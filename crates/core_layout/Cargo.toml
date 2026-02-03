@@ -1,0 +1,14 @@
+[package]
+name = "leopardwm-core-layout"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Platform-agnostic scrollable tiling layout engine for LeopardWM"
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]

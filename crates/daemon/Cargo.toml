@@ -1,0 +1,34 @@
+[package]
+name = "leopardwm-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Main daemon process for LeopardWM window manager"
+
+[[bin]]
+name = "leopardwm"
+path = "src/main.rs"
+
+[dependencies]
+leopardwm-core-layout = { path = "../core_layout" }
+leopardwm-platform-win32 = { path = "../platform_win32" }
+leopardwm-ipc = { path = "../ipc" }
+clap = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+toml = { workspace = true }
+directories = { workspace = true }
+tray-icon = { version = "0.21", default-features = false }
+windows = { workspace = true }
+wry = { workspace = true }
+raw-window-handle = { workspace = true }
+regex = "1"
+
+[dev-dependencies]

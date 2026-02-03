@@ -1,0 +1,19 @@
+# Auto-generated defaults
+.DS_Store
+Thumbs.db
+
+# Rust
+/target
+**/*.rs.bk
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# Node
+node_modules/
+
+# Editor
+.vscode/
+.idea/

@@ -1,0 +1,27 @@
+[package]
+name = "leopardwm-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Command-line interface for controlling LeopardWM"
+
+[[bin]]
+name = "leopardwm-cli"
+path = "src/main.rs"
+
+[dependencies]
+leopardwm-ipc = { path = "../ipc" }
+leopardwm-platform-win32 = { path = "../platform_win32" }
+clap = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+toml = { workspace = true }
+directories = { workspace = true }
+windows = { workspace = true }
+winreg = "0.55"
+
+[dev-dependencies]

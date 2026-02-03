@@ -1,0 +1,17 @@
+[package]
+name = "leopardwm-platform-win32"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Windows platform integration for LeopardWM (HWND manipulation, DWM cloaking)"
+
+[dependencies]
+leopardwm-core-layout = { path = "../core_layout" }
+windows = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+[dev-dependencies]
