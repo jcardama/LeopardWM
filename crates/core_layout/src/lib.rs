@@ -484,7 +484,14 @@ impl Workspace {
     ///
     /// Note: Negative gaps are treated as zero for calculation purposes.
     pub fn total_width(&self) -> i32 {
-        if self.columns.is_empty() {
+        // Only count columns that have at least one non-minimized window
+        let active_columns: Vec<&Column> = self
+            .columns
+            .iter()
+            .filter(|c| self.is_column_active(c))
+            .collect();
+
+        if active_columns.is_empty() {
             return 0;
         }
 
@@ -492,12 +499,11 @@ impl Workspace {
         let gap = self.gap.max(0);
         let outer_gap = self.outer_gap.max(0);
 
-        let column_widths: i32 = self
-            .columns
+        let column_widths: i32 = active_columns
             .iter()
             .map(|c| c.width)
             .fold(0i32, |acc, w| acc.saturating_add(w));
-        let gaps = gap.saturating_mul(self.columns.len().saturating_sub(1) as i32);
+        let gaps = gap.saturating_mul(active_columns.len().saturating_sub(1) as i32);
         let outer_gaps = outer_gap.saturating_mul(2);
 
         column_widths
@@ -1025,7 +1031,24 @@ impl Workspace {
     /// Calculate the x-coordinate of a column's left edge on the strip.
     ///
     /// Note: Negative gaps are treated as zero for calculation purposes.
+    /// Check if a column has at least one non-minimized window.
+    fn is_column_active(&self, column: &Column) -> bool {
+        column
+            .windows()
+            .iter()
+            .any(|w| !self.minimized_windows.contains(w))
+    }
+
     fn column_x(&self, column_index: usize) -> i32 {
+        self.column_x_with_minimized_handling(column_index, true)
+    }
+
+    /// Compute the X position of a column, optionally skipping minimized columns.
+    fn column_x_with_minimized_handling(
+        &self,
+        column_index: usize,
+        skip_minimized: bool,
+    ) -> i32 {
         // Defensively clamp gaps to >= 0
         let gap = self.gap.max(0);
         let outer_gap = self.outer_gap.max(0);
@@ -1034,6 +1057,10 @@ impl Workspace {
         for (i, col) in self.columns.iter().enumerate() {
             if i == column_index {
                 return x;
+            }
+            // Skip fully-minimized columns when requested
+            if skip_minimized && !self.is_column_active(col) {
+                continue;
             }
             x = x.saturating_add(col.width).saturating_add(gap);
         }
@@ -1149,13 +1176,18 @@ impl Workspace {
                 Visibility::Visible
             };
 
-            // Filter out minimized windows for height calculation
+            // Filter out minimized windows
             let visible_windows: Vec<WindowId> = column
                 .windows()
                 .iter()
                 .copied()
                 .filter(|w| !self.minimized_windows.contains(w))
                 .collect();
+
+            // Skip columns where all windows are minimized
+            if !self.is_column_active(column) {
+                continue;
+            }
 
             // Calculate window heights (equal split for stacked windows)
             // Clamp usable_height to >= 0 to handle tight viewports
@@ -1367,8 +1399,14 @@ impl Workspace {
                         .saturating_add(outer_gap)
                         .saturating_sub(viewport_width) as f64
                 } else {
-                    // Already in view, no scroll needed
-                    return;
+                    // Column is in view, but scroll may exceed max_scroll after
+                    // minimized columns reduced total_width. Clamp if needed.
+                    let max_scroll = (self.total_width() - viewport_width).max(0) as f64;
+                    if current > max_scroll + 0.5 {
+                        max_scroll
+                    } else {
+                        return;
+                    }
                 }
             }
         };
@@ -3878,6 +3916,166 @@ mod tests {
 
         // No visible window exists
         assert_eq!(ws.focused_visible_window(), None);
+    }
+
+    // ====================================================================
+    // Minimize / Restore Scroll Clamping
+    // ====================================================================
+
+    #[test]
+    fn test_minimize_clamps_stale_scroll_just_in_view() {
+        // Regression: in JustInView mode, minimizing a column could leave
+        // scroll_offset beyond the new max_scroll if the focused column
+        // was "in view" relative to the stale scroll position.
+        let mut ws = Workspace::with_gaps(10, 10);
+        ws.set_centering_mode(CenteringMode::JustInView);
+
+        // 3 columns of 800px each. total_width = 2440, viewport = 1920
+        ws.insert_window(1, Some(800)).unwrap();
+        ws.insert_window(2, Some(800)).unwrap();
+        ws.insert_window(3, Some(800)).unwrap();
+
+        let vp_width = 1920;
+
+        // Scroll to show column 2 (rightmost)
+        let _ = ws.focus_window(3);
+        ws.ensure_focused_visible(vp_width);
+        // max_scroll = 2440 - 1920 = 520
+        assert_eq!(ws.scroll_offset as i32, 520);
+
+        // Minimize column 2 (focused). Focus moves to column 1.
+        ws.mark_minimized(3);
+        ws.focus_right(); // fails (nothing to right)
+        ws.focus_left(); // goes to col 1
+        assert_eq!(ws.focused_window(), Some(2));
+
+        // Animated ensure should clamp scroll to new max_scroll (0)
+        ws.ensure_focused_visible_animated(vp_width);
+
+        // Complete the animation
+        for _ in 0..100 {
+            if !ws.tick_animation(16) {
+                break;
+            }
+        }
+
+        let scroll = ws.effective_scroll_offset();
+        let max_scroll = (ws.total_width() - vp_width).max(0) as f64;
+        assert!(
+            scroll <= max_scroll + 0.5,
+            "scroll {} should be <= max_scroll {} after minimize",
+            scroll,
+            max_scroll
+        );
+    }
+
+    #[test]
+    fn test_minimize_single_window_at_first_position() {
+        // When all but one window are minimized, the remaining window
+        // should be placed at the first position (outer_gap from left).
+        let mut ws = Workspace::with_gaps(10, 10);
+        ws.set_centering_mode(CenteringMode::JustInView);
+
+        ws.insert_window(1, Some(800)).unwrap();
+        ws.insert_window(2, Some(800)).unwrap();
+        ws.insert_window(3, Some(800)).unwrap();
+
+        let viewport = Rect::new(0, 0, 1920, 1080);
+        let vp_width = viewport.width;
+
+        // Scroll right to view column 2
+        let _ = ws.focus_window(3);
+        ws.ensure_focused_visible(vp_width);
+
+        // Minimize columns 0 and 2, leaving only column 1 active
+        ws.mark_minimized(1);
+        ws.mark_minimized(3);
+        let _ = ws.focus_window(2);
+
+        ws.ensure_focused_visible_animated(vp_width);
+        // Complete the animation
+        for _ in 0..100 {
+            if !ws.tick_animation(16) {
+                break;
+            }
+        }
+
+        let placements = ws.compute_placements(viewport);
+        assert_eq!(placements.len(), 1);
+        // Should be at outer_gap (10), not offset by stale scroll
+        assert_eq!(placements[0].rect.x, 10);
+    }
+
+    #[test]
+    fn test_restore_all_positions_correct() {
+        // Restore 3 windows one by one and verify no overlapping positions.
+        let mut ws = Workspace::with_gaps(10, 10);
+        ws.set_centering_mode(CenteringMode::JustInView);
+
+        ws.insert_window(1, Some(800)).unwrap();
+        ws.insert_window(2, Some(800)).unwrap();
+        ws.insert_window(3, Some(800)).unwrap();
+
+        let viewport = Rect::new(0, 0, 1920, 1080);
+        let vp_width = viewport.width;
+
+        // Minimize all
+        ws.mark_minimized(1);
+        ws.mark_minimized(2);
+        ws.mark_minimized(3);
+        ws.ensure_focused_visible_animated(vp_width);
+        for _ in 0..100 {
+            if !ws.tick_animation(16) {
+                break;
+            }
+        }
+
+        // Restore window 1
+        ws.mark_restored(1);
+        let _ = ws.focus_window(1);
+        ws.ensure_focused_visible_animated(vp_width);
+        for _ in 0..100 {
+            if !ws.tick_animation(16) {
+                break;
+            }
+        }
+
+        let p = ws.compute_placements(viewport);
+        assert_eq!(p.len(), 1);
+        assert_eq!(p[0].rect.x, 10); // first position
+
+        // Restore window 2
+        ws.mark_restored(2);
+        let _ = ws.focus_window(2);
+        ws.ensure_focused_visible_animated(vp_width);
+        for _ in 0..100 {
+            if !ws.tick_animation(16) {
+                break;
+            }
+        }
+
+        let p = ws.compute_placements(viewport);
+        assert_eq!(p.len(), 2);
+        // Windows should be at different x positions
+        assert_ne!(p[0].rect.x, p[1].rect.x);
+
+        // Restore window 3
+        ws.mark_restored(3);
+        let _ = ws.focus_window(3);
+        ws.ensure_focused_visible_animated(vp_width);
+        for _ in 0..100 {
+            if !ws.tick_animation(16) {
+                break;
+            }
+        }
+
+        let p = ws.compute_placements_animated(viewport);
+        assert_eq!(p.len(), 3);
+        // All at distinct x positions
+        let xs: Vec<i32> = p.iter().map(|pl| pl.rect.x).collect();
+        assert_ne!(xs[0], xs[1], "window 1 and 2 overlap at x={}", xs[0]);
+        assert_ne!(xs[1], xs[2], "window 2 and 3 overlap at x={}", xs[1]);
+        assert_ne!(xs[0], xs[2], "window 1 and 3 overlap at x={}", xs[0]);
     }
 
     // =========================================================================

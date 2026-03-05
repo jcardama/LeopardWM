@@ -1179,11 +1179,6 @@ max_column_width = 1600
 centering_mode = "center"
 
 [appearance]
-# Use DWM cloaking for off-screen windows (keeps them in Alt-Tab)
-use_cloaking = true
-
-# Use batched window positioning for smoother updates
-use_deferred_positioning = true
 
 [behavior]
 # Automatically focus new windows when they appear
@@ -1325,8 +1320,6 @@ max_column_width = {max_width}
 centering_mode = "{centering}"
 
 [appearance]
-use_cloaking = true
-use_deferred_positioning = true
 
 [behavior]
 focus_new_windows = true
@@ -2039,8 +2032,6 @@ mod tests {
     fn test_generate_default_config_contains_appearance_section() {
         let config = generate_default_config();
         assert!(config.contains("[appearance]"));
-        assert!(config.contains("use_cloaking"));
-        assert!(config.contains("use_deferred_positioning"));
     }
 
     #[test]

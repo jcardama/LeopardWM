@@ -11,30 +11,31 @@
 //! - System tray icon and menu
 
 mod animation_worker;
+mod command_handler;
 mod config;
+mod event_handler;
+mod helpers;
 mod settings;
+mod state;
 mod tray;
 
-use anyhow::{anyhow, Result};
+use state::*;
+
+use anyhow::Result;
 use clap::Parser;
 use config::Config;
-use leopardwm_core_layout::{Rect, Workspace};
+use leopardwm_core_layout::Rect;
 use leopardwm_ipc::{
     pipe_name_candidates, preferred_pipe_name, IpcCommand, IpcResponse, MAX_IPC_MESSAGE_SIZE,
 };
 use leopardwm_platform_win32::{
-    enumerate_monitors, enumerate_windows, find_monitor_for_rect, get_process_executable,
-    install_event_hooks, install_mouse_hook, monitor_to_left, monitor_to_right,
+    enumerate_monitors, enumerate_windows, install_event_hooks, install_mouse_hook,
     overlay::OverlayWindow, parse_hotkey_string, register_gestures, register_hotkeys,
     restore_windows_moved_offscreen, set_display_change_sender, set_dpi_awareness,
-    uncloak_all_managed_windows, uncloak_all_visible_windows, GestureEvent, Hotkey, HotkeyEvent,
-    HotkeyId, MonitorId, MonitorInfo, PlatformConfig, WindowEvent,
+    uncloak_all_visible_windows, GestureEvent, Hotkey, HotkeyEvent, HotkeyId, MonitorId,
+    MonitorInfo, WindowEvent,
 };
-use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-#[cfg(test)]
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -50,10 +51,7 @@ pub struct Args {
     /// Disable global hotkey registration
     #[arg(long)]
     pub no_hotkeys: bool,
-    /// Use MoveOffScreen instead of DWM cloaking
-    #[arg(long)]
-    pub no_cloak: bool,
-    /// Safe mode: combines --no-hotkeys and --no-cloak
+    /// Safe mode: disables global hotkey registration
     #[arg(long)]
     pub safe_mode: bool,
 }
@@ -62,11 +60,6 @@ impl Args {
     /// Returns true if hotkeys should be skipped (either --no-hotkeys or --safe-mode).
     pub fn skip_hotkeys(&self) -> bool {
         self.no_hotkeys || self.safe_mode
-    }
-
-    /// Returns true if cloaking should be disabled (either --no-cloak or --safe-mode).
-    pub fn skip_cloak(&self) -> bool {
-        self.no_cloak || self.safe_mode
     }
 }
 
@@ -102,25 +95,14 @@ enum DaemonEvent {
 const IPC_READ_TIMEOUT: Duration = Duration::from_secs(5);
 /// IPC responder timeout - daemon must answer within this period.
 const IPC_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
-/// Max time allowed for a single Win32 placement apply call.
-const APPLY_LAYOUT_TIMEOUT: Duration = Duration::from_millis(1500);
 /// Poll interval for cooperative timed thread joins.
 const JOIN_WITH_TIMEOUT_POLL_INTERVAL: Duration = Duration::from_millis(10);
-/// Suppress MovedOrResized events briefly after placements are applied.
-const MOVED_OR_RESIZED_SUPPRESSION_WINDOW: Duration = Duration::from_millis(250);
 /// Retry count for shutdown visibility recovery when an apply worker fails to exit in time.
 const SHUTDOWN_RECOVERY_RETRY_ATTEMPTS: usize = 3;
 /// Delay between additional shutdown visibility recovery attempts.
 const SHUTDOWN_RECOVERY_RETRY_DELAY: Duration = Duration::from_millis(250);
 /// Final bounded wait per lingering apply worker before daemon exit.
 const SHUTDOWN_FINAL_JOIN_TIMEOUT: Duration = Duration::from_secs(2);
-
-/// Fallback viewport dimensions when no monitor is detected.
-const FALLBACK_VIEWPORT_WIDTH: i32 = 1920;
-const FALLBACK_VIEWPORT_HEIGHT: i32 = 1080;
-const FALLBACK_WORK_AREA_HEIGHT: i32 = 1040;
-const MIN_SET_WIDTH_FRACTION: f64 = 0.1;
-const MAX_SET_WIDTH_FRACTION: f64 = 1.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ShutdownMode {
@@ -149,13 +131,6 @@ fn shutdown_mode_for_command(cmd: &IpcCommand) -> Option<ShutdownMode> {
     }
 }
 
-fn layout_apply_timeout_message(timeout: Duration) -> String {
-    format!(
-        "Layout application timed out after {} ms; tiling auto-paused to keep the daemon responsive. Resolve blocked Win32 placement, then use tray 'Pause/Resume Tiling' to resume. If desktop control degrades, run `leopardwm-cli panic-revert`.",
-        timeout.as_millis()
-    )
-}
-
 fn response_for_ipc_wait_failure(cmd: &IpcCommand, timed_out: bool) -> IpcResponse {
     if matches!(cmd, IpcCommand::Stop | IpcCommand::PanicRevert) {
         // Stop/panic_revert semantics are "shutdown initiated"; don't report as a hard failure
@@ -168,1903 +143,10 @@ fn response_for_ipc_wait_failure(cmd: &IpcCommand, timed_out: bool) -> IpcRespon
     }
 }
 
-#[cfg(test)]
-#[derive(Debug, Clone, Copy)]
-enum TestApplyPlacementsBehavior {
-    SleepAndSucceed(Duration),
-    SleepAndFail(Duration),
-}
-
-fn validate_set_width_fraction(fraction: f64) -> std::result::Result<(), String> {
-    if !fraction.is_finite() {
-        return Err("Invalid set-width fraction: value must be finite".to_string());
-    }
-    if !(MIN_SET_WIDTH_FRACTION..=MAX_SET_WIDTH_FRACTION).contains(&fraction) {
-        return Err(format!(
-            "Invalid set-width fraction ({}): expected value in [{:.1}, {:.1}]",
-            fraction, MIN_SET_WIDTH_FRACTION, MAX_SET_WIDTH_FRACTION
-        ));
-    }
-    Ok(())
-}
-
-/// Application state supporting multiple monitors.
-struct AppState {
-    /// Workspaces indexed by monitor ID.
-    workspaces: HashMap<MonitorId, Workspace>,
-    /// Monitor info indexed by monitor ID.
-    monitors: HashMap<MonitorId, MonitorInfo>,
-    /// Currently focused monitor.
-    focused_monitor: MonitorId,
-    /// Platform configuration.
-    platform_config: PlatformConfig,
-    /// User configuration.
-    config: Config,
-    /// Pre-compiled window rules for efficient matching.
-    compiled_rules: Vec<config::CompiledWindowRule>,
-    /// Previously focused window for border color tracking.
-    previous_focused_hwnd: Option<u64>,
-    /// Border frame overlay for the active window.
-    border_frame: Option<leopardwm_platform_win32::border::BorderFrame>,
-    /// Whether tiling is paused.
-    paused: bool,
-    /// Guard flag to suppress MovedOrResized events during apply_layout().
-    applying_layout: bool,
-    /// Window currently being dragged/resized by the user (if any).
-    /// MovedOrResized events are suppressed during drag; snap-back happens on drop.
-    dragging_window: Option<u64>,
-    /// Per-window suppression deadline for MovedOrResized events after apply_layout().
-    moved_or_resized_suppression: HashMap<u64, std::time::Instant>,
-    /// Cooperative cancellation flag for placement workers during shutdown/revert.
-    apply_worker_cancelled: Arc<AtomicBool>,
-    /// Monotonic token to invalidate stale workers when shutdown starts.
-    apply_epoch: Arc<AtomicU64>,
-    /// Timed-out placement workers retained for join during shutdown/revert.
-    pending_apply_workers: Vec<std::thread::JoinHandle<()>>,
-    /// Max time allowed for Win32 placement calls before auto-pausing tiling.
-    layout_apply_timeout: Duration,
-    /// Daemon start time for uptime reporting.
-    start_time: std::time::Instant,
-    /// Injected window info for testing. When set, `lookup_window_info()` returns
-    /// entries from this map instead of calling `enumerate_windows()`.
-    #[cfg(test)]
-    injected_window_info: HashMap<u64, leopardwm_platform_win32::WindowInfo>,
-    /// Optional test-only behavior override for placement application.
-    #[cfg(test)]
-    injected_apply_placements_behavior: Option<TestApplyPlacementsBehavior>,
-    /// Number of late-worker recovery passes executed after cancellation.
-    #[cfg(test)]
-    late_worker_recovery_count: Arc<AtomicUsize>,
-}
-
-/// Snapshot of workspace state for persistence.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct WorkspaceSnapshot {
-    /// Monitor device name (stable across restarts, unlike MonitorId/HMONITOR).
-    monitor_device_name: String,
-    /// Saved workspace state.
-    workspace: Workspace,
-}
-
-/// Full daemon state snapshot for persistence.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct StateSnapshot {
-    /// Timestamp when state was saved.
-    saved_at: String,
-    /// Per-monitor workspace snapshots.
-    workspaces: Vec<WorkspaceSnapshot>,
-    /// Which monitor was focused (by device name).
-    focused_monitor_name: String,
-}
-
-impl AppState {
-    /// Create new state with config and monitors.
-    fn new_with_config(config: Config, monitors: Vec<MonitorInfo>) -> Self {
-        let mut workspaces = HashMap::new();
-        let mut monitor_map = HashMap::new();
-        let mut focused_monitor = 0;
-
-        for monitor in monitors {
-            let mut workspace = Workspace::with_gaps(config.layout.gap, config.layout.outer_gap);
-            workspace.set_default_column_width(config.layout.default_column_width);
-            workspace.set_centering_mode(config.layout.centering_mode.into());
-
-            if monitor.is_primary {
-                focused_monitor = monitor.id;
-            }
-
-            workspaces.insert(monitor.id, workspace);
-            monitor_map.insert(monitor.id, monitor);
-        }
-
-        // If no primary found, use first monitor (defensive pattern avoids unwrap)
-        if focused_monitor == 0 {
-            if let Some(&first_id) = monitor_map.keys().next() {
-                focused_monitor = first_id;
-            }
-            // If map is empty, focused_monitor stays 0; focused_workspace() returns None
-        }
-
-        let platform_config = PlatformConfig {
-            hide_strategy: if config.appearance.use_cloaking {
-                leopardwm_platform_win32::HideStrategy::Cloak
-            } else {
-                leopardwm_platform_win32::HideStrategy::MoveOffScreen
-            },
-            use_deferred_positioning: config.appearance.use_deferred_positioning,
-        };
-
-        let compiled_rules = config.compile_window_rules();
-
-        Self {
-            workspaces,
-            monitors: monitor_map,
-            focused_monitor,
-            platform_config,
-            config,
-            compiled_rules,
-            previous_focused_hwnd: None,
-            border_frame: leopardwm_platform_win32::border::BorderFrame::new().ok(),
-            paused: false,
-            applying_layout: false,
-            dragging_window: None,
-            moved_or_resized_suppression: HashMap::new(),
-            apply_worker_cancelled: Arc::new(AtomicBool::new(false)),
-            apply_epoch: Arc::new(AtomicU64::new(0)),
-            pending_apply_workers: Vec::new(),
-            layout_apply_timeout: APPLY_LAYOUT_TIMEOUT,
-            start_time: std::time::Instant::now(),
-            #[cfg(test)]
-            injected_window_info: HashMap::new(),
-            #[cfg(test)]
-            injected_apply_placements_behavior: None,
-            #[cfg(test)]
-            late_worker_recovery_count: Arc::new(AtomicUsize::new(0)),
-        }
-    }
-
-    /// Get the currently focused workspace.
-    fn focused_workspace(&self) -> Option<&Workspace> {
-        self.workspaces.get(&self.focused_monitor)
-    }
-
-    /// Get the currently focused workspace mutably.
-    fn focused_workspace_mut(&mut self) -> Option<&mut Workspace> {
-        self.workspaces.get_mut(&self.focused_monitor)
-    }
-
-    /// Get the focused monitor's viewport.
-    fn focused_viewport(&self) -> Rect {
-        self.monitors
-            .get(&self.focused_monitor)
-            .map(|m| m.work_area)
-            .unwrap_or_else(|| Rect::new(0, 0, FALLBACK_VIEWPORT_WIDTH, FALLBACK_VIEWPORT_HEIGHT))
-    }
-
-    /// Look up window info for a given window handle.
-    ///
-    /// In production, calls `enumerate_windows()` and finds the matching entry.
-    /// In tests, returns from the injected window info map if available.
-    fn lookup_window_info(&self, hwnd: u64) -> Option<leopardwm_platform_win32::WindowInfo> {
-        #[cfg(test)]
-        {
-            if let Some(info) = self.injected_window_info.get(&hwnd) {
-                return Some(info.clone());
-            }
-        }
-        leopardwm_platform_win32::get_window_info(hwnd)
-    }
-
-    /// Check whether a window ID is known to this state (managed or injected).
-    ///
-    /// Used by event validation to skip `is_valid_window` for windows we have
-    /// info about, even if they aren't yet managed (e.g., during Created events).
-    fn is_known_window(&self, wid: u64) -> bool {
-        if self.find_window_workspace(wid).is_some() {
-            return true;
-        }
-        #[cfg(test)]
-        {
-            if self.injected_window_info.contains_key(&wid) {
-                return true;
-            }
-        }
-        false
-    }
-
-    /// Apply configuration to all workspaces.
-    fn apply_config(&mut self, config: Config) {
-        // Swap config first so border helpers read the new values
-        let old_border_on = self.config.appearance.active_border;
-        self.compiled_rules = config.compile_window_rules();
-
-        // Update platform config
-        self.platform_config.use_deferred_positioning = config.appearance.use_deferred_positioning;
-        self.platform_config.hide_strategy = if config.appearance.use_cloaking {
-            leopardwm_platform_win32::HideStrategy::Cloak
-        } else {
-            leopardwm_platform_win32::HideStrategy::MoveOffScreen
-        };
-
-        self.config = config;
-
-        // Handle border transitions with new config values
-        if let Some(hwnd) = self.previous_focused_hwnd {
-            if self.config.appearance.active_border {
-                self.show_border(hwnd);
-            } else if old_border_on {
-                self.hide_border();
-            }
-        } else if !self.config.appearance.active_border && old_border_on {
-            self.hide_border();
-        }
-
-        for workspace in self.workspaces.values_mut() {
-            workspace.set_gap(self.config.layout.gap);
-            workspace.set_outer_gap(self.config.layout.outer_gap);
-            workspace.set_default_column_width(self.config.layout.default_column_width);
-            workspace.set_centering_mode(self.config.layout.centering_mode.into());
-        }
-        info!(
-            "Configuration applied to all {} workspaces",
-            self.workspaces.len()
-        );
-    }
-
-    /// Save current workspace state to disk.
-    fn save_state(&self) -> Result<()> {
-        let snapshots: Vec<WorkspaceSnapshot> = self
-            .workspaces
-            .iter()
-            .filter_map(|(monitor_id, workspace)| {
-                self.monitors
-                    .get(monitor_id)
-                    .map(|monitor| WorkspaceSnapshot {
-                        monitor_device_name: monitor.device_name.clone(),
-                        workspace: workspace.clone(),
-                    })
-            })
-            .collect();
-
-        let focused_name = self
-            .monitors
-            .get(&self.focused_monitor)
-            .map(|m| m.device_name.clone())
-            .unwrap_or_default();
-
-        let saved_at = {
-            let now = std::time::SystemTime::now();
-            match now.duration_since(std::time::UNIX_EPOCH) {
-                Ok(d) => format!("{}", d.as_secs()),
-                Err(_) => "0".to_string(),
-            }
-        };
-
-        let snapshot = StateSnapshot {
-            saved_at,
-            workspaces: snapshots,
-            focused_monitor_name: focused_name,
-        };
-
-        let state_path = Self::state_file_path();
-        if let Some(parent) = state_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-
-        let json = serde_json::to_string_pretty(&snapshot)?;
-        std::fs::write(&state_path, json)?;
-        info!("Workspace state saved to {:?}", state_path);
-        Ok(())
-    }
-
-    /// Load saved workspace state from disk.
-    fn load_state() -> Option<StateSnapshot> {
-        let state_path = Self::state_file_path();
-        match std::fs::read_to_string(&state_path) {
-            Ok(json) => match serde_json::from_str(&json) {
-                Ok(snapshot) => Some(snapshot),
-                Err(e) => {
-                    warn!("Failed to parse saved state: {}", e);
-                    None
-                }
-            },
-            Err(_) => None,
-        }
-    }
-
-    /// Get the path for the state file.
-    fn state_file_path() -> std::path::PathBuf {
-        directories::ProjectDirs::from("", "", "leopardwm")
-            .map(|dirs| dirs.data_dir().join("workspace-state.json"))
-            .unwrap_or_else(|| std::path::PathBuf::from("workspace-state.json"))
-    }
-
-    /// Restore workspace state from a saved snapshot.
-    ///
-    /// This should be called AFTER windows are enumerated so that scroll offsets
-    /// are not clamped against empty workspaces. Sets the scroll offset directly
-    /// (bypassing clamping) to preserve the saved value.
-    ///
-    /// Returns the set of monitor IDs whose scroll offsets were successfully
-    /// restored. The caller should skip `ensure_focused_visible()` for these
-    /// monitors to avoid overwriting the restored offset.
-    fn restore_state(&mut self, snapshot: &StateSnapshot) -> HashSet<MonitorId> {
-        let mut restored_monitors = HashSet::new();
-
-        for ws_snapshot in &snapshot.workspaces {
-            // Find matching monitor by device name
-            let monitor_id = self
-                .monitors
-                .iter()
-                .find(|(_, m)| m.device_name == ws_snapshot.monitor_device_name)
-                .map(|(&id, _)| id);
-
-            if let Some(id) = monitor_id {
-                // Restore scroll offset from saved workspace
-                if let Some(workspace) = self.workspaces.get_mut(&id) {
-                    let saved_offset = ws_snapshot.workspace.scroll_offset();
-                    if saved_offset != 0.0 {
-                        workspace.set_scroll_offset(saved_offset);
-                    }
-                    restored_monitors.insert(id);
-                    info!(
-                        "Restored workspace state for monitor '{}'",
-                        ws_snapshot.monitor_device_name
-                    );
-                }
-            } else {
-                debug!(
-                    "Skipping saved workspace for unknown monitor '{}'",
-                    ws_snapshot.monitor_device_name
-                );
-            }
-        }
-
-        // Restore focused monitor
-        if let Some((&id, _)) = self
-            .monitors
-            .iter()
-            .find(|(_, m)| m.device_name == snapshot.focused_monitor_name)
-        {
-            self.focused_monitor = id;
-        }
-
-        restored_monitors
-    }
-
-    /// Reconcile workspaces after monitor configuration change.
-    ///
-    /// This handles:
-    /// - Removing workspaces for disconnected monitors (migrating windows to primary)
-    /// - Adding workspaces for newly connected monitors
-    fn reconcile_monitors(&mut self, new_monitors: Vec<MonitorInfo>) {
-        let new_ids: HashSet<MonitorId> = new_monitors.iter().map(|m| m.id).collect();
-        let old_ids: HashSet<MonitorId> = self.monitors.keys().copied().collect();
-
-        // Find primary monitor in new config (or first available)
-        let primary_id = new_monitors
-            .iter()
-            .find(|m| m.is_primary)
-            .or_else(|| new_monitors.first())
-            .map(|m| m.id);
-
-        // Handle added monitors - create new workspaces FIRST so migration
-        // targets exist even when all old monitors are replaced with new ones.
-        for monitor in &new_monitors {
-            if !old_ids.contains(&monitor.id) {
-                let mut workspace =
-                    Workspace::with_gaps(self.config.layout.gap, self.config.layout.outer_gap);
-                workspace.set_default_column_width(self.config.layout.default_column_width);
-                workspace.set_centering_mode(self.config.layout.centering_mode.into());
-                self.workspaces.insert(monitor.id, workspace);
-                info!("Created workspace for new monitor {}", monitor.id);
-            }
-        }
-
-        // Handle removed monitors - migrate windows to primary
-        for removed_id in old_ids.difference(&new_ids) {
-            if let Some(old_workspace) = self.workspaces.remove(removed_id) {
-                let window_ids = old_workspace.all_window_ids();
-                if let Some(primary) = primary_id {
-                    if let Some(primary_ws) = self.workspaces.get_mut(&primary) {
-                        for window_id in &window_ids {
-                            if let Err(e) = primary_ws.insert_window(*window_id, None) {
-                                warn!("Failed to migrate window {}: {}", window_id, e);
-                            }
-                        }
-                        info!(
-                            "Migrated {} windows from removed monitor {} to primary",
-                            window_ids.len(),
-                            removed_id
-                        );
-                    }
-                }
-            }
-            self.monitors.remove(removed_id);
-        }
-
-        // Update monitor info
-        self.monitors = new_monitors.into_iter().map(|m| (m.id, m)).collect();
-
-        // Update focused monitor if it was removed
-        if !self.monitors.contains_key(&self.focused_monitor) {
-            self.focused_monitor = primary_id.unwrap_or(0);
-        }
-    }
-
-    /// Collect all managed window IDs across all workspaces.
-    ///
-    /// Returns tiled and floating window IDs from every monitor's workspace.
-    fn all_managed_window_ids(&self) -> Vec<u64> {
-        let mut ids = Vec::new();
-        for workspace in self.workspaces.values() {
-            ids.extend(workspace.all_window_ids());
-        }
-        ids
-    }
-
-    /// Record a short suppression window for moved/resized feedback generated by apply_layout().
-    fn arm_moved_or_resized_suppression<I>(&mut self, window_ids: I)
-    where
-        I: IntoIterator<Item = u64>,
-    {
-        let now = std::time::Instant::now();
-        self.moved_or_resized_suppression
-            .retain(|_, deadline| *deadline > now);
-        let deadline = now + MOVED_OR_RESIZED_SUPPRESSION_WINDOW;
-        for hwnd in window_ids {
-            self.moved_or_resized_suppression.insert(hwnd, deadline);
-        }
-    }
-
-    /// Returns true when a moved/resized event should be ignored due to recent apply_layout().
-    fn should_suppress_moved_or_resized(&mut self, hwnd: u64) -> bool {
-        let now = std::time::Instant::now();
-        self.moved_or_resized_suppression
-            .retain(|_, deadline| *deadline > now);
-        self.moved_or_resized_suppression
-            .get(&hwnd)
-            .is_some_and(|deadline| *deadline > now)
-    }
-
-    /// Join any finished timed-out apply workers so the pending list does not grow indefinitely.
-    /// Returns the number of workers reaped in this pass.
-    fn reap_finished_pending_apply_workers(&mut self) -> usize {
-        if self.pending_apply_workers.is_empty() {
-            return 0;
-        }
-        let mut still_running = Vec::with_capacity(self.pending_apply_workers.len());
-        let mut reaped = 0usize;
-        for handle in self.pending_apply_workers.drain(..) {
-            if handle.is_finished() {
-                let _ = handle.join();
-                reaped += 1;
-            } else {
-                still_running.push(handle);
-            }
-        }
-        self.pending_apply_workers = still_running;
-        reaped
-    }
-
-    /// Mark shutdown/revert in progress and take ownership of any timed-out apply workers.
-    fn begin_shutdown_or_revert(&mut self) -> Vec<std::thread::JoinHandle<()>> {
-        self.apply_worker_cancelled.store(true, Ordering::SeqCst);
-        self.apply_epoch.fetch_add(1, Ordering::SeqCst);
-        std::mem::take(&mut self.pending_apply_workers)
-    }
-
-    /// Check if any workspace has an active animation.
-    fn is_animating(&self) -> bool {
-        self.workspaces.values().any(|w| w.is_animating())
-    }
-
-    /// Tick all active animations by the given delta time.
-    /// Returns true if any animation is still running.
-    fn tick_animations(&mut self, delta_ms: u64) -> bool {
-        let mut still_animating = false;
-        for workspace in self.workspaces.values_mut() {
-            if workspace.tick_animation(delta_ms) {
-                still_animating = true;
-            }
-        }
-        still_animating
-    }
-
-    /// Compute animated placements and send them to the animation worker.
-    ///
-    /// Returns `Ok(true)` if a frame was sent, `Ok(false)` if paused or no placements.
-    fn send_animation_frame(
-        &mut self,
-        worker: &animation_worker::AnimationWorkerHandle,
-    ) -> Result<bool> {
-        if self.paused {
-            return Ok(false);
-        }
-        let mut all_placements = Vec::new();
-        for (monitor_id, workspace) in &self.workspaces {
-            if let Some(monitor) = self.monitors.get(monitor_id) {
-                let placements = workspace.compute_placements_animated(monitor.work_area);
-                all_placements.extend(placements);
-            }
-        }
-        if all_placements.is_empty() {
-            return Ok(false);
-        }
-        self.arm_moved_or_resized_suppression(all_placements.iter().map(|p| p.window_id));
-        self.applying_layout = true;
-
-        let request = animation_worker::FrameRequest {
-            placements: all_placements,
-            platform_config: self.platform_config.clone(),
-        };
-        worker
-            .send_frame(request)
-            .map_err(|e| anyhow::anyhow!(e))?;
-        Ok(true)
-    }
-
-    /// Recalculate layout and apply placements for all monitors.
-    /// Uses animated offsets if any workspace has an active animation.
-    /// No-op when tiling is paused.
-    fn apply_layout(&mut self) -> Result<()> {
-        let reaped_workers = self.reap_finished_pending_apply_workers();
-        if reaped_workers > 0 {
-            let managed_window_ids = self.all_managed_window_ids();
-            run_visibility_recovery_pass(&managed_window_ids, "late-apply-worker");
-        }
-
-        if self.paused {
-            return Ok(());
-        }
-        if self.apply_worker_cancelled.load(Ordering::SeqCst) {
-            return Err(anyhow!(
-                "Layout application skipped: shutdown/revert cleanup is in progress"
-            ));
-        }
-        if !self.pending_apply_workers.is_empty() {
-            return Err(anyhow!(
-                "Layout application skipped: previous timed-out apply worker is still finishing"
-            ));
-        }
-        self.applying_layout = true;
-        let mut all_placements = Vec::new();
-
-        for (monitor_id, workspace) in &self.workspaces {
-            if let Some(monitor) = self.monitors.get(monitor_id) {
-                // Use animated placements to support smooth scrolling
-                let placements = workspace.compute_placements_animated(monitor.work_area);
-                debug!(
-                    "Monitor {}: {} placements for viewport {}x{} (animating: {})",
-                    monitor_id,
-                    placements.len(),
-                    monitor.work_area.width,
-                    monitor.work_area.height,
-                    workspace.is_animating()
-                );
-                all_placements.extend(placements);
-            }
-        }
-        self.arm_moved_or_resized_suppression(all_placements.iter().map(|p| p.window_id));
-
-        let timeout = self.layout_apply_timeout;
-        let platform_config = self.platform_config.clone();
-        let apply_worker_cancelled = self.apply_worker_cancelled.clone();
-        let apply_epoch_ref = self.apply_epoch.clone();
-        let apply_epoch = apply_epoch_ref.fetch_add(1, Ordering::SeqCst) + 1;
-        let apply_window_ids: Vec<u64> = all_placements.iter().map(|p| p.window_id).collect();
-        #[cfg(test)]
-        let injected_behavior = self.injected_apply_placements_behavior;
-        #[cfg(test)]
-        let late_worker_recovery_count = self.late_worker_recovery_count.clone();
-
-        let (tx, rx) = std::sync::mpsc::channel::<Result<()>>();
-        let spawn_result = std::thread::Builder::new()
-            .name("leopardwm-apply-layout".to_string())
-            .spawn(move || {
-                let should_cancel = || {
-                    apply_worker_cancelled.load(Ordering::SeqCst)
-                        || apply_epoch_ref.load(Ordering::SeqCst) != apply_epoch
-                };
-                if should_cancel() {
-                    let _ = tx.send(Ok(()));
-                    return;
-                }
-
-                #[cfg(test)]
-                if let Some(behavior) = injected_behavior {
-                    let result = match behavior {
-                        TestApplyPlacementsBehavior::SleepAndSucceed(delay) => {
-                            std::thread::sleep(delay);
-                            Ok(())
-                        }
-                        TestApplyPlacementsBehavior::SleepAndFail(delay) => {
-                            std::thread::sleep(delay);
-                            Err(anyhow!("injected apply_placements failure"))
-                        }
-                    };
-                    if should_cancel() {
-                        run_visibility_recovery_pass(
-                            &apply_window_ids,
-                            "apply-cancelled-late-worker",
-                        );
-                        #[cfg(test)]
-                        late_worker_recovery_count.fetch_add(1, Ordering::SeqCst);
-                        let _ = tx.send(Ok(()));
-                        return;
-                    }
-                    let _ = tx.send(result);
-                    return;
-                }
-
-                if should_cancel() {
-                    let _ = tx.send(Ok(()));
-                    return;
-                }
-                let result =
-                    leopardwm_platform_win32::apply_placements(&all_placements, &platform_config)
-                        .map_err(|e| anyhow!(e.to_string()));
-                if should_cancel() {
-                    run_visibility_recovery_pass(&apply_window_ids, "apply-cancelled-late-worker");
-                    #[cfg(test)]
-                    late_worker_recovery_count.fetch_add(1, Ordering::SeqCst);
-                    let _ = tx.send(Ok(()));
-                    return;
-                }
-                let _ = tx.send(result);
-            });
-
-        let worker_handle = match spawn_result {
-            Ok(handle) => handle,
-            Err(e) => {
-                self.applying_layout = false;
-                return Err(anyhow!("Failed to spawn layout worker thread: {}", e));
-            }
-        };
-
-        let result = match rx.recv_timeout(timeout) {
-            Ok(result) => {
-                let _ = worker_handle.join();
-                if result.is_err() {
-                    self.moved_or_resized_suppression.clear();
-                }
-                result
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                self.paused = true;
-                // Invalidate this apply epoch so late-starting workers bail before placement calls.
-                self.apply_epoch.fetch_add(1, Ordering::SeqCst);
-                self.pending_apply_workers.push(worker_handle);
-                self.moved_or_resized_suppression.clear();
-                let msg = layout_apply_timeout_message(timeout);
-                warn!("{}", msg);
-                let managed_window_ids = self.all_managed_window_ids();
-                run_visibility_recovery_pass(&managed_window_ids, "apply-timeout");
-                Err(anyhow!(msg))
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                let _ = worker_handle.join();
-                self.moved_or_resized_suppression.clear();
-                Err(anyhow!(
-                    "Layout worker thread exited without returning a result"
-                ))
-            }
-        };
-        self.applying_layout = false;
-
-        // Reposition border to track the focused window after layout changes
-        if result.is_ok() {
-            if let Some(hwnd) = self.previous_focused_hwnd {
-                if self.config.appearance.active_border {
-                    self.show_border(hwnd);
-                }
-            }
-        }
-
-        result
-    }
-
-    /// Convert the config border color (hex RGB string) to BGR u32 for Win32.
-    fn border_color_bgr(&self) -> Option<u32> {
-        let color = u32::from_str_radix(&self.config.appearance.active_border_color, 16).ok()?;
-        let r = (color >> 16) & 0xFF;
-        let g = (color >> 8) & 0xFF;
-        let b = color & 0xFF;
-        Some((b << 16) | (g << 8) | r)
-    }
-
-    /// Convert the config border position string to the platform enum.
-    fn border_position(&self) -> leopardwm_platform_win32::border::BorderPosition {
-        if self.config.appearance.active_border_position == "inside" {
-            leopardwm_platform_win32::border::BorderPosition::Inside
-        } else {
-            leopardwm_platform_win32::border::BorderPosition::Outside
-        }
-    }
-
-    /// Show the border frame on the given window, or hide it if borders are disabled.
-    fn show_border(&self, hwnd: u64) {
-        if let Some(ref frame) = self.border_frame {
-            if self.config.appearance.active_border {
-                if let Some(bgr) = self.border_color_bgr() {
-                    frame.show(
-                        hwnd,
-                        self.config.appearance.active_border_width,
-                        self.border_position(),
-                        bgr,
-                    );
-                    return;
-                }
-            }
-            frame.hide();
-        }
-    }
-
-    /// Hide the border frame.
-    fn hide_border(&self) {
-        if let Some(ref frame) = self.border_frame {
-            frame.hide();
-        }
-    }
-
-    /// Set the OS foreground window to match the workspace's focused window.
-    /// Also updates active window border if configured.
-    fn sync_foreground_window(&mut self) {
-        let focused_hwnd = self
-            .focused_workspace()
-            .and_then(|ws| ws.focused_visible_window());
-
-        if let Some(hwnd) = focused_hwnd {
-            self.show_border(hwnd);
-
-            // Set foreground window
-            let _ = leopardwm_platform_win32::set_foreground_window(hwnd);
-            self.previous_focused_hwnd = Some(hwnd);
-        } else {
-            debug!("sync_foreground_window: no focused visible window");
-        }
-    }
-
-    /// Enumerate windows and add them to the appropriate workspace based on position.
-    fn enumerate_and_add_windows(&mut self) -> Result<usize> {
-        let windows = enumerate_windows()?;
-        let monitors: Vec<_> = self.monitors.values().cloned().collect();
-        let mut added = 0;
-
-        for win_info in windows {
-            // Get executable name for rule matching
-            let executable = get_process_executable(win_info.process_id).unwrap_or_default();
-
-            // Check window rules
-            let action =
-                self.evaluate_window_rules(&win_info.class_name, &win_info.title, &executable);
-
-            // Skip ignored windows
-            if action == config::WindowAction::Ignore {
-                debug!(
-                    "Ignoring window by rule: {} ({})",
-                    win_info.title, win_info.class_name
-                );
-                continue;
-            }
-
-            // Find which monitor this window is on
-            let monitor_id = find_monitor_for_rect(&monitors, &win_info.rect)
-                .map(|m| m.id)
-                .unwrap_or(self.focused_monitor);
-
-            // Get floating rect before borrowing workspace mutably (to avoid borrow conflict)
-            let floating_rect = if action == config::WindowAction::Float {
-                Some(self.get_floating_rect_from_rules(
-                    &win_info.class_name,
-                    &win_info.title,
-                    &executable,
-                    &win_info.rect,
-                ))
-            } else {
-                None
-            };
-
-            if let Some(workspace) = self.workspaces.get_mut(&monitor_id) {
-                match action {
-                    config::WindowAction::Float => {
-                        // Use rule dimensions or default to centered 800x600 window
-                        let rule_rect = floating_rect.unwrap_or_else(|| {
-                            let viewport = self
-                                .monitors
-                                .get(&monitor_id)
-                                .map(|m| m.work_area)
-                                .unwrap_or_else(|| {
-                                    Rect::new(
-                                        0,
-                                        0,
-                                        FALLBACK_VIEWPORT_WIDTH,
-                                        FALLBACK_VIEWPORT_HEIGHT,
-                                    )
-                                });
-                            Rect::new(
-                                viewport.x + (viewport.width - 800) / 2,
-                                viewport.y + (viewport.height - 600) / 2,
-                                800,
-                                600,
-                            )
-                        });
-
-                        match workspace.add_floating(win_info.hwnd, rule_rect) {
-                            Ok(()) => {
-                                info!(
-                                    "Added floating window: {} ({}) to monitor {} - {}x{}",
-                                    win_info.title,
-                                    win_info.class_name,
-                                    monitor_id,
-                                    rule_rect.width,
-                                    rule_rect.height
-                                );
-                                added += 1;
-                            }
-                            Err(e) => {
-                                warn!("Failed to add floating window {}: {}", win_info.hwnd, e);
-                            }
-                        }
-                    }
-                    config::WindowAction::Tile => {
-                        // Use a reasonable default width or the window's current width, respecting config bounds
-                        let width = win_info.rect.width.clamp(
-                            self.config.layout.min_column_width,
-                            self.config.layout.max_column_width,
-                        );
-
-                        match workspace.insert_window(win_info.hwnd, Some(width)) {
-                            Ok(()) => {
-                                info!(
-                                    "Added tiled window: {} ({}) to monitor {} - {}x{}",
-                                    win_info.title,
-                                    win_info.class_name,
-                                    monitor_id,
-                                    win_info.rect.width,
-                                    win_info.rect.height
-                                );
-                                added += 1;
-                            }
-                            Err(e) => {
-                                warn!("Failed to add window {}: {}", win_info.hwnd, e);
-                            }
-                        }
-                    }
-                    config::WindowAction::Ignore => unreachable!(), // Handled above
-                }
-            }
-        }
-
-        Ok(added)
-    }
-
-    /// Evaluate window rules and return the action for a window.
-    fn evaluate_window_rules(
-        &self,
-        class_name: &str,
-        title: &str,
-        executable: &str,
-    ) -> config::WindowAction {
-        for rule in &self.compiled_rules {
-            if rule.matches(class_name, title, executable) {
-                return rule.action;
-            }
-        }
-        config::WindowAction::Tile // Default
-    }
-
-    /// Get the floating rect for a window based on rules.
-    fn get_floating_rect_from_rules(
-        &self,
-        class_name: &str,
-        title: &str,
-        executable: &str,
-        original_rect: &leopardwm_core_layout::Rect,
-    ) -> leopardwm_core_layout::Rect {
-        for rule in &self.compiled_rules {
-            if rule.matches(class_name, title, executable) {
-                let width = rule.width.unwrap_or(original_rect.width);
-                let height = rule.height.unwrap_or(original_rect.height);
-                return leopardwm_core_layout::Rect::new(
-                    original_rect.x,
-                    original_rect.y,
-                    width,
-                    height,
-                );
-            }
-        }
-        *original_rect
-    }
-
-    /// Find which workspace contains a window.
-    fn find_window_workspace(&self, window_id: u64) -> Option<MonitorId> {
-        for (monitor_id, workspace) in &self.workspaces {
-            if workspace.contains_window(window_id) {
-                return Some(*monitor_id);
-            }
-        }
-        None
-    }
-
-    /// Move the focused window to another monitor using an all-or-nothing update.
-    ///
-    /// The source and target workspaces are mutated on cloned snapshots first and
-    /// committed only if both remove and insert operations succeed.
-    fn move_focused_window_to_monitor_transactional(
-        &mut self,
-        target_monitor: MonitorId,
-    ) -> std::result::Result<Option<u64>, String> {
-        let source_monitor = self.focused_monitor;
-        if source_monitor == target_monitor {
-            return Ok(None);
-        }
-
-        let Some(window_id) = self.focused_workspace().and_then(|ws| ws.focused_window()) else {
-            return Ok(None);
-        };
-
-        let Some(mut source_workspace) = self.workspaces.get(&source_monitor).cloned() else {
-            return Err(format!(
-                "Source workspace missing for monitor {}",
-                source_monitor
-            ));
-        };
-        let Some(mut target_workspace) = self.workspaces.get(&target_monitor).cloned() else {
-            return Err(format!(
-                "Target workspace missing for monitor {}",
-                target_monitor
-            ));
-        };
-
-        source_workspace
-            .remove_window(window_id)
-            .map_err(|e| format!("Failed to remove window: {}", e))?;
-        target_workspace
-            .insert_window(window_id, None)
-            .map_err(|e| format!("Failed to add window to target: {}", e))?;
-
-        let target_viewport = self
-            .monitors
-            .get(&target_monitor)
-            .map(|m| m.work_area.width)
-            .unwrap_or(FALLBACK_VIEWPORT_WIDTH);
-        target_workspace.ensure_focused_visible(target_viewport);
-
-        self.workspaces.insert(source_monitor, source_workspace);
-        self.workspaces.insert(target_monitor, target_workspace);
-        self.focused_monitor = target_monitor;
-        Ok(Some(window_id))
-    }
-
-    /// Get the rectangle of the focused column for snap hint display.
-    ///
-    /// Returns the absolute screen position of the focused column.
-    fn get_focused_column_rect(&self) -> Option<Rect> {
-        let workspace = self.focused_workspace()?;
-        let monitor = self.monitors.get(&self.focused_monitor)?;
-        let placements = workspace.compute_placements(monitor.work_area);
-
-        // Find the placement for the focused window
-        let focused_hwnd = workspace.focused_window()?;
-        placements
-            .iter()
-            .find(|p| p.window_id == focused_hwnd)
-            .map(|p| p.rect)
-    }
-
-    /// Toggle paused state for tiling operations.
-    ///
-    /// When resuming, this immediately reapplies layout so windows snap back
-    /// without waiting for another command/event. If resume reapply fails,
-    /// paused state is restored to avoid claiming a healthy resumed mode.
-    fn toggle_pause(&mut self, source: &str) -> Result<()> {
-        let was_paused = self.paused;
-        self.paused = !was_paused;
-        info!(
-            "Tiling {} via {}",
-            if self.paused { "paused" } else { "resumed" },
-            source
-        );
-        if !self.paused {
-            if let Err(err) = self.apply_layout() {
-                self.paused = was_paused;
-                warn!(
-                    "Resume apply failed via {}; restoring paused state: {}",
-                    source, err
-                );
-                return Err(err);
-            }
-        }
-        Ok(())
-    }
-
-    /// Process an IPC command and return a response.
-    fn handle_command(&mut self, cmd: IpcCommand) -> IpcResponse {
-        let viewport_width = self.focused_viewport().width;
-
-        match cmd {
-            IpcCommand::FocusLeft => {
-                if let Some(workspace) = self.focused_workspace_mut() {
-                    workspace.focus_left();
-                    workspace.ensure_focused_visible_animated(viewport_width);
-                    info!("Focus left -> column {}", workspace.focused_column_index());
-                }
-                if let Err(e) = self.apply_layout() {
-                    return IpcResponse::error(format!("Failed to apply layout: {}", e));
-                }
-                self.sync_foreground_window();
-                IpcResponse::Ok
-            }
-            IpcCommand::FocusRight => {
-                if let Some(workspace) = self.focused_workspace_mut() {
-                    workspace.focus_right();
-                    workspace.ensure_focused_visible_animated(viewport_width);
-                    info!("Focus right -> column {}", workspace.focused_column_index());
-                }
-                if let Err(e) = self.apply_layout() {
-                    return IpcResponse::error(format!("Failed to apply layout: {}", e));
-                }
-                self.sync_foreground_window();
-                IpcResponse::Ok
-            }
-            IpcCommand::FocusUp => {
-                if let Some(workspace) = self.focused_workspace_mut() {
-                    workspace.focus_up();
-                    info!(
-                        "Focus up -> window {}",
-                        workspace.focused_window_index_in_column()
-                    );
-                }
-                if let Err(e) = self.apply_layout() {
-                    return IpcResponse::error(format!("Failed to apply layout: {}", e));
-                }
-                self.sync_foreground_window();
-                IpcResponse::Ok
-            }
-            IpcCommand::FocusDown => {
-                if let Some(workspace) = self.focused_workspace_mut() {
-                    workspace.focus_down();
-                    info!(
-                        "Focus down -> window {}",
-                        workspace.focused_window_index_in_column()
-                    );
-                }
-                if let Err(e) = self.apply_layout() {
-                    return IpcResponse::error(format!("Failed to apply layout: {}", e));
-                }
-                self.sync_foreground_window();
-                IpcResponse::Ok
-            }
-            IpcCommand::MoveColumnLeft => {
-                if let Some(workspace) = self.focused_workspace_mut() {
-                    workspace.move_column_left();
-                    workspace.ensure_focused_visible_animated(viewport_width);
-                    info!("Moved column left");
-                }
-                if let Err(e) = self.apply_layout() {
-                    return IpcResponse::error(format!("Failed to apply layout: {}", e));
-                }
-                IpcResponse::Ok
-            }
-            IpcCommand::MoveColumnRight => {
-                if let Some(workspace) = self.focused_workspace_mut() {
-                    workspace.move_column_right();
-                    workspace.ensure_focused_visible_animated(viewport_width);
-                    info!("Moved column right");
-                }
-                if let Err(e) = self.apply_layout() {
-                    return IpcResponse::error(format!("Failed to apply layout: {}", e));
-                }
-                IpcResponse::Ok
-            }
-            IpcCommand::FocusMonitorLeft => {
-                let monitors: Vec<_> = self.monitors.values().cloned().collect();
-                if let Some(target) = monitor_to_left(&monitors, self.focused_monitor) {
-                    let target_id = target.id;
-                    self.focused_monitor = target_id;
-                    info!("Focused monitor left -> {}", target_id);
-                    if let Err(e) = self.apply_layout() {
-                        return IpcResponse::error(format!("Failed to apply layout: {}", e));
-                    }
-                    self.sync_foreground_window();
-                } else {
-                    info!("No monitor to the left");
-                }
-                IpcResponse::Ok
-            }
-            IpcCommand::FocusMonitorRight => {
-                let monitors: Vec<_> = self.monitors.values().cloned().collect();
-                if let Some(target) = monitor_to_right(&monitors, self.focused_monitor) {
-                    let target_id = target.id;
-                    self.focused_monitor = target_id;
-                    info!("Focused monitor right -> {}", target_id);
-                    if let Err(e) = self.apply_layout() {
-                        return IpcResponse::error(format!("Failed to apply layout: {}", e));
-                    }
-                    self.sync_foreground_window();
-                } else {
-                    info!("No monitor to the right");
-                }
-                IpcResponse::Ok
-            }
-            IpcCommand::MoveWindowToMonitorLeft => {
-                let monitors: Vec<_> = self.monitors.values().cloned().collect();
-                if let Some(target) = monitor_to_left(&monitors, self.focused_monitor) {
-                    let target_id = target.id;
-                    match self.move_focused_window_to_monitor_transactional(target_id) {
-                        Ok(Some(hwnd)) => {
-                            info!("Moved window {} to monitor {}", hwnd, target_id);
-                            if let Err(e) = self.apply_layout() {
-                                return IpcResponse::error(format!(
-                                    "Failed to apply layout: {}",
-                                    e
-                                ));
-                            }
-                            self.sync_foreground_window();
-                        }
-                        Ok(None) => info!("No focused window to move"),
-                        Err(message) => return IpcResponse::error(message),
-                    }
-                } else {
-                    info!("No monitor to the left");
-                }
-                IpcResponse::Ok
-            }
-            IpcCommand::MoveWindowToMonitorRight => {
-                let monitors: Vec<_> = self.monitors.values().cloned().collect();
-                if let Some(target) = monitor_to_right(&monitors, self.focused_monitor) {
-                    let target_id = target.id;
-                    match self.move_focused_window_to_monitor_transactional(target_id) {
-                        Ok(Some(hwnd)) => {
-                            info!("Moved window {} to monitor {}", hwnd, target_id);
-                            if let Err(e) = self.apply_layout() {
-                                return IpcResponse::error(format!(
-                                    "Failed to apply layout: {}",
-                                    e
-                                ));
-                            }
-                            self.sync_foreground_window();
-                        }
-                        Ok(None) => info!("No focused window to move"),
-                        Err(message) => return IpcResponse::error(message),
-                    }
-                } else {
-                    info!("No monitor to the right");
-                }
-                IpcResponse::Ok
-            }
-            IpcCommand::Resize { delta } => {
-                if let Some(workspace) = self.focused_workspace_mut() {
-                    workspace.resize_focused_column(delta);
-                    info!("Resized column by {}", delta);
-                }
-                if let Err(e) = self.apply_layout() {
-                    return IpcResponse::error(format!("Failed to apply layout: {}", e));
-                }
-                IpcResponse::Ok
-            }
-            IpcCommand::Scroll { delta } => {
-                if let Some(workspace) = self.focused_workspace_mut() {
-                    workspace.scroll_by(delta, viewport_width);
-                    info!("Scrolled by {}", delta);
-                }
-                if let Err(e) = self.apply_layout() {
-                    return IpcResponse::error(format!("Failed to apply layout: {}", e));
-                }
-                IpcResponse::Ok
-            }
-            IpcCommand::QueryWorkspace => {
-                if let Some(workspace) = self.focused_workspace() {
-                    IpcResponse::WorkspaceState {
-                        columns: workspace.column_count(),
-                        windows: workspace.window_count(),
-                        focused_column: workspace.focused_column_index(),
-                        focused_window: workspace.focused_window_index_in_column(),
-                        scroll_offset: workspace.scroll_offset(),
-                        total_width: workspace.total_width(),
-                    }
-                } else {
-                    IpcResponse::error("No focused workspace")
-                }
-            }
-            IpcCommand::QueryFocused => {
-                if let Some(workspace) = self.focused_workspace() {
-                    IpcResponse::FocusedWindow {
-                        window_id: workspace.focused_window(),
-                        column_index: workspace.focused_column_index(),
-                        window_index: workspace.focused_window_index_in_column(),
-                    }
-                } else {
-                    IpcResponse::error("No focused workspace")
-                }
-            }
-            IpcCommand::Refresh => match self.enumerate_and_add_windows() {
-                Ok(added) => {
-                    info!("Refreshed: added {} new windows across all monitors", added);
-                    if let Err(e) = self.apply_layout() {
-                        return IpcResponse::error(format!("Failed to apply layout: {}", e));
-                    }
-                    IpcResponse::Ok
-                }
-                Err(e) => IpcResponse::error(format!("Failed to enumerate windows: {}", e)),
-            },
-            IpcCommand::Apply => {
-                if let Err(e) = self.apply_layout() {
-                    return IpcResponse::error(format!("Failed to apply layout: {}", e));
-                }
-                info!("Applied layout");
-                IpcResponse::Ok
-            }
-            IpcCommand::Reload => match Config::load() {
-                Ok(new_config) => {
-                    self.apply_config(new_config);
-                    if let Err(e) = self.apply_layout() {
-                        return IpcResponse::error(format!("Failed to apply layout: {}", e));
-                    }
-                    IpcResponse::Ok
-                }
-                Err(e) => IpcResponse::error(format!("Failed to reload config: {}", e)),
-            },
-            IpcCommand::TogglePause => {
-                if let Err(e) = self.toggle_pause("IPC toggle") {
-                    return IpcResponse::error(format!("Failed to apply layout: {}", e));
-                }
-                IpcResponse::Ok
-            }
-            IpcCommand::Stop => {
-                // This is handled specially in the event loop
-                IpcResponse::Ok
-            }
-            IpcCommand::PanicRevert => {
-                // This is handled specially in the event loop
-                IpcResponse::Ok
-            }
-            IpcCommand::QueryAllWindows => {
-                let mut windows = Vec::new();
-
-                // Get focused window for comparison
-                let focused_hwnd = self.focused_workspace().and_then(|ws| ws.focused_window());
-
-                // Enumerate all windows to get titles and other info
-                let win_info_map: HashMap<u64, (String, String, u32)> = match enumerate_windows() {
-                    Ok(wins) => wins
-                        .into_iter()
-                        .map(|w| (w.hwnd, (w.title, w.class_name, w.process_id)))
-                        .collect(),
-                    Err(_) => HashMap::new(),
-                };
-
-                for (monitor_id, workspace) in &self.workspaces {
-                    // Tiled windows
-                    for (col_idx, column) in workspace.columns().iter().enumerate() {
-                        for (win_idx, &window_id) in column.windows().iter().enumerate() {
-                            let (title, class_name, process_id) =
-                                win_info_map.get(&window_id).cloned().unwrap_or_else(|| {
-                                    ("Unknown".to_string(), "Unknown".to_string(), 0)
-                                });
-
-                            let executable = get_process_executable(process_id).unwrap_or_default();
-
-                            // Get rect from computed placements
-                            let rect = self
-                                .monitors
-                                .get(monitor_id)
-                                .map(|m| workspace.compute_placements(m.work_area))
-                                .and_then(|placements| {
-                                    placements
-                                        .into_iter()
-                                        .find(|p| p.window_id == window_id)
-                                        .map(|p| p.rect)
-                                })
-                                .unwrap_or_else(|| Rect::new(0, 0, 0, 0));
-
-                            windows.push(leopardwm_ipc::WindowInfo {
-                                window_id,
-                                title,
-                                class_name,
-                                process_id,
-                                executable,
-                                rect: leopardwm_ipc::IpcRect::new(
-                                    rect.x,
-                                    rect.y,
-                                    rect.width,
-                                    rect.height,
-                                ),
-                                column_index: Some(col_idx),
-                                window_index: Some(win_idx),
-                                monitor_id: *monitor_id as i64,
-                                is_floating: false,
-                                is_focused: Some(window_id) == focused_hwnd,
-                            });
-                        }
-                    }
-
-                    // Floating windows
-                    for floating in workspace.floating_windows() {
-                        let (title, class_name, process_id) = win_info_map
-                            .get(&floating.id)
-                            .cloned()
-                            .unwrap_or_else(|| ("Unknown".to_string(), "Unknown".to_string(), 0));
-
-                        let executable = get_process_executable(process_id).unwrap_or_default();
-
-                        windows.push(leopardwm_ipc::WindowInfo {
-                            window_id: floating.id,
-                            title,
-                            class_name,
-                            process_id,
-                            executable,
-                            rect: leopardwm_ipc::IpcRect::new(
-                                floating.rect.x,
-                                floating.rect.y,
-                                floating.rect.width,
-                                floating.rect.height,
-                            ),
-                            column_index: None,
-                            window_index: None,
-                            monitor_id: *monitor_id as i64,
-                            is_floating: true,
-                            is_focused: Some(floating.id) == focused_hwnd,
-                        });
-                    }
-                }
-
-                IpcResponse::WindowList { windows }
-            }
-            IpcCommand::CloseWindow => {
-                if let Some(hwnd) = self.focused_workspace().and_then(|ws| ws.focused_window()) {
-                    if let Err(e) = leopardwm_platform_win32::close_window(hwnd) {
-                        return IpcResponse::error(format!("Failed to close window: {}", e));
-                    }
-                    info!("Closed window {}", hwnd);
-                } else {
-                    info!("No focused window to close");
-                }
-                IpcResponse::Ok
-            }
-            IpcCommand::ToggleFloating => {
-                let viewport = self.focused_viewport();
-                let prev_hwnd = self.previous_focused_hwnd;
-                if let Some(workspace) = self.focused_workspace_mut() {
-                    // Check if the OS-foreground window is floating — unfloat it
-                    let foreground_is_floating = prev_hwnd
-                        .map(|hwnd| workspace.is_floating(hwnd))
-                        .unwrap_or(false);
-                    if foreground_is_floating {
-                        let hwnd = prev_hwnd.unwrap();
-                        if workspace.unfloat_window(hwnd) {
-                            info!("Unfloated window {} back to tiling", hwnd);
-                        }
-                    } else if let Some(wid) = workspace.toggle_floating(viewport) {
-                        info!("Toggled window {} to floating", wid);
-                    }
-                }
-                if let Err(e) = self.apply_layout() {
-                    return IpcResponse::error(format!("Failed to apply layout: {}", e));
-                }
-                self.sync_foreground_window();
-                IpcResponse::Ok
-            }
-            IpcCommand::ToggleFullscreen => {
-                if let Some(workspace) = self.focused_workspace_mut() {
-                    let entering = workspace.toggle_fullscreen();
-                    info!("Fullscreen: {}", if entering { "on" } else { "off" });
-                }
-                if let Err(e) = self.apply_layout() {
-                    return IpcResponse::error(format!("Failed to apply layout: {}", e));
-                }
-                IpcResponse::Ok
-            }
-            IpcCommand::SetColumnWidth { fraction } => {
-                if let Err(message) = validate_set_width_fraction(fraction) {
-                    return IpcResponse::error(message);
-                }
-                if let Some(workspace) = self.focused_workspace_mut() {
-                    workspace.set_focused_column_width_fraction(fraction, viewport_width);
-                    info!("Set column width fraction to {:.3}", fraction);
-                }
-                if let Err(e) = self.apply_layout() {
-                    return IpcResponse::error(format!("Failed to apply layout: {}", e));
-                }
-                IpcResponse::Ok
-            }
-            IpcCommand::EqualizeColumnWidths => {
-                if let Some(workspace) = self.focused_workspace_mut() {
-                    workspace.equalize_column_widths(viewport_width);
-                    info!("Equalized column widths");
-                }
-                if let Err(e) = self.apply_layout() {
-                    return IpcResponse::error(format!("Failed to apply layout: {}", e));
-                }
-                IpcResponse::Ok
-            }
-            IpcCommand::QueryStatus => {
-                let uptime = self.start_time.elapsed().as_secs();
-                let total_windows: usize = self
-                    .workspaces
-                    .values()
-                    .map(|ws| ws.window_count() + ws.floating_count())
-                    .sum();
-                IpcResponse::StatusInfo {
-                    version: env!("CARGO_PKG_VERSION").to_string(),
-                    monitors: self.monitors.len(),
-                    total_windows,
-                    uptime_seconds: uptime,
-                }
-            }
-            IpcCommand::HealthCheck => {
-                let uptime = self.start_time.elapsed().as_secs();
-                let total_windows: usize = self
-                    .workspaces
-                    .values()
-                    .map(|ws| ws.window_count() + ws.floating_count())
-                    .sum();
-                IpcResponse::HealthInfo {
-                    healthy: true,
-                    uptime_seconds: uptime,
-                    total_windows,
-                    monitors: self.monitors.len(),
-                    paused: self.paused,
-                }
-            }
-        }
-    }
-
-    /// Handle a window lifecycle event.
-    fn handle_window_event(&mut self, event: WindowEvent) {
-        // Get window_id from event for validation (DisplayChange and MouseEnterWindow have no validation needed)
-        let window_id = match &event {
-            WindowEvent::Created(id)
-            | WindowEvent::Destroyed(id)
-            | WindowEvent::Focused(id)
-            | WindowEvent::Minimized(id)
-            | WindowEvent::Restored(id)
-            | WindowEvent::MovedOrResized(id)
-            | WindowEvent::MoveSizeStart(id)
-            | WindowEvent::MoveSizeEnd(id) => Some(*id),
-            WindowEvent::DisplayChange | WindowEvent::MouseEnterWindow(_) => None,
-        };
-
-        // Validate window existence for events that require it.
-        // Skip validation for:
-        //   - Destroyed events (window is already gone)
-        //   - Windows we already know about (managed or injected in tests)
-        //   - DisplayChange / MouseEnterWindow (no window to validate)
-        if let Some(wid) = window_id {
-            if !matches!(event, WindowEvent::Destroyed(_))
-                && !self.is_known_window(wid)
-                && !leopardwm_platform_win32::is_valid_window(wid)
-            {
-                debug!("Ignoring event for invalid window {}", wid);
-                return;
-            }
-        }
-
-        match event {
-            WindowEvent::Created(hwnd) => {
-                // Check if any workspace already manages this window
-                if self.find_window_workspace(hwnd).is_some() {
-                    debug!("Window {} already managed, ignoring create event", hwnd);
-                    return;
-                }
-
-                // Try to get window info for filtering and monitor assignment
-                if let Some(win_info) = self.lookup_window_info(hwnd) {
-                    // Get executable name for rule matching
-                    let executable =
-                        get_process_executable(win_info.process_id).unwrap_or_default();
-
-                    // Check window rules
-                    let action = self.evaluate_window_rules(
-                        &win_info.class_name,
-                        &win_info.title,
-                        &executable,
-                    );
-
-                    // Skip ignored windows
-                    if action == config::WindowAction::Ignore {
-                        debug!(
-                            "Ignoring window by rule: {} ({})",
-                            win_info.title, win_info.class_name
-                        );
-                        return;
-                    }
-
-                    // Determine which monitor this window should be on
-                    let monitors: Vec<_> = self.monitors.values().cloned().collect();
-                    let monitor_id = find_monitor_for_rect(&monitors, &win_info.rect)
-                        .map(|m| m.id)
-                        .unwrap_or(self.focused_monitor);
-
-                    // Get floating rect before borrowing workspace mutably
-                    let floating_rect = if action == config::WindowAction::Float {
-                        Some(self.get_floating_rect_from_rules(
-                            &win_info.class_name,
-                            &win_info.title,
-                            &executable,
-                            &win_info.rect,
-                        ))
-                    } else {
-                        None
-                    };
-
-                    let viewport_width = self
-                        .monitors
-                        .get(&monitor_id)
-                        .map(|m| m.work_area.width)
-                        .unwrap_or(FALLBACK_VIEWPORT_WIDTH);
-
-                    if let Some(workspace) = self.workspaces.get_mut(&monitor_id) {
-                        let added = match action {
-                            config::WindowAction::Float => {
-                                // Use rule dimensions or default to centered 800x600 window
-                                let rect = floating_rect.unwrap_or_else(|| {
-                                    let viewport = self
-                                        .monitors
-                                        .get(&monitor_id)
-                                        .map(|m| m.work_area)
-                                        .unwrap_or_else(|| {
-                                            Rect::new(
-                                                0,
-                                                0,
-                                                FALLBACK_VIEWPORT_WIDTH,
-                                                FALLBACK_VIEWPORT_HEIGHT,
-                                            )
-                                        });
-                                    Rect::new(
-                                        viewport.x + (viewport.width - 800) / 2,
-                                        viewport.y + (viewport.height - 600) / 2,
-                                        800,
-                                        600,
-                                    )
-                                });
-                                workspace.add_floating(hwnd, rect).is_ok()
-                            }
-                            config::WindowAction::Tile => {
-                                let width = win_info.rect.width.clamp(
-                                    self.config.layout.min_column_width,
-                                    self.config.layout.max_column_width,
-                                );
-                                if self.config.behavior.focus_new_windows {
-                                    workspace.insert_window(hwnd, Some(width)).is_ok()
-                                } else {
-                                    workspace.insert_window_no_focus(hwnd, Some(width)).is_ok()
-                                }
-                            }
-                            config::WindowAction::Ignore => unreachable!(),
-                        };
-
-                        if added {
-                            info!(
-                                "Window created: {} ({}) - added to monitor {} as {:?}",
-                                win_info.title, win_info.class_name, monitor_id, action
-                            );
-                            if self.config.behavior.focus_new_windows {
-                                workspace.ensure_focused_visible_animated(viewport_width);
-                            }
-                            if let Err(e) = self.apply_layout() {
-                                warn!("Failed to apply layout after window create: {}", e);
-                            }
-                            if self.config.behavior.focus_new_windows {
-                                self.sync_foreground_window();
-                            }
-                        } else {
-                            debug!("Failed to add window {} to workspace", hwnd);
-                        }
-                    }
-                }
-            }
-            WindowEvent::Destroyed(hwnd) => {
-                // Find which workspace contains this window
-                if let Some(monitor_id) = self.find_window_workspace(hwnd) {
-                    let viewport_width = self
-                        .monitors
-                        .get(&monitor_id)
-                        .map(|m| m.work_area.width)
-                        .unwrap_or(FALLBACK_VIEWPORT_WIDTH);
-
-                    if let Some(workspace) = self.workspaces.get_mut(&monitor_id) {
-                        // Try to remove as floating window first
-                        let was_floating = workspace.remove_floating(hwnd);
-
-                        if was_floating {
-                            info!(
-                                "Floating window {} destroyed - removed from monitor {}",
-                                hwnd, monitor_id
-                            );
-                        } else if let Err(e) = workspace.remove_window(hwnd) {
-                            warn!("Failed to remove window {}: {}", hwnd, e);
-                        } else {
-                            info!(
-                                "Window {} destroyed - removed from monitor {}",
-                                hwnd, monitor_id
-                            );
-                            workspace.ensure_focused_visible_animated(viewport_width);
-                        }
-
-                        if let Err(e) = self.apply_layout() {
-                            warn!("Failed to apply layout after window destroy: {}", e);
-                        }
-                    }
-                }
-            }
-            WindowEvent::Focused(hwnd) => {
-                // Update focus to match what Windows says is focused
-                if let Some(monitor_id) = self.find_window_workspace(hwnd) {
-                    // Update focused monitor to match the window's monitor
-                    self.focused_monitor = monitor_id;
-
-                    let viewport_width = self
-                        .monitors
-                        .get(&monitor_id)
-                        .map(|m| m.work_area.width)
-                        .unwrap_or(FALLBACK_VIEWPORT_WIDTH);
-
-                    if let Some(workspace) = self.workspaces.get_mut(&monitor_id) {
-                        if let Err(e) = workspace.focus_window(hwnd) {
-                            // Floating windows are not in the tiled column list,
-                            // so focus_window fails for them — that's expected.
-                            debug!("Failed to focus window {}: {}", hwnd, e);
-                        } else {
-                            debug!("Focus changed to window {} on monitor {}", hwnd, monitor_id);
-                            workspace.ensure_focused_visible_animated(viewport_width);
-                            if let Err(e) = self.apply_layout() {
-                                warn!("Failed to apply layout after focus change: {}", e);
-                            }
-                        }
-                    }
-
-                    // Update border colors to reflect the new focus.
-                    // Must happen after focus_window() so focused_visible_window()
-                    // returns the correct hwnd, and before updating
-                    // previous_focused_hwnd so the old border gets reset.
-                    self.sync_foreground_window();
-
-                    // Track the OS-foreground window — including floating windows —
-                    // so that ToggleFloating can reliably detect and unfloat the
-                    // currently focused floating window.
-                    self.previous_focused_hwnd = Some(hwnd);
-                } else {
-                    // Focus went to an unmanaged window (e.g. settings, taskbar).
-                    // Hide the border overlay and clear tracked hwnd so animation
-                    // frames don't re-show it.
-                    self.hide_border();
-                    self.previous_focused_hwnd = None;
-                }
-            }
-            WindowEvent::Minimized(hwnd) => {
-                if let Some(monitor_id) = self.find_window_workspace(hwnd) {
-                    let viewport_width = self
-                        .monitors
-                        .get(&monitor_id)
-                        .map(|m| m.work_area.width)
-                        .unwrap_or(FALLBACK_VIEWPORT_WIDTH);
-                    if let Some(workspace) = self.workspaces.get_mut(&monitor_id) {
-                        let cleared_fullscreen = workspace.clear_fullscreen_if_window(hwnd);
-                        if workspace.mark_minimized(hwnd) || cleared_fullscreen {
-                            info!("Window {} marked minimized", hwnd);
-
-                            // If the minimized window was the focused window, move focus
-                            if workspace.focused_window() == Some(hwnd) {
-                                // Try to focus another window in the same column
-                                workspace.focus_down();
-                                if workspace.focused_window() == Some(hwnd) {
-                                    workspace.focus_up();
-                                }
-                                // If still focused on minimized (only window in column), try next column
-                                if workspace.focused_window() == Some(hwnd) {
-                                    workspace.focus_right();
-                                    if workspace.focused_window() == Some(hwnd) {
-                                        workspace.focus_left();
-                                    }
-                                }
-                            }
-                            workspace.ensure_focused_visible_animated(viewport_width);
-
-                            if let Err(e) = self.apply_layout() {
-                                warn!("Failed to apply layout after minimize: {}", e);
-                            }
-                            // Keep monitor focus aligned before foreground sync so we don't
-                            // accidentally steer foreground to a stale monitor.
-                            self.focused_monitor = monitor_id;
-                            self.sync_foreground_window();
-                        }
-                    }
-                } else {
-                    debug!("Window {} minimized (unmanaged)", hwnd);
-                }
-            }
-            WindowEvent::Restored(hwnd) => {
-                if let Some(monitor_id) = self.find_window_workspace(hwnd) {
-                    let viewport_width = self
-                        .monitors
-                        .get(&monitor_id)
-                        .map(|m| m.work_area.width)
-                        .unwrap_or(FALLBACK_VIEWPORT_WIDTH);
-                    let mut should_sync_foreground = false;
-                    if let Some(workspace) = self.workspaces.get_mut(&monitor_id) {
-                        if workspace.mark_restored(hwnd) {
-                            info!("Window {} restored from minimized", hwnd);
-                            if workspace.is_floating(hwnd) {
-                                // Keep floating restores from stealing focus back to tiled windows.
-                                debug!(
-                                    "Restored floating window {} without changing tiled focus",
-                                    hwnd
-                                );
-                            } else if let Err(e) = workspace.focus_window(hwnd) {
-                                warn!("Failed to focus restored window {}: {}", hwnd, e);
-                            } else {
-                                workspace.ensure_focused_visible_animated(viewport_width);
-                                should_sync_foreground = true;
-                            }
-                        }
-                    }
-                    if let Err(e) = self.apply_layout() {
-                        warn!("Failed to apply layout after window restore: {}", e);
-                    }
-                    if should_sync_foreground {
-                        self.focused_monitor = monitor_id;
-                        self.sync_foreground_window();
-                    }
-                } else {
-                    debug!("Window {} restored (unmanaged)", hwnd);
-                }
-            }
-            WindowEvent::MoveSizeStart(hwnd) => {
-                debug!("User started dragging/resizing window {}", hwnd);
-                self.dragging_window = Some(hwnd);
-            }
-            WindowEvent::MoveSizeEnd(hwnd) => {
-                debug!("User finished dragging/resizing window {}", hwnd);
-                self.dragging_window = None;
-                // Snap the window back to its tiled position with animation.
-                if let Some(monitor_id) = self.find_window_workspace(hwnd) {
-                    let is_floating = self
-                        .workspaces
-                        .get(&monitor_id)
-                        .map_or(true, |ws| ws.is_floating(hwnd));
-
-                    if !is_floating {
-                        debug!("Managed window {} dropped — animating back", hwnd);
-                        let viewport_width = self
-                            .monitors
-                            .get(&monitor_id)
-                            .map(|m| m.work_area.width)
-                            .unwrap_or(FALLBACK_VIEWPORT_WIDTH);
-
-                        if let Some(workspace) = self.workspaces.get_mut(&monitor_id) {
-                            workspace.ensure_focused_visible_animated(viewport_width);
-                        }
-                        if let Err(e) = self.apply_layout() {
-                            warn!("Failed to snap back layout after drag: {}", e);
-                        }
-                    }
-                }
-            }
-            WindowEvent::MovedOrResized(hwnd) => {
-                // Skip events triggered by our own apply_layout() to avoid feedback loop.
-                if self.applying_layout || self.should_suppress_moved_or_resized(hwnd) {
-                    return;
-                }
-                // Suppress location-change events while the user is actively dragging.
-                // We'll snap back on MoveSizeEnd instead.
-                if self.dragging_window == Some(hwnd) {
-                    return;
-                }
-                // If the window is managed (tiled), snap it back to its layout position.
-                // This handles programmatic moves (not user drags).
-                if let Some(monitor_id) = self.find_window_workspace(hwnd) {
-                    let is_floating = self
-                        .workspaces
-                        .get(&monitor_id)
-                        .map_or(true, |ws| ws.is_floating(hwnd));
-
-                    if !is_floating {
-                        debug!("Managed window {} moved/resized — snapping back", hwnd);
-                        if let Err(e) = self.apply_layout() {
-                            warn!("Failed to snap back layout after move/resize: {}", e);
-                        }
-                    } else {
-                        debug!("Floating window {} moved/resized by user — ignored", hwnd);
-                    }
-                } else {
-                    debug!("Unmanaged window {} moved/resized — ignored", hwnd);
-                }
-            }
-            WindowEvent::DisplayChange => {
-                // Display configuration changed (monitors added/removed/rearranged)
-                info!("Display configuration changed - reconciling monitors");
-
-                // Re-enumerate monitors
-                match enumerate_monitors() {
-                    Ok(new_monitors) if !new_monitors.is_empty() => {
-                        info!(
-                            "Detected {} monitor(s) after display change",
-                            new_monitors.len()
-                        );
-                        for m in &new_monitors {
-                            info!(
-                                "  Monitor {}: {}x{} at ({},{}){} \"{}\"",
-                                m.id,
-                                m.work_area.width,
-                                m.work_area.height,
-                                m.work_area.x,
-                                m.work_area.y,
-                                if m.is_primary { " [PRIMARY]" } else { "" },
-                                m.device_name
-                            );
-                        }
-
-                        // Reconcile workspaces with new monitor configuration
-                        self.reconcile_monitors(new_monitors);
-
-                        // Re-apply layout with updated monitor configuration
-                        if let Err(e) = self.apply_layout() {
-                            warn!("Failed to apply layout after display change: {}", e);
-                        }
-                    }
-                    Ok(_) => {
-                        warn!("No monitors found after display change");
-                    }
-                    Err(e) => {
-                        warn!("Failed to enumerate monitors after display change: {}", e);
-                    }
-                }
-            }
-            WindowEvent::MouseEnterWindow(_hwnd) => {
-                // This is handled by the main event loop with debouncing
-                // (focus_follows_mouse delay)
-            }
-        }
-    }
-
-    /// Apply focus to a window for focus-follows-mouse.
-    /// Returns true if focus was applied, false if the window isn't managed.
-    fn apply_focus_follows_mouse(&mut self, hwnd: u64) -> bool {
-        if let Some(monitor_id) = self.find_window_workspace(hwnd) {
-            // Update focused monitor to match the window's monitor
-            self.focused_monitor = monitor_id;
-
-            let viewport_width = self
-                .monitors
-                .get(&monitor_id)
-                .map(|m| m.work_area.width)
-                .unwrap_or(FALLBACK_VIEWPORT_WIDTH);
-
-            if let Some(workspace) = self.workspaces.get_mut(&monitor_id) {
-                if workspace.is_floating(hwnd) {
-                    // Floating windows are managed but not represented in tiled columns.
-                    self.previous_focused_hwnd = Some(hwnd);
-                    let _ = leopardwm_platform_win32::set_foreground_window(hwnd);
-                    debug!(
-                        "Focus-follows-mouse: focused floating window {} on monitor {}",
-                        hwnd, monitor_id
-                    );
-                    return true;
-                }
-                if let Err(e) = workspace.focus_window(hwnd) {
-                    debug!(
-                        "Failed to focus window {} for focus-follows-mouse: {}",
-                        hwnd, e
-                    );
-                    return false;
-                }
-                debug!(
-                    "Focus-follows-mouse: focused window {} on monitor {}",
-                    hwnd, monitor_id
-                );
-                workspace.ensure_focused_visible_animated(viewport_width);
-                if let Err(e) = self.apply_layout() {
-                    warn!("Failed to apply layout after focus-follows-mouse: {}", e);
-                }
-                self.sync_foreground_window();
-                return true;
-            }
-        }
-        false
-    }
-}
+// handle_command is in command_handler.rs
+// handle_window_event and apply_focus_follows_mouse are in event_handler.rs
+// Helper methods are in helpers.rs
+// AppState struct and constructor are in state.rs
 
 /// Hotkey registration result containing handle and mapping.
 struct HotkeyState {
@@ -2164,49 +246,6 @@ fn setup_hotkeys(config: &Config, event_tx: mpsc::Sender<DaemonEvent>) -> Hotkey
             }
         }
     }
-}
-
-fn merged_cleanup_window_ids(
-    managed_window_ids: &[u64],
-    discovered_window_ids: &[u64],
-) -> Vec<u64> {
-    let mut merged = Vec::with_capacity(managed_window_ids.len() + discovered_window_ids.len());
-    merged.extend_from_slice(managed_window_ids);
-    merged.extend_from_slice(discovered_window_ids);
-    merged.sort_unstable();
-    merged.dedup();
-    merged
-}
-
-fn run_visibility_recovery_pass(managed_window_ids: &[u64], context_label: &str) {
-    let discovered_window_ids = match enumerate_windows() {
-        Ok(windows) => windows.into_iter().map(|w| w.hwnd).collect::<Vec<_>>(),
-        Err(e) => {
-            warn!(
-                "Failed to enumerate windows during {} recovery: {}",
-                context_label, e
-            );
-            Vec::new()
-        }
-    };
-    let recovery_window_ids = merged_cleanup_window_ids(managed_window_ids, &discovered_window_ids);
-
-    match restore_windows_moved_offscreen(&recovery_window_ids) {
-        Ok(restored) => {
-            if restored > 0 {
-                info!(
-                    "Restored {} windows from MoveOffScreen sentinel positions",
-                    restored
-                );
-            }
-        }
-        Err(e) => warn!("MoveOffScreen recovery failed: {}", e),
-    }
-
-    // Keep managed-window uncloak behavior.
-    uncloak_all_managed_windows(managed_window_ids);
-    // Safety net: also uncloak all visible windows on the desktop.
-    uncloak_all_visible_windows();
 }
 
 /// Shared shutdown/recovery cleanup used by all daemon exit paths.
@@ -2515,7 +554,6 @@ pub struct StartupInfo {
     pub log_path: String,
     pub safe_mode: bool,
     pub no_hotkeys: bool,
-    pub no_cloak: bool,
 }
 
 /// Print a startup banner to stderr so users see immediate feedback.
@@ -2559,15 +597,9 @@ pub fn format_startup_banner(info: &StartupInfo) -> String {
     }
     writeln!(out, "  Logs:     {}", info.log_path).unwrap();
     if info.safe_mode {
-        writeln!(
-            out,
-            "  Mode:     SAFE MODE (hotkeys disabled, cloaking disabled)"
-        )
-        .unwrap();
+        writeln!(out, "  Mode:     SAFE MODE (hotkeys disabled)").unwrap();
     } else if info.no_hotkeys {
         writeln!(out, "  Mode:     hotkeys disabled").unwrap();
-    } else if info.no_cloak {
-        writeln!(out, "  Mode:     cloaking disabled").unwrap();
     } else {
         writeln!(out, "  Status:   Active").unwrap();
     }
@@ -2684,11 +716,6 @@ async fn main() -> Result<()> {
         eprintln!("Failed to load configuration: {}. Using defaults.", e);
         Config::default()
     });
-
-    // Apply safe-mode overrides to config
-    if args.skip_cloak() {
-        config.appearance.use_cloaking = false;
-    }
 
     // Initialize logging with configured log level
     let log_level = match config.behavior.log_level.to_lowercase().as_str() {
@@ -3141,7 +1168,6 @@ async fn main() -> Result<()> {
             log_path,
             safe_mode: args.safe_mode,
             no_hotkeys: args.skip_hotkeys(),
-            no_cloak: args.skip_cloak(),
         });
     }
 
@@ -3645,7 +1671,8 @@ async fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use leopardwm_core_layout::Rect;
+    use leopardwm_core_layout::{Rect, Workspace};
+    use std::sync::atomic::Ordering;
 
     fn test_config() -> Config {
         Config::default()
@@ -4748,51 +2775,33 @@ mod tests {
     fn test_args_default_all_false() {
         let args = Args {
             no_hotkeys: false,
-            no_cloak: false,
             safe_mode: false,
         };
         assert!(!args.skip_hotkeys());
-        assert!(!args.skip_cloak());
     }
 
     #[test]
     fn test_args_no_hotkeys() {
         let args = Args {
             no_hotkeys: true,
-            no_cloak: false,
             safe_mode: false,
         };
         assert!(args.skip_hotkeys());
-        assert!(!args.skip_cloak());
     }
 
     #[test]
-    fn test_args_no_cloak() {
+    fn test_args_safe_mode_implies_no_hotkeys() {
         let args = Args {
             no_hotkeys: false,
-            no_cloak: true,
-            safe_mode: false,
-        };
-        assert!(!args.skip_hotkeys());
-        assert!(args.skip_cloak());
-    }
-
-    #[test]
-    fn test_args_safe_mode_implies_both() {
-        let args = Args {
-            no_hotkeys: false,
-            no_cloak: false,
             safe_mode: true,
         };
         assert!(args.skip_hotkeys());
-        assert!(args.skip_cloak());
     }
 
     #[test]
     fn test_args_parse_no_flags() {
         let args = Args::try_parse_from(["leopardwm"]).unwrap();
         assert!(!args.no_hotkeys);
-        assert!(!args.no_cloak);
         assert!(!args.safe_mode);
     }
 
@@ -4801,22 +2810,12 @@ mod tests {
         let args = Args::try_parse_from(["leopardwm", "--safe-mode"]).unwrap();
         assert!(args.safe_mode);
         assert!(args.skip_hotkeys());
-        assert!(args.skip_cloak());
     }
 
     #[test]
     fn test_args_parse_no_hotkeys() {
         let args = Args::try_parse_from(["leopardwm", "--no-hotkeys"]).unwrap();
         assert!(args.no_hotkeys);
-        assert!(!args.no_cloak);
-        assert!(!args.safe_mode);
-    }
-
-    #[test]
-    fn test_args_parse_no_cloak() {
-        let args = Args::try_parse_from(["leopardwm", "--no-cloak"]).unwrap();
-        assert!(args.no_cloak);
-        assert!(!args.no_hotkeys);
         assert!(!args.safe_mode);
     }
 
@@ -4838,7 +2837,6 @@ mod tests {
             log_path: "C:\\Users\\test\\AppData\\Local\\Temp\\leopardwm-daemon.log".to_string(),
             safe_mode: false,
             no_hotkeys: false,
-            no_cloak: false,
         }
     }
 
@@ -4863,7 +2861,6 @@ mod tests {
         info.config_path = None;
         info.safe_mode = true;
         info.no_hotkeys = true;
-        info.no_cloak = true;
         let banner = format_startup_banner(&info);
         assert!(banner.contains("SAFE MODE"));
         assert!(banner.contains("(default"));
@@ -4929,7 +2926,7 @@ mod tests {
     fn test_join_with_timeout_hanging_thread() {
         let mut handle = Some(std::thread::spawn(|| {
             // Simulate a hanging thread
-            std::thread::sleep(Duration::from_secs(60));
+            std::thread::sleep(Duration::from_secs(300));
         }));
         let result = join_with_timeout(&mut handle, Duration::from_millis(100));
         assert!(
@@ -5774,6 +3771,42 @@ mod tests {
             state.focused_workspace().unwrap().window_count(),
             1,
             "duplicate Created event should be ignored"
+        );
+    }
+
+    #[test]
+    fn test_recently_hidden_hwnd_suppresses_recreation() {
+        let mut state = AppState::new_with_config(test_config(), test_monitors());
+
+        state
+            .injected_window_info
+            .insert(100, make_test_window_info(100));
+        state
+            .injected_window_info
+            .insert(200, make_test_window_info(200));
+
+        // Add window 200
+        state.handle_window_event(WindowEvent::Created(200));
+        assert_eq!(state.focused_workspace().unwrap().window_count(), 1);
+
+        // Hide window 200 — records it in recently_hidden_hwnds
+        state.handle_window_event(WindowEvent::Hidden(200));
+        assert_eq!(state.focused_workspace().unwrap().window_count(), 0);
+
+        // Re-create window 200 — should be suppressed (recently hidden)
+        state.handle_window_event(WindowEvent::Created(200));
+        assert_eq!(
+            state.focused_workspace().unwrap().window_count(),
+            0,
+            "recently hidden window should not be re-added"
+        );
+
+        // A different window (100) should still be addable
+        state.handle_window_event(WindowEvent::Created(100));
+        assert_eq!(
+            state.focused_workspace().unwrap().window_count(),
+            1,
+            "unrelated window should still be added"
         );
     }
 

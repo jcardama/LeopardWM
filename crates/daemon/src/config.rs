@@ -102,14 +102,6 @@ impl From<CenteringModeConfig> for CenteringMode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppearanceConfig {
-    /// Whether to use DWM cloaking for off-screen windows.
-    #[serde(default = "default_true")]
-    pub use_cloaking: bool,
-
-    /// Whether to use batched window positioning (DeferWindowPos).
-    #[serde(default = "default_true")]
-    pub use_deferred_positioning: bool,
-
     /// Whether to highlight the active window border (Windows 11+).
     #[serde(default = "default_true")]
     pub active_border: bool,
@@ -130,8 +122,6 @@ pub struct AppearanceConfig {
 impl Default for AppearanceConfig {
     fn default() -> Self {
         Self {
-            use_cloaking: true,
-            use_deferred_positioning: true,
             active_border: true,
             active_border_color: default_active_border_color(),
             active_border_width: default_active_border_width(),
@@ -916,7 +906,6 @@ mod tests {
         assert_eq!(config.layout.outer_gap, 10);
         assert_eq!(config.layout.default_column_width, 800);
         assert_eq!(config.layout.centering_mode, CenteringModeConfig::Center);
-        assert!(config.appearance.use_cloaking);
         assert!(config.behavior.focus_new_windows);
     }
 

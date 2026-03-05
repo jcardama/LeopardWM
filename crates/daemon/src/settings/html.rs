@@ -243,6 +243,24 @@ html, body {
 .field-label { font-size: 14px; line-height: 20px; }
 .field-desc { font-size: 12px; line-height: 16px; color: var(--text-secondary); margin-top: 2px; }
 
+/* ── Input Wrapper (for ::after accent line) ─────────────────────── */
+.input-wrap {
+  position: relative;
+  display: inline-block;
+  border-radius: var(--ctrl-radius);
+  overflow: hidden;
+}
+.input-wrap::after {
+  content: '';
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 2px;
+  background: var(--accent);
+  transform: scaleX(0);
+  transition: transform 0.15s cubic-bezier(0.85, 0, 0.15, 1);
+}
+.input-wrap:focus-within::after { transform: scaleX(1); }
+
 /* ── Text / Number Inputs ─────────────────────────────────────────── */
 input[type="text"],
 input[type="number"] {
@@ -267,8 +285,7 @@ input[type="text"]:focus,
 input[type="number"]:focus {
   background: var(--ctrl-fill-input-active);
   border-color: var(--ctrl-stroke);
-  border-bottom: 2px solid var(--accent);
-  padding-bottom: 5px;
+  border-bottom-color: transparent;
 }
 input[type="number"] { width: 100px; }
 input[type="text"] { width: 180px; }
@@ -455,7 +472,7 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 2px; }
 table { width: 100%; border-collapse: collapse; font-size: 14px; line-height: 20px; }
 th {
   background: var(--card-bg-secondary);
-  padding: 8px 12px;
+  padding: 8px 8px;
   text-align: left;
   font-weight: 600;
   font-size: 12px;
@@ -463,28 +480,41 @@ th {
   color: var(--text-secondary);
   border-bottom: 1px solid var(--divider-stroke);
 }
+th:first-child { padding-left: 12px; }
+th:last-child { padding-right: 12px; }
 td {
-  padding: 4px 12px;
+  padding: 4px 0;
   border-bottom: 1px solid var(--divider-stroke);
   vertical-align: middle;
 }
+td:first-child { padding-left: 4px; }
+td:last-child { padding-right: 4px; }
 tr:last-child td { border-bottom: none; }
 td input[type="text"] {
   width: 100%; border: none; background: transparent;
-  padding: 4px 0; min-height: unset; border-radius: 0;
+  padding: 4px 8px; min-height: unset;
+  border-radius: var(--ctrl-radius);
   border-bottom: 1px solid transparent;
+  transition: background 0.08s, border-color 0.08s;
 }
+td input[type="text"]:hover { background: var(--ctrl-fill-secondary); }
 td input[type="text"]:focus {
-  border-bottom: 1px solid var(--accent);
+  background: var(--ctrl-fill-input-active);
+  border-bottom-color: transparent;
+}
+td .input-wrap { display: block; }
+td .input-wrap::after { height: 2px; }
+/* ── Inline ComboBox (for table cells) ────────────────────────────── */
+td .combobox { min-width: 80px; }
+td .combobox-trigger {
+  border: none;
   background: transparent;
+  padding: 4px 8px;
+  min-height: unset;
+  border-radius: var(--ctrl-radius);
+  transition: background 0.08s;
 }
-td select {
-  font-family: var(--font); font-size: 14px;
-  color: var(--text-primary);
-  border: none; background: transparent;
-  padding: 4px 4px 4px 0; min-width: 80px;
-  outline: none; cursor: pointer;
-}
+td .combobox-trigger:hover { background: var(--ctrl-fill-secondary); }
 .table-actions { display: flex; gap: 8px; margin-top: 12px; margin-bottom: 4px; }
 
 .row-delete {
@@ -605,14 +635,6 @@ input[type="range"]::-webkit-slider-thumb {
       <div id="sec-appearance" class="section">
         <h2 class="section-title">Appearance</h2>
         <div class="card">
-          <div class="field">
-            <div class="field-info"><div class="field-label">Use cloaking</div><div class="field-desc">Hide off-screen windows via DWM cloaking</div></div>
-            <label class="toggle"><input type="checkbox" id="appearance-use_cloaking"><span class="track"></span><span class="thumb"></span></label>
-          </div>
-          <div class="field">
-            <div class="field-info"><div class="field-label">Deferred positioning</div><div class="field-desc">Batch window moves for smoother layout</div></div>
-            <label class="toggle"><input type="checkbox" id="appearance-use_deferred_positioning"><span class="track"></span><span class="thumb"></span></label>
-          </div>
           <div class="field">
             <div class="field-info"><div class="field-label">Active border</div><div class="field-desc">Highlight the focused window border</div></div>
             <label class="toggle"><input type="checkbox" id="appearance-active_border"><span class="track"></span><span class="thumb"></span></label>
@@ -764,7 +786,7 @@ document.querySelectorAll('.nav-item[data-section]').forEach(function(link) {
 });
 
 /* ── ComboBox ───────────────────────────────────────────────────────── */
-document.querySelectorAll('.combobox').forEach(function(cb) {
+function initCombobox(cb) {
   var trigger = cb.querySelector('.combobox-trigger');
   var popup = cb.querySelector('.combobox-popup');
   trigger.addEventListener('click', function(e) {
@@ -776,7 +798,7 @@ document.querySelectorAll('.combobox').forEach(function(cb) {
       /* Position popup using fixed coords from trigger rect */
       var rect = trigger.getBoundingClientRect();
       popup.style.left = rect.left + 'px';
-      popup.style.width = rect.width + 'px';
+      popup.style.width = Math.max(rect.width, 100) + 'px';
       var spaceBelow = window.innerHeight - rect.bottom - 8;
       if (spaceBelow < 160) {
         popup.style.bottom = (window.innerHeight - rect.top + 4) + 'px';
@@ -799,7 +821,8 @@ document.querySelectorAll('.combobox').forEach(function(cb) {
       autoSave(0);
     });
   });
-});
+}
+document.querySelectorAll('.combobox').forEach(function(cb) { initCombobox(cb); });
 document.addEventListener('click', function() {
   document.querySelectorAll('.combobox.open').forEach(function(cb) { cb.classList.remove('open'); });
 });
@@ -839,8 +862,6 @@ function init(cfg) {
   setVal('layout-max_column_width', cfg.layout.max_column_width);
   setCb('cb-layout-centering_mode', cfg.layout.centering_mode);
 
-  setChecked('appearance-use_cloaking', cfg.appearance.use_cloaking);
-  setChecked('appearance-use_deferred_positioning', cfg.appearance.use_deferred_positioning);
   setChecked('appearance-active_border', cfg.appearance.active_border);
   setVal('appearance-active_border_color', hexToInput(cfg.appearance.active_border_color));
   setVal('appearance-active_border_width', cfg.appearance.active_border_width);
@@ -884,23 +905,33 @@ function addHotkeyRow(key, cmd) {
     '<td><input type="text" class="hk-cmd" value="' + escAttr(cmd) + '" placeholder="e.g. focus_left"></td>' +
     '<td><button class="row-delete" onclick="this.closest(\'tr\').remove();autoSave(0)">' + deleteIcon + '</button></td>';
   tbody.appendChild(tr);
+  wrapAllInputs(tr);
   tr.querySelectorAll('input').forEach(function(el) { el.addEventListener('input', function() { autoSave(500); }); });
 }
 
 function addRuleRow(r) {
   var tbody = document.getElementById('rules-body');
   var tr = document.createElement('tr');
-  var actionOpts = ['tile','float','ignore'].map(function(a) {
-    return '<option value="'+a+'"'+(a===(r.action||'tile')?' selected':'')+'>'+a+'</option>';
+  var action = r.action || 'tile';
+  var actionLabel = action.charAt(0).toUpperCase() + action.slice(1);
+  var chevron = '<svg class="combobox-chevron" viewBox="0 0 12 12"><path d="M2.15 4.65a.5.5 0 01.7 0L6 7.79l3.15-3.14a.5.5 0 11.7.7l-3.5 3.5a.5.5 0 01-.7 0l-3.5-3.5a.5.5 0 010-.7z"/></svg>';
+  var options = ['tile','float','ignore'].map(function(a) {
+    var label = a.charAt(0).toUpperCase() + a.slice(1);
+    return '<div class="combobox-option' + (a === action ? ' selected' : '') + '" data-value="' + a + '">' + label + '</div>';
   }).join('');
   tr.innerHTML =
     '<td><input type="text" class="rule-class" value="' + escAttr(r.match_class||'') + '" placeholder="regex"></td>' +
     '<td><input type="text" class="rule-title" value="' + escAttr(r.match_title||'') + '" placeholder="regex"></td>' +
     '<td><input type="text" class="rule-exe" value="' + escAttr(r.match_executable||'') + '" placeholder="app.exe"></td>' +
-    '<td><select class="rule-action">' + actionOpts + '</select></td>' +
+    '<td><div class="combobox" data-value="' + action + '">' +
+      '<button class="combobox-trigger" type="button"><span class="combobox-text">' + actionLabel + '</span>' + chevron + '</button>' +
+      '<div class="combobox-popup">' + options + '</div>' +
+    '</div></td>' +
     '<td><button class="row-delete" onclick="this.closest(\'tr\').remove();autoSave(0)">' + deleteIcon + '</button></td>';
   tbody.appendChild(tr);
-  tr.querySelectorAll('input,select').forEach(function(el) { el.addEventListener('input', function() { autoSave(500); }); });
+  wrapAllInputs(tr);
+  tr.querySelectorAll('input').forEach(function(el) { el.addEventListener('input', function() { autoSave(500); }); });
+  initCombobox(tr.querySelector('.combobox'));
 }
 
 function escAttr(s) { return (s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
@@ -915,8 +946,6 @@ function readConfig() {
       centering_mode: cbVal('cb-layout-centering_mode')
     },
     appearance: {
-      use_cloaking: checked('appearance-use_cloaking'),
-      use_deferred_positioning: checked('appearance-use_deferred_positioning'),
       active_border: checked('appearance-active_border'),
       active_border_color: inputToHex(val('appearance-active_border_color')),
       active_border_width: num('appearance-active_border_width'),
@@ -961,7 +990,8 @@ function readRules() {
     var cls = tr.querySelector('.rule-class').value.trim();
     var title = tr.querySelector('.rule-title').value.trim();
     var exe = tr.querySelector('.rule-exe').value.trim();
-    r.action = tr.querySelector('.rule-action').value;
+    var cb = tr.querySelector('.combobox');
+    r.action = cb ? (cb.dataset.value || 'tile') : 'tile';
     if (cls) r.match_class = cls;
     if (title) r.match_title = title;
     if (exe) r.match_executable = exe;
@@ -969,6 +999,19 @@ function readRules() {
   });
   return rules;
 }
+
+/* ── Wrap inputs in .input-wrap for ::after accent line ───────────── */
+function wrapInput(input) {
+  if (input.parentElement && input.parentElement.classList.contains('input-wrap')) return;
+  var wrap = document.createElement('span');
+  wrap.className = 'input-wrap';
+  input.parentNode.insertBefore(wrap, input);
+  wrap.appendChild(input);
+}
+function wrapAllInputs(root) {
+  (root || document).querySelectorAll('input[type="text"], input[type="number"]').forEach(wrapInput);
+}
+wrapAllInputs();
 
 /* ── Auto-save ────────────────────────────────────────────────────── */
 var _saveTimer = null;

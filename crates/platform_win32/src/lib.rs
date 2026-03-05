@@ -4,8 +4,7 @@
 //!
 //! This crate handles:
 //! - Window enumeration and filtering
-//! - Window positioning via SetWindowPos (with DeferWindowPos batching)
-//! - Window cloaking/uncloaking via DWM APIs
+//! - Window positioning via SetWindowPos
 //! - WinEvent hooks for window lifecycle events
 //! - Visual overlay for snap hints
 
@@ -18,9 +17,7 @@ use std::sync::mpsc;
 use thiserror::Error;
 use windows::core::BOOL;
 use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, RECT, TRUE};
-use windows::Win32::Graphics::Dwm::{
-    DwmGetWindowAttribute, DwmSetWindowAttribute, DWMWA_CLOAK, DWMWA_CLOAKED,
-};
+use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DwmSetWindowAttribute, DWMWA_CLOAKED};
 use windows::Win32::Graphics::Gdi::{
     EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFOEXW,
 };
@@ -33,9 +30,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     MOD_SHIFT, MOD_WIN,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    BeginDeferWindowPos, BringWindowToTop, CallNextHookEx, CreateWindowExW, DefWindowProcW,
-    DeferWindowPos, DestroyWindow, DispatchMessageW, EndDeferWindowPos, EnumWindows, GetAncestor,
-    GetClassNameW, GetForegroundWindow, GetMessageW, GetWindow, GetWindowLongW, GetWindowRect,
+    BringWindowToTop, CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyWindow,
+    DispatchMessageW, EnumWindows, GetAncestor, GetClassNameW, GetMessageW, GetWindow,
+    GetWindowLongW, GetWindowRect,
     GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow,
     IsWindowVisible, PeekMessageW, PostMessageW, PostThreadMessageW, RegisterClassW,
     SetForegroundWindow, SetWindowPos, SetWindowsHookExW, ShowWindow, UnhookWindowsHookEx,
@@ -49,6 +46,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 const EVENT_OBJECT_CREATE: u32 = 0x8000;
 const EVENT_OBJECT_DESTROY: u32 = 0x8001;
 const EVENT_OBJECT_SHOW: u32 = 0x8002;
+const EVENT_OBJECT_HIDE: u32 = 0x8003;
 const EVENT_OBJECT_FOCUS: u32 = 0x8005;
 const EVENT_SYSTEM_FOREGROUND: u32 = 0x0003;
 const EVENT_SYSTEM_MINIMIZESTART: u32 = 0x0016;
@@ -103,14 +101,11 @@ fn combine_operation_failures(context: &str, failures: Vec<String>) -> Win32Erro
 ///
 /// Benign failures include:
 /// - Window-not-found races (window vanished between enumeration and operation)
-/// - Cloak/uncloak failures (DwmSetWindowAttribute(DWMWA_CLOAK) is unsupported
-///   on many window types; failure is cosmetic — the window just stays in its
-///   current visibility state)
 fn is_benign_side_effect_error(error: &Win32Error) -> bool {
     matches!(
         error,
         Win32Error::WindowNotFound(window_id) if *window_id != 0
-    ) || matches!(error, Win32Error::CloakFailed(_))
+    )
 }
 
 /// Errors that can occur during Win32 operations.
@@ -124,9 +119,6 @@ pub enum Win32Error {
 
     #[error("Failed to set window position: {0}")]
     SetPositionFailed(String),
-
-    #[error("Failed to cloak window: {0}")]
-    CloakFailed(String),
 
     #[error("Failed to install event hook: {0}")]
     HookInstallFailed(String),
@@ -190,34 +182,9 @@ impl MonitorInfo {
     }
 }
 
-/// Strategy for hiding off-screen windows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum HideStrategy {
-    /// Use DWM cloaking (preferred, keeps window in Alt-Tab).
-    #[default]
-    Cloak,
-    /// Move windows off-screen (alternative when cloaking is disabled).
-    /// Windows are moved far off-screen rather than cloaked.
-    MoveOffScreen,
-}
-
 /// Configuration for the Win32 platform layer.
-#[derive(Debug, Clone)]
-pub struct PlatformConfig {
-    /// Strategy for hiding off-screen windows.
-    pub hide_strategy: HideStrategy,
-    /// Whether to use DeferWindowPos for batched moves.
-    pub use_deferred_positioning: bool,
-}
-
-impl Default for PlatformConfig {
-    fn default() -> Self {
-        Self {
-            hide_strategy: HideStrategy::default(),
-            use_deferred_positioning: true,
-        }
-    }
-}
+#[derive(Debug, Clone, Default)]
+pub struct PlatformConfig;
 
 /// Enumerate all top-level windows that should be managed.
 ///
@@ -497,6 +464,11 @@ unsafe extern "system" fn enum_windows_callback(hwnd: HWND, lparam: LPARAM) -> B
         return TRUE;
     }
 
+    // Skip minimized windows (e.g., tray apps like Raycast)
+    if IsIconic(hwnd).as_bool() {
+        return TRUE;
+    }
+
     // Get window styles
     let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
     let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
@@ -618,6 +590,12 @@ fn should_emit_window_event_with_policy(
         return false;
     }
 
+    // Skip minimized windows (e.g., tray apps) unless we're handling
+    // restore/minimize transitions where the window state is transient.
+    if require_visible && unsafe { IsIconic(hwnd) }.as_bool() {
+        return false;
+    }
+
     let is_tool_window = ex_style & WS_EX_TOOLWINDOW.0 != 0;
     let is_app_window = ex_style & WS_EX_APPWINDOW.0 != 0;
     if is_tool_window && !is_app_window {
@@ -689,9 +667,10 @@ fn should_emit_window_event_for(event: u32, hwnd: HWND) -> bool {
         EVENT_SYSTEM_FOREGROUND | EVENT_OBJECT_FOCUS => {
             should_emit_window_event_with_policy(hwnd, true, false, false)
         }
-        // Restore/minimize/destroy should still pass basic top-level filtering,
+        // Restore/minimize/destroy/hide should still pass basic top-level filtering,
         // but visibility/title can be transient during these transitions.
-        EVENT_SYSTEM_MINIMIZESTART | EVENT_SYSTEM_MINIMIZEEND | EVENT_OBJECT_DESTROY => {
+        EVENT_SYSTEM_MINIMIZESTART | EVENT_SYSTEM_MINIMIZEEND | EVENT_OBJECT_DESTROY
+        | EVENT_OBJECT_HIDE => {
             should_emit_window_event_with_policy(hwnd, false, false, false)
         }
         EVENT_OBJECT_LOCATIONCHANGE => should_emit_window_event_with_policy(hwnd, true, true, true),
@@ -708,6 +687,7 @@ fn should_filter_window_event_by_manageability(event: u32) -> bool {
         EVENT_OBJECT_CREATE
             | EVENT_OBJECT_DESTROY
             | EVENT_OBJECT_SHOW
+            | EVENT_OBJECT_HIDE
             | EVENT_SYSTEM_FOREGROUND
             | EVENT_SYSTEM_MINIMIZESTART
             | EVENT_SYSTEM_MINIMIZEEND
@@ -922,169 +902,44 @@ pub fn is_valid_window(hwnd: WindowId) -> bool {
     }
 }
 
-fn collect_uncloak_targets(
-    visible: &[&WindowPlacement],
-    offscreen: &[&WindowPlacement],
-    hide_strategy: HideStrategy,
-) -> Vec<WindowId> {
-    let mut targets: Vec<WindowId> = visible
-        .iter()
-        .map(|placement| placement.window_id)
-        .collect();
-    if hide_strategy == HideStrategy::MoveOffScreen {
-        for placement in offscreen {
-            if !targets.contains(&placement.window_id) {
-                targets.push(placement.window_id);
-            }
-        }
+/// Check if a window handle is valid and has `WS_VISIBLE` style.
+///
+/// Used to distinguish spurious `EVENT_OBJECT_HIDE` from Electron apps
+/// (which fire hide on still-visible main windows) from genuine hide events.
+pub fn is_window_visible(hwnd: WindowId) -> bool {
+    if hwnd == 0 {
+        return false;
     }
-    targets
-}
-
-fn ensure_foreground_window_remains_visible(
-    visible: &[&WindowPlacement],
-    offscreen: &[&WindowPlacement],
-) -> Option<WindowId> {
-    if offscreen.is_empty() {
-        return None;
-    }
-
-    let foreground_window_id = unsafe {
-        let raw_hwnd = GetForegroundWindow();
-        if raw_hwnd.0.is_null() {
-            return None;
-        }
-        let hwnd = normalize_to_root_window(raw_hwnd);
-        if hwnd.0.is_null() {
-            return None;
-        }
-        hwnd.0 as usize as WindowId
-    };
-
-    let foreground_will_be_hidden = offscreen_contains_window(offscreen, foreground_window_id);
-    if !foreground_will_be_hidden {
-        return None;
-    }
-
-    let fallback_window_id = select_visible_fallback_window(visible, foreground_window_id);
-
-    if let Some(window_id) = fallback_window_id {
-        match set_foreground_window(window_id) {
-            Ok(true) => return None,
-            Ok(false) => {
-                tracing::warn!(
-                    "Foreground switch from window {} to visible fallback {} was denied by the OS; keeping foreground window visible",
-                    foreground_window_id,
-                    window_id
-                );
-                return Some(foreground_window_id);
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "Failed to move foreground focus from window {} to visible fallback {} before hide: {}; keeping foreground window visible",
-                    foreground_window_id,
-                    window_id,
-                    e
-                );
-                return Some(foreground_window_id);
-            }
-        }
-    }
-
-    tracing::warn!(
-        "No visible fallback window was available while foreground window {} would be hidden; keeping foreground window visible",
-        foreground_window_id
-    );
-    Some(foreground_window_id)
-}
-
-fn offscreen_contains_window(offscreen: &[&WindowPlacement], window_id: WindowId) -> bool {
-    offscreen
-        .iter()
-        .any(|placement| placement.window_id == window_id)
-}
-
-fn select_visible_fallback_window(
-    visible: &[&WindowPlacement],
-    foreground_window_id: WindowId,
-) -> Option<WindowId> {
-    visible
-        .iter()
-        .find(|placement| placement.window_id != foreground_window_id)
-        .or_else(|| visible.first())
-        .map(|placement| placement.window_id)
-}
-
-fn rollback_apply_visibility_changes(
-    cloaked_window_ids: &[WindowId],
-    moved_offscreen_window_ids: &[WindowId],
-    visible_window_ids: &[WindowId],
-) {
-    for window_id in cloaked_window_ids {
-        if let Err(e) = uncloak_window(*window_id) {
-            tracing::warn!(
-                "Rollback failed while uncloaking window {} after apply error: {}",
-                window_id,
-                e
-            );
-        }
-    }
-
-    if !moved_offscreen_window_ids.is_empty() {
-        if let Err(e) = restore_windows_moved_offscreen(moved_offscreen_window_ids) {
-            tracing::warn!(
-                "Rollback failed while restoring moved-offscreen windows after apply error: {}",
-                e
-            );
-        }
-    }
-
-    for window_id in visible_window_ids {
-        match set_foreground_window(*window_id) {
-            Ok(true) => break,
-            Ok(false) => tracing::warn!(
-                "Rollback foreground restore was denied for window {}",
-                window_id
-            ),
-            Err(e) => tracing::warn!(
-                "Rollback foreground restore failed for window {}: {}",
-                window_id,
-                e
-            ),
-        }
+    unsafe {
+        let hwnd = HWND(hwnd as *mut c_void);
+        IsWindow(Some(hwnd)).as_bool() && IsWindowVisible(hwnd).as_bool()
     }
 }
 
-fn record_apply_side_effect_failure(
-    side_effect_failures: &mut Vec<String>,
-    benign_race_count: &mut usize,
-    operation: &str,
-    window_id: WindowId,
-    error: Win32Error,
-) {
-    if is_benign_side_effect_error(&error) {
-        *benign_race_count += 1;
-        tracing::debug!(
-            "Ignoring benign race during {} for window {}: {}",
-            operation,
-            window_id,
-            error
-        );
-    } else {
-        tracing::warn!("Failed to {} window {}: {}", operation, window_id, error);
-        side_effect_failures.push(format!("{} {} failed: {}", operation, window_id, error));
+/// Check if a managed window is still valid and visible.
+///
+/// Returns `false` if the window no longer exists, is not visible,
+/// or is minimized (e.g., close-to-tray apps). Used to prune stale
+/// windows from the layout that disappeared without firing events.
+pub fn is_window_alive_and_visible(hwnd: WindowId) -> bool {
+    if hwnd == 0 {
+        return false;
+    }
+    unsafe {
+        let hwnd = HWND(hwnd as *mut c_void);
+        IsWindow(Some(hwnd)).as_bool()
+            && IsWindowVisible(hwnd).as_bool()
+            && !IsIconic(hwnd).as_bool()
     }
 }
 
 /// Apply window placements from the layout engine.
 ///
-/// This function:
-/// 1. Groups placements by visibility
-/// 2. Uses DeferWindowPos for visible windows (batched move)
-/// 3. Applies cloaking/uncloaking based on visibility changes
+/// Visible windows are positioned immediately via SetWindowPos.
+/// Off-screen windows are moved to sentinel coordinates far off-screen.
 pub fn apply_placements(
     placements: &[WindowPlacement],
-    config: &PlatformConfig,
+    _config: &PlatformConfig,
 ) -> Result<(), Win32Error> {
     if placements.is_empty() {
         return Ok(());
@@ -1094,121 +949,39 @@ pub fn apply_placements(
     let (visible, offscreen): (Vec<_>, Vec<_>) = placements
         .iter()
         .partition(|p| p.visibility == Visibility::Visible);
-    let visible_window_ids: Vec<WindowId> = visible
-        .iter()
-        .map(|placement| placement.window_id)
-        .collect();
-    let mut side_effect_failures: Vec<String> = Vec::new();
-    let mut benign_side_effect_races: usize = 0;
-    let mut cloaked_window_ids: Vec<WindowId> = Vec::new();
-    let mut moved_offscreen_window_ids: Vec<WindowId> = Vec::new();
-
-    // Apply positions for visible windows
-    if !visible.is_empty() {
-        if config.use_deferred_positioning {
-            apply_placements_deferred(&visible)?;
-        } else {
-            apply_placements_immediate(&visible)?;
+    // Apply positions for visible windows using immediate SetWindowPos
+    for placement in &visible {
+        if let Err(e) = set_window_pos_immediate(placement) {
+            if is_benign_side_effect_error(&e) {
+                tracing::debug!(
+                    "Ignoring benign race during placement for window {}: {}",
+                    placement.window_id,
+                    e
+                );
+                continue;
+            }
+            return Err(e);
         }
     }
 
-    // Keep windows visible under the active hide strategy.
-    for window_id in collect_uncloak_targets(&visible, &offscreen, config.hide_strategy) {
-        if let Err(e) = uncloak_window(window_id) {
-            record_apply_side_effect_failure(
-                &mut side_effect_failures,
-                &mut benign_side_effect_races,
-                "uncloak",
-                window_id,
-                e,
-            );
-        }
-    }
-
-    let protected_foreground_window =
-        ensure_foreground_window_remains_visible(&visible, &offscreen);
-
-    if let Some(window_id) = protected_foreground_window {
-        match config.hide_strategy {
-            HideStrategy::Cloak => {
-                if let Err(e) = uncloak_window(window_id) {
-                    record_apply_side_effect_failure(
-                        &mut side_effect_failures,
-                        &mut benign_side_effect_races,
-                        "uncloak protected foreground",
-                        window_id,
-                        e,
-                    );
-                }
+    // Move off-screen windows to sentinel coordinates
+    for placement in &offscreen {
+        let offscreen_placement = WindowPlacement {
+            window_id: placement.window_id,
+            rect: move_offscreen_rect_for(&placement.rect),
+            visibility: Visibility::OffScreenLeft,
+            column_index: placement.column_index,
+        };
+        if let Err(e) = set_window_pos_immediate(&offscreen_placement) {
+            if is_benign_side_effect_error(&e) {
+                tracing::debug!(
+                    "Ignoring benign race during off-screen move for window {}: {}",
+                    placement.window_id,
+                    e
+                );
+                continue;
             }
-            HideStrategy::MoveOffScreen => {
-                if let Err(e) = restore_windows_moved_offscreen(&[window_id]) {
-                    record_apply_side_effect_failure(
-                        &mut side_effect_failures,
-                        &mut benign_side_effect_races,
-                        "restore protected foreground",
-                        window_id,
-                        e,
-                    );
-                }
-            }
-        }
-    }
-
-    // Hide off-screen windows based on strategy
-    match config.hide_strategy {
-        HideStrategy::Cloak => {
-            for placement in &offscreen {
-                if protected_foreground_window == Some(placement.window_id) {
-                    tracing::warn!(
-                        "Skipping cloak for foreground window {} because focus handoff was not confirmed",
-                        placement.window_id
-                    );
-                    continue;
-                }
-                if let Err(e) = cloak_window(placement.window_id) {
-                    record_apply_side_effect_failure(
-                        &mut side_effect_failures,
-                        &mut benign_side_effect_races,
-                        "cloak",
-                        placement.window_id,
-                        e,
-                    );
-                } else {
-                    cloaked_window_ids.push(placement.window_id);
-                }
-            }
-        }
-        HideStrategy::MoveOffScreen => {
-            // Move windows far off-screen (don't cloak them)
-            // They remain in Alt-Tab but aren't visible
-            for placement in &offscreen {
-                if protected_foreground_window == Some(placement.window_id) {
-                    tracing::warn!(
-                        "Skipping MoveOffScreen for foreground window {} because focus handoff was not confirmed",
-                        placement.window_id
-                    );
-                    continue;
-                }
-                // Move to far off-screen position
-                let offscreen_placement = WindowPlacement {
-                    window_id: placement.window_id,
-                    rect: move_offscreen_rect_for(&placement.rect),
-                    visibility: Visibility::OffScreenLeft,
-                    column_index: placement.column_index,
-                };
-                if let Err(e) = set_window_pos_immediate(&offscreen_placement) {
-                    record_apply_side_effect_failure(
-                        &mut side_effect_failures,
-                        &mut benign_side_effect_races,
-                        "move off-screen",
-                        placement.window_id,
-                        e,
-                    );
-                } else {
-                    moved_offscreen_window_ids.push(placement.window_id);
-                }
-            }
+            return Err(e);
         }
     }
 
@@ -1218,187 +991,6 @@ pub fn apply_placements(
         offscreen.len()
     );
 
-    if !side_effect_failures.is_empty() {
-        rollback_apply_visibility_changes(
-            &cloaked_window_ids,
-            &moved_offscreen_window_ids,
-            &visible_window_ids,
-        );
-        return Err(combine_operation_failures(
-            "apply_placements completed with side-effect failures",
-            side_effect_failures,
-        ));
-    }
-
-    if benign_side_effect_races > 0 {
-        tracing::debug!(
-            "apply_placements ignored {} benign side-effect race(s)",
-            benign_side_effect_races
-        );
-    }
-
-    Ok(())
-}
-
-/// Apply placements using DeferWindowPos for batched positioning.
-///
-/// This function uses the Windows DeferWindowPos API to batch multiple
-/// window positioning operations into a single screen update, reducing
-/// flicker and improving performance.
-///
-/// If EndDeferWindowPos fails, falls back to individual SetWindowPos calls
-/// for all windows and returns an error if fallback cannot fully recover.
-/// If individual DeferWindowPos calls fail during the batch, those placements
-/// are tracked and retried individually after the batch; unrecovered failures
-/// are returned as an error.
-fn apply_placements_deferred(placements: &[&WindowPlacement]) -> Result<(), Win32Error> {
-    unsafe {
-        let hdwp =
-            BeginDeferWindowPos(placements.len().min(i32::MAX as usize) as i32).map_err(|e| {
-                Win32Error::SetPositionFailed(format!("BeginDeferWindowPos failed: {}", e))
-            })?;
-
-        let mut current_hdwp = hdwp;
-        let mut failed_placements: Vec<&WindowPlacement> = Vec::new();
-
-        for placement in placements {
-            let hwnd = match window_id_to_hwnd(placement.window_id) {
-                Ok(h) => h,
-                Err(err) => {
-                    tracing::warn!(
-                        "Skipping deferred placement for invalid window ID {}: {}",
-                        placement.window_id,
-                        err
-                    );
-                    failed_placements.push(placement);
-                    continue;
-                }
-            };
-            let rect = &placement.rect;
-
-            match DeferWindowPos(
-                current_hdwp,
-                hwnd,
-                None, // HWND_TOP equivalent - no z-order change with SWP_NOZORDER
-                rect.x,
-                rect.y,
-                rect.width,
-                rect.height,
-                SWP_NOZORDER | SWP_NOACTIVATE,
-            ) {
-                Ok(new_hdwp) => {
-                    current_hdwp = new_hdwp;
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "DeferWindowPos failed for window {}: {}, will retry individually",
-                        placement.window_id,
-                        e
-                    );
-                    failed_placements.push(placement);
-                }
-            }
-        }
-
-        // Try to commit the batch
-        if let Err(e) = EndDeferWindowPos(current_hdwp) {
-            tracing::warn!(
-                "EndDeferWindowPos failed: {}. Falling back to individual positioning for all windows.",
-                e
-            );
-            // Fall back to individual positioning for ALL windows
-            let mut fallback_failures: Vec<String> = Vec::new();
-            let mut benign_races: usize = 0;
-            for placement in placements {
-                if let Err(fallback_err) = set_window_pos_immediate(placement) {
-                    if is_benign_side_effect_error(&fallback_err) {
-                        benign_races += 1;
-                        tracing::debug!(
-                            "Ignoring benign race during deferred fallback for window {}: {}",
-                            placement.window_id,
-                            fallback_err
-                        );
-                    } else {
-                        tracing::warn!(
-                            "Individual SetWindowPos also failed for {}: {}",
-                            placement.window_id,
-                            fallback_err
-                        );
-                        fallback_failures
-                            .push(format!("window {}: {}", placement.window_id, fallback_err));
-                    }
-                }
-            }
-            if !fallback_failures.is_empty() {
-                fallback_failures.insert(0, format!("EndDeferWindowPos failed: {}", e));
-                return Err(combine_operation_failures(
-                    "Deferred positioning fallback could not fully recover",
-                    fallback_failures,
-                ));
-            }
-            if benign_races > 0 {
-                tracing::debug!(
-                    "Deferred fallback ignored {} benign window race(s)",
-                    benign_races
-                );
-            }
-        } else {
-            // Batch succeeded, now handle any that failed during deferral
-            let mut fallback_failures: Vec<String> = Vec::new();
-            let mut benign_races: usize = 0;
-            for placement in failed_placements {
-                if let Err(fallback_err) = set_window_pos_immediate(placement) {
-                    if is_benign_side_effect_error(&fallback_err) {
-                        benign_races += 1;
-                        tracing::debug!(
-                            "Ignoring benign race during deferred retry for window {}: {}",
-                            placement.window_id,
-                            fallback_err
-                        );
-                    } else {
-                        tracing::warn!(
-                            "Fallback SetWindowPos failed for {}: {}",
-                            placement.window_id,
-                            fallback_err
-                        );
-                        fallback_failures
-                            .push(format!("window {}: {}", placement.window_id, fallback_err));
-                    }
-                }
-            }
-            if !fallback_failures.is_empty() {
-                return Err(combine_operation_failures(
-                    "Deferred positioning had unrecovered per-window failures",
-                    fallback_failures,
-                ));
-            }
-            if benign_races > 0 {
-                tracing::debug!(
-                    "Deferred retry ignored {} benign window race(s)",
-                    benign_races
-                );
-            }
-        }
-    }
-
-    Ok(())
-}
-
-/// Apply placements using immediate SetWindowPos calls.
-fn apply_placements_immediate(placements: &[&WindowPlacement]) -> Result<(), Win32Error> {
-    for placement in placements {
-        if let Err(e) = set_window_pos_immediate(placement) {
-            if is_benign_side_effect_error(&e) {
-                tracing::debug!(
-                    "Ignoring benign race during immediate placement for window {}: {}",
-                    placement.window_id,
-                    e
-                );
-                continue;
-            }
-            return Err(e);
-        }
-    }
     Ok(())
 }
 
@@ -1409,6 +1001,11 @@ fn set_window_pos_immediate(placement: &WindowPlacement) -> Result<(), Win32Erro
     unsafe {
         if !IsWindow(Some(hwnd)).as_bool() {
             return Err(Win32Error::WindowNotFound(window_id));
+        }
+
+        // Skip iconic (minimized) windows — SetWindowPos has no visible effect on them
+        if IsIconic(hwnd).as_bool() {
+            return Ok(());
         }
 
         let rect = &placement.rect;
@@ -1428,71 +1025,6 @@ fn set_window_pos_immediate(placement: &WindowPlacement) -> Result<(), Win32Erro
             return Err(Win32Error::SetPositionFailed(format!(
                 "SetWindowPos failed for window {}: {}",
                 window_id, e
-            )));
-        }
-    }
-    Ok(())
-}
-
-/// Cloak a window (hide from view but keep in Alt-Tab).
-///
-/// Cloaked windows are hidden visually but remain in the taskbar
-/// and can still receive focus via Alt-Tab.
-pub fn cloak_window(hwnd: WindowId) -> Result<(), Win32Error> {
-    let window_id = hwnd;
-    let hwnd = window_id_to_hwnd(window_id)?;
-    unsafe {
-        if !IsWindow(Some(hwnd)).as_bool() {
-            return Err(Win32Error::WindowNotFound(window_id));
-        }
-
-        let cloak_value: u32 = 1;
-
-        let result = DwmSetWindowAttribute(
-            hwnd,
-            DWMWA_CLOAK,
-            &cloak_value as *const u32 as *const c_void,
-            std::mem::size_of::<u32>() as u32,
-        );
-
-        if result.is_err() {
-            if !IsWindow(Some(hwnd)).as_bool() {
-                return Err(Win32Error::WindowNotFound(window_id));
-            }
-            return Err(Win32Error::CloakFailed(format!(
-                "DwmSetWindowAttribute(CLOAK=1) failed for {:?}",
-                hwnd
-            )));
-        }
-    }
-    Ok(())
-}
-
-/// Uncloak a window (make visible again).
-pub fn uncloak_window(hwnd: WindowId) -> Result<(), Win32Error> {
-    let window_id = hwnd;
-    let hwnd = window_id_to_hwnd(window_id)?;
-    unsafe {
-        if !IsWindow(Some(hwnd)).as_bool() {
-            return Err(Win32Error::WindowNotFound(window_id));
-        }
-
-        let cloak_value: u32 = 0;
-
-        let result = DwmSetWindowAttribute(
-            hwnd,
-            DWMWA_CLOAK,
-            &cloak_value as *const u32 as *const c_void,
-            std::mem::size_of::<u32>() as u32,
-        );
-
-        if result.is_err() {
-            if !IsWindow(Some(hwnd)).as_bool() {
-                return Err(Win32Error::WindowNotFound(window_id));
-            }
-            return Err(Win32Error::CloakFailed(format!(
-                "DwmSetWindowAttribute(CLOAK=0) failed for {:?}",
-                hwnd
             )));
         }
     }
@@ -1753,20 +1285,15 @@ pub fn restore_windows_moved_offscreen(window_ids: &[WindowId]) -> Result<usize,
     Ok(restored_count)
 }
 
-/// Uncloak a list of managed windows, best-effort.
+/// Restore managed windows to their visible positions, best-effort.
 ///
-/// Iterates through the provided window IDs and uncloaks each one.
-/// Logs warnings for failures but never panics. Also resets border colors and
-/// restores windows parked at MoveOffScreen sentinel coordinates.
+/// Resets border colors and restores windows parked at MoveOffScreen
+/// sentinel coordinates. Logs warnings for failures but never panics.
 pub fn uncloak_all_managed_windows(window_ids: &[WindowId]) {
     for &wid in window_ids {
         if wid == 0 {
             continue;
         }
-        if let Err(e) = uncloak_window(wid) {
-            tracing::warn!("Failed to uncloak window {} during shutdown: {}", wid, e);
-        }
-        // Best-effort border reset
         let _ = reset_window_border_color(wid);
     }
 
@@ -1778,7 +1305,7 @@ pub fn uncloak_all_managed_windows(window_ids: &[WindowId]) {
     }
 
     tracing::info!(
-        "Uncloaked {} managed windows during shutdown",
+        "Restored {} managed windows during shutdown",
         window_ids.len()
     );
 }
@@ -1843,30 +1370,15 @@ pub fn restore_all_windows_moved_offscreen_best_effort() -> usize {
     restored_count
 }
 
-/// Uncloak all visible windows on the system, best-effort.
+/// Restore all visible windows on the system, best-effort.
 ///
-/// Uses `EnumWindows` to find all top-level windows and uncloaks them.
-/// Also restores any windows parked at MoveOffScreen sentinel coordinates.
+/// Restores any windows parked at MoveOffScreen sentinel coordinates.
 /// This does not require AppState and works even if state is poisoned,
 /// making it suitable for use in panic hooks.
 pub fn uncloak_all_visible_windows() {
-    unsafe {
-        let _ = EnumWindows(Some(uncloak_all_callback), LPARAM(0));
-    }
     let _ = restore_all_windows_moved_offscreen_best_effort();
     // eprintln because tracing may not work in a panic hook
-    eprintln!("[leopardwm] Emergency uncloak of all windows complete");
-}
-
-/// Callback for `EnumWindows` that uncloaks every window.
-unsafe extern "system" fn uncloak_all_callback(hwnd: HWND, _lparam: LPARAM) -> BOOL {
-    let wid = hwnd.0 as WindowId;
-    if wid != 0 {
-        // Best-effort uncloak — ignore errors
-        let _ = uncloak_window(wid);
-        let _ = reset_window_border_color(wid);
-    }
-    TRUE // continue enumeration
+    eprintln!("[leopardwm] Emergency window restore complete");
 }
 
 /// Set the process DPI awareness to Per-Monitor Aware V2.
@@ -1889,6 +1401,8 @@ pub enum WindowEvent {
     Created(WindowId),
     /// A window was destroyed.
     Destroyed(WindowId),
+    /// A window was hidden (e.g., close-to-tray apps using ShowWindow(SW_HIDE)).
+    Hidden(WindowId),
     /// A window received focus.
     Focused(WindowId),
     /// A window was minimized.
@@ -2005,7 +1519,7 @@ pub fn install_event_hooks() -> Result<(EventHookHandle, mpsc::Receiver<WindowEv
 
                 // Define events to hook: (min_event, max_event)
                 let event_ranges = [
-                    (EVENT_OBJECT_CREATE, EVENT_OBJECT_SHOW),
+                    (EVENT_OBJECT_CREATE, EVENT_OBJECT_HIDE),
                     (EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND),
                     (EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND),
                     (EVENT_SYSTEM_MOVESIZESTART, EVENT_SYSTEM_MOVESIZEEND),
@@ -2136,11 +1650,11 @@ fn win_event_callback_inner(
     // Exception: EVENT_OBJECT_FOCUS fires with OBJID_CLIENT, and
     // EVENT_SYSTEM_* events always have id_object == 0, so we allow
     // focus/foreground events regardless of id_object.
-    let is_focus_or_show = matches!(
+    let is_focus_or_visibility = matches!(
         event,
-        EVENT_SYSTEM_FOREGROUND | EVENT_OBJECT_FOCUS | EVENT_OBJECT_SHOW
+        EVENT_SYSTEM_FOREGROUND | EVENT_OBJECT_FOCUS | EVENT_OBJECT_SHOW | EVENT_OBJECT_HIDE
     );
-    if id_object != OBJID_WINDOW && !is_focus_or_show {
+    if id_object != OBJID_WINDOW && !is_focus_or_visibility {
         return;
     }
 
@@ -2149,8 +1663,13 @@ fn win_event_callback_inner(
         return;
     }
 
-    // Normalize to top-level window in case we got a child HWND.
-    let hwnd = normalize_to_root_window(hwnd);
+    // For destroy/hide events, skip normalization — the window may already be gone,
+    // and GetAncestor would return null. Use the HWND as-is.
+    let hwnd = if matches!(event, EVENT_OBJECT_DESTROY | EVENT_OBJECT_HIDE) {
+        hwnd
+    } else {
+        normalize_to_root_window(hwnd)
+    };
 
     if should_filter_window_event_by_manageability(event)
         && !should_emit_window_event_for(event, hwnd)
@@ -2164,6 +1683,7 @@ fn win_event_callback_inner(
     let window_event = match event {
         EVENT_OBJECT_CREATE | EVENT_OBJECT_SHOW => WindowEvent::Created(window_id),
         EVENT_OBJECT_DESTROY => WindowEvent::Destroyed(window_id),
+        EVENT_OBJECT_HIDE => WindowEvent::Hidden(window_id),
         EVENT_SYSTEM_FOREGROUND | EVENT_OBJECT_FOCUS => WindowEvent::Focused(window_id),
         EVENT_SYSTEM_MINIMIZESTART => WindowEvent::Minimized(window_id),
         EVENT_SYSTEM_MINIMIZEEND => WindowEvent::Restored(window_id),
@@ -3370,9 +2890,7 @@ mod tests {
 
     #[test]
     fn test_platform_config_default() {
-        let config = PlatformConfig::default();
-        assert_eq!(config.hide_strategy, HideStrategy::Cloak);
-        assert!(config.use_deferred_positioning);
+        let _config = PlatformConfig::default();
     }
 
     #[test]
@@ -3640,10 +3158,6 @@ mod tests {
         assert!(display.contains("test error"));
         assert!(display.contains("position"));
 
-        let cloak_err = Win32Error::CloakFailed("cloak failed".to_string());
-        let display = format!("{}", cloak_err);
-        assert!(display.contains("cloak"));
-
         let window_not_found = Win32Error::WindowNotFound(12345);
         let display = format!("{}", window_not_found);
         assert!(display.contains("12345"));
@@ -3658,16 +3172,6 @@ mod tests {
         assert!(!is_benign_side_effect_error(
             &Win32Error::SetPositionFailed("hard failure".to_string())
         ));
-    }
-
-    #[test]
-    fn test_is_benign_side_effect_error_cloak_failures_are_benign() {
-        assert!(is_benign_side_effect_error(&Win32Error::CloakFailed(
-            "DwmSetWindowAttribute(CLOAK=1) failed".to_string()
-        )));
-        assert!(is_benign_side_effect_error(&Win32Error::CloakFailed(
-            "DwmSetWindowAttribute(CLOAK=0) failed".to_string()
-        )));
     }
 
     #[test]
@@ -3712,90 +3216,6 @@ mod tests {
         assert!(!is_border_color_unsupported_hresult(
             windows::core::HRESULT(0x8000_4005u32 as i32)
         ));
-    }
-
-    #[test]
-    fn test_collect_uncloak_targets_move_offscreen_includes_offscreen() {
-        let visible = [WindowPlacement {
-            window_id: 1,
-            rect: Rect::new(0, 0, 100, 100),
-            visibility: Visibility::Visible,
-            column_index: 0,
-        }];
-        let offscreen = [
-            WindowPlacement {
-                window_id: 2,
-                rect: Rect::new(100, 0, 100, 100),
-                visibility: Visibility::OffScreenLeft,
-                column_index: 0,
-            },
-            WindowPlacement {
-                window_id: 1,
-                rect: Rect::new(200, 0, 100, 100),
-                visibility: Visibility::OffScreenLeft,
-                column_index: 0,
-            },
-        ];
-        let visible_refs: Vec<_> = visible.iter().collect();
-        let offscreen_refs: Vec<_> = offscreen.iter().collect();
-
-        let cloak_targets =
-            collect_uncloak_targets(&visible_refs, &offscreen_refs, HideStrategy::Cloak);
-        assert_eq!(cloak_targets, vec![1]);
-
-        let move_targets =
-            collect_uncloak_targets(&visible_refs, &offscreen_refs, HideStrategy::MoveOffScreen);
-        assert_eq!(move_targets, vec![1, 2]);
-    }
-
-    #[test]
-    fn test_offscreen_contains_window_detects_target() {
-        let offscreen = [
-            WindowPlacement {
-                window_id: 10,
-                rect: Rect::new(0, 0, 100, 100),
-                visibility: Visibility::OffScreenLeft,
-                column_index: 0,
-            },
-            WindowPlacement {
-                window_id: 20,
-                rect: Rect::new(100, 0, 100, 100),
-                visibility: Visibility::OffScreenRight,
-                column_index: 0,
-            },
-        ];
-        let offscreen_refs: Vec<_> = offscreen.iter().collect();
-        assert!(offscreen_contains_window(&offscreen_refs, 10));
-        assert!(offscreen_contains_window(&offscreen_refs, 20));
-        assert!(!offscreen_contains_window(&offscreen_refs, 30));
-    }
-
-    #[test]
-    fn test_select_visible_fallback_window_prefers_non_foreground() {
-        let visible = [
-            WindowPlacement {
-                window_id: 1,
-                rect: Rect::new(0, 0, 100, 100),
-                visibility: Visibility::Visible,
-                column_index: 0,
-            },
-            WindowPlacement {
-                window_id: 2,
-                rect: Rect::new(100, 0, 100, 100),
-                visibility: Visibility::Visible,
-                column_index: 0,
-            },
-        ];
-        let visible_refs: Vec<_> = visible.iter().collect();
-        assert_eq!(select_visible_fallback_window(&visible_refs, 1), Some(2));
-        assert_eq!(select_visible_fallback_window(&visible_refs, 2), Some(1));
-    }
-
-    #[test]
-    fn test_select_visible_fallback_window_handles_empty_visible() {
-        let visible: [WindowPlacement; 0] = [];
-        let visible_refs: Vec<_> = visible.iter().collect();
-        assert_eq!(select_visible_fallback_window(&visible_refs, 42), None);
     }
 
     #[test]
@@ -3851,11 +3271,8 @@ mod tests {
     }
 
     #[test]
-    fn test_apply_placements_reports_move_offscreen_errors() {
-        let config = PlatformConfig {
-            hide_strategy: HideStrategy::MoveOffScreen,
-            use_deferred_positioning: false,
-        };
+    fn test_apply_placements_reports_cloak_errors() {
+        let config = PlatformConfig;
         let placements = vec![WindowPlacement {
             window_id: 0,
             rect: Rect::new(0, 0, 800, 600),
