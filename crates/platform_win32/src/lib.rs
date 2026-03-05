@@ -48,6 +48,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 // WinEvent constants (not all are exposed by windows-rs)
 const EVENT_OBJECT_CREATE: u32 = 0x8000;
 const EVENT_OBJECT_DESTROY: u32 = 0x8001;
+const EVENT_OBJECT_SHOW: u32 = 0x8002;
 const EVENT_OBJECT_FOCUS: u32 = 0x8005;
 const EVENT_SYSTEM_FOREGROUND: u32 = 0x0003;
 const EVENT_SYSTEM_MINIMIZESTART: u32 = 0x0016;
@@ -221,6 +222,95 @@ impl Default for PlatformConfig {
 /// Enumerate all top-level windows that should be managed.
 ///
 /// Filters out:
+/// Get info for a single window handle with relaxed filters.
+///
+/// Unlike `enumerate_windows`, this does not filter out cloaked windows
+/// or windows with empty titles, making it suitable for handling window
+/// creation events where UWP apps may still be transitioning.
+pub fn get_window_info(hwnd_id: WindowId) -> Option<WindowInfo> {
+    unsafe {
+        let hwnd = HWND(hwnd_id as *mut c_void);
+
+        if !IsWindowVisible(hwnd).as_bool() {
+            return None;
+        }
+
+        let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
+        let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+
+        // Skip tool windows (unless they have WS_EX_APPWINDOW)
+        let is_tool_window = ex_style & WS_EX_TOOLWINDOW.0 != 0;
+        let is_app_window = ex_style & WS_EX_APPWINDOW.0 != 0;
+        if is_tool_window && !is_app_window {
+            return None;
+        }
+
+        if ex_style & WS_EX_NOACTIVATE.0 != 0 {
+            return None;
+        }
+
+        // Skip owned windows
+        if let Ok(owner) = GetWindow(hwnd, GW_OWNER) {
+            if !owner.is_invalid() {
+                return None;
+            }
+        }
+
+        // Get title (allow empty for UWP apps still loading)
+        let title_len = GetWindowTextLengthW(hwnd);
+        let title = if title_len > 0 {
+            let mut title_buf: Vec<u16> = vec![0; (title_len + 1) as usize];
+            let actual_len = GetWindowTextW(hwnd, &mut title_buf);
+            String::from_utf16_lossy(&title_buf[..actual_len as usize])
+        } else {
+            String::new()
+        };
+
+        // Get class name
+        let mut class_buf: Vec<u16> = vec![0; 256];
+        let class_len = GetClassNameW(hwnd, &mut class_buf);
+        let class_name = if class_len > 0 {
+            String::from_utf16_lossy(&class_buf[..class_len as usize])
+        } else {
+            String::new()
+        };
+
+        if should_skip_window_by_class(&class_name) {
+            return None;
+        }
+
+        // Get process ID
+        let mut process_id: u32 = 0;
+        GetWindowThreadProcessId(hwnd, Some(&mut process_id));
+
+        // Get window rect
+        let mut win_rect = RECT::default();
+        if GetWindowRect(hwnd, &mut win_rect).is_err() {
+            return None;
+        }
+
+        let rect = Rect::new(
+            win_rect.left,
+            win_rect.top,
+            win_rect.right - win_rect.left,
+            win_rect.bottom - win_rect.top,
+        );
+
+        if rect.width == 0 || rect.height == 0 {
+            return None;
+        }
+
+        Some(WindowInfo {
+            hwnd: hwnd_id,
+            title,
+            class_name,
+            process_id,
+            rect,
+            visible: true,
+        })
+    }
+}
+
 /// - Invisible windows
 /// - Tool windows (WS_EX_TOOLWINDOW without WS_EX_APPWINDOW)
 /// - Windows with empty titles
@@ -592,7 +682,9 @@ fn should_emit_window_event_for(event: u32, hwnd: HWND) -> bool {
     match event {
         // Creation can happen before title is set; keep manageability checks but
         // allow empty title and cloaked transitional states.
-        EVENT_OBJECT_CREATE => should_emit_window_event_with_policy(hwnd, true, false, false),
+        EVENT_OBJECT_CREATE | EVENT_OBJECT_SHOW => {
+            should_emit_window_event_with_policy(hwnd, true, false, false)
+        }
         // Focus must not be blocked by cloaked-state checks or empty titles.
         EVENT_SYSTEM_FOREGROUND | EVENT_OBJECT_FOCUS => {
             should_emit_window_event_with_policy(hwnd, true, false, false)
@@ -615,6 +707,7 @@ fn should_filter_window_event_by_manageability(event: u32) -> bool {
         event,
         EVENT_OBJECT_CREATE
             | EVENT_OBJECT_DESTROY
+            | EVENT_OBJECT_SHOW
             | EVENT_SYSTEM_FOREGROUND
             | EVENT_SYSTEM_MINIMIZESTART
             | EVENT_SYSTEM_MINIMIZEEND
@@ -640,8 +733,6 @@ fn should_skip_window_by_title(title: &str) -> bool {
         "Program Manager",
         "Windows Input Experience",
         "Microsoft Text Input Application",
-        "Settings",
-        // Add more system window titles as needed
     ];
 
     SKIP_TITLES.contains(&title)
@@ -649,9 +740,11 @@ fn should_skip_window_by_title(title: &str) -> bool {
 
 /// Check if a window is cloaked (hidden by DWM).
 ///
-/// Cloaked windows should be skipped during enumeration since they're
-/// not actually visible to the user (e.g., windows on other virtual desktops).
+/// Only treats shell-cloaked windows (on other virtual desktops) as cloaked.
+/// App-cloaked windows (UWP transitioning) are allowed through so that
+/// ApplicationFrameWindow hosts like Settings are not filtered out.
 fn is_window_cloaked(hwnd: HWND) -> bool {
+    const DWM_CLOAKED_SHELL: u32 = 0x2;
     unsafe {
         let mut cloaked: u32 = 0;
         let result = DwmGetWindowAttribute(
@@ -661,7 +754,7 @@ fn is_window_cloaked(hwnd: HWND) -> bool {
             std::mem::size_of::<u32>() as u32,
         );
         match result {
-            Ok(()) => cloaked != 0,
+            Ok(()) => cloaked & DWM_CLOAKED_SHELL != 0,
             Err(e) => {
                 let window_is_valid = IsWindow(Some(hwnd)).as_bool();
                 let treat_as_cloaked = should_treat_cloak_query_failure_as_cloaked(window_is_valid);
@@ -775,7 +868,8 @@ fn should_skip_window_by_class(class_name: &str) -> bool {
         // Empty/cloaked UWP frames are already filtered by the cloaked window check.
         "XamlExplorerHostIslandWindow", // XAML islands
         "TopLevelWindowForOverflowXamlIsland", // Overflow islands
-                                        // Add more system classes as needed
+        "LeopardWMSettings",          // Our own settings window
+        "LeopardWMBorderFrame",       // Our own border overlay
     ];
 
     SKIP_CLASSES.contains(&class_name)
@@ -1911,7 +2005,7 @@ pub fn install_event_hooks() -> Result<(EventHookHandle, mpsc::Receiver<WindowEv
 
                 // Define events to hook: (min_event, max_event)
                 let event_ranges = [
-                    (EVENT_OBJECT_CREATE, EVENT_OBJECT_DESTROY),
+                    (EVENT_OBJECT_CREATE, EVENT_OBJECT_SHOW),
                     (EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND),
                     (EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND),
                     (EVENT_SYSTEM_MOVESIZESTART, EVENT_SYSTEM_MOVESIZEEND),
@@ -2042,8 +2136,11 @@ fn win_event_callback_inner(
     // Exception: EVENT_OBJECT_FOCUS fires with OBJID_CLIENT, and
     // EVENT_SYSTEM_* events always have id_object == 0, so we allow
     // focus/foreground events regardless of id_object.
-    let is_focus_event = matches!(event, EVENT_SYSTEM_FOREGROUND | EVENT_OBJECT_FOCUS);
-    if id_object != OBJID_WINDOW && !is_focus_event {
+    let is_focus_or_show = matches!(
+        event,
+        EVENT_SYSTEM_FOREGROUND | EVENT_OBJECT_FOCUS | EVENT_OBJECT_SHOW
+    );
+    if id_object != OBJID_WINDOW && !is_focus_or_show {
         return;
     }
 
@@ -2065,7 +2162,7 @@ fn win_event_callback_inner(
 
     // Map event to our WindowEvent type
     let window_event = match event {
-        EVENT_OBJECT_CREATE => WindowEvent::Created(window_id),
+        EVENT_OBJECT_CREATE | EVENT_OBJECT_SHOW => WindowEvent::Created(window_id),
         EVENT_OBJECT_DESTROY => WindowEvent::Destroyed(window_id),
         EVENT_SYSTEM_FOREGROUND | EVENT_OBJECT_FOCUS => WindowEvent::Focused(window_id),
         EVENT_SYSTEM_MINIMIZESTART => WindowEvent::Minimized(window_id),

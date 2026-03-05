@@ -352,9 +352,7 @@ impl AppState {
                 return Some(info.clone());
             }
         }
-        enumerate_windows()
-            .ok()
-            .and_then(|windows| windows.into_iter().find(|w| w.hwnd == hwnd))
+        leopardwm_platform_win32::get_window_info(hwnd)
     }
 
     /// Check whether a window ID is known to this state (managed or injected).
