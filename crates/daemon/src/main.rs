@@ -1,3 +1,4 @@
+#![windows_subsystem = "windows"]
 //! LeopardWM Daemon
 //!
 //! Main daemon process for the LeopardWM window manager.
