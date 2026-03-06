@@ -1,0 +1,28 @@
+name: Release
+on:
+  push:
+    tags: ["v*"]
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - run: cargo build --release
+      - run: cargo test --all
+      - name: Package
+        shell: bash
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          DIR="LeopardWM-${VERSION}-x86_64-windows"
+          mkdir "$DIR"
+          cp target/release/leopardwm.exe "$DIR/"
+          cp target/release/leopardwm-cli.exe "$DIR/"
+          cp README.md LICENSE "$DIR/"
+          7z a "${DIR}.zip" "$DIR"
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: LeopardWM-*.zip
+          generate_release_notes: true

@@ -710,6 +710,13 @@ async fn main() -> Result<()> {
         eprintln!("[leopardwm] Warning: Failed to set DPI awareness (may already be set)");
     }
 
+    // Auto-create config file on first run
+    match config::ensure_config_on_disk() {
+        Ok(Some(path)) => eprintln!("[leopardwm] Created default config: {}", path.display()),
+        Ok(None) => {}
+        Err(e) => eprintln!("[leopardwm] Warning: Could not create config file: {}", e),
+    }
+
     // Load configuration first (needed for log level)
     let mut config = Config::load().unwrap_or_else(|e| {
         // Can't use tracing yet, fall back to eprintln

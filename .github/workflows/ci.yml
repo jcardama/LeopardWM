@@ -1,0 +1,11 @@
+name: CI
+on: [push, pull_request]
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release
+      - run: cargo test --all
+      - run: cargo clippy --all -- -D warnings

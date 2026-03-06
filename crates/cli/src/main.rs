@@ -24,8 +24,6 @@ const IPC_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const IPC_RECOVERY_CONNECT_TIMEOUT: Duration = Duration::from_secs(12);
 /// Default timeout budget for daemon responses after request send.
 const IPC_DEFAULT_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
-/// Apply can involve heavier work and should allow a longer response window.
-const IPC_APPLY_RESPONSE_TIMEOUT: Duration = Duration::from_secs(20);
 /// Extended timeout for recovery commands that can race shutdown.
 const IPC_RECOVERY_RESPONSE_TIMEOUT: Duration = Duration::from_secs(15);
 /// How long to wait for daemon process/pipe teardown after stop-style commands.
@@ -74,7 +72,6 @@ fn command_connect_timeout(cmd: &IpcCommand) -> Duration {
 
 fn command_response_timeout(cmd: &IpcCommand) -> Duration {
     match cmd {
-        IpcCommand::Apply => IPC_APPLY_RESPONSE_TIMEOUT,
         IpcCommand::Stop | IpcCommand::PanicRevert => IPC_RECOVERY_RESPONSE_TIMEOUT,
         _ => IPC_DEFAULT_RESPONSE_TIMEOUT,
     }
@@ -128,8 +125,6 @@ enum Commands {
     },
     /// Re-enumerate windows
     Refresh,
-    /// Apply current layout to windows
-    Apply,
     /// Reload configuration from file
     Reload,
     /// Start daemon (if needed) and apply layout once
@@ -143,18 +138,6 @@ enum Commands {
         /// Start daemon in safe mode (no hotkeys, no cloaking)
         #[arg(long)]
         safe_mode: bool,
-    },
-    /// Generate default configuration file
-    Init {
-        /// Output path (default: %APPDATA%/leopardwm/config/config.toml)
-        #[arg(short, long)]
-        output: Option<PathBuf>,
-        /// Overwrite existing config file
-        #[arg(short, long)]
-        force: bool,
-        /// Use a preset profile: developer, laptop, ultrawide
-        #[arg(short, long)]
-        profile: Option<String>,
     },
     /// Stop the daemon
     Stop,
@@ -192,10 +175,6 @@ enum Commands {
     },
     /// Collect diagnostic logs for bug reports
     CollectLogs,
-    /// Quick health check (is daemon alive and responding?)
-    Health,
-    /// First-run setup assistant
-    Setup,
     /// Manage configuration files
     Config {
         #[command(subcommand)]
@@ -267,6 +246,18 @@ enum AutostartAction {
 
 #[derive(Subcommand)]
 enum ConfigAction {
+    /// Generate default configuration file
+    Init {
+        /// Output path (default: %APPDATA%/leopardwm/config/config.toml)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        /// Overwrite existing config file
+        #[arg(short, long)]
+        force: bool,
+        /// Use a preset profile: developer, laptop, ultrawide
+        #[arg(short, long)]
+        profile: Option<String>,
+    },
     /// Reset config to defaults (backs up current to config.toml.bak)
     Reset,
     /// Create a backup of the current config
@@ -311,7 +302,6 @@ fn to_ipc_command(cmd: &Commands) -> IpcCommand {
             QueryType::All => IpcCommand::QueryAllWindows,
         },
         Commands::Refresh => IpcCommand::Refresh,
-        Commands::Apply => IpcCommand::Apply,
         Commands::Reload => IpcCommand::Reload,
         Commands::CloseWindow => IpcCommand::CloseWindow,
         Commands::ToggleFloating => IpcCommand::ToggleFloating,
@@ -321,14 +311,11 @@ fn to_ipc_command(cmd: &Commands) -> IpcCommand {
         },
         Commands::EqualizeWidths => IpcCommand::EqualizeColumnWidths,
         Commands::Status => IpcCommand::QueryStatus,
-        Commands::Health => IpcCommand::HealthCheck,
         Commands::PanicRevert => IpcCommand::PanicRevert,
         Commands::Run { .. } => unreachable!("Run handled separately"),
-        Commands::Init { .. } => unreachable!("Init handled separately"),
         Commands::Doctor => unreachable!("Doctor handled separately"),
         Commands::Autostart { .. } => unreachable!("Autostart handled separately"),
         Commands::CollectLogs => unreachable!("CollectLogs handled separately"),
-        Commands::Setup => unreachable!("Setup handled separately"),
         Commands::Config { .. } => unreachable!("Config handled separately"),
         Commands::EmergencyUncloak => unreachable!("EmergencyUncloak handled separately"),
         Commands::Stop => IpcCommand::Stop,
@@ -739,22 +726,6 @@ async fn send_apply_with_recovery() -> Result<IpcResponse> {
     }
 }
 
-async fn handle_apply() -> Result<()> {
-    if !probe_daemon_running()? {
-        anyhow::bail!(apply_not_running_message());
-    }
-
-    let response = send_apply_with_recovery().await?;
-
-    print_response(&response);
-    if is_non_success_response(&response) {
-        run_local_emergency_visibility_restore(apply_non_success_recovery_reason())
-            .context("Failed to execute local emergency visibility restore")?;
-        anyhow::bail!(apply_error_response_recovery_message());
-    }
-    Ok(())
-}
-
 async fn handle_stop() -> Result<()> {
     let daemon_running = probe_daemon_running()?;
 
@@ -1127,24 +1098,9 @@ fn print_response(response: &IpcResponse) {
             let secs = uptime_seconds % 60;
             println!("  Uptime: {}h {}m {}s", hours, mins, secs);
         }
-        IpcResponse::HealthInfo {
-            healthy,
-            uptime_seconds,
-            total_windows,
-            monitors,
-            paused,
-        } => {
-            if *healthy {
-                println!("HEALTHY");
-            } else {
-                println!("UNHEALTHY");
-            }
-            println!("  Uptime: {}s", uptime_seconds);
-            println!("  Windows: {}", total_windows);
-            println!("  Monitors: {}", monitors);
-            if *paused {
-                println!("  Status: PAUSED");
-            }
+        IpcResponse::HealthInfo { .. } => {
+            // Health command removed; display as generic success if received
+            println!("OK");
         }
         IpcResponse::Unknown => {
             println!("Daemon returned an unknown response status (client/daemon version mismatch)");
@@ -1299,7 +1255,8 @@ fn handle_init(output: Option<PathBuf>, force: bool, profile: Option<String>) ->
     } else {
         println!("Created config file: {}", path.display());
     }
-    println!("\nEdit this file to customize LeopardWM settings.");
+    println!("\nNote: The daemon creates a default config on first run.");
+    println!("Use this command to regenerate or apply a profile preset.");
     println!("Run 'leopardwm-cli reload' to apply changes while daemon is running.");
 
     Ok(())
@@ -1482,7 +1439,7 @@ async fn handle_doctor() -> Result<()> {
     match &found_path {
         Some(path) => CheckResult::Pass(format!("Config file exists: {}", path.display())),
         None => CheckResult::Warn(format!(
-            "No config file found. Run 'leopardwm-cli init' to create one at: {}",
+            "No config file found. Config will be auto-created on next daemon start at: {}",
             display_path.display()
         )),
     }
@@ -1669,67 +1626,24 @@ fn handle_collect_logs() -> Result<()> {
     Ok(())
 }
 
-/// First-run setup assistant.
-fn handle_setup() -> Result<()> {
-    println!("LeopardWM Setup");
-    println!("==============\n");
-
-    // Step 1: Check if config exists
-    let config_path = default_config_path().context("Could not determine config path.")?;
-
-    if config_path.exists() {
-        println!("[OK] Config file already exists: {}", config_path.display());
-    } else {
-        println!("Creating default config file...");
-        handle_init(None, false, None)?;
-    }
-
-    // Step 2: Check daemon binary
-    match find_daemon_binary() {
-        Some(path) => println!("[OK] Daemon binary found: {}", path.display()),
-        None => {
-            println!("[!!] Daemon binary not found. Building...");
-            ensure_daemon_binary()?;
-            println!("[OK] Daemon built successfully.");
-        }
-    }
-
-    // Step 3: Print summary
-    println!("\n## Quick Start");
-    println!("  1. Edit config: {}", config_path.display());
-    println!("  2. Start daemon: leopardwm-cli run");
-    println!("  3. Check health: leopardwm-cli doctor");
-    println!();
-    println!("## Default Hotkeys (Ctrl+Alt prefix)");
-    println!("  Ctrl+Alt+H/L/J/K      Focus left/right/down/up");
-    println!("  Ctrl+Alt+Shift+H/L    Move column left/right");
-    println!("  Ctrl+Alt+Minus/Equals Resize column");
-    println!("  Ctrl+Alt+1/2/3/0      Column width presets");
-    println!("  Ctrl+Alt+Win+,/.      Focus monitor left/right");
-    println!("  Ctrl+Alt+W            Close focused window");
-    println!("  Ctrl+Alt+F            Toggle floating");
-    println!("  Ctrl+Alt+Shift+F      Toggle fullscreen");
-    println!("  Ctrl+Alt+P            Toggle pause");
-    println!("  Ctrl+Alt+R            Refresh");
-    println!("  Win+Ctrl+Escape       Emergency restore + stop daemon");
-    println!();
-    println!("## Optional: Enable Auto-Start");
-    println!("  leopardwm-cli autostart enable");
-
-    Ok(())
-}
-
 /// Get the backup path for a config file.
 fn config_backup_path(config_path: &std::path::Path) -> PathBuf {
     config_path.with_extension("toml.bak")
 }
 
-/// Handle config subcommands (reset, backup, restore).
+/// Handle config subcommands (init, reset, backup, restore).
 fn handle_config(action: ConfigAction) -> Result<()> {
     let config_path = default_config_path().context("Could not determine config path.")?;
     let backup_path = config_backup_path(&config_path);
 
     match action {
+        ConfigAction::Init {
+            output,
+            force,
+            profile,
+        } => {
+            return handle_init(output, force, profile);
+        }
         ConfigAction::Reset => {
             // Back up current config if it exists
             if config_path.exists() {
@@ -1774,17 +1688,11 @@ async fn main() -> Result<()> {
 
     // Handle locally-executed commands (do not use IPC command mapping)
     match cli.command {
-        Commands::Init {
-            output,
-            force,
-            profile,
-        } => return handle_init(output, force, profile),
         Commands::Run {
             no_apply,
             wait_ms,
             safe_mode,
         } => return handle_run(no_apply, wait_ms, safe_mode).await,
-        Commands::Apply => return handle_apply().await,
         Commands::Stop => return handle_stop().await,
         Commands::PanicRevert => return handle_panic_revert().await,
         Commands::EmergencyUncloak => return handle_emergency_uncloak(),
@@ -1792,7 +1700,6 @@ async fn main() -> Result<()> {
         Commands::Doctor => return handle_doctor().await,
         Commands::Autostart { action } => return handle_autostart(action),
         Commands::CollectLogs => return handle_collect_logs(),
-        Commands::Setup => return handle_setup(),
         Commands::Config { action } => return handle_config(action),
         _ => {}
     }
@@ -1983,12 +1890,6 @@ mod tests {
     }
 
     #[test]
-    fn test_to_ipc_command_apply() {
-        let cmd = Commands::Apply;
-        assert!(matches!(to_ipc_command(&cmd), IpcCommand::Apply));
-    }
-
-    #[test]
     fn test_to_ipc_command_reload() {
         let cmd = Commands::Reload;
         assert!(matches!(to_ipc_command(&cmd), IpcCommand::Reload));
@@ -2117,12 +2018,6 @@ mod tests {
     }
 
     #[test]
-    fn test_apply_response_timeout_is_longer_than_default() {
-        assert!(IPC_APPLY_RESPONSE_TIMEOUT > IPC_DEFAULT_RESPONSE_TIMEOUT);
-        assert!(IPC_APPLY_RESPONSE_TIMEOUT <= Duration::from_secs(60));
-    }
-
-    #[test]
     fn test_recovery_response_timeout_is_longer_than_default() {
         assert!(IPC_RECOVERY_RESPONSE_TIMEOUT > IPC_DEFAULT_RESPONSE_TIMEOUT);
         assert!(IPC_RECOVERY_RESPONSE_TIMEOUT <= Duration::from_secs(60));
@@ -2173,10 +2068,10 @@ mod tests {
     }
 
     #[test]
-    fn test_command_response_timeout_for_apply_uses_extended_budget() {
+    fn test_command_response_timeout_for_apply_uses_default() {
         assert_eq!(
             command_response_timeout(&IpcCommand::Apply),
-            IPC_APPLY_RESPONSE_TIMEOUT
+            IPC_DEFAULT_RESPONSE_TIMEOUT
         );
     }
 
@@ -2665,19 +2560,14 @@ mod tests {
     #[test]
     fn test_config_action_variants_parse() {
         // Verify ConfigAction variants can be constructed
+        let _init = ConfigAction::Init {
+            output: None,
+            force: false,
+            profile: None,
+        };
         let _reset = ConfigAction::Reset;
         let _backup = ConfigAction::Backup;
         let _restore = ConfigAction::Restore;
-    }
-
-    // =========================================================================
-    // Phase 3: Health command test (Iteration 43)
-    // =========================================================================
-
-    #[test]
-    fn test_to_ipc_command_health() {
-        let cmd = Commands::Health;
-        assert!(matches!(to_ipc_command(&cmd), IpcCommand::HealthCheck));
     }
 
     // =========================================================================

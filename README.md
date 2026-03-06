@@ -1,5 +1,6 @@
 # LeopardWM
 
+[![CI](https://github.com/jcardama/LeopardWM/actions/workflows/ci.yml/badge.svg)](https://github.com/jcardama/LeopardWM/actions/workflows/ci.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
 ![Platform: Windows 10/11](https://img.shields.io/badge/Platform-Windows%2010%2F11-0078D4)
 
@@ -26,7 +27,15 @@ Most Windows tilers use tree or BSP layouts. LeopardWM is **scroll-first**: wind
 - Workspace persistence and session recovery
 - Autostart via Registry
 
-## Quick Start
+## Installation
+
+Download the latest release from [GitHub Releases](https://github.com/jcardama/LeopardWM/releases):
+
+1. Extract `LeopardWM-x.y.z-x86_64-windows.zip` to a permanent location
+2. Run `leopardwm.exe`
+3. (Optional) Enable autostart: `leopardwm-cli autostart enable`
+
+## Quick Start (from source)
 
 Prerequisites: [Rust](https://rustup.rs) with the MSVC toolchain (`stable-x86_64-pc-windows-msvc`)
 
@@ -36,12 +45,13 @@ cd LeopardWM
 cargo build --release
 ```
 
-Binaries land in `target/release/`. Generate a default config and start the daemon:
+Start the daemon:
 
 ```bash
-cargo run -p leopardwm-cli -- init
-cargo run -p leopardwm-cli -- run
+./target/release/leopardwm.exe
 ```
+
+A default config is created automatically at `%APPDATA%\leopardwm\config\config.toml`. Customize via the tray icon → Settings, or edit the file directly.
 
 ## Default Hotkeys
 

@@ -870,6 +870,140 @@ impl Config {
     }
 }
 
+/// Write the commented default config to disk if no config file exists.
+/// Returns Ok(Some(path)) if a file was created, Ok(None) if it already exists.
+pub fn ensure_config_on_disk() -> Result<Option<PathBuf>> {
+    let paths = config_paths();
+    // If any config file already exists, do nothing
+    for path in &paths {
+        if path.exists() {
+            return Ok(None);
+        }
+    }
+    // Write to the primary path
+    let path = paths
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("No config path available"))?
+        .clone();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&path, generate_default_config_content())?;
+
+    // Also ensure data directory exists (for workspace persistence)
+    if let Some(proj_dirs) = ProjectDirs::from("", "", "leopardwm") {
+        let data_dir = proj_dirs.data_dir();
+        let _ = fs::create_dir_all(data_dir);
+    }
+
+    Ok(Some(path))
+}
+
+/// Generate commented default config content for hand-editing.
+///
+/// Keep in sync with cli/src/main.rs:generate_default_config()
+fn generate_default_config_content() -> String {
+    r#"# LeopardWM Configuration
+# https://github.com/jcardama/LeopardWM
+
+[layout]
+# Gap between columns in pixels
+gap = 10
+
+# Gap at the edges of the viewport in pixels
+outer_gap = 10
+
+# Default width for new columns in pixels
+default_column_width = 800
+
+# Minimum column width in pixels
+min_column_width = 400
+
+# Maximum column width in pixels
+max_column_width = 1600
+
+# Centering mode: "center" or "just_in_view"
+# - center: Always center the focused column
+# - just_in_view: Only scroll if focused column would be outside viewport
+centering_mode = "center"
+
+[appearance]
+
+[behavior]
+# Automatically focus new windows when they appear
+focus_new_windows = true
+
+# Track focus changes from Windows (sync with Alt-Tab, etc.)
+track_focus_changes = true
+
+# Log level: trace, debug, info, warn, error
+log_level = "info"
+
+# Focus follows mouse (hover to focus)
+focus_follows_mouse = false
+
+[hotkeys]
+# Navigation (focus) — Ctrl+Alt + HJKL
+"Ctrl+Alt+H" = "focus_left"
+"Ctrl+Alt+L" = "focus_right"
+"Ctrl+Alt+K" = "focus_up"
+"Ctrl+Alt+J" = "focus_down"
+
+# Move column — Ctrl+Alt+Shift
+"Ctrl+Alt+Shift+H" = "move_column_left"
+"Ctrl+Alt+Shift+L" = "move_column_right"
+
+# Resize — Ctrl+Alt + Minus/Equals
+"Ctrl+Alt+Minus" = "resize_shrink"
+"Ctrl+Alt+Equals" = "resize_grow"
+
+# Column width presets
+"Ctrl+Alt+1" = "width_third"
+"Ctrl+Alt+2" = "width_half"
+"Ctrl+Alt+3" = "width_two_thirds"
+"Ctrl+Alt+0" = "equalize_widths"
+
+# Monitor focus — Ctrl+Alt+Win
+"Ctrl+Alt+Win+Comma" = "focus_monitor_left"
+"Ctrl+Alt+Win+Period" = "focus_monitor_right"
+
+# Move to monitor — Ctrl+Alt+Win+Shift
+"Ctrl+Alt+Win+Shift+Comma" = "move_to_monitor_left"
+"Ctrl+Alt+Win+Shift+Period" = "move_to_monitor_right"
+
+# Window management
+"Ctrl+Alt+W" = "close_window"
+"Ctrl+Alt+F" = "toggle_floating"
+"Ctrl+Alt+Shift+F" = "toggle_fullscreen"
+"Ctrl+Alt+P" = "toggle_pause"
+"Ctrl+Alt+R" = "refresh"
+"Ctrl+Alt+Shift+R" = "reload"
+
+# Emergency restore + stop daemon
+"Win+Ctrl+Escape" = "panic_revert"
+
+[gestures]
+# Touchpad gesture support
+enabled = true
+swipe_left = "focus_left"
+swipe_right = "focus_right"
+swipe_up = "focus_up"
+swipe_down = "focus_down"
+
+[snap_hints]
+# Visual snap hint overlays during resize
+enabled = true
+duration_ms = 200
+opacity = 128
+
+# [[window_rules]]
+# match_class = "Chrome_WidgetWin_1"
+# match_title = ".*DevTools.*"
+# action = "float"
+"#
+    .to_string()
+}
+
 /// Get all possible config file paths in priority order.
 pub fn config_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
