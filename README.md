@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/leopardwm.png" alt="LeopardWM" width="128" />
+</p>
+
 # LeopardWM
 
 [![CI](https://github.com/jcardama/LeopardWM/actions/workflows/ci.yml/badge.svg)](https://github.com/jcardama/LeopardWM/actions/workflows/ci.yml)

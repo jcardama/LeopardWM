@@ -30,5 +30,9 @@ windows = { workspace = true }
 wry = { workspace = true }
 raw-window-handle = { workspace = true }
 regex = "1"
+png = "0.17"
+
+[build-dependencies]
+winresource = "0.1"
 
 [dev-dependencies]

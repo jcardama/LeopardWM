@@ -409,66 +409,32 @@ pub fn format_tooltip_text(
     tooltip
 }
 
-/// Create a default icon for the tray.
-///
-/// Uses a simple blue square as a placeholder icon.
+/// Create the tray icon from the embedded 32x32 PNG.
 fn create_default_icon() -> Result<tray_icon::Icon, TrayError> {
-    // Create a simple 32x32 RGBA icon (blue square with rounded appearance)
-    const SIZE: usize = 32;
-    let mut rgba = vec![0u8; SIZE * SIZE * 4];
+    let png_bytes = include_bytes!("../../../assets/icon-32.png");
+    let decoder = png::Decoder::new(std::io::Cursor::new(png_bytes));
+    let mut reader = decoder
+        .read_info()
+        .map_err(|e| TrayError::Icon(format!("PNG decode error: {e}")))?;
+    let mut buf = vec![0u8; reader.output_buffer_size()];
+    let info = reader
+        .next_frame(&mut buf)
+        .map_err(|e| TrayError::Icon(format!("PNG frame error: {e}")))?;
+    buf.truncate(info.buffer_size());
 
-    // Colors: LeopardWM blue theme
-    let primary_r = 66u8;
-    let primary_g = 133u8;
-    let primary_b = 244u8;
-    let accent_r = 52u8;
-    let accent_g = 168u8;
-    let accent_b = 83u8;
-
-    for y in 0..SIZE {
-        for x in 0..SIZE {
-            let idx = (y * SIZE + x) * 4;
-
-            // Calculate distance from center
-            let cx = SIZE as f32 / 2.0;
-            let cy = SIZE as f32 / 2.0;
-            let dx = x as f32 - cx;
-            let dy = y as f32 - cy;
-            let dist = (dx * dx + dy * dy).sqrt();
-
-            // Create a rounded square with gradient
-            let max_dist = SIZE as f32 / 2.0 - 2.0;
-
-            if dist < max_dist {
-                // Inside the icon - create a tiling pattern
-                let tile_size = 8;
-                let tx = x / tile_size;
-                let ty = y / tile_size;
-
-                // Checkerboard pattern to represent tiling
-                if (tx + ty) % 2 == 0 {
-                    rgba[idx] = primary_r;
-                    rgba[idx + 1] = primary_g;
-                    rgba[idx + 2] = primary_b;
-                } else {
-                    rgba[idx] = accent_r;
-                    rgba[idx + 1] = accent_g;
-                    rgba[idx + 2] = accent_b;
-                }
-                rgba[idx + 3] = 255; // Fully opaque
-            } else if dist < max_dist + 2.0 {
-                // Anti-aliased edge
-                let alpha = ((max_dist + 2.0 - dist) / 2.0 * 255.0) as u8;
-                rgba[idx] = primary_r;
-                rgba[idx + 1] = primary_g;
-                rgba[idx + 2] = primary_b;
-                rgba[idx + 3] = alpha;
-            }
-            // else: transparent (default 0)
+    // Convert RGB to RGBA if needed
+    let rgba = if info.color_type == png::ColorType::Rgb {
+        let mut out = Vec::with_capacity((info.width * info.height * 4) as usize);
+        for chunk in buf.chunks(3) {
+            out.extend_from_slice(chunk);
+            out.push(255);
         }
-    }
+        out
+    } else {
+        buf
+    };
 
-    tray_icon::Icon::from_rgba(rgba, SIZE as u32, SIZE as u32)
+    tray_icon::Icon::from_rgba(rgba, info.width, info.height)
         .map_err(|e| TrayError::Icon(e.to_string()))
 }
 

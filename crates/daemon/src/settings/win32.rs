@@ -10,7 +10,7 @@ use std::sync::mpsc;
 
 use anyhow::Result;
 use tracing::{info, warn};
-use windows::core::w;
+use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWINDOWATTRIBUTE};
 use windows::Win32::Graphics::Gdi::*;
@@ -80,6 +80,19 @@ pub fn run_settings_window(config: Config, event_tx: mpsc::Sender<SettingsEvent>
             HBRUSH((COLOR_BTNFACE.0 + 1) as _)
         };
 
+        // Load the embedded application icon (set by winresource build script)
+        let icon = LoadIconW(Some(hinstance.into()), PCWSTR(1 as _)).ok();
+        let icon_sm = LoadImageW(
+            Some(hinstance.into()),
+            PCWSTR(1 as _),
+            IMAGE_ICON,
+            16,
+            16,
+            LR_DEFAULTCOLOR,
+        )
+        .ok()
+        .map(|h| HICON(h.0));
+
         // Register window class
         let class_name = w!("LeopardWMSettings");
         let wc = WNDCLASSEXW {
@@ -90,6 +103,8 @@ pub fn run_settings_window(config: Config, event_tx: mpsc::Sender<SettingsEvent>
             hCursor: LoadCursorW(None, IDC_ARROW)?,
             hbrBackground: bg_brush,
             lpszClassName: class_name,
+            hIcon: icon.unwrap_or_default(),
+            hIconSm: icon_sm.unwrap_or_default(),
             ..Default::default()
         };
         RegisterClassExW(&wc);
