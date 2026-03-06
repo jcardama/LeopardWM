@@ -417,14 +417,25 @@ impl AppState {
             WindowEvent::MoveSizeEnd(hwnd) => {
                 debug!("User finished dragging/resizing window {}", hwnd);
                 self.dragging_window = None;
-                // Snap the window back to its tiled position with animation.
                 if let Some(monitor_id) = self.find_window_workspace(hwnd) {
                     let is_floating = self
                         .workspaces
                         .get(&monitor_id)
                         .map_or(true, |ws| ws.is_floating(hwnd));
 
-                    if !is_floating {
+                    if is_floating {
+                        // Update stored rect so layout won't snap it back
+                        if let Some(win_info) = self.lookup_window_info(hwnd) {
+                            if let Some(workspace) = self.workspaces.get_mut(&monitor_id) {
+                                workspace.update_floating(hwnd, win_info.rect);
+                                debug!(
+                                    "Floating window {} dropped at {:?}",
+                                    hwnd, win_info.rect
+                                );
+                            }
+                        }
+                    } else {
+                        // Snap tiled window back to its layout position with animation.
                         debug!("Managed window {} dropped — animating back", hwnd);
                         let viewport_width = self
                             .monitors
