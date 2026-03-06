@@ -1427,6 +1427,61 @@ pub fn uncloak_all_visible_windows() {
     eprintln!("[leopardwm] Emergency window restore complete");
 }
 
+/// Cascade windows starting at (0, 0) on the primary monitor work area.
+///
+/// Each window is sized to 60% of the work area and offset by 30px from the
+/// previous one. Off-screen windows are first restored, then cascaded.
+pub fn cascade_windows(window_ids: &[WindowId]) {
+    let work_area = match get_primary_monitor() {
+        Ok(m) => m.work_area,
+        Err(_) => Rect {
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1080,
+        },
+    };
+
+    // First restore any windows that are off-screen
+    let _ = restore_all_windows_moved_offscreen_best_effort();
+
+    // Use height as the base so windows look reasonable on ultrawide monitors
+    let cascade_h = (work_area.height as f64 * 0.5) as i32;
+    let cascade_w = (cascade_h as f64 * 1.33) as i32; // 4:3 aspect ratio
+    let step = 30;
+
+    let placements: Vec<WindowPlacement> = window_ids
+        .iter()
+        .enumerate()
+        .map(|(i, &wid)| {
+            let offset = (i as i32) * step;
+            WindowPlacement {
+                window_id: wid,
+                rect: Rect {
+                    x: work_area.x + offset,
+                    y: work_area.y + offset,
+                    width: cascade_w,
+                    height: cascade_h,
+                },
+                visibility: Visibility::Visible,
+                column_index: 0,
+            }
+        })
+        .collect();
+
+    // Restore minimized windows first
+    for &wid in window_ids {
+        let hwnd = HWND(wid as *mut c_void);
+        unsafe {
+            if IsIconic(hwnd).as_bool() {
+                let _ = ShowWindow(hwnd, SW_RESTORE);
+            }
+        }
+    }
+
+    let _ = apply_placements(&placements, &PlatformConfig);
+}
+
 /// Set the process DPI awareness to Per-Monitor Aware V2.
 ///
 /// This must be called as early as possible in `main()`, before any

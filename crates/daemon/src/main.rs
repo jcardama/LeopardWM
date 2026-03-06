@@ -30,11 +30,11 @@ use leopardwm_ipc::{
     pipe_name_candidates, preferred_pipe_name, IpcCommand, IpcResponse, MAX_IPC_MESSAGE_SIZE,
 };
 use leopardwm_platform_win32::{
-    enumerate_monitors, enumerate_windows, install_event_hooks, install_mouse_hook,
-    overlay::OverlayWindow, parse_hotkey_string, register_gestures, register_hotkeys,
-    restore_windows_moved_offscreen, set_display_change_sender, set_dpi_awareness,
-    uncloak_all_visible_windows, GestureEvent, Hotkey, HotkeyEvent, HotkeyId, MonitorId,
-    MonitorInfo, WindowEvent,
+    cascade_windows, enumerate_monitors, enumerate_windows, install_event_hooks,
+    install_mouse_hook, overlay::OverlayWindow, parse_hotkey_string, register_gestures,
+    register_hotkeys, restore_windows_moved_offscreen, set_display_change_sender,
+    set_dpi_awareness, uncloak_all_visible_windows, GestureEvent, Hotkey, HotkeyEvent, HotkeyId,
+    MonitorId, MonitorInfo, WindowEvent,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -1550,6 +1550,18 @@ async fn main() -> Result<()> {
                             settings_sync_tx.clone(),
                         );
                     }
+                    tray::TrayEvent::EditConfig => {
+                        info!("Tray: Edit config requested");
+                        let config_path = config::config_paths()
+                            .into_iter()
+                            .find(|p| p.exists())
+                            .or_else(|| config::config_paths().into_iter().next());
+                        if let Some(path) = config_path {
+                            let _ = std::process::Command::new("cmd")
+                                .args(["/c", "start", "", &path.to_string_lossy()])
+                                .spawn();
+                        }
+                    }
                     tray::TrayEvent::ViewLogs => {
                         info!("Tray: View logs requested");
                         let log_dir = std::env::temp_dir();
@@ -1557,9 +1569,45 @@ async fn main() -> Result<()> {
                             .args(["/c", "start", "", &log_dir.to_string_lossy()])
                             .spawn();
                     }
-                    tray::TrayEvent::EmergencyUncloakAll => {
-                        warn!("Tray: Emergency uncloak requested");
-                        uncloak_all_visible_windows();
+                    tray::TrayEvent::ReleaseAllWindows => {
+                        warn!("Tray: Release all windows requested");
+                        {
+                            let mut state = state.lock().await;
+                            // 1. Pause tiling
+                            if !state.paused {
+                                let _ = state.toggle_pause("release all windows");
+                            }
+                            // 2. Clear focus and hide border
+                            state.hide_border();
+                            state.previous_focused_hwnd = None;
+                            // 3. Cascade all managed windows
+                            let window_ids = state.all_managed_window_ids();
+                            cascade_windows(&window_ids);
+                        }
+                        if let Some(ref mgr) = tray_manager {
+                            mgr.update_pause_text(true);
+                        }
+                        // 3. Ask user if they want to restart tiling
+                        let event_tx_clone = event_tx.clone();
+                        std::thread::spawn(move || {
+                            use windows::Win32::UI::WindowsAndMessaging::{
+                                MessageBoxW, IDYES, MB_ICONQUESTION, MB_YESNO,
+                            };
+                            use windows::core::w;
+                            let result = unsafe {
+                                MessageBoxW(
+                                    None,
+                                    w!("All windows have been released and cascaded.\n\nWould you like to restart tiling?"),
+                                    w!("LeopardWM"),
+                                    MB_YESNO | MB_ICONQUESTION,
+                                )
+                            };
+                            if result == IDYES {
+                                let _ = event_tx_clone.blocking_send(
+                                    DaemonEvent::Tray(tray::TrayEvent::TogglePause),
+                                );
+                            }
+                        });
                     }
                 }
             }

@@ -17,7 +17,7 @@ use std::sync::{
 use thiserror::Error;
 use tracing::{debug, info};
 use tray_icon::{
-    menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
+    menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu},
     TrayIconBuilder,
 };
 
@@ -75,8 +75,9 @@ mod menu_ids {
     pub const EXIT: &str = "exit";
     pub const TOGGLE_PAUSE: &str = "toggle_pause";
     pub const OPEN_CONFIG: &str = "open_config";
+    pub const EDIT_CONFIG: &str = "edit_config";
     pub const VIEW_LOGS: &str = "view_logs";
-    pub const EMERGENCY_UNCLOAK_ALL: &str = "emergency_uncloak_all";
+    pub const RELEASE_ALL_WINDOWS: &str = "release_all_windows";
 }
 
 /// Events emitted by the tray icon.
@@ -90,12 +91,14 @@ pub enum TrayEvent {
     Exit,
     /// User clicked "Pause/Resume Tiling" menu item.
     TogglePause,
-    /// User clicked "Open Config" menu item.
+    /// User clicked "Settings" menu item.
     OpenConfig,
+    /// User clicked "Edit Config" menu item.
+    EditConfig,
     /// User clicked "View Logs" menu item.
     ViewLogs,
-    /// User clicked "Emergency: Uncloak All Windows" menu item.
-    EmergencyUncloakAll,
+    /// User clicked "Release All Windows" menu item.
+    ReleaseAllWindows,
 }
 
 /// Shared state between the caller and the message-loop thread.
@@ -282,9 +285,9 @@ fn run_tray_thread(init_tx: mpsc::Sender<InitResult>, shared: Arc<SharedState>) 
                     win32_msg::WM_APP_UPDATE_PAUSE => {
                         let paused = shared.paused.load(Ordering::Relaxed);
                         let label = if paused {
-                            "Resume Tiling"
+                            "Resume Tiling\tCtrl+Alt+P"
                         } else {
-                            "Pause Tiling"
+                            "Pause Tiling\tCtrl+Alt+P"
                         };
                         pause_item.set_text(label);
                         continue;
@@ -304,59 +307,63 @@ fn run_tray_thread(init_tx: mpsc::Sender<InitResult>, shared: Arc<SharedState>) 
 /// thread so the hidden notification window belongs to that thread.
 fn build_tray() -> Result<(tray_icon::TrayIcon, MenuItem), TrayError> {
     let menu = Menu::new();
+    let append = |item: &dyn tray_icon::menu::IsMenuItem| -> Result<(), TrayError> {
+        menu.append(item)
+            .map_err(|e| TrayError::Menu(e.to_string()))
+    };
 
-    // Title item (disabled)
-    let title = MenuItem::new("LeopardWM", false, None);
-    menu.append(&title)
-        .map_err(|e| TrayError::Menu(e.to_string()))?;
+    // Title item (disabled, shows version)
+    let version = env!("CARGO_PKG_VERSION");
+    append(&MenuItem::new(format!("LeopardWM v{version}"), false, None))?;
+    append(&PredefinedMenuItem::separator())?;
 
-    // Separator
-    menu.append(&PredefinedMenuItem::separator())
-        .map_err(|e| TrayError::Menu(e.to_string()))?;
-
-    // Refresh Windows
-    let refresh = MenuItem::with_id(menu_ids::REFRESH, "Refresh Windows", true, None);
-    menu.append(&refresh)
-        .map_err(|e| TrayError::Menu(e.to_string()))?;
-
-    // Reload Config
-    let reload = MenuItem::with_id(menu_ids::RELOAD, "Reload Config", true, None);
-    menu.append(&reload)
-        .map_err(|e| TrayError::Menu(e.to_string()))?;
-
-    // Toggle Pause
-    let toggle_pause = MenuItem::with_id(menu_ids::TOGGLE_PAUSE, "Pause Tiling", true, None);
-    menu.append(&toggle_pause)
-        .map_err(|e| TrayError::Menu(e.to_string()))?;
-
-    // Settings
-    let open_config = MenuItem::with_id(menu_ids::OPEN_CONFIG, "Settings", true, None);
-    menu.append(&open_config)
-        .map_err(|e| TrayError::Menu(e.to_string()))?;
-
-    // View Logs
-    let view_logs = MenuItem::with_id(menu_ids::VIEW_LOGS, "View Logs", true, None);
-    menu.append(&view_logs)
-        .map_err(|e| TrayError::Menu(e.to_string()))?;
-
-    // Emergency: Uncloak All Windows
-    let emergency_uncloak = MenuItem::with_id(
-        menu_ids::EMERGENCY_UNCLOAK_ALL,
-        "Emergency: Uncloak All Windows",
+    // Toggle Pause (first — most time-sensitive action)
+    let toggle_pause = MenuItem::with_id(
+        menu_ids::TOGGLE_PAUSE,
+        "Pause Tiling\tCtrl+Alt+P",
         true,
         None,
     );
-    menu.append(&emergency_uncloak)
-        .map_err(|e| TrayError::Menu(e.to_string()))?;
+    append(&toggle_pause)?;
+    append(&PredefinedMenuItem::separator())?;
 
-    // Separator
-    menu.append(&PredefinedMenuItem::separator())
+    // Configuration group
+    append(&MenuItem::with_id(menu_ids::OPEN_CONFIG, "Settings...", true, None))?;
+    append(&MenuItem::with_id(menu_ids::EDIT_CONFIG, "Edit Config", true, None))?;
+    append(&MenuItem::with_id(
+        menu_ids::RELOAD,
+        "Reload Config\tCtrl+Alt+Shift+R",
+        true,
+        None,
+    ))?;
+    append(&PredefinedMenuItem::separator())?;
+
+    // Troubleshooting submenu
+    let troubleshoot = Submenu::new("Troubleshooting", true);
+    troubleshoot
+        .append(&MenuItem::with_id(
+            menu_ids::REFRESH,
+            "Refresh Windows\tCtrl+Alt+R",
+            true,
+            None,
+        ))
         .map_err(|e| TrayError::Menu(e.to_string()))?;
+    troubleshoot
+        .append(&MenuItem::with_id(menu_ids::VIEW_LOGS, "View Logs", true, None))
+        .map_err(|e| TrayError::Menu(e.to_string()))?;
+    troubleshoot
+        .append(&MenuItem::with_id(
+            menu_ids::RELEASE_ALL_WINDOWS,
+            "Release All Windows",
+            true,
+            None,
+        ))
+        .map_err(|e| TrayError::Menu(e.to_string()))?;
+    append(&troubleshoot)?;
+    append(&PredefinedMenuItem::separator())?;
 
     // Exit
-    let exit = MenuItem::with_id(menu_ids::EXIT, "Exit", true, None);
-    menu.append(&exit)
-        .map_err(|e| TrayError::Menu(e.to_string()))?;
+    append(&MenuItem::with_id(menu_ids::EXIT, "Exit", true, None))?;
 
     // Create the tray icon with a simple embedded icon
     let icon = create_default_icon()?;
@@ -378,8 +385,9 @@ fn map_menu_id_to_event(menu_id: &str) -> Option<TrayEvent> {
         menu_ids::EXIT => Some(TrayEvent::Exit),
         menu_ids::TOGGLE_PAUSE => Some(TrayEvent::TogglePause),
         menu_ids::OPEN_CONFIG => Some(TrayEvent::OpenConfig),
+        menu_ids::EDIT_CONFIG => Some(TrayEvent::EditConfig),
         menu_ids::VIEW_LOGS => Some(TrayEvent::ViewLogs),
-        menu_ids::EMERGENCY_UNCLOAK_ALL => Some(TrayEvent::EmergencyUncloakAll),
+        menu_ids::RELEASE_ALL_WINDOWS => Some(TrayEvent::ReleaseAllWindows),
         _ => None,
     }
 }
@@ -468,9 +476,9 @@ mod tests {
     }
 
     #[test]
-    fn test_tray_event_emergency_uncloak_variant() {
-        let event = TrayEvent::EmergencyUncloakAll;
-        assert!(matches!(event, TrayEvent::EmergencyUncloakAll));
+    fn test_tray_event_release_all_windows_variant() {
+        let event = TrayEvent::ReleaseAllWindows;
+        assert!(matches!(event, TrayEvent::ReleaseAllWindows));
     }
 
     #[test]
@@ -496,12 +504,16 @@ mod tests {
             Some(TrayEvent::OpenConfig)
         ));
         assert!(matches!(
+            map_menu_id_to_event(menu_ids::EDIT_CONFIG),
+            Some(TrayEvent::EditConfig)
+        ));
+        assert!(matches!(
             map_menu_id_to_event(menu_ids::VIEW_LOGS),
             Some(TrayEvent::ViewLogs)
         ));
         assert!(matches!(
-            map_menu_id_to_event(menu_ids::EMERGENCY_UNCLOAK_ALL),
-            Some(TrayEvent::EmergencyUncloakAll)
+            map_menu_id_to_event(menu_ids::RELEASE_ALL_WINDOWS),
+            Some(TrayEvent::ReleaseAllWindows)
         ));
         assert!(map_menu_id_to_event("unknown").is_none());
     }
@@ -547,8 +559,9 @@ mod tests {
             menu_ids::EXIT,
             menu_ids::TOGGLE_PAUSE,
             menu_ids::OPEN_CONFIG,
+            menu_ids::EDIT_CONFIG,
             menu_ids::VIEW_LOGS,
-            menu_ids::EMERGENCY_UNCLOAK_ALL,
+            menu_ids::RELEASE_ALL_WINDOWS,
         ];
         for (i, a) in ids.iter().enumerate() {
             for (j, b) in ids.iter().enumerate() {
