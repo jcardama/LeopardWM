@@ -51,8 +51,11 @@ impl AppState {
 
     /// Apply configuration to all workspaces.
     pub(crate) fn apply_config(&mut self, config: config::Config) {
-        // Swap config first so border helpers read the new values
+        // Save old gap values before swapping config so we can rescale columns
         let old_border_on = self.config.appearance.active_border;
+        let old_gap = self.config.layout.gap;
+        let old_outer_left = self.config.layout.outer_gap_left;
+        let old_outer_right = self.config.layout.outer_gap_right;
         self.compiled_rules = config.compile_window_rules();
 
         self.config = config;
@@ -70,17 +73,30 @@ impl AppState {
 
         for (&monitor_id, workspace) in self.workspaces.iter_mut() {
             workspace.set_gap(self.config.layout.gap);
-            workspace.set_outer_gap(self.config.layout.outer_gap);
-            workspace.set_default_column_width(self.config.layout.default_column_width);
-            workspace.set_centering_mode(self.config.layout.centering_mode.into());
-
-            // Recalculate scroll offset for new gap values so all columns
-            // are positioned correctly (not just the rightmost ones).
+            workspace.set_outer_gaps(
+                self.config.layout.outer_gap_left,
+                self.config.layout.outer_gap_right,
+                self.config.layout.outer_gap_top,
+                self.config.layout.outer_gap_bottom,
+            );
             let viewport_width = self
                 .monitors
                 .get(&monitor_id)
                 .map(|m| m.work_area.width)
                 .unwrap_or(FALLBACK_VIEWPORT_WIDTH);
+
+            // Rescale column widths to preserve fractions under new gap values
+            workspace.rescale_column_widths(
+                old_gap, old_outer_left, old_outer_right, viewport_width,
+            );
+
+            workspace.set_default_column_width(
+                self.config.layout.default_column_width_px(viewport_width),
+            );
+            workspace.set_centering_mode(self.config.layout.centering_mode.into());
+
+            // Recalculate scroll offset for new gap values so all columns
+            // are positioned correctly (not just the rightmost ones).
             workspace.ensure_focused_visible_animated(viewport_width);
         }
 
@@ -327,9 +343,17 @@ impl AppState {
         // targets exist even when all old monitors are replaced with new ones.
         for monitor in &new_monitors {
             if !old_ids.contains(&monitor.id) {
-                let mut workspace =
-                    Workspace::with_gaps(self.config.layout.gap, self.config.layout.outer_gap);
-                workspace.set_default_column_width(self.config.layout.default_column_width);
+                let mut workspace = Workspace::with_directional_gaps(
+                    self.config.layout.gap,
+                    self.config.layout.outer_gap_left,
+                    self.config.layout.outer_gap_right,
+                    self.config.layout.outer_gap_top,
+                    self.config.layout.outer_gap_bottom,
+                );
+                let vw = monitor.work_area.width;
+                workspace.set_default_column_width(
+                    self.config.layout.default_column_width_px(vw),
+                );
                 workspace.set_centering_mode(self.config.layout.centering_mode.into());
                 self.workspaces.insert(monitor.id, workspace);
                 info!("Created workspace for new monitor {}", monitor.id);
@@ -462,9 +486,10 @@ impl AppState {
         std::mem::take(&mut self.pending_apply_workers)
     }
 
-    /// Check if any workspace has an active animation.
+    /// Check if any workspace has an active animation or layout transition.
     pub(crate) fn is_animating(&self) -> bool {
-        self.workspaces.values().any(|w| w.is_animating())
+        self.layout_transition.is_some()
+            || self.workspaces.values().any(|w| w.is_animating())
     }
 
     /// Tick all active animations by the given delta time.
@@ -476,7 +501,42 @@ impl AppState {
                 still_animating = true;
             }
         }
+        if let Some(ref mut transition) = self.layout_transition {
+            if transition.tick(delta_ms) {
+                still_animating = true;
+            } else {
+                self.layout_transition = None;
+            }
+        }
         still_animating
+    }
+
+    /// Snapshot the current placement rects for all tiled windows.
+    /// Call this *before* a structural layout change.
+    pub(crate) fn snapshot_layout(&self) -> std::collections::HashMap<u64, leopardwm_core_layout::Rect> {
+        let mut rects = std::collections::HashMap::new();
+        for (monitor_id, workspace) in &self.workspaces {
+            if let Some(monitor) = self.monitors.get(monitor_id) {
+                for p in workspace.compute_placements_animated(monitor.work_area) {
+                    rects.insert(p.window_id, p.rect);
+                }
+            }
+        }
+        rects
+    }
+
+    /// Start a layout transition animation from a pre-change snapshot.
+    /// Call this *after* the structural change and ensure_focused_visible_animated.
+    pub(crate) fn start_layout_transition(
+        &mut self,
+        start_rects: std::collections::HashMap<u64, leopardwm_core_layout::Rect>,
+    ) {
+        use crate::state::LAYOUT_TRANSITION_DURATION_MS;
+        self.layout_transition = Some(LayoutTransition {
+            start_rects,
+            elapsed_ms: 0,
+            duration_ms: LAYOUT_TRANSITION_DURATION_MS,
+        });
     }
 
     /// Compute animated placements and send them to the animation worker.
@@ -499,6 +559,23 @@ impl AppState {
         if all_placements.is_empty() {
             return Ok(false);
         }
+
+        // Interpolate layout transitions (structural changes like move/expel).
+        if let Some(ref transition) = self.layout_transition {
+            let t = transition.eased_progress();
+            for p in &mut all_placements {
+                if let Some(start) = transition.start_rects.get(&p.window_id) {
+                    p.rect = leopardwm_core_layout::Rect::new(
+                        start.x + ((p.rect.x - start.x) as f64 * t).round() as i32,
+                        start.y + ((p.rect.y - start.y) as f64 * t).round() as i32,
+                        start.width + ((p.rect.width - start.width) as f64 * t).round() as i32,
+                        start.height
+                            + ((p.rect.height - start.height) as f64 * t).round() as i32,
+                    );
+                }
+            }
+        }
+
         self.arm_moved_or_resized_suppression(all_placements.iter().map(|p| p.window_id));
         self.applying_layout = true;
 
@@ -554,6 +631,23 @@ impl AppState {
                 all_placements.extend(placements);
             }
         }
+
+        // Interpolate layout transitions (structural changes like move/expel).
+        if let Some(ref transition) = self.layout_transition {
+            let t = transition.eased_progress();
+            for p in &mut all_placements {
+                if let Some(start) = transition.start_rects.get(&p.window_id) {
+                    p.rect = leopardwm_core_layout::Rect::new(
+                        start.x + ((p.rect.x - start.x) as f64 * t).round() as i32,
+                        start.y + ((p.rect.y - start.y) as f64 * t).round() as i32,
+                        start.width + ((p.rect.width - start.width) as f64 * t).round() as i32,
+                        start.height
+                            + ((p.rect.height - start.height) as f64 * t).round() as i32,
+                    );
+                }
+            }
+        }
+
         self.arm_moved_or_resized_suppression(all_placements.iter().map(|p| p.window_id));
 
         let timeout = self.layout_apply_timeout;
@@ -818,13 +912,7 @@ impl AppState {
                         }
                     }
                     config::WindowAction::Tile => {
-                        // Use a reasonable default width or the window's current width, respecting config bounds
-                        let width = win_info.rect.width.clamp(
-                            self.config.layout.min_column_width,
-                            self.config.layout.max_column_width,
-                        );
-
-                        match workspace.insert_window(win_info.hwnd, Some(width)) {
+                        match workspace.insert_window(win_info.hwnd, None) {
                             Ok(()) => {
                                 self.window_managed_at.insert(win_info.hwnd, std::time::Instant::now());
                                 info!(

@@ -823,10 +823,13 @@ async fn main() -> Result<()> {
     }
 
     info!(
-        "Configuration loaded: gap={}, outer_gap={}, default_column_width={}, log_level={}",
+        "Configuration loaded: gap={}, outer_gaps=[{},{},{},{}], width_presets={:?}, log_level={}",
         config.layout.gap,
-        config.layout.outer_gap,
-        config.layout.default_column_width,
+        config.layout.outer_gap_left,
+        config.layout.outer_gap_right,
+        config.layout.outer_gap_top,
+        config.layout.outer_gap_bottom,
+        config.layout.width_presets,
         config.behavior.log_level
     );
 
@@ -925,11 +928,22 @@ async fn main() -> Result<()> {
             }
         }
 
-        // Normalize all column widths to default_column_width on startup.
+        // Normalize all column widths to the first width preset on startup.
         // Windows may have arbitrary sizes before tiling; using a uniform width
         // ensures consistent initial layout.
-        let default_width = state.config.layout.default_column_width;
-        for (_monitor_id, workspace) in state.workspaces.iter_mut() {
+        let monitor_widths_for_default: HashMap<_, _> = state
+            .monitors
+            .iter()
+            .map(|(&id, m)| {
+                let vw = m.work_area.width;
+                (id, state.config.layout.default_column_width_px(vw))
+            })
+            .collect();
+        for (&monitor_id, workspace) in state.workspaces.iter_mut() {
+            let default_width = monitor_widths_for_default
+                .get(&monitor_id)
+                .copied()
+                .unwrap_or(800);
             workspace.set_all_column_widths(default_width);
         }
 
@@ -2004,10 +2018,10 @@ mod tests {
         let mut state = AppState::new_with_config(test_config(), test_monitors());
         let mut new_config = test_config();
         new_config.layout.gap = 20;
-        new_config.layout.outer_gap = 15;
+        new_config.layout.outer_gap_left = 15;
         state.apply_config(new_config.clone());
         assert_eq!(state.config.layout.gap, 20);
-        assert_eq!(state.config.layout.outer_gap, 15);
+        assert_eq!(state.config.layout.outer_gap_left, 15);
     }
 
     #[test]

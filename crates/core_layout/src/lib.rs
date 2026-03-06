@@ -16,10 +16,14 @@ const MIN_COLUMN_WIDTH: i32 = 100;
 
 /// Default gap between columns in pixels.
 pub const DEFAULT_GAP: i32 = 10;
-/// Default gap at viewport edges in pixels.
+/// Default outer gaps at viewport edges in pixels.
 pub const DEFAULT_OUTER_GAP: i32 = 10;
 /// Default width for new columns in pixels.
 pub const DEFAULT_COLUMN_WIDTH: i32 = 800;
+
+fn default_outer_gap_value() -> i32 {
+    DEFAULT_OUTER_GAP
+}
 
 /// Unique identifier for a window.
 /// On Windows, this will typically be the HWND cast to u64.
@@ -223,12 +227,16 @@ pub struct WindowPlacement {
 
 /// A column in the infinite strip.
 /// A column contains one or more vertically stacked windows.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Column {
     /// Width of the column in pixels.
     width: i32,
     /// Windows in this column (vertically stacked).
     windows: Vec<WindowId>,
+    /// Per-window height weights (parallel to `windows`, sums to ~1.0).
+    /// Empty vec means equal distribution (backward compat).
+    #[serde(default)]
+    height_weights: Vec<f64>,
 }
 
 impl Column {
@@ -238,6 +246,7 @@ impl Column {
         Self {
             width: width.max(MIN_COLUMN_WIDTH),
             windows: vec![window_id],
+            height_weights: vec![1.0],
         }
     }
 
@@ -247,6 +256,7 @@ impl Column {
         Self {
             width: width.max(MIN_COLUMN_WIDTH),
             windows: Vec::new(),
+            height_weights: Vec::new(),
         }
     }
 
@@ -261,15 +271,22 @@ impl Column {
     }
 
     /// Add a window to this column (at the bottom of the stack).
+    /// Resets all height weights to equal distribution.
     pub fn add_window(&mut self, window_id: WindowId) {
         self.windows.push(window_id);
+        self.equalize_height_weights();
     }
 
     /// Remove a window from this column.
     /// Returns the index of the removed window if found, None otherwise.
+    /// Renormalizes remaining height weights.
     pub fn remove_window(&mut self, window_id: WindowId) -> Option<usize> {
         if let Some(pos) = self.windows.iter().position(|&w| w == window_id) {
             self.windows.remove(pos);
+            if pos < self.height_weights.len() {
+                self.height_weights.remove(pos);
+            }
+            self.normalize_height_weights();
             Some(pos)
         } else {
             None
@@ -292,6 +309,11 @@ impl Column {
         &self.windows
     }
 
+    /// Get the height weights for this column.
+    pub fn height_weights(&self) -> &[f64] {
+        &self.height_weights
+    }
+
     /// Check if this column contains a specific window.
     pub fn contains(&self, window_id: WindowId) -> bool {
         self.windows.contains(&window_id)
@@ -300,6 +322,77 @@ impl Column {
     /// Get a window by index.
     pub fn get(&self, index: usize) -> Option<WindowId> {
         self.windows.get(index).copied()
+    }
+
+    /// Insert a window at a specific index.
+    /// Resets all height weights to equal distribution.
+    pub fn insert_at(&mut self, index: usize, window_id: WindowId) {
+        self.windows.insert(index, window_id);
+        self.equalize_height_weights();
+    }
+
+    /// Swap two windows by index within this column.
+    /// Also swaps their height weights.
+    pub fn swap_windows(&mut self, a: usize, b: usize) {
+        self.windows.swap(a, b);
+        if a < self.height_weights.len() && b < self.height_weights.len() {
+            self.height_weights.swap(a, b);
+        }
+    }
+
+    /// Set a single window's height weight, distributing the remainder
+    /// equally among siblings. Each sibling keeps at least 5% weight.
+    pub fn set_height_weight(&mut self, index: usize, weight: f64) {
+        let n = self.windows.len();
+        if n <= 1 || index >= n {
+            return;
+        }
+        self.ensure_height_weights();
+
+        let siblings = n - 1;
+        let min_sibling = 0.05;
+        // Clamp so siblings can each have at least min_sibling
+        let max_weight = 1.0 - (siblings as f64 * min_sibling);
+        let weight = weight.clamp(min_sibling, max_weight);
+
+        self.height_weights[index] = weight;
+        let remainder = 1.0 - weight;
+        let per_sibling = remainder / siblings as f64;
+        for i in 0..n {
+            if i != index {
+                self.height_weights[i] = per_sibling;
+            }
+        }
+    }
+
+    /// Reset all height weights to equal distribution.
+    pub fn equalize_height_weights(&mut self) {
+        let n = self.windows.len();
+        if n == 0 {
+            self.height_weights.clear();
+        } else {
+            self.height_weights = vec![1.0 / n as f64; n];
+        }
+    }
+
+    /// Ensure height_weights vec matches windows length (backward compat).
+    fn ensure_height_weights(&mut self) {
+        if self.height_weights.len() != self.windows.len() {
+            self.equalize_height_weights();
+        }
+    }
+
+    /// Normalize height weights so they sum to 1.0.
+    fn normalize_height_weights(&mut self) {
+        if self.height_weights.is_empty() {
+            return;
+        }
+        let sum: f64 = self.height_weights.iter().sum();
+        if sum > 0.0 && (sum - 1.0).abs() > 1e-9 {
+            for w in &mut self.height_weights {
+                *w /= sum;
+            }
+        }
     }
 }
 
@@ -352,8 +445,18 @@ pub struct Workspace {
     scroll_offset: f64,
     /// Gap between columns in pixels (always >= 0).
     gap: i32,
-    /// Gap at the edges of the viewport (always >= 0).
-    outer_gap: i32,
+    /// Gap at the left edge of the viewport (always >= 0).
+    #[serde(default = "default_outer_gap_value")]
+    outer_gap_left: i32,
+    /// Gap at the right edge of the viewport (always >= 0).
+    #[serde(default = "default_outer_gap_value")]
+    outer_gap_right: i32,
+    /// Gap at the top edge of the viewport (always >= 0).
+    #[serde(default = "default_outer_gap_value")]
+    outer_gap_top: i32,
+    /// Gap at the bottom edge of the viewport (always >= 0).
+    #[serde(default = "default_outer_gap_value")]
+    outer_gap_bottom: i32,
     /// Default width for new columns (always >= MIN_COLUMN_WIDTH).
     default_column_width: i32,
     /// Centering mode for focus changes.
@@ -380,7 +483,10 @@ impl Default for Workspace {
             focused_window_in_column: 0,
             scroll_offset: 0.0,
             gap: DEFAULT_GAP,
-            outer_gap: DEFAULT_OUTER_GAP,
+            outer_gap_left: DEFAULT_OUTER_GAP,
+            outer_gap_right: DEFAULT_OUTER_GAP,
+            outer_gap_top: DEFAULT_OUTER_GAP,
+            outer_gap_bottom: DEFAULT_OUTER_GAP,
             default_column_width: DEFAULT_COLUMN_WIDTH,
             centering_mode: CenteringMode::default(),
             active_animation: None,
@@ -397,12 +503,35 @@ impl Workspace {
         Self::default()
     }
 
-    /// Create a workspace with custom gap settings.
+    /// Create a workspace with uniform gap settings.
     /// Gap values are clamped to >= 0.
     pub fn with_gaps(gap: i32, outer_gap: i32) -> Self {
+        let og = outer_gap.max(0);
         Self {
             gap: gap.max(0),
-            outer_gap: outer_gap.max(0),
+            outer_gap_left: og,
+            outer_gap_right: og,
+            outer_gap_top: og,
+            outer_gap_bottom: og,
+            ..Default::default()
+        }
+    }
+
+    /// Create a workspace with per-side outer gap settings.
+    /// Gap values are clamped to >= 0.
+    pub fn with_directional_gaps(
+        gap: i32,
+        outer_gap_left: i32,
+        outer_gap_right: i32,
+        outer_gap_top: i32,
+        outer_gap_bottom: i32,
+    ) -> Self {
+        Self {
+            gap: gap.max(0),
+            outer_gap_left: outer_gap_left.max(0),
+            outer_gap_right: outer_gap_right.max(0),
+            outer_gap_top: outer_gap_top.max(0),
+            outer_gap_bottom: outer_gap_bottom.max(0),
             ..Default::default()
         }
     }
@@ -497,18 +626,16 @@ impl Workspace {
 
         // Defensively clamp gaps to >= 0 in case fields were set directly
         let gap = self.gap.max(0);
-        let outer_gap = self.outer_gap.max(0);
 
+        // Strip width = columns + inter-column gaps only.
+        // Outer gaps are viewport padding, not strip content.
         let column_widths: i32 = active_columns
             .iter()
             .map(|c| c.width)
             .fold(0i32, |acc, w| acc.saturating_add(w));
         let gaps = gap.saturating_mul(active_columns.len().saturating_sub(1) as i32);
-        let outer_gaps = outer_gap.saturating_mul(2);
 
-        column_widths
-            .saturating_add(gaps)
-            .saturating_add(outer_gaps)
+        column_widths.saturating_add(gaps)
     }
 
     /// Insert a new window as a new column to the right of the focused column.
@@ -957,15 +1084,29 @@ impl Workspace {
         self.gap = gap.max(0);
     }
 
-    /// Get the gap at viewport edges in pixels.
-    pub fn outer_gap(&self) -> i32 {
-        self.outer_gap
+    /// Get outer gaps as (left, right, top, bottom).
+    pub fn outer_gaps(&self) -> (i32, i32, i32, i32) {
+        (
+            self.outer_gap_left,
+            self.outer_gap_right,
+            self.outer_gap_top,
+            self.outer_gap_bottom,
+        )
     }
 
     /// Set the gap at viewport edges in pixels.
-    /// Value is clamped to >= 0.
-    pub fn set_outer_gap(&mut self, outer_gap: i32) {
-        self.outer_gap = outer_gap.max(0);
+    /// Values are clamped to >= 0.
+    pub fn set_outer_gaps(
+        &mut self,
+        left: i32,
+        right: i32,
+        top: i32,
+        bottom: i32,
+    ) {
+        self.outer_gap_left = left.max(0);
+        self.outer_gap_right = right.max(0);
+        self.outer_gap_top = top.max(0);
+        self.outer_gap_bottom = bottom.max(0);
     }
 
     /// Get the default width for new columns.
@@ -1056,9 +1197,10 @@ impl Workspace {
     ) -> i32 {
         // Defensively clamp gaps to >= 0
         let gap = self.gap.max(0);
-        let outer_gap = self.outer_gap.max(0);
 
-        let mut x = outer_gap;
+        // Strip coordinates start at 0 — outer gaps are viewport padding,
+        // not part of the scrollable strip.
+        let mut x = 0;
         for (i, col) in self.columns.iter().enumerate() {
             if i == column_index {
                 return x;
@@ -1080,6 +1222,14 @@ impl Workspace {
         })
     }
 
+    /// The width of the visible strip area inside the viewport (viewport minus outer padding).
+    fn visible_width(&self, viewport_width: i32) -> i32 {
+        viewport_width
+            .saturating_sub(self.outer_gap_left.max(0))
+            .saturating_sub(self.outer_gap_right.max(0))
+            .max(0)
+    }
+
     /// Ensure the focused column is visible in the viewport.
     /// Adjusts scroll_offset according to the centering mode.
     ///
@@ -1093,37 +1243,28 @@ impl Workspace {
             return;
         };
 
-        // Defensively clamp outer_gap to >= 0
-        let outer_gap = self.outer_gap.max(0);
+        // Outer gaps are viewport padding — visible strip area is smaller.
+        let vis_w = self.visible_width(viewport_width);
 
         match self.centering_mode {
             CenteringMode::Center => {
-                // Center the focused column in the viewport
                 let col_center = col_x.saturating_add(col_width / 2);
-                self.scroll_offset = (col_center.saturating_sub(viewport_width / 2)) as f64;
+                self.scroll_offset = (col_center.saturating_sub(vis_w / 2)) as f64;
             }
             CenteringMode::JustInView => {
-                // Only scroll if the focused column is outside the viewport
-                // Use rounding instead of truncation for consistent behavior
-                let viewport_left = self.scroll_offset.round() as i32;
-                let viewport_right = viewport_left.saturating_add(viewport_width);
+                let scroll_left = self.scroll_offset.round() as i32;
+                let scroll_right = scroll_left.saturating_add(vis_w);
                 let col_right = col_x.saturating_add(col_width);
 
-                if col_x < viewport_left {
-                    // Column is to the left of viewport, scroll left
-                    self.scroll_offset = col_x.saturating_sub(outer_gap) as f64;
-                } else if col_right > viewport_right {
-                    // Column is to the right of viewport, scroll right
-                    self.scroll_offset = col_right
-                        .saturating_add(outer_gap)
-                        .saturating_sub(viewport_width)
-                        as f64;
+                if col_x < scroll_left {
+                    self.scroll_offset = col_x as f64;
+                } else if col_right > scroll_right {
+                    self.scroll_offset = col_right.saturating_sub(vis_w) as f64;
                 }
             }
         }
 
-        // Clamp scroll offset to valid range
-        let max_scroll = (self.total_width() - viewport_width).max(0);
+        let max_scroll = (self.total_width() - vis_w).max(0);
         self.scroll_offset = self.scroll_offset.clamp(0.0, max_scroll as f64);
     }
 
@@ -1156,37 +1297,45 @@ impl Workspace {
 
         // Defensively clamp gaps to >= 0 in case fields were set directly
         let gap = self.gap.max(0);
-        let outer_gap = self.outer_gap.max(0);
+        let outer_left = self.outer_gap_left.max(0);
+        let outer_top = self.outer_gap_top.max(0);
+        let outer_bottom = self.outer_gap_bottom.max(0);
 
-        let viewport_right = viewport_left.saturating_add(viewport.width);
+        // Visible strip area inside viewport padding
+        let vis_w = self.visible_width(viewport.width);
+        let visible_right = viewport_left.saturating_add(vis_w);
 
-        let mut current_x = outer_gap;
+        // Strip starts at 0 — outer gaps are viewport padding
+        let mut current_x: i32 = 0;
 
         for (col_idx, column) in self.columns.iter().enumerate() {
             // Calculate column position in strip coordinates
             let col_strip_x = current_x;
             let col_strip_right = col_strip_x.saturating_add(column.width);
 
-            // Transform to screen coordinates (relative to viewport)
+            // Transform to screen coordinates:
+            // strip_x → screen_x = strip_x - scroll_offset + viewport.x + outer_left
             let col_screen_x = col_strip_x
                 .saturating_sub(viewport_left)
-                .saturating_add(viewport.x);
+                .saturating_add(viewport.x)
+                .saturating_add(outer_left);
 
-            // Determine visibility
+            // Determine visibility against the visible strip area
             let visibility = if col_strip_right <= viewport_left {
                 Visibility::OffScreenLeft
-            } else if col_strip_x >= viewport_right {
+            } else if col_strip_x >= visible_right {
                 Visibility::OffScreenRight
             } else {
                 Visibility::Visible
             };
 
-            // Filter out minimized windows
-            let visible_windows: Vec<WindowId> = column
+            // Filter out minimized windows, collecting (original_index, window_id) pairs
+            let visible_windows: Vec<(usize, WindowId)> = column
                 .windows()
                 .iter()
-                .copied()
-                .filter(|w| !self.minimized_windows.contains(w))
+                .enumerate()
+                .filter(|(_, w)| !self.minimized_windows.contains(w))
+                .map(|(i, &w)| (i, w))
                 .collect();
 
             // Skip columns where all windows are minimized
@@ -1194,12 +1343,11 @@ impl Workspace {
                 continue;
             }
 
-            // Calculate window heights (equal split for stacked windows)
-            // Clamp usable_height to >= 0 to handle tight viewports
-            // Use saturating arithmetic to prevent overflow
+            // Build visible-window weights
             let usable_height = viewport
                 .height
-                .saturating_sub(outer_gap.saturating_mul(2))
+                .saturating_sub(outer_top)
+                .saturating_sub(outer_bottom)
                 .max(0);
             let window_count = visible_windows.len() as i32;
             let window_gaps = if window_count > 1 {
@@ -1207,22 +1355,28 @@ impl Workspace {
             } else {
                 0
             };
-            // Clamp window_height to >= 0 to prevent negative dimensions
-            let window_height = if window_count > 0 {
-                ((usable_height - window_gaps).max(0)) / window_count
+            let available_height = (usable_height - window_gaps).max(0);
+
+            // Compute per-window heights using weights
+            let visible_weights: Vec<f64> = if column.height_weights.len() == column.windows().len() {
+                visible_windows.iter().map(|(i, _)| column.height_weights[*i]).collect()
             } else {
-                0
+                vec![1.0; visible_windows.len()]
+            };
+            let weight_sum: f64 = visible_weights.iter().sum();
+            let normalized: Vec<f64> = if weight_sum > 0.0 {
+                visible_weights.iter().map(|w| w / weight_sum).collect()
+            } else {
+                vec![1.0 / visible_windows.len().max(1) as f64; visible_windows.len()]
             };
 
-            let mut current_y = viewport.y + outer_gap;
+            let mut current_y = viewport.y + outer_top;
 
-            for (win_idx, &window_id) in visible_windows.iter().enumerate() {
-                // Adjust height for last visible window to handle rounding
-                // Clamp to >= 0 to prevent negative dimensions
+            for (win_idx, &(_, window_id)) in visible_windows.iter().enumerate() {
                 let height = if win_idx == visible_windows.len() - 1 {
-                    (viewport.y + viewport.height - outer_gap - current_y).max(0)
+                    (viewport.y + viewport.height - outer_bottom - current_y).max(0)
                 } else {
-                    window_height
+                    (available_height as f64 * normalized[win_idx]).round() as i32
                 };
 
                 placements.push(WindowPlacement {
@@ -1277,6 +1431,126 @@ impl Workspace {
         }
     }
 
+    /// Move the focused window to the column on the left (joining it).
+    /// Focus follows the moved window. If the source column becomes empty it is removed.
+    pub fn move_window_left(&mut self) {
+        if self.focused_column == 0 {
+            return;
+        }
+        let wid = self.columns[self.focused_column]
+            .windows
+            .remove(self.focused_window_in_column);
+        if self.focused_window_in_column < self.columns[self.focused_column].height_weights.len() {
+            self.columns[self.focused_column].height_weights.remove(self.focused_window_in_column);
+        }
+        self.columns[self.focused_column].equalize_height_weights();
+        let source_empty = self.columns[self.focused_column].is_empty();
+        if source_empty {
+            self.columns.remove(self.focused_column);
+        }
+        // Target is now one index to the left (or same index if source was removed)
+        let target_idx = self.focused_column - 1;
+        self.columns[target_idx].add_window(wid);
+        self.focused_column = target_idx;
+        self.focused_window_in_column = self.columns[target_idx].len() - 1;
+    }
+
+    /// Move the focused window to the column on the right (joining it).
+    /// Focus follows the moved window. If the source column becomes empty it is removed.
+    pub fn move_window_right(&mut self) {
+        if self.focused_column + 1 >= self.columns.len() {
+            return;
+        }
+        let wid = self.columns[self.focused_column]
+            .windows
+            .remove(self.focused_window_in_column);
+        if self.focused_window_in_column < self.columns[self.focused_column].height_weights.len() {
+            self.columns[self.focused_column].height_weights.remove(self.focused_window_in_column);
+        }
+        self.columns[self.focused_column].equalize_height_weights();
+        let source_empty = self.columns[self.focused_column].is_empty();
+        if source_empty {
+            self.columns.remove(self.focused_column);
+            // Right column shifted left into focused_column's slot
+            self.columns[self.focused_column].add_window(wid);
+            self.focused_window_in_column = self.columns[self.focused_column].len() - 1;
+        } else {
+            // Clamp focus in source column (we don't stay there, but keep it consistent)
+            let right_idx = self.focused_column + 1;
+            self.columns[right_idx].add_window(wid);
+            self.focused_column = right_idx;
+            self.focused_window_in_column = self.columns[right_idx].len() - 1;
+        }
+    }
+
+    /// Push the focused window out to a new column on the left.
+    pub fn expel_to_left(&mut self) {
+        if self.columns[self.focused_column].len() <= 1 {
+            return;
+        }
+        let wid = self.columns[self.focused_column]
+            .windows
+            .remove(self.focused_window_in_column);
+        if self.focused_window_in_column < self.columns[self.focused_column].height_weights.len() {
+            self.columns[self.focused_column].height_weights.remove(self.focused_window_in_column);
+        }
+        self.columns[self.focused_column].equalize_height_weights();
+        // Clamp focus in old column
+        let old_len = self.columns[self.focused_column].len();
+        if self.focused_window_in_column >= old_len {
+            self.focused_window_in_column = old_len.saturating_sub(1);
+        }
+        let width = self.columns[self.focused_column].width();
+        let new_col = Column::new(wid, width);
+        self.columns.insert(self.focused_column, new_col);
+        // Focus the new column (it took the current index)
+        self.focused_window_in_column = 0;
+    }
+
+    /// Push the focused window out to a new column on the right.
+    pub fn expel_to_right(&mut self) {
+        if self.columns[self.focused_column].len() <= 1 {
+            return;
+        }
+        let wid = self.columns[self.focused_column]
+            .windows
+            .remove(self.focused_window_in_column);
+        if self.focused_window_in_column < self.columns[self.focused_column].height_weights.len() {
+            self.columns[self.focused_column].height_weights.remove(self.focused_window_in_column);
+        }
+        self.columns[self.focused_column].equalize_height_weights();
+        // Clamp focus in old column
+        let old_len = self.columns[self.focused_column].len();
+        if self.focused_window_in_column >= old_len {
+            self.focused_window_in_column = old_len.saturating_sub(1);
+        }
+        let width = self.columns[self.focused_column].width();
+        let new_col = Column::new(wid, width);
+        self.columns.insert(self.focused_column + 1, new_col);
+        self.focused_column += 1;
+        self.focused_window_in_column = 0;
+    }
+
+    /// Swap the focused window with the one above in the same column.
+    pub fn move_window_up_in_column(&mut self) {
+        if self.focused_window_in_column == 0 {
+            return;
+        }
+        self.columns[self.focused_column]
+            .swap_windows(self.focused_window_in_column, self.focused_window_in_column - 1);
+        self.focused_window_in_column -= 1;
+    }
+
+    /// Swap the focused window with the one below in the same column.
+    pub fn move_window_down_in_column(&mut self) {
+        if self.focused_window_in_column + 1 >= self.columns[self.focused_column].len() {
+            return;
+        }
+        self.columns[self.focused_column]
+            .swap_windows(self.focused_window_in_column, self.focused_window_in_column + 1);
+        self.focused_window_in_column += 1;
+    }
+
     /// Scroll the viewport by a pixel delta.
     ///
     /// Special float values (NaN, Infinity) are treated as zero for safety.
@@ -1315,8 +1589,9 @@ impl Workspace {
         duration_ms: Option<u64>,
         easing: Option<Easing>,
     ) {
-        // Clamp target to valid range
-        let max_scroll = (self.total_width() - viewport_width).max(0);
+        // Clamp target to valid range (visible area = viewport minus outer padding)
+        let vis_w = self.visible_width(viewport_width);
+        let max_scroll = (self.total_width() - vis_w).max(0);
         let clamped_target = target.clamp(0.0, max_scroll as f64);
 
         // Use current effective position as start (handles interrupting animations)
@@ -1379,34 +1654,25 @@ impl Workspace {
             return;
         };
 
-        // Defensively clamp outer_gap to >= 0
-        let outer_gap = self.outer_gap.max(0);
+        let vis_w = self.visible_width(viewport_width);
 
         let target_offset = match self.centering_mode {
             CenteringMode::Center => {
-                // Center the focused column in the viewport
                 let col_center = col_x.saturating_add(col_width / 2);
-                (col_center.saturating_sub(viewport_width / 2)) as f64
+                (col_center.saturating_sub(vis_w / 2)) as f64
             }
             CenteringMode::JustInView => {
-                // Only scroll if the focused column is outside the viewport
                 let current = self.effective_scroll_offset();
-                let viewport_left = current.round() as i32;
-                let viewport_right = viewport_left.saturating_add(viewport_width);
+                let scroll_left = current.round() as i32;
+                let scroll_right = scroll_left.saturating_add(vis_w);
                 let col_right = col_x.saturating_add(col_width);
 
-                if col_x < viewport_left {
-                    // Column is to the left of viewport, scroll left
-                    col_x.saturating_sub(outer_gap) as f64
-                } else if col_right > viewport_right {
-                    // Column is to the right of viewport, scroll right
-                    col_right
-                        .saturating_add(outer_gap)
-                        .saturating_sub(viewport_width) as f64
+                if col_x < scroll_left {
+                    col_x as f64
+                } else if col_right > scroll_right {
+                    col_right.saturating_sub(vis_w) as f64
                 } else {
-                    // Column is in view, but scroll may exceed max_scroll after
-                    // minimized columns reduced total_width. Clamp if needed.
-                    let max_scroll = (self.total_width() - viewport_width).max(0) as f64;
+                    let max_scroll = (self.total_width() - vis_w).max(0) as f64;
                     if current > max_scroll + 0.5 {
                         max_scroll
                     } else {
@@ -1632,13 +1898,14 @@ impl Workspace {
     // Column Width Presets
     // ========================================================================
 
-    /// Set the focused column's width as a fraction of the viewport width.
+    /// Set the focused column's width as a fraction of the usable viewport width.
+    /// The usable width accounts for outer gaps and inter-column gaps.
     /// Fraction should be between 0.1 and 1.0.
     pub fn set_focused_column_width_fraction(&mut self, fraction: f64, viewport_width: i32) {
         let fraction = fraction.clamp(0.1, 1.0);
-        let outer_gap = self.outer_gap.max(0);
-        let usable_width = viewport_width.saturating_sub(outer_gap * 2);
-        let new_width = (usable_width as f64 * fraction).round() as i32;
+        let base = self.width_base(viewport_width);
+        let gap = self.gap.max(0);
+        let new_width = (base as f64 * fraction - gap as f64).round() as i32;
 
         if let Some(column) = self.columns.get_mut(self.focused_column) {
             column.set_width(new_width);
@@ -1646,19 +1913,177 @@ impl Workspace {
     }
 
     /// Equalize all column widths to share the viewport equally.
+    /// Uses gap-aware formula so equalized columns perfectly fill the viewport.
     pub fn equalize_column_widths(&mut self, viewport_width: i32) {
         if self.columns.is_empty() {
             return;
         }
 
-        let outer_gap = self.outer_gap.max(0);
+        let outer_left = self.outer_gap_left.max(0);
+        let outer_right = self.outer_gap_right.max(0);
         let gap = self.gap.max(0);
         let n = self.columns.len() as i32;
-        let total_gaps = gap * (n - 1) + outer_gap * 2;
+        let total_gaps = gap * (n - 1) + outer_left + outer_right;
         let per_column = ((viewport_width - total_gaps).max(MIN_COLUMN_WIDTH * n)) / n;
 
         for col in &mut self.columns {
             col.set_width(per_column);
+        }
+    }
+
+    /// Rescale all column widths after gap values change.
+    /// Converts each column's current pixel width back to a fraction using the
+    /// old gap values, then recomputes the pixel width with the current gaps.
+    pub fn rescale_column_widths(
+        &mut self,
+        old_gap: i32,
+        old_outer_left: i32,
+        old_outer_right: i32,
+        viewport_width: i32,
+    ) {
+        let old_gap_c = old_gap.max(0);
+        let old_base = viewport_width
+            .saturating_sub(old_outer_left.max(0))
+            .saturating_sub(old_outer_right.max(0))
+            .saturating_add(old_gap_c)
+            .max(1);
+        let new_base = self.width_base(viewport_width);
+        let new_gap = self.gap.max(0);
+
+        if old_base == new_base && old_gap_c == new_gap {
+            return;
+        }
+
+        for col in &mut self.columns {
+            let frac = (col.width + old_gap_c) as f64 / old_base as f64;
+            let new_width = (new_base as f64 * frac - new_gap as f64).round() as i32;
+            col.set_width(new_width);
+        }
+    }
+
+    // ========================================================================
+    // Width Preset Cycling
+    // ========================================================================
+
+    /// Compute the base value for fraction ↔ pixel conversion.
+    /// Formula: `column_width = fraction * base - gap`.
+    /// This is independent of column count. When fractions sum to 1.0,
+    /// the columns plus gaps perfectly fill the viewport.
+    fn width_base(&self, viewport_width: i32) -> i32 {
+        let outer_left = self.outer_gap_left.max(0);
+        let outer_right = self.outer_gap_right.max(0);
+        let gap = self.gap.max(0);
+        viewport_width
+            .saturating_sub(outer_left)
+            .saturating_sub(outer_right)
+            .saturating_add(gap)
+            .max(0)
+    }
+
+    /// Cycle the focused column width up through the given presets.
+    pub fn cycle_width_up(&mut self, presets: &[f64], viewport_width: i32) {
+        if presets.is_empty() {
+            return;
+        }
+        let base = self.width_base(viewport_width);
+        let gap = self.gap.max(0);
+        let Some(column) = self.columns.get_mut(self.focused_column) else {
+            return;
+        };
+        if base <= 0 {
+            return;
+        }
+        let current_frac = (column.width + gap) as f64 / base as f64;
+
+        let mut sorted = presets.to_vec();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+        const TOLERANCE: f64 = 0.005;
+        let target = sorted.iter().find(|&&p| p > current_frac + TOLERANCE);
+        if let Some(&frac) = target {
+            let new_width = (base as f64 * frac - gap as f64).round() as i32;
+            column.set_width(new_width);
+        }
+    }
+
+    /// Cycle the focused column width down through the given presets.
+    pub fn cycle_width_down(&mut self, presets: &[f64], viewport_width: i32) {
+        if presets.is_empty() {
+            return;
+        }
+        let base = self.width_base(viewport_width);
+        let gap = self.gap.max(0);
+        let Some(column) = self.columns.get_mut(self.focused_column) else {
+            return;
+        };
+        if base <= 0 {
+            return;
+        }
+        let current_frac = (column.width + gap) as f64 / base as f64;
+
+        let mut sorted = presets.to_vec();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+        const TOLERANCE: f64 = 0.005;
+        let target = sorted.iter().rev().find(|&&p| p < current_frac - TOLERANCE);
+        if let Some(&frac) = target {
+            let new_width = (base as f64 * frac - gap as f64).round() as i32;
+            column.set_width(new_width);
+        }
+    }
+
+    // ========================================================================
+    // Height Preset Cycling
+    // ========================================================================
+
+    /// Cycle the focused window's height weight up through the given presets.
+    /// Presets are fractions of column height (weight values).
+    /// No-op for single-window columns.
+    pub fn cycle_height_up(&mut self, presets: &[f64]) {
+        self.cycle_height_impl(presets, true);
+    }
+
+    /// Cycle the focused window's height weight down through the given presets.
+    /// No-op for single-window columns.
+    pub fn cycle_height_down(&mut self, presets: &[f64]) {
+        self.cycle_height_impl(presets, false);
+    }
+
+    fn cycle_height_impl(&mut self, presets: &[f64], up: bool) {
+        if presets.is_empty() {
+            return;
+        }
+        let col_idx = self.focused_column;
+        let win_idx = self.focused_window_in_column;
+        let col = match self.columns.get_mut(col_idx) {
+            Some(c) => c,
+            None => return,
+        };
+        if col.len() <= 1 {
+            return;
+        }
+        col.ensure_height_weights();
+        let current_weight = col.height_weights[win_idx];
+
+        let mut sorted = presets.to_vec();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+        const TOLERANCE: f64 = 0.005;
+        let target = if up {
+            sorted.iter().find(|&&p| p > current_weight + TOLERANCE).copied()
+        } else {
+            sorted.iter().rev().find(|&&p| p < current_weight - TOLERANCE).copied()
+        };
+
+        if let Some(frac) = target {
+            col.set_height_weight(win_idx, frac);
+        }
+    }
+
+    /// Equalize height weights in the focused column.
+    pub fn equalize_focused_column_heights(&mut self) {
+        if let Some(col) = self.columns.get_mut(self.focused_column) {
+            col.equalize_height_weights();
         }
     }
 
@@ -1720,9 +2145,10 @@ mod tests {
         assert_eq!(ws.focused_column_index(), 2);
         assert_eq!(ws.focused_window(), Some(3));
 
-        // Total width: outer_gap + 400 + gap + 600 + gap + 400 + outer_gap
-        // = 10 + 400 + 10 + 600 + 10 + 400 + 10 = 1440
-        assert_eq!(ws.total_width(), 1440);
+        // Total strip width: 400 + gap + 600 + gap + 400
+        // = 400 + 10 + 600 + 10 + 400 = 1420
+        // (outer gaps are viewport padding, not strip content)
+        assert_eq!(ws.total_width(), 1420);
     }
 
     #[test]
@@ -2327,7 +2753,7 @@ mod tests {
         // Negative gaps should be clamped to 0
         let ws = Workspace::with_gaps(-100, -50);
         assert_eq!(ws.gap(), 0);
-        assert_eq!(ws.outer_gap(), 0);
+        assert_eq!(ws.outer_gaps(), (0, 0, 0, 0));
     }
 
     #[test]
@@ -2341,10 +2767,10 @@ mod tests {
         assert_eq!(ws.gap(), 0); // Clamped
 
         // Test outer_gap setter
-        ws.set_outer_gap(15);
-        assert_eq!(ws.outer_gap(), 15);
-        ws.set_outer_gap(-100);
-        assert_eq!(ws.outer_gap(), 0); // Clamped
+        ws.set_outer_gaps(15, 15, 15, 15);
+        assert_eq!(ws.outer_gaps(), (15, 15, 15, 15));
+        ws.set_outer_gaps(-100, -100, -100, -100);
+        assert_eq!(ws.outer_gaps(), (0, 0, 0, 0)); // Clamped
 
         // Test default_column_width setter
         ws.set_default_column_width(500);
@@ -2374,7 +2800,8 @@ mod tests {
         // Each window ~180px, but last takes remainder
 
         let total_height: i32 = placements.iter().map(|p| p.rect.height).sum();
-        let expected_usable = viewport.height - ws.outer_gap() * 2;
+        let (_, _, outer_top, outer_bottom) = ws.outer_gaps();
+        let expected_usable = viewport.height - outer_top - outer_bottom;
         let expected_gaps = ws.gap() * (placements.len() as i32 - 1);
 
         // Total heights + gaps should equal usable height
@@ -3442,13 +3869,13 @@ mod tests {
         let mut ws = Workspace::with_gaps(10, 10);
         ws.insert_window(1, Some(400)).unwrap();
 
-        // Set to half viewport (1920 - 20 outer gaps = 1900 usable)
+        // base = 1920 - 10 - 10 + 10 = 1910
+        // width = fraction * base - gap
         ws.set_focused_column_width_fraction(0.5, 1920);
-        assert_eq!(ws.columns()[0].width(), 950); // 1900 * 0.5
+        assert_eq!(ws.columns()[0].width(), 945); // 0.5 * 1910 - 10
 
-        // Set to one-third
         ws.set_focused_column_width_fraction(0.333, 1920);
-        assert_eq!(ws.columns()[0].width(), 633); // round(1900 * 0.333)
+        assert_eq!(ws.columns()[0].width(), 626); // round(0.333 * 1910 - 10)
     }
 
     #[test]
@@ -4119,5 +4546,446 @@ mod tests {
         ws.insert_window(1, Some(400)).unwrap();
         let result = ws.insert_window_no_focus(1, Some(400));
         assert!(result.is_err());
+    }
+
+    // =========================================================================
+    // Consume / Expel / Move window in column
+    // =========================================================================
+
+    #[test]
+    fn test_move_window_left_basic() {
+        let mut ws = Workspace::new();
+        ws.insert_window(1, Some(400)).unwrap(); // col 0: [A]
+        ws.insert_window(2, Some(400)).unwrap(); // col 1: [B], focused
+        assert_eq!(ws.focused_column_index(), 1);
+
+        ws.move_window_left();
+
+        assert_eq!(ws.column_count(), 1);
+        assert_eq!(ws.columns()[0].windows(), &[1, 2]); // B joined A's column
+        assert_eq!(ws.focused_column_index(), 0);
+        assert_eq!(ws.focused_window(), Some(2)); // focus followed
+    }
+
+    #[test]
+    fn test_move_window_left_multi() {
+        let mut ws = Workspace::new();
+        ws.insert_window(1, Some(400)).unwrap(); // col 0: [A]
+        ws.insert_window(2, Some(400)).unwrap(); // col 1: [B]
+        ws.insert_window_in_column(3, 1).unwrap(); // col 1: [B, C]
+        // Focus B (idx 0 in col 1)
+        ws.test_set_focus_unchecked(1, 0);
+
+        ws.move_window_left();
+
+        assert_eq!(ws.column_count(), 2);
+        assert_eq!(ws.columns()[0].windows(), &[1, 2]); // B joined A
+        assert_eq!(ws.columns()[1].windows(), &[3]); // C remains
+        assert_eq!(ws.focused_column_index(), 0);
+        assert_eq!(ws.focused_window(), Some(2));
+    }
+
+    #[test]
+    fn test_move_window_left_at_edge() {
+        let mut ws = Workspace::new();
+        ws.insert_window(1, Some(400)).unwrap();
+        assert_eq!(ws.focused_column_index(), 0);
+
+        ws.move_window_left(); // no-op
+
+        assert_eq!(ws.column_count(), 1);
+        assert_eq!(ws.columns()[0].windows(), &[1]);
+    }
+
+    #[test]
+    fn test_move_window_right_basic() {
+        let mut ws = Workspace::new();
+        ws.insert_window(1, Some(400)).unwrap(); // col 0: [A]
+        ws.insert_window(2, Some(400)).unwrap(); // col 1: [B]
+        ws.focus_left(); // focus col 0
+        assert_eq!(ws.focused_column_index(), 0);
+
+        ws.move_window_right();
+
+        assert_eq!(ws.column_count(), 1);
+        assert_eq!(ws.columns()[0].windows(), &[2, 1]); // A joined B's column
+        assert_eq!(ws.focused_column_index(), 0);
+        assert_eq!(ws.focused_window(), Some(1)); // focus followed
+    }
+
+    #[test]
+    fn test_move_window_right_multi() {
+        let mut ws = Workspace::new();
+        ws.insert_window(1, Some(400)).unwrap(); // col 0: [A]
+        ws.insert_window_in_column(2, 0).unwrap(); // col 0: [A, B]
+        ws.insert_window(3, Some(400)).unwrap(); // col 1: [C]
+        // Focus A (idx 0 in col 0)
+        ws.test_set_focus_unchecked(0, 0);
+
+        ws.move_window_right();
+
+        assert_eq!(ws.column_count(), 2);
+        assert_eq!(ws.columns()[0].windows(), &[2]); // B remains
+        assert_eq!(ws.columns()[1].windows(), &[3, 1]); // A joined C
+        assert_eq!(ws.focused_column_index(), 1);
+        assert_eq!(ws.focused_window(), Some(1));
+    }
+
+    #[test]
+    fn test_move_window_right_at_edge() {
+        let mut ws = Workspace::new();
+        ws.insert_window(1, Some(400)).unwrap();
+        assert_eq!(ws.focused_column_index(), 0);
+
+        ws.move_window_right(); // no-op
+
+        assert_eq!(ws.column_count(), 1);
+        assert_eq!(ws.columns()[0].windows(), &[1]);
+    }
+
+    #[test]
+    fn test_move_window_right_single_window_column() {
+        // Single window in source — column removed after move
+        let mut ws = Workspace::new();
+        ws.insert_window(1, Some(400)).unwrap(); // col 0: [A]
+        ws.insert_window(2, Some(400)).unwrap(); // col 1: [B]
+        ws.insert_window(3, Some(400)).unwrap(); // col 2: [C]
+        ws.focus_left();
+        ws.focus_left(); // focus col 0
+        assert_eq!(ws.focused_column_index(), 0);
+
+        ws.move_window_right();
+
+        assert_eq!(ws.column_count(), 2);
+        assert_eq!(ws.columns()[0].windows(), &[2, 1]); // B + A
+        assert_eq!(ws.columns()[1].windows(), &[3]);
+        assert_eq!(ws.focused_window(), Some(1));
+    }
+
+    #[test]
+    fn test_expel_to_left() {
+        let mut ws = Workspace::new();
+        ws.insert_window(1, Some(400)).unwrap();
+        ws.insert_window_in_column(2, 0).unwrap();
+        ws.insert_window_in_column(3, 0).unwrap();
+        // col 0: [A, B, C], focus B (idx 1)
+        ws.test_set_focus_unchecked(0, 1);
+
+        ws.expel_to_left();
+
+        assert_eq!(ws.column_count(), 2);
+        assert_eq!(ws.columns()[0].windows(), &[2]); // B expelled
+        assert_eq!(ws.columns()[1].windows(), &[1, 3]); // A, C remain
+        assert_eq!(ws.focused_column_index(), 0);
+        assert_eq!(ws.focused_window(), Some(2));
+    }
+
+    #[test]
+    fn test_expel_to_right() {
+        let mut ws = Workspace::new();
+        ws.insert_window(1, Some(400)).unwrap();
+        ws.insert_window_in_column(2, 0).unwrap();
+        ws.insert_window_in_column(3, 0).unwrap();
+        // col 0: [A, B, C], focus B (idx 1)
+        ws.test_set_focus_unchecked(0, 1);
+
+        ws.expel_to_right();
+
+        assert_eq!(ws.column_count(), 2);
+        assert_eq!(ws.columns()[0].windows(), &[1, 3]); // A, C remain
+        assert_eq!(ws.columns()[1].windows(), &[2]); // B expelled
+        assert_eq!(ws.focused_column_index(), 1);
+        assert_eq!(ws.focused_window(), Some(2));
+    }
+
+    #[test]
+    fn test_expel_single_window_noop() {
+        let mut ws = Workspace::new();
+        ws.insert_window(1, Some(400)).unwrap();
+
+        ws.expel_to_left(); // no-op
+        assert_eq!(ws.column_count(), 1);
+        assert_eq!(ws.columns()[0].windows(), &[1]);
+
+        ws.expel_to_right(); // no-op
+        assert_eq!(ws.column_count(), 1);
+        assert_eq!(ws.columns()[0].windows(), &[1]);
+    }
+
+    #[test]
+    fn test_move_window_up() {
+        let mut ws = Workspace::new();
+        ws.insert_window(1, Some(400)).unwrap();
+        ws.insert_window_in_column(2, 0).unwrap();
+        ws.insert_window_in_column(3, 0).unwrap();
+        // col 0: [A, B, C], focus C (idx 2)
+        ws.test_set_focus_unchecked(0, 2);
+
+        ws.move_window_up_in_column();
+
+        assert_eq!(ws.columns()[0].windows(), &[1, 3, 2]); // C swapped up
+        assert_eq!(ws.focused_window_index_in_column(), 1);
+        assert_eq!(ws.focused_window(), Some(3));
+    }
+
+    #[test]
+    fn test_move_window_down() {
+        let mut ws = Workspace::new();
+        ws.insert_window(1, Some(400)).unwrap();
+        ws.insert_window_in_column(2, 0).unwrap();
+        ws.insert_window_in_column(3, 0).unwrap();
+        // col 0: [A, B, C], focus A (idx 0)
+        ws.test_set_focus_unchecked(0, 0);
+
+        ws.move_window_down_in_column();
+
+        assert_eq!(ws.columns()[0].windows(), &[2, 1, 3]); // A swapped down
+        assert_eq!(ws.focused_window_index_in_column(), 1);
+        assert_eq!(ws.focused_window(), Some(1));
+    }
+
+    #[test]
+    fn test_move_window_up_at_top_noop() {
+        let mut ws = Workspace::new();
+        ws.insert_window(1, Some(400)).unwrap();
+        ws.insert_window_in_column(2, 0).unwrap();
+        ws.test_set_focus_unchecked(0, 0);
+
+        ws.move_window_up_in_column();
+
+        assert_eq!(ws.columns()[0].windows(), &[1, 2]);
+        assert_eq!(ws.focused_window_index_in_column(), 0);
+    }
+
+    #[test]
+    fn test_move_window_down_at_bottom_noop() {
+        let mut ws = Workspace::new();
+        ws.insert_window(1, Some(400)).unwrap();
+        ws.insert_window_in_column(2, 0).unwrap();
+        ws.test_set_focus_unchecked(0, 1);
+
+        ws.move_window_down_in_column();
+
+        assert_eq!(ws.columns()[0].windows(), &[1, 2]);
+        assert_eq!(ws.focused_window_index_in_column(), 1);
+    }
+
+    #[test]
+    fn test_move_window_preserves_minimized() {
+        let mut ws = Workspace::new();
+        ws.insert_window(1, Some(400)).unwrap();
+        ws.insert_window(2, Some(400)).unwrap(); // focused, col 1
+        ws.mark_minimized(2);
+        assert_eq!(ws.focused_column_index(), 1);
+
+        ws.move_window_left();
+
+        // Window 2 should still be in minimized set
+        assert!(ws.is_minimized(2));
+        assert_eq!(ws.column_count(), 1);
+        assert_eq!(ws.columns()[0].windows(), &[1, 2]);
+    }
+
+    // ========================================================================
+    // Height Weights Tests
+    // ========================================================================
+
+    #[test]
+    fn test_column_height_weights_on_add() {
+        let mut col = Column::new(1, 800);
+        assert_eq!(col.height_weights(), &[1.0]);
+
+        col.add_window(2);
+        assert_eq!(col.height_weights().len(), 2);
+        let sum: f64 = col.height_weights().iter().sum();
+        assert!((sum - 1.0).abs() < 1e-9);
+        assert!((col.height_weights()[0] - 0.5).abs() < 1e-9);
+        assert!((col.height_weights()[1] - 0.5).abs() < 1e-9);
+
+        col.add_window(3);
+        assert_eq!(col.height_weights().len(), 3);
+        let sum: f64 = col.height_weights().iter().sum();
+        assert!((sum - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_column_height_weights_on_remove() {
+        let mut col = Column::new(1, 800);
+        col.add_window(2);
+        col.add_window(3);
+
+        col.remove_window(2);
+        assert_eq!(col.height_weights().len(), 2);
+        let sum: f64 = col.height_weights().iter().sum();
+        assert!((sum - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_column_height_weights_swap() {
+        let mut col = Column::new(1, 800);
+        col.add_window(2);
+        // Set unequal weights
+        col.set_height_weight(0, 0.667);
+        let w0 = col.height_weights()[0];
+        let w1 = col.height_weights()[1];
+        assert!((w0 - 0.667).abs() < 0.01);
+
+        col.swap_windows(0, 1);
+        // Weights should follow their windows
+        assert!((col.height_weights()[0] - w1).abs() < 1e-9);
+        assert!((col.height_weights()[1] - w0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_placements_with_height_weights() {
+        let mut ws = Workspace::with_gaps(0, 0);
+        ws.insert_window(1, Some(800)).unwrap();
+        ws.insert_window_in_column(2, 0).unwrap();
+
+        // Set window 1 to 2/3 weight, window 2 to 1/3
+        ws.columns[0].set_height_weight(0, 0.667);
+
+        let viewport = Rect::new(0, 0, 800, 900);
+        let placements = ws.compute_placements(viewport);
+
+        assert_eq!(placements.len(), 2);
+        // Window 1 (2/3 of 900 = 600)
+        assert!((placements[0].rect.height - 600).abs() <= 1);
+        // Window 2 (1/3 of 900 = 300)
+        assert!((placements[1].rect.height - 300).abs() <= 1);
+        // Total should equal viewport height
+        assert_eq!(
+            placements[0].rect.height + placements[1].rect.height,
+            viewport.height
+        );
+    }
+
+    #[test]
+    fn test_cycle_width_up() {
+        let mut ws = Workspace::with_gaps(0, 0);
+        ws.insert_window(1, Some(640)).unwrap(); // 640/1920 ≈ 0.333
+        let presets = vec![0.333, 0.5, 0.667];
+
+        ws.cycle_width_up(&presets, 1920);
+        let expected = (1920.0_f64 * 0.5).round() as i32;
+        assert_eq!(ws.columns()[0].width(), expected);
+    }
+
+    #[test]
+    fn test_cycle_width_down() {
+        let mut ws = Workspace::with_gaps(0, 0);
+        ws.insert_window(1, Some(1280)).unwrap(); // 1280/1920 ≈ 0.667
+        let presets = vec![0.333, 0.5, 0.667];
+
+        ws.cycle_width_down(&presets, 1920);
+        let expected = (1920.0_f64 * 0.5).round() as i32;
+        assert_eq!(ws.columns()[0].width(), expected);
+    }
+
+    #[test]
+    fn test_cycle_width_between_presets() {
+        let mut ws = Workspace::with_gaps(0, 0);
+        ws.insert_window(1, Some(768)).unwrap(); // 768/1920 = 0.4
+        let presets = vec![0.333, 0.5, 0.667];
+
+        ws.cycle_width_up(&presets, 1920);
+        let expected = (1920.0_f64 * 0.5).round() as i32;
+        assert_eq!(ws.columns()[0].width(), expected);
+    }
+
+    #[test]
+    fn test_cycle_width_at_max_noop() {
+        let mut ws = Workspace::with_gaps(0, 0);
+        let w = (1920.0_f64 * 0.667).round() as i32;
+        ws.insert_window(1, Some(w)).unwrap();
+        let presets = vec![0.333, 0.5, 0.667];
+
+        ws.cycle_width_up(&presets, 1920);
+        assert_eq!(ws.columns()[0].width(), w); // No change
+    }
+
+    #[test]
+    fn test_cycle_height_single_window_noop() {
+        let mut ws = Workspace::with_gaps(0, 0);
+        ws.insert_window(1, Some(800)).unwrap();
+        let presets = vec![0.333, 0.5, 0.667];
+
+        ws.cycle_height_up(&presets);
+        // Single window — weight should stay at 1.0
+        assert_eq!(ws.columns()[0].height_weights(), &[1.0]);
+    }
+
+    #[test]
+    fn test_cycle_height_multi_window() {
+        let mut ws = Workspace::with_gaps(0, 0);
+        ws.insert_window(1, Some(800)).unwrap();
+        ws.insert_window_in_column(2, 0).unwrap();
+        ws.set_focus(0, 0).unwrap();
+
+        // Both windows start at 0.5 weight
+        let presets = vec![0.333, 0.5, 0.667];
+
+        ws.cycle_height_up(&presets);
+        let w = ws.columns()[0].height_weights()[0];
+        assert!((w - 0.667).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_equalize_heights() {
+        let mut ws = Workspace::with_gaps(0, 0);
+        ws.insert_window(1, Some(800)).unwrap();
+        ws.insert_window_in_column(2, 0).unwrap();
+        ws.set_focus(0, 0).unwrap();
+
+        let presets = vec![0.333, 0.5, 0.667];
+        ws.cycle_height_up(&presets);
+
+        ws.equalize_focused_column_heights();
+        assert!((ws.columns()[0].height_weights()[0] - 0.5).abs() < 1e-9);
+        assert!((ws.columns()[0].height_weights()[1] - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_height_weights_backward_compat() {
+        // Simulate a Column deserialized without height_weights (empty vec via #[serde(default)])
+        let col = Column {
+            width: 800,
+            windows: vec![1, 2],
+            height_weights: Vec::new(), // backward compat: empty
+        };
+        assert!(col.height_weights.is_empty());
+        // Compute placements should fall back to equal distribution
+        let mut ws = Workspace::with_gaps(0, 0);
+        ws.columns.push(col);
+        ws.focused_column = 0;
+        ws.focused_window_in_column = 0;
+        let viewport = Rect::new(0, 0, 800, 1000);
+        let placements = ws.compute_placements(viewport);
+        assert_eq!(placements.len(), 2);
+        // Equal heights
+        assert_eq!(placements[0].rect.height + placements[1].rect.height, 1000);
+        assert!((placements[0].rect.height - placements[1].rect.height).abs() <= 1);
+    }
+
+    #[test]
+    fn test_move_window_resets_weights() {
+        let mut ws = Workspace::with_gaps(10, 10);
+        ws.insert_window(1, Some(800)).unwrap();
+        ws.insert_window(2, Some(800)).unwrap();
+        ws.insert_window_in_column(3, 1).unwrap();
+        ws.set_focus(1, 0).unwrap();
+
+        // Set unequal weights in column 1
+        ws.columns[1].set_height_weight(0, 0.667);
+
+        // Move window 2 to column 0
+        ws.set_focus(1, 0).unwrap();
+        ws.move_window_left();
+
+        // Column 0 now has 2 windows — weights should be equalized
+        let weights = ws.columns[0].height_weights();
+        assert_eq!(weights.len(), 2);
+        assert!((weights[0] - 0.5).abs() < 1e-9);
+        assert!((weights[1] - 0.5).abs() < 1e-9);
     }
 }

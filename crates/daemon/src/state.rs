@@ -12,6 +12,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::info;
 
+/// Duration of layout transition animations in milliseconds.
+pub(crate) const LAYOUT_TRANSITION_DURATION_MS: u64 = 200;
+
 /// Fallback viewport dimensions when no monitor is detected.
 pub(crate) const FALLBACK_VIEWPORT_WIDTH: i32 = 1920;
 pub(crate) const FALLBACK_VIEWPORT_HEIGHT: i32 = 1080;
@@ -35,6 +38,41 @@ pub(crate) const RECENTLY_HIDDEN_TTL: Duration = Duration::from_secs(300);
 pub(crate) enum TestApplyPlacementsBehavior {
     SleepAndSucceed(Duration),
     SleepAndFail(Duration),
+}
+
+/// Tracks an in-progress layout transition animation.
+/// Interpolates window positions from a pre-change snapshot to the new layout.
+pub(crate) struct LayoutTransition {
+    /// Per-window starting rects (before the structural change).
+    pub(crate) start_rects: HashMap<u64, Rect>,
+    /// Elapsed time in milliseconds.
+    pub(crate) elapsed_ms: u64,
+    /// Total duration in milliseconds.
+    pub(crate) duration_ms: u64,
+}
+
+impl LayoutTransition {
+    pub(crate) fn progress(&self) -> f64 {
+        if self.duration_ms == 0 {
+            return 1.0;
+        }
+        (self.elapsed_ms as f64 / self.duration_ms as f64).clamp(0.0, 1.0)
+    }
+
+    pub(crate) fn is_complete(&self) -> bool {
+        self.elapsed_ms >= self.duration_ms
+    }
+
+    /// Cubic ease-out (matches scroll animation default).
+    pub(crate) fn eased_progress(&self) -> f64 {
+        let t = self.progress();
+        1.0 - (1.0 - t).powi(3)
+    }
+
+    pub(crate) fn tick(&mut self, delta_ms: u64) -> bool {
+        self.elapsed_ms = self.elapsed_ms.saturating_add(delta_ms);
+        !self.is_complete()
+    }
 }
 
 /// Application state supporting multiple monitors.
@@ -82,6 +120,8 @@ pub(crate) struct AppState {
     /// distinguish transient popups (managed briefly) from real windows
     /// (managed for a long time, e.g., close-to-tray apps).
     pub(crate) window_managed_at: HashMap<u64, std::time::Instant>,
+    /// Active layout transition animation (window position interpolation).
+    pub(crate) layout_transition: Option<LayoutTransition>,
     /// Injected window info for testing. When set, `lookup_window_info()` returns
     /// entries from this map instead of calling `enumerate_windows()`.
     #[cfg(test)]
@@ -122,8 +162,15 @@ impl AppState {
         let mut focused_monitor = 0;
 
         for monitor in monitors {
-            let mut workspace = Workspace::with_gaps(config.layout.gap, config.layout.outer_gap);
-            workspace.set_default_column_width(config.layout.default_column_width);
+            let mut workspace = Workspace::with_directional_gaps(
+                config.layout.gap,
+                config.layout.outer_gap_left,
+                config.layout.outer_gap_right,
+                config.layout.outer_gap_top,
+                config.layout.outer_gap_bottom,
+            );
+            let vw = monitor.work_area.width;
+            workspace.set_default_column_width(config.layout.default_column_width_px(vw));
             workspace.set_centering_mode(config.layout.centering_mode.into());
 
             if monitor.is_primary {
@@ -166,6 +213,7 @@ impl AppState {
             start_time: std::time::Instant::now(),
             recently_hidden_hwnds: HashMap::new(),
             window_managed_at: HashMap::new(),
+            layout_transition: None,
             #[cfg(test)]
             injected_window_info: HashMap::new(),
             #[cfg(test)]

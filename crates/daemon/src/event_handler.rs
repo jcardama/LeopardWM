@@ -140,14 +140,10 @@ impl AppState {
                                 workspace.add_floating(hwnd, rect).is_ok()
                             }
                             config::WindowAction::Tile => {
-                                let width = win_info.rect.width.clamp(
-                                    self.config.layout.min_column_width,
-                                    self.config.layout.max_column_width,
-                                );
                                 if self.config.behavior.focus_new_windows {
-                                    workspace.insert_window(hwnd, Some(width)).is_ok()
+                                    workspace.insert_window(hwnd, None).is_ok()
                                 } else {
-                                    workspace.insert_window_no_focus(hwnd, Some(width)).is_ok()
+                                    workspace.insert_window_no_focus(hwnd, None).is_ok()
                                 }
                             }
                             config::WindowAction::Ignore => unreachable!(),

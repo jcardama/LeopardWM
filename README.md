@@ -66,9 +66,13 @@ All hotkeys use `Ctrl+Alt` as the base modifier. Layered pattern: base = focus, 
 |---|---|
 | `Ctrl+Alt+H/L/J/K` | Focus left / right / down / up |
 | `Ctrl+Alt+Shift+H/L` | Move column left / right |
-| `Ctrl+Alt+Minus` / `Ctrl+Alt+Equals` | Shrink / grow column |
-| `Ctrl+Alt+1` / `2` / `3` | Set width to 1/3, 1/2, 2/3 |
+| `Ctrl+Alt+Shift+J/K` | Move window down / up in column |
+| `Ctrl+Alt+[` / `]` | Move window to left / right column |
+| `Ctrl+Alt+Shift+[` / `]` | Expel window to new column left / right |
+| `Ctrl+Alt+Minus` / `Ctrl+Alt+Equals` | Cycle column width down / up |
+| `Ctrl+Alt+Shift+Minus` / `Shift+Equals` | Cycle window height down / up |
 | `Ctrl+Alt+0` | Equalize all column widths |
+| `Ctrl+Alt+Shift+0` | Equalize window heights in column |
 | `Ctrl+Alt+Win+,`/`.` | Focus monitor left / right |
 | `Ctrl+Alt+Win+Shift+,`/`.` | Move window to monitor |
 | `Ctrl+Alt+W` | Close focused window |
@@ -117,7 +121,7 @@ LeopardWM is a **window controller**, not a compositor. DWM remains the composit
 
 If you find LeopardWM useful, consider supporting development:
 
-<a href="https://buymeacoffee.com/jcardama"><img src="https://img.buymeacoffee.com/button-api/?text=Buy me a coffee&emoji=&slug=jcardama&button_colour=FFDD00&font_colour=000000&font_family=Inter&outline_colour=000000&coffee_colour=ffffff" height="40" /></a>
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?logo=buy-me-a-coffee&logoColor=000)](https://buymeacoffee.com/jcardama)
 
 ## Contributing
 

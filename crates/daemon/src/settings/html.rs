@@ -219,6 +219,18 @@ html, body {
   line-height: 28px;
   margin-bottom: 16px;
 }
+.section-subtitle {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 20px;
+  margin: 16px 0 4px;
+}
+.section-desc {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
 
 /* ── Card ─────────────────────────────────────────────────────────── */
 .card {
@@ -655,24 +667,24 @@ input[type="range"]::-webkit-slider-thumb {
         <h2 class="section-title">Layout</h2>
         <div class="card">
           <div class="field">
-            <div class="field-info"><div class="field-label">Gap</div><div class="field-desc">Space between columns (px)</div></div>
+            <div class="field-info"><div class="field-label">Gap</div><div class="field-desc">Space between columns and between stacked windows (px)</div></div>
             <input type="number" id="layout-gap" min="0" max="100">
           </div>
           <div class="field">
-            <div class="field-info"><div class="field-label">Outer gap</div><div class="field-desc">Space at viewport edges (px)</div></div>
-            <input type="number" id="layout-outer_gap" min="0" max="100">
+            <div class="field-info"><div class="field-label">Outer gap left</div><div class="field-desc">Space at the left edge (px)</div></div>
+            <input type="number" id="layout-outer_gap_left" min="0" max="100">
           </div>
           <div class="field">
-            <div class="field-info"><div class="field-label">Default column width</div><div class="field-desc">Initial width for new columns (px)</div></div>
-            <input type="number" id="layout-default_column_width" min="100" max="4000">
+            <div class="field-info"><div class="field-label">Outer gap right</div><div class="field-desc">Space at the right edge (px)</div></div>
+            <input type="number" id="layout-outer_gap_right" min="0" max="100">
           </div>
           <div class="field">
-            <div class="field-info"><div class="field-label">Min column width</div><div class="field-desc">Minimum allowed column width (px)</div></div>
-            <input type="number" id="layout-min_column_width" min="0" max="4000">
+            <div class="field-info"><div class="field-label">Outer gap top</div><div class="field-desc">Space at the top edge (px)</div></div>
+            <input type="number" id="layout-outer_gap_top" min="0" max="100">
           </div>
           <div class="field">
-            <div class="field-info"><div class="field-label">Max column width</div><div class="field-desc">Maximum allowed column width (px)</div></div>
-            <input type="number" id="layout-max_column_width" min="0" max="8000">
+            <div class="field-info"><div class="field-label">Outer gap bottom</div><div class="field-desc">Space at the bottom edge (px)</div></div>
+            <input type="number" id="layout-outer_gap_bottom" min="0" max="100">
           </div>
           <div class="field">
             <div class="field-info"><div class="field-label">Centering mode</div><div class="field-desc">How the focused column is positioned in the viewport</div></div>
@@ -685,6 +697,24 @@ input[type="range"]::-webkit-slider-thumb {
             </div>
           </div>
         </div>
+        <h3 class="section-subtitle">Width presets</h3>
+        <p class="section-desc">Column width presets as viewport fractions. The first preset is the default width for new columns.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Fraction</th><th style="width:36px"></th></tr></thead>
+            <tbody id="width-presets-body"></tbody>
+          </table>
+        </div>
+        <div class="table-actions"><button class="btn btn-sm" onclick="addPresetRow('width',null)">+ Add preset</button></div>
+        <h3 class="section-subtitle">Height presets</h3>
+        <p class="section-desc">Window height presets as column fractions for cycling window heights.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Fraction</th><th style="width:36px"></th></tr></thead>
+            <tbody id="height-presets-body"></tbody>
+          </table>
+        </div>
+        <div class="table-actions"><button class="btn btn-sm" onclick="addPresetRow('height',null)">+ Add preset</button></div>
       </div>
 
       <!-- Appearance -->
@@ -918,6 +948,25 @@ document.addEventListener('click', function() {
 /* ── Helpers ─────────────────────────────────────────────────────────── */
 function val(id) { return document.getElementById(id).value; }
 function num(id) { return parseInt(document.getElementById(id).value, 10) || 0; }
+function addPresetRow(kind, value) {
+  var tbody = document.getElementById(kind + '-presets-body');
+  var tr = document.createElement('tr');
+  var v = (value != null) ? value : '';
+  tr.innerHTML =
+    '<td><input type="text" class="preset-val" value="' + v + '" placeholder="0.5"></td>' +
+    '<td><button class="row-delete" onclick="this.closest(\'tr\').remove();autoSave(0)">' + deleteIcon + '</button></td>';
+  tbody.appendChild(tr);
+  wrapAllInputs(tr);
+  tr.querySelector('input').addEventListener('input', function() { autoSave(500); });
+}
+function readPresets(kind) {
+  var vals = [];
+  document.querySelectorAll('#' + kind + '-presets-body tr').forEach(function(tr) {
+    var v = parseFloat(tr.querySelector('.preset-val').value.trim());
+    if (!isNaN(v) && v > 0 && v <= 1) vals.push(v);
+  });
+  return vals;
+}
 function checked(id) { return document.getElementById(id).checked; }
 function setVal(id, v) { document.getElementById(id).value = v; }
 function setChecked(id, v) { document.getElementById(id).checked = !!v; }
@@ -944,10 +993,14 @@ function inputToHex(v) { return v.replace('#', '').toUpperCase(); }
 /* ── Init ────────────────────────────────────────────────────────────── */
 function init(cfg) {
   setVal('layout-gap', cfg.layout.gap);
-  setVal('layout-outer_gap', cfg.layout.outer_gap);
-  setVal('layout-default_column_width', cfg.layout.default_column_width);
-  setVal('layout-min_column_width', cfg.layout.min_column_width);
-  setVal('layout-max_column_width', cfg.layout.max_column_width);
+  setVal('layout-outer_gap_left', cfg.layout.outer_gap_left);
+  setVal('layout-outer_gap_right', cfg.layout.outer_gap_right);
+  setVal('layout-outer_gap_top', cfg.layout.outer_gap_top);
+  setVal('layout-outer_gap_bottom', cfg.layout.outer_gap_bottom);
+  document.getElementById('width-presets-body').innerHTML = '';
+  (cfg.layout.width_presets || [0.333,0.5,0.667]).forEach(function(v) { addPresetRow('width', v); });
+  document.getElementById('height-presets-body').innerHTML = '';
+  (cfg.layout.height_presets || [0.333,0.5,0.667]).forEach(function(v) { addPresetRow('height', v); });
   setCb('cb-layout-centering_mode', cfg.layout.centering_mode);
 
   setChecked('appearance-active_border', cfg.appearance.active_border);
@@ -988,9 +1041,13 @@ var CMD_LABELS = {
   focus_left: 'Focus left', focus_right: 'Focus right',
   focus_up: 'Focus up', focus_down: 'Focus down',
   move_column_left: 'Move column left', move_column_right: 'Move column right',
-  resize_shrink: 'Shrink column', resize_grow: 'Grow column',
-  width_third: 'Width 1/3', width_half: 'Width 1/2',
-  width_two_thirds: 'Width 2/3', equalize_widths: 'Equalize widths',
+  move_window_left: 'Move window left', move_window_right: 'Move window right',
+  expel_to_left: 'Expel to left', expel_to_right: 'Expel to right',
+  move_window_up: 'Move window up', move_window_down: 'Move window down',
+  cycle_width_down: 'Cycle width down', cycle_width_up: 'Cycle width up',
+  equalize_widths: 'Equalize widths',
+  cycle_height_down: 'Cycle height down', cycle_height_up: 'Cycle height up',
+  equalize_heights: 'Equalize heights',
   focus_monitor_left: 'Focus monitor left', focus_monitor_right: 'Focus monitor right',
   move_to_monitor_left: 'Move to monitor left', move_to_monitor_right: 'Move to monitor right',
   close_window: 'Close window', toggle_floating: 'Toggle floating',
@@ -1003,8 +1060,11 @@ var CMD_LABELS = {
 var CMD_ORDER = [
   'focus_left', 'focus_right', 'focus_up', 'focus_down',
   'move_column_left', 'move_column_right',
-  'resize_shrink', 'resize_grow',
-  'width_third', 'width_half', 'width_two_thirds', 'equalize_widths',
+  'move_window_left', 'move_window_right',
+  'expel_to_left', 'expel_to_right',
+  'move_window_up', 'move_window_down',
+  'cycle_width_down', 'cycle_width_up', 'equalize_widths',
+  'cycle_height_down', 'cycle_height_up', 'equalize_heights',
   'focus_monitor_left', 'focus_monitor_right',
   'move_to_monitor_left', 'move_to_monitor_right',
   'close_window', 'toggle_floating', 'toggle_fullscreen',
@@ -1016,9 +1076,13 @@ var DEFAULT_HOTKEYS = {
   "Ctrl+Alt+H": "focus_left", "Ctrl+Alt+L": "focus_right",
   "Ctrl+Alt+K": "focus_up", "Ctrl+Alt+J": "focus_down",
   "Ctrl+Alt+Shift+H": "move_column_left", "Ctrl+Alt+Shift+L": "move_column_right",
-  "Ctrl+Alt+Minus": "resize_shrink", "Ctrl+Alt+Equals": "resize_grow",
-  "Ctrl+Alt+1": "width_third", "Ctrl+Alt+2": "width_half",
-  "Ctrl+Alt+3": "width_two_thirds", "Ctrl+Alt+0": "equalize_widths",
+  "Ctrl+Alt+Bracket_Left": "move_window_left", "Ctrl+Alt+Bracket_Right": "move_window_right",
+  "Ctrl+Alt+Shift+Bracket_Left": "expel_to_left", "Ctrl+Alt+Shift+Bracket_Right": "expel_to_right",
+  "Ctrl+Alt+Shift+K": "move_window_up", "Ctrl+Alt+Shift+J": "move_window_down",
+  "Ctrl+Alt+Minus": "cycle_width_down", "Ctrl+Alt+Equals": "cycle_width_up",
+  "Ctrl+Alt+0": "equalize_widths",
+  "Ctrl+Alt+Shift+Minus": "cycle_height_down", "Ctrl+Alt+Shift+Equals": "cycle_height_up",
+  "Ctrl+Alt+Shift+0": "equalize_heights",
   "Ctrl+Alt+Win+Comma": "focus_monitor_left", "Ctrl+Alt+Win+Period": "focus_monitor_right",
   "Ctrl+Alt+Win+Shift+Comma": "move_to_monitor_left", "Ctrl+Alt+Win+Shift+Period": "move_to_monitor_right",
   "Ctrl+Alt+W": "close_window", "Ctrl+Alt+F": "toggle_floating",
@@ -1108,10 +1172,13 @@ function escAttr(s) { return (s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;'
 function readConfig() {
   return {
     layout: {
-      gap: num('layout-gap'), outer_gap: num('layout-outer_gap'),
-      default_column_width: num('layout-default_column_width'),
-      min_column_width: num('layout-min_column_width'),
-      max_column_width: num('layout-max_column_width'),
+      gap: num('layout-gap'),
+      outer_gap_left: num('layout-outer_gap_left'),
+      outer_gap_right: num('layout-outer_gap_right'),
+      outer_gap_top: num('layout-outer_gap_top'),
+      outer_gap_bottom: num('layout-outer_gap_bottom'),
+      width_presets: readPresets('width'),
+      height_presets: readPresets('height'),
       centering_mode: cbVal('cb-layout-centering_mode')
     },
     appearance: {

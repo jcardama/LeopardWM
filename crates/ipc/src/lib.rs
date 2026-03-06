@@ -151,6 +151,19 @@ pub enum IpcCommand {
     /// Move the focused column right.
     MoveColumnRight,
 
+    /// Move the focused window to the column on the left.
+    MoveWindowLeft,
+    /// Move the focused window to the column on the right.
+    MoveWindowRight,
+    /// Expel the focused window to a new column on the left.
+    ExpelToLeft,
+    /// Expel the focused window to a new column on the right.
+    ExpelToRight,
+    /// Move the focused window up within the column.
+    MoveWindowUp,
+    /// Move the focused window down within the column.
+    MoveWindowDown,
+
     /// Focus the monitor to the left.
     FocusMonitorLeft,
     /// Focus the monitor to the right.
@@ -206,6 +219,16 @@ pub enum IpcCommand {
     },
     /// Equalize all column widths.
     EqualizeColumnWidths,
+    /// Cycle focused column width up through presets.
+    CycleWidthUp,
+    /// Cycle focused column width down through presets.
+    CycleWidthDown,
+    /// Cycle focused window height up through presets.
+    CycleHeightUp,
+    /// Cycle focused window height down through presets.
+    CycleHeightDown,
+    /// Equalize height weights in the focused column.
+    EqualizeColumnHeights,
     /// Query daemon status information.
     QueryStatus,
     /// Health check — returns uptime, window count, and error count.
@@ -381,6 +404,12 @@ mod tests {
             IpcCommand::FocusDown,
             IpcCommand::MoveColumnLeft,
             IpcCommand::MoveColumnRight,
+            IpcCommand::MoveWindowLeft,
+            IpcCommand::MoveWindowRight,
+            IpcCommand::ExpelToLeft,
+            IpcCommand::ExpelToRight,
+            IpcCommand::MoveWindowUp,
+            IpcCommand::MoveWindowDown,
             IpcCommand::FocusMonitorLeft,
             IpcCommand::FocusMonitorRight,
             IpcCommand::MoveWindowToMonitorLeft,
@@ -404,6 +433,11 @@ mod tests {
             IpcCommand::SetColumnWidth { fraction: 0.5 },
             IpcCommand::SetColumnWidth { fraction: 0.333 },
             IpcCommand::EqualizeColumnWidths,
+            IpcCommand::CycleWidthUp,
+            IpcCommand::CycleWidthDown,
+            IpcCommand::CycleHeightUp,
+            IpcCommand::CycleHeightDown,
+            IpcCommand::EqualizeColumnHeights,
             IpcCommand::QueryStatus,
             IpcCommand::HealthCheck,
         ];

@@ -97,10 +97,20 @@ enum Commands {
         #[command(subcommand)]
         direction: ScrollDirection,
     },
-    /// Move the focused column
+    /// Move the focused column left or right
     Move {
         #[command(subcommand)]
         direction: MoveDirection,
+    },
+    /// Move the focused window in any direction
+    MoveWindow {
+        #[command(subcommand)]
+        direction: MoveWindowDirection,
+    },
+    /// Expel the focused window to a new column
+    Expel {
+        #[command(subcommand)]
+        direction: ExpelDirection,
     },
     /// Resize the focused column
     Resize {
@@ -164,6 +174,16 @@ enum Commands {
     },
     /// Equalize all column widths
     EqualizeWidths,
+    /// Cycle focused column width up through presets
+    CycleWidthUp,
+    /// Cycle focused column width down through presets
+    CycleWidthDown,
+    /// Cycle focused window height up through presets
+    CycleHeightUp,
+    /// Cycle focused window height down through presets
+    CycleHeightDown,
+    /// Equalize window heights in the focused column
+    EqualizeHeights,
     /// Query daemon status
     Status,
     /// Run diagnostic checks
@@ -215,6 +235,26 @@ enum MoveDirection {
     /// Move focused column left
     Left,
     /// Move focused column right
+    Right,
+}
+
+#[derive(Subcommand)]
+enum MoveWindowDirection {
+    /// Move focused window to the column on the left
+    Left,
+    /// Move focused window to the column on the right
+    Right,
+    /// Move focused window up in column
+    Up,
+    /// Move focused window down in column
+    Down,
+}
+
+#[derive(Subcommand)]
+enum ExpelDirection {
+    /// Expel to a new column on the left
+    Left,
+    /// Expel to a new column on the right
     Right,
 }
 
@@ -287,6 +327,16 @@ fn to_ipc_command(cmd: &Commands) -> IpcCommand {
             MoveDirection::Left => IpcCommand::MoveColumnLeft,
             MoveDirection::Right => IpcCommand::MoveColumnRight,
         },
+        Commands::MoveWindow { direction } => match direction {
+            MoveWindowDirection::Left => IpcCommand::MoveWindowLeft,
+            MoveWindowDirection::Right => IpcCommand::MoveWindowRight,
+            MoveWindowDirection::Up => IpcCommand::MoveWindowUp,
+            MoveWindowDirection::Down => IpcCommand::MoveWindowDown,
+        },
+        Commands::Expel { direction } => match direction {
+            ExpelDirection::Left => IpcCommand::ExpelToLeft,
+            ExpelDirection::Right => IpcCommand::ExpelToRight,
+        },
         Commands::Resize { delta } => IpcCommand::Resize { delta: *delta },
         Commands::FocusMonitor { direction } => match direction {
             MonitorDirection::Left => IpcCommand::FocusMonitorLeft,
@@ -310,6 +360,11 @@ fn to_ipc_command(cmd: &Commands) -> IpcCommand {
             fraction: *fraction,
         },
         Commands::EqualizeWidths => IpcCommand::EqualizeColumnWidths,
+        Commands::CycleWidthUp => IpcCommand::CycleWidthUp,
+        Commands::CycleWidthDown => IpcCommand::CycleWidthDown,
+        Commands::CycleHeightUp => IpcCommand::CycleHeightUp,
+        Commands::CycleHeightDown => IpcCommand::CycleHeightDown,
+        Commands::EqualizeHeights => IpcCommand::EqualizeColumnHeights,
         Commands::Status => IpcCommand::QueryStatus,
         Commands::PanicRevert => IpcCommand::PanicRevert,
         Commands::Run { .. } => unreachable!("Run handled separately"),
@@ -1117,17 +1172,11 @@ fn generate_default_config() -> String {
 # Gap between columns in pixels
 gap = 10
 
-# Gap at the edges of the viewport in pixels
-outer_gap = 10
-
-# Default width for new columns in pixels
-default_column_width = 800
-
-# Minimum column width in pixels
-min_column_width = 400
-
-# Maximum column width in pixels
-max_column_width = 1600
+# Outer gaps at the edges of the viewport in pixels
+outer_gap_left = 10
+outer_gap_right = 10
+outer_gap_top = 10
+outer_gap_bottom = 10
 
 # Centering mode: "center" or "just_in_view"
 # - center: Always center the focused column
@@ -1264,11 +1313,11 @@ fn handle_init(output: Option<PathBuf>, force: bool, profile: Option<String>) ->
 
 /// Generate config content for a named profile.
 fn generate_profile_config(profile: &str) -> String {
-    let (gap, outer_gap, default_width, min_width, max_width, centering) = match profile {
-        "laptop" => (6, 6, 700, 350, 1400, "center"),
-        "ultrawide" => (12, 16, 1000, 500, 2000, "just_in_view"),
-        "developer" => (10, 10, 900, 400, 1600, "center"),
-        _ => (10, 10, 800, 400, 1600, "center"),
+    let (gap, outer_gap, centering) = match profile {
+        "laptop" => (6, 6, "center"),
+        "ultrawide" => (12, 16, "just_in_view"),
+        "developer" => (10, 10, "center"),
+        _ => (10, 10, "center"),
     };
 
     format!(
@@ -1277,10 +1326,10 @@ fn generate_profile_config(profile: &str) -> String {
 
 [layout]
 gap = {gap}
-outer_gap = {outer_gap}
-default_column_width = {default_width}
-min_column_width = {min_width}
-max_column_width = {max_width}
+outer_gap_left = {outer_gap}
+outer_gap_right = {outer_gap}
+outer_gap_top = {outer_gap}
+outer_gap_bottom = {outer_gap}
 centering_mode = "{centering}"
 
 [appearance]
@@ -1801,6 +1850,54 @@ mod tests {
     }
 
     #[test]
+    fn test_to_ipc_command_move_window_left() {
+        let cmd = Commands::MoveWindow {
+            direction: MoveWindowDirection::Left,
+        };
+        assert!(matches!(to_ipc_command(&cmd), IpcCommand::MoveWindowLeft));
+    }
+
+    #[test]
+    fn test_to_ipc_command_move_window_right() {
+        let cmd = Commands::MoveWindow {
+            direction: MoveWindowDirection::Right,
+        };
+        assert!(matches!(to_ipc_command(&cmd), IpcCommand::MoveWindowRight));
+    }
+
+    #[test]
+    fn test_to_ipc_command_move_window_up() {
+        let cmd = Commands::MoveWindow {
+            direction: MoveWindowDirection::Up,
+        };
+        assert!(matches!(to_ipc_command(&cmd), IpcCommand::MoveWindowUp));
+    }
+
+    #[test]
+    fn test_to_ipc_command_move_window_down() {
+        let cmd = Commands::MoveWindow {
+            direction: MoveWindowDirection::Down,
+        };
+        assert!(matches!(to_ipc_command(&cmd), IpcCommand::MoveWindowDown));
+    }
+
+    #[test]
+    fn test_to_ipc_command_expel_left() {
+        let cmd = Commands::Expel {
+            direction: ExpelDirection::Left,
+        };
+        assert!(matches!(to_ipc_command(&cmd), IpcCommand::ExpelToLeft));
+    }
+
+    #[test]
+    fn test_to_ipc_command_expel_right() {
+        let cmd = Commands::Expel {
+            direction: ExpelDirection::Right,
+        };
+        assert!(matches!(to_ipc_command(&cmd), IpcCommand::ExpelToRight));
+    }
+
+    #[test]
     fn test_to_ipc_command_resize() {
         let cmd = Commands::Resize { delta: 50 };
         match to_ipc_command(&cmd) {
@@ -1941,8 +2038,7 @@ mod tests {
         let config = generate_default_config();
         assert!(config.contains("[layout]"));
         assert!(config.contains("gap"));
-        assert!(config.contains("outer_gap"));
-        assert!(config.contains("default_column_width"));
+        assert!(config.contains("outer_gap_left"));
     }
 
     #[test]
@@ -2579,14 +2675,14 @@ mod tests {
         let config = generate_profile_config("laptop");
         assert!(config.contains("laptop profile"));
         assert!(config.contains("gap = 6"));
-        assert!(config.contains("default_column_width = 700"));
+        assert!(config.contains("outer_gap_left = 6"));
     }
 
     #[test]
     fn test_generate_profile_config_ultrawide() {
         let config = generate_profile_config("ultrawide");
         assert!(config.contains("ultrawide profile"));
-        assert!(config.contains("default_column_width = 1000"));
+        assert!(config.contains("outer_gap_left = 16"));
         assert!(config.contains("just_in_view"));
     }
 
@@ -2594,7 +2690,7 @@ mod tests {
     fn test_generate_profile_config_developer() {
         let config = generate_profile_config("developer");
         assert!(config.contains("developer profile"));
-        assert!(config.contains("default_column_width = 900"));
+        assert!(config.contains("outer_gap_left = 10"));
         assert!(config.contains("\"Win+Ctrl+Escape\" = \"panic_revert\""));
     }
 

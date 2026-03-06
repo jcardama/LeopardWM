@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use leopardwm_core_layout::CenteringMode;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 
@@ -44,36 +44,110 @@ pub struct LayoutConfig {
     #[serde(default = "default_gap")]
     pub gap: i32,
 
-    /// Gap at the edges of the viewport in pixels.
+    /// Outer gap at the left edge of the viewport.
     #[serde(default = "default_outer_gap")]
-    pub outer_gap: i32,
+    pub outer_gap_left: i32,
 
-    /// Default width for new columns in pixels.
-    #[serde(default = "default_column_width")]
-    pub default_column_width: i32,
+    /// Outer gap at the right edge of the viewport.
+    #[serde(default = "default_outer_gap")]
+    pub outer_gap_right: i32,
 
-    /// Minimum column width in pixels.
-    #[serde(default = "default_min_column_width")]
-    pub min_column_width: i32,
+    /// Outer gap at the top edge of the viewport.
+    #[serde(default = "default_outer_gap")]
+    pub outer_gap_top: i32,
 
-    /// Maximum column width in pixels.
-    #[serde(default = "default_max_column_width")]
-    pub max_column_width: i32,
+    /// Outer gap at the bottom edge of the viewport.
+    #[serde(default = "default_outer_gap")]
+    pub outer_gap_bottom: i32,
 
     /// Centering mode for focus navigation.
     #[serde(default)]
     pub centering_mode: CenteringModeConfig,
+
+    /// Width presets for cycling (fractions of usable viewport width).
+    /// The first preset is also used as the default width for new columns.
+    #[serde(default = "default_width_presets")]
+    pub width_presets: Vec<f64>,
+
+    /// Height presets for cycling (fractions of column height / weight).
+    #[serde(default = "default_height_presets")]
+    pub height_presets: Vec<f64>,
+
+    // Legacy fields kept for backward-compatible deserialization; not used.
+    #[serde(default, skip_serializing)]
+    #[allow(dead_code)]
+    outer_gap: Option<i32>,
+    #[serde(default, skip_serializing)]
+    #[allow(dead_code)]
+    default_column_width: Option<i32>,
+    #[serde(default, skip_serializing)]
+    #[allow(dead_code)]
+    min_column_width: Option<i32>,
+    #[serde(default, skip_serializing)]
+    #[allow(dead_code)]
+    max_column_width: Option<i32>,
+}
+
+fn default_width_presets() -> Vec<f64> {
+    vec![0.333, 0.5, 0.667]
+}
+
+fn default_height_presets() -> Vec<f64> {
+    vec![0.333, 0.5, 0.667]
 }
 
 impl Default for LayoutConfig {
     fn default() -> Self {
         Self {
             gap: default_gap(),
-            outer_gap: default_outer_gap(),
-            default_column_width: default_column_width(),
-            min_column_width: default_min_column_width(),
-            max_column_width: default_max_column_width(),
+            outer_gap_left: default_outer_gap(),
+            outer_gap_right: default_outer_gap(),
+            outer_gap_top: default_outer_gap(),
+            outer_gap_bottom: default_outer_gap(),
             centering_mode: CenteringModeConfig::default(),
+            width_presets: default_width_presets(),
+            height_presets: default_height_presets(),
+            outer_gap: None,
+            default_column_width: None,
+            min_column_width: None,
+            max_column_width: None,
+        }
+    }
+}
+
+impl LayoutConfig {
+    /// Compute the default column width in pixels for a given viewport width,
+    /// using the first width preset as a fraction.
+    /// Formula: `width = fraction * (viewport - OL - OR + gap) - gap`
+    /// This is independent of column count — same result whether 1 or 10 columns.
+    pub fn default_column_width_px(&self, viewport_width: i32) -> i32 {
+        let base = viewport_width
+            .saturating_sub(self.outer_gap_left.max(0))
+            .saturating_sub(self.outer_gap_right.max(0))
+            .saturating_add(self.gap.max(0));
+        let gap = self.gap.max(0);
+        let frac = self.width_presets.first().copied().unwrap_or(0.5);
+        (base as f64 * frac - gap as f64).round().max(100.0) as i32
+    }
+
+    /// Migrate legacy `outer_gap` field to per-side fields if present.
+    /// Called after deserialization.
+    pub fn migrate_outer_gap(&mut self) {
+        if let Some(og) = self.outer_gap.take() {
+            let og = og.max(0);
+            // Only migrate if the new fields are still at defaults, meaning
+            // the user's config only had the old `outer_gap` key.
+            let d = default_outer_gap();
+            if self.outer_gap_left == d
+                && self.outer_gap_right == d
+                && self.outer_gap_top == d
+                && self.outer_gap_bottom == d
+            {
+                self.outer_gap_left = og;
+                self.outer_gap_right = og;
+                self.outer_gap_top = og;
+                self.outer_gap_bottom = og;
+            }
         }
     }
 }
@@ -176,18 +250,6 @@ fn default_gap() -> i32 {
 
 fn default_outer_gap() -> i32 {
     10
-}
-
-fn default_column_width() -> i32 {
-    800
-}
-
-fn default_min_column_width() -> i32 {
-    400
-}
-
-fn default_max_column_width() -> i32 {
-    1600
 }
 
 fn default_true() -> bool {
@@ -366,15 +428,15 @@ impl Default for HotkeyConfig {
         bindings.insert("Ctrl+Alt+Shift+H".to_string(), "move_column_left".to_string());
         bindings.insert("Ctrl+Alt+Shift+L".to_string(), "move_column_right".to_string());
 
-        // Resize — Ctrl+Alt + Minus/Equals
-        bindings.insert("Ctrl+Alt+Minus".to_string(), "resize_shrink".to_string());
-        bindings.insert("Ctrl+Alt+Equals".to_string(), "resize_grow".to_string());
-
-        // Column width presets — Ctrl+Alt + number
-        bindings.insert("Ctrl+Alt+1".to_string(), "width_third".to_string());
-        bindings.insert("Ctrl+Alt+2".to_string(), "width_half".to_string());
-        bindings.insert("Ctrl+Alt+3".to_string(), "width_two_thirds".to_string());
+        // Width cycling — Ctrl+Alt + Minus/Equals
+        bindings.insert("Ctrl+Alt+Minus".to_string(), "cycle_width_down".to_string());
+        bindings.insert("Ctrl+Alt+Equals".to_string(), "cycle_width_up".to_string());
         bindings.insert("Ctrl+Alt+0".to_string(), "equalize_widths".to_string());
+
+        // Height cycling — Ctrl+Alt+Shift + Minus/Equals/0
+        bindings.insert("Ctrl+Alt+Shift+Minus".to_string(), "cycle_height_down".to_string());
+        bindings.insert("Ctrl+Alt+Shift+Equals".to_string(), "cycle_height_up".to_string());
+        bindings.insert("Ctrl+Alt+Shift+0".to_string(), "equalize_heights".to_string());
 
         // Monitor focus — Ctrl+Alt+Win + Comma/Period
         bindings.insert("Ctrl+Alt+Win+Comma".to_string(), "focus_monitor_left".to_string());
@@ -397,6 +459,16 @@ impl Default for HotkeyConfig {
         bindings.insert("Ctrl+Alt+P".to_string(), "toggle_pause".to_string());
         bindings.insert("Ctrl+Alt+R".to_string(), "refresh".to_string());
         bindings.insert("Ctrl+Alt+Shift+R".to_string(), "reload".to_string());
+
+        // Move window to adjacent column — Ctrl+Alt + brackets, +Shift = expel to new column
+        bindings.insert("Ctrl+Alt+Bracket_Left".to_string(), "move_window_left".to_string());
+        bindings.insert("Ctrl+Alt+Bracket_Right".to_string(), "move_window_right".to_string());
+        bindings.insert("Ctrl+Alt+Shift+Bracket_Left".to_string(), "expel_to_left".to_string());
+        bindings.insert("Ctrl+Alt+Shift+Bracket_Right".to_string(), "expel_to_right".to_string());
+
+        // Move window up/down in column — Ctrl+Alt+Shift + JK
+        bindings.insert("Ctrl+Alt+Shift+K".to_string(), "move_window_up".to_string());
+        bindings.insert("Ctrl+Alt+Shift+J".to_string(), "move_window_down".to_string());
 
         // Emergency escape hatch: revert visibility state and stop daemon.
         bindings.insert("Win+Ctrl+Escape".to_string(), "panic_revert".to_string());
@@ -576,8 +648,11 @@ pub fn parse_command(cmd: &str) -> Option<leopardwm_ipc::IpcCommand> {
         "focus_monitor_right" => Some(IpcCommand::FocusMonitorRight),
         "move_to_monitor_left" => Some(IpcCommand::MoveWindowToMonitorLeft),
         "move_to_monitor_right" => Some(IpcCommand::MoveWindowToMonitorRight),
-        "resize_grow" => Some(IpcCommand::Resize { delta: 50 }),
-        "resize_shrink" => Some(IpcCommand::Resize { delta: -50 }),
+        "cycle_width_up" | "resize_grow" => Some(IpcCommand::CycleWidthUp),
+        "cycle_width_down" | "resize_shrink" => Some(IpcCommand::CycleWidthDown),
+        "cycle_height_up" => Some(IpcCommand::CycleHeightUp),
+        "cycle_height_down" => Some(IpcCommand::CycleHeightDown),
+        "equalize_heights" => Some(IpcCommand::EqualizeColumnHeights),
         "scroll_left" => Some(IpcCommand::Scroll { delta: -100.0 }),
         "scroll_right" => Some(IpcCommand::Scroll { delta: 100.0 }),
         "refresh" => Some(IpcCommand::Refresh),
@@ -591,11 +666,46 @@ pub fn parse_command(cmd: &str) -> Option<leopardwm_ipc::IpcCommand> {
         "width_half" => Some(IpcCommand::SetColumnWidth { fraction: 0.5 }),
         "width_two_thirds" => Some(IpcCommand::SetColumnWidth { fraction: 0.667 }),
         "equalize_widths" => Some(IpcCommand::EqualizeColumnWidths),
+        "move_window_left" => Some(IpcCommand::MoveWindowLeft),
+        "move_window_right" => Some(IpcCommand::MoveWindowRight),
+        "expel_to_left" => Some(IpcCommand::ExpelToLeft),
+        "expel_to_right" => Some(IpcCommand::ExpelToRight),
+        "move_window_up" => Some(IpcCommand::MoveWindowUp),
+        "move_window_down" => Some(IpcCommand::MoveWindowDown),
         _ => None,
     }
 }
 
+/// Deprecated hotkey command names that should be removed during migration.
+const DEPRECATED_HOTKEY_COMMANDS: &[&str] = &[
+    "width_third",
+    "width_half",
+    "width_two_thirds",
+];
+
+/// Hotkey command renames: (old_name, new_name).
+const HOTKEY_COMMAND_RENAMES: &[(&str, &str)] = &[
+    ("resize_grow", "cycle_width_up"),
+    ("resize_shrink", "cycle_width_down"),
+];
+
 impl Config {
+    /// Migrate deprecated hotkey bindings: rename old commands and remove obsolete ones.
+    fn migrate_hotkey_bindings(bindings: &mut HashMap<String, String>) {
+        // Rename old command names to new ones
+        for (old, new) in HOTKEY_COMMAND_RENAMES {
+            for value in bindings.values_mut() {
+                if value == old {
+                    *value = new.to_string();
+                }
+            }
+        }
+        // Remove bindings for deprecated commands
+        bindings.retain(|_, cmd| {
+            !DEPRECATED_HOTKEY_COMMANDS.contains(&cmd.as_str())
+        });
+    }
+
     /// Load configuration from standard locations.
     ///
     /// Tries the following locations in order:
@@ -631,88 +741,38 @@ impl Config {
             self.layout.gap = 0;
         }
 
-        // outer_gap must be >= 0
-        if self.layout.outer_gap < 0 {
-            warnings.push(ConfigWarning {
-                field: "layout.outer_gap".to_string(),
-                message: format!(
-                    "Negative outer_gap ({}) clamped to 0",
-                    self.layout.outer_gap
-                ),
-            });
-            self.layout.outer_gap = 0;
+        // outer gaps must be >= 0
+        for (field, val) in [
+            ("layout.outer_gap_left", &mut self.layout.outer_gap_left),
+            ("layout.outer_gap_right", &mut self.layout.outer_gap_right),
+            ("layout.outer_gap_top", &mut self.layout.outer_gap_top),
+            ("layout.outer_gap_bottom", &mut self.layout.outer_gap_bottom),
+        ] {
+            if *val < 0 {
+                warnings.push(ConfigWarning {
+                    field: field.to_string(),
+                    message: format!("Negative {} ({}) clamped to 0", field, *val),
+                });
+                *val = 0;
+            }
         }
 
-        // min_column_width must be >= 0
-        if self.layout.min_column_width < 0 {
+        // width_presets must not be empty
+        if self.layout.width_presets.is_empty() {
             warnings.push(ConfigWarning {
-                field: "layout.min_column_width".to_string(),
-                message: format!(
-                    "Negative min_column_width ({}) clamped to 0",
-                    self.layout.min_column_width
-                ),
+                field: "layout.width_presets".to_string(),
+                message: "Empty width_presets, using defaults".to_string(),
             });
-            self.layout.min_column_width = 0;
+            self.layout.width_presets = default_width_presets();
         }
 
-        // max_column_width must be >= 0
-        if self.layout.max_column_width < 0 {
+        // height_presets must not be empty
+        if self.layout.height_presets.is_empty() {
             warnings.push(ConfigWarning {
-                field: "layout.max_column_width".to_string(),
-                message: format!(
-                    "Negative max_column_width ({}) clamped to 0",
-                    self.layout.max_column_width
-                ),
+                field: "layout.height_presets".to_string(),
+                message: "Empty height_presets, using defaults".to_string(),
             });
-            self.layout.max_column_width = 0;
-        }
-
-        // default_column_width must be >= 0
-        if self.layout.default_column_width < 0 {
-            warnings.push(ConfigWarning {
-                field: "layout.default_column_width".to_string(),
-                message: format!(
-                    "Negative default_column_width ({}) clamped to 0",
-                    self.layout.default_column_width
-                ),
-            });
-            self.layout.default_column_width = 0;
-        }
-
-        // min_column_width must be <= max_column_width
-        if self.layout.min_column_width > self.layout.max_column_width {
-            warnings.push(ConfigWarning {
-                field: "layout.min_column_width / layout.max_column_width".to_string(),
-                message: format!(
-                    "min_column_width ({}) > max_column_width ({}), swapping",
-                    self.layout.min_column_width, self.layout.max_column_width
-                ),
-            });
-            std::mem::swap(
-                &mut self.layout.min_column_width,
-                &mut self.layout.max_column_width,
-            );
-        }
-
-        // default_column_width must be in [min, max]
-        if self.layout.default_column_width < self.layout.min_column_width
-            || self.layout.default_column_width > self.layout.max_column_width
-        {
-            let clamped = self
-                .layout
-                .default_column_width
-                .clamp(self.layout.min_column_width, self.layout.max_column_width);
-            warnings.push(ConfigWarning {
-                field: "layout.default_column_width".to_string(),
-                message: format!(
-                    "default_column_width ({}) outside [{}, {}], clamped to {}",
-                    self.layout.default_column_width,
-                    self.layout.min_column_width,
-                    self.layout.max_column_width,
-                    clamped,
-                ),
-            });
-            self.layout.default_column_width = clamped;
+            self.layout.height_presets = default_height_presets();
         }
 
         // focus_follows_mouse_delay_ms must be >= 50 when enabled
@@ -838,8 +898,25 @@ impl Config {
         let content = fs::read_to_string(path)
             .with_context(|| format!("Failed to read config file: {}", path.display()))?;
 
-        let config: Config = toml::from_str(&content)
+        let mut config: Config = toml::from_str(&content)
             .with_context(|| format!("Failed to parse config file: {}", path.display()))?;
+
+        // Migrate legacy `outer_gap` → per-side outer gap fields.
+        config.layout.migrate_outer_gap();
+
+        // Migrate deprecated hotkey command names.
+        Self::migrate_hotkey_bindings(&mut config.hotkeys.bindings);
+
+        // Merge default hotkeys: any command not already bound by the user
+        // gets its default binding. This ensures new hotkeys automatically
+        // appear for existing users without overriding their customizations.
+        let user_commands: HashSet<String> =
+            config.hotkeys.bindings.values().cloned().collect();
+        for (key, cmd) in HotkeyConfig::default().bindings {
+            if !user_commands.contains(&cmd) {
+                config.hotkeys.bindings.insert(key, cmd);
+            }
+        }
 
         Ok(config)
     }
@@ -910,17 +987,18 @@ fn generate_default_config_content() -> String {
 # Gap between columns in pixels
 gap = 10
 
-# Gap at the edges of the viewport in pixels
-outer_gap = 10
+# Outer gaps at the edges of the viewport in pixels
+outer_gap_left = 10
+outer_gap_right = 10
+outer_gap_top = 10
+outer_gap_bottom = 10
 
-# Default width for new columns in pixels
-default_column_width = 800
+# Width presets (fractions of usable viewport width).
+# First preset is used as the default width for new columns.
+width_presets = [0.333, 0.5, 0.667]
 
-# Minimum column width in pixels
-min_column_width = 400
-
-# Maximum column width in pixels
-max_column_width = 1600
+# Height presets (fractions of column height / weight).
+height_presets = [0.333, 0.5, 0.667]
 
 # Centering mode: "center" or "just_in_view"
 # - center: Always center the focused column
@@ -953,15 +1031,15 @@ focus_follows_mouse = false
 "Ctrl+Alt+Shift+H" = "move_column_left"
 "Ctrl+Alt+Shift+L" = "move_column_right"
 
-# Resize — Ctrl+Alt + Minus/Equals
-"Ctrl+Alt+Minus" = "resize_shrink"
-"Ctrl+Alt+Equals" = "resize_grow"
-
-# Column width presets
-"Ctrl+Alt+1" = "width_third"
-"Ctrl+Alt+2" = "width_half"
-"Ctrl+Alt+3" = "width_two_thirds"
+# Width cycling — Ctrl+Alt + Minus/Equals
+"Ctrl+Alt+Minus" = "cycle_width_down"
+"Ctrl+Alt+Equals" = "cycle_width_up"
 "Ctrl+Alt+0" = "equalize_widths"
+
+# Height cycling — Ctrl+Alt+Shift + Minus/Equals/0
+"Ctrl+Alt+Shift+Minus" = "cycle_height_down"
+"Ctrl+Alt+Shift+Equals" = "cycle_height_up"
+"Ctrl+Alt+Shift+0" = "equalize_heights"
 
 # Monitor focus — Ctrl+Alt+Win
 "Ctrl+Alt+Win+Comma" = "focus_monitor_left"
@@ -1037,8 +1115,11 @@ mod tests {
     fn test_default_config() {
         let config = Config::default();
         assert_eq!(config.layout.gap, 10);
-        assert_eq!(config.layout.outer_gap, 10);
-        assert_eq!(config.layout.default_column_width, 800);
+        assert_eq!(config.layout.outer_gap_left, 10);
+        assert_eq!(config.layout.outer_gap_right, 10);
+        assert_eq!(config.layout.outer_gap_top, 10);
+        assert_eq!(config.layout.outer_gap_bottom, 10);
+        assert_eq!(config.layout.width_presets, vec![0.333, 0.5, 0.667]);
         assert_eq!(config.layout.centering_mode, CenteringModeConfig::Center);
         assert!(config.behavior.focus_new_windows);
     }
@@ -1061,8 +1142,8 @@ mod tests {
         "#;
         let config: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(config.layout.gap, 20);
-        assert_eq!(config.layout.outer_gap, 10); // default
-        assert_eq!(config.layout.default_column_width, 800); // default
+        assert_eq!(config.layout.outer_gap_left, 10); // default
+        assert_eq!(config.layout.width_presets, vec![0.333, 0.5, 0.667]); // default
     }
 
     #[test]
@@ -1086,7 +1167,7 @@ mod tests {
     #[test]
     fn test_hotkey_config_default() {
         let config = HotkeyConfig::default();
-        assert_eq!(config.bindings.len(), 23);
+        assert_eq!(config.bindings.len(), 29);
         assert_eq!(
             config.bindings.get("Ctrl+Alt+H"),
             Some(&"focus_left".to_string())
@@ -1101,7 +1182,7 @@ mod tests {
         );
         assert_eq!(
             config.bindings.get("Ctrl+Alt+Minus"),
-            Some(&"resize_shrink".to_string())
+            Some(&"cycle_width_down".to_string())
         );
         assert_eq!(
             config.bindings.get("Ctrl+Alt+Win+Comma"),
@@ -1129,16 +1210,52 @@ mod tests {
         );
         assert_eq!(
             parse_command("resize_grow"),
-            Some(IpcCommand::Resize { delta: 50 })
+            Some(IpcCommand::CycleWidthUp)
         );
         assert_eq!(
             parse_command("resize_shrink"),
-            Some(IpcCommand::Resize { delta: -50 })
+            Some(IpcCommand::CycleWidthDown)
+        );
+        assert_eq!(
+            parse_command("cycle_width_up"),
+            Some(IpcCommand::CycleWidthUp)
+        );
+        assert_eq!(
+            parse_command("cycle_height_up"),
+            Some(IpcCommand::CycleHeightUp)
+        );
+        assert_eq!(
+            parse_command("equalize_heights"),
+            Some(IpcCommand::EqualizeColumnHeights)
         );
         assert_eq!(parse_command("refresh"), Some(IpcCommand::Refresh));
         assert_eq!(parse_command("panic_revert"), Some(IpcCommand::PanicRevert));
         assert_eq!(parse_command("PANIC-REVERT"), Some(IpcCommand::PanicRevert));
         assert_eq!(parse_command("toggle_pause"), Some(IpcCommand::TogglePause));
+        assert_eq!(
+            parse_command("move_window_left"),
+            Some(IpcCommand::MoveWindowLeft)
+        );
+        assert_eq!(
+            parse_command("move_window_right"),
+            Some(IpcCommand::MoveWindowRight)
+        );
+        assert_eq!(
+            parse_command("expel_to_left"),
+            Some(IpcCommand::ExpelToLeft)
+        );
+        assert_eq!(
+            parse_command("expel_to_right"),
+            Some(IpcCommand::ExpelToRight)
+        );
+        assert_eq!(
+            parse_command("move_window_up"),
+            Some(IpcCommand::MoveWindowUp)
+        );
+        assert_eq!(
+            parse_command("move_window_down"),
+            Some(IpcCommand::MoveWindowDown)
+        );
         assert_eq!(parse_command("unknown_command"), None);
     }
 
@@ -1161,54 +1278,58 @@ mod tests {
     }
 
     #[test]
-    fn test_column_width_bounds_defaults() {
-        let config = Config::default();
-        // Verify default bounds are sensible
-        assert_eq!(config.layout.min_column_width, 400);
-        assert_eq!(config.layout.max_column_width, 1600);
-        assert!(config.layout.min_column_width < config.layout.max_column_width);
-        assert!(config.layout.default_column_width >= config.layout.min_column_width);
-        assert!(config.layout.default_column_width <= config.layout.max_column_width);
+    fn test_hotkey_merge_adds_missing_defaults() {
+        // Simulate a user config with only one hotkey — load_from_path
+        // would merge defaults for unbound commands.
+        let defaults = HotkeyConfig::default();
+        let mut user = HotkeyConfig {
+            bindings: HashMap::new(),
+        };
+        // User only binds focus_left to a custom key
+        user.bindings
+            .insert("Ctrl+Alt+X".to_string(), "focus_left".to_string());
+
+        // Merge: commands not bound by user get default binding
+        let user_commands: HashSet<String> = user.bindings.values().cloned().collect();
+        for (key, cmd) in defaults.bindings.iter() {
+            if !user_commands.contains(cmd) {
+                user.bindings.insert(key.clone(), cmd.clone());
+            }
+        }
+
+        // User's custom binding preserved (default focus_left key not added)
+        assert_eq!(
+            user.bindings.get("Ctrl+Alt+X"),
+            Some(&"focus_left".to_string())
+        );
+        assert!(!user.bindings.contains_key("Ctrl+Alt+H"));
+
+        // New commands from defaults are present
+        assert_eq!(
+            user.bindings.get("Ctrl+Alt+Bracket_Left"),
+            Some(&"move_window_left".to_string())
+        );
+        assert_eq!(
+            user.bindings.get("Ctrl+Alt+Shift+J"),
+            Some(&"move_window_down".to_string())
+        );
     }
 
     #[test]
-    fn test_column_width_bounds_custom() {
-        let toml_str = r#"
-            [layout]
-            min_column_width = 300
-            max_column_width = 2000
-            default_column_width = 1000
-        "#;
-        let config: Config = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.layout.min_column_width, 300);
-        assert_eq!(config.layout.max_column_width, 2000);
-        assert_eq!(config.layout.default_column_width, 1000);
+    fn test_width_presets_defaults() {
+        let config = Config::default();
+        assert_eq!(config.layout.width_presets, vec![0.333, 0.5, 0.667]);
+        assert_eq!(config.layout.height_presets, vec![0.333, 0.5, 0.667]);
     }
 
     #[test]
-    fn test_width_clamping_logic() {
-        let config = Config::default();
-        // Simulate the clamping logic used in daemon
-        let too_small = 200i32;
-        let too_large = 2000i32;
-        let just_right = 800i32;
-
-        let clamped_small = too_small.clamp(
-            config.layout.min_column_width,
-            config.layout.max_column_width,
-        );
-        let clamped_large = too_large.clamp(
-            config.layout.min_column_width,
-            config.layout.max_column_width,
-        );
-        let clamped_right = just_right.clamp(
-            config.layout.min_column_width,
-            config.layout.max_column_width,
-        );
-
-        assert_eq!(clamped_small, 400); // Clamped to min
-        assert_eq!(clamped_large, 1600); // Clamped to max
-        assert_eq!(clamped_right, 800); // Unchanged
+    fn test_default_column_width_px() {
+        let config = LayoutConfig::default();
+        // base = 1920 - 10 - 10 + 10 = 1910
+        // width = 0.333 * 1910 - 10 = 626
+        let width = config.default_column_width_px(1920);
+        let base = 1920 - config.outer_gap_left - config.outer_gap_right + config.gap;
+        assert_eq!(width, (base as f64 * 0.333 - config.gap as f64).round() as i32);
     }
 
     #[test]
@@ -1596,74 +1717,25 @@ mod tests {
     #[test]
     fn test_validate_negative_outer_gap_clamped() {
         let mut config = Config::default();
-        config.layout.outer_gap = -10;
+        config.layout.outer_gap_left = -10;
+        config.layout.outer_gap_top = -5;
         let warnings = config.validate();
-        assert_eq!(config.layout.outer_gap, 0);
-        assert!(warnings.iter().any(|w| w.field == "layout.outer_gap"));
+        assert_eq!(config.layout.outer_gap_left, 0);
+        assert_eq!(config.layout.outer_gap_top, 0);
+        assert!(warnings
+            .iter()
+            .any(|w| w.field == "layout.outer_gap_left"));
     }
 
     #[test]
-    fn test_validate_negative_min_column_width_clamped() {
+    fn test_validate_empty_width_presets_resets() {
         let mut config = Config::default();
-        config.layout.min_column_width = -200;
-        config.layout.max_column_width = 900;
+        config.layout.width_presets = vec![];
         let warnings = config.validate();
-        assert_eq!(config.layout.min_column_width, 0);
+        assert_eq!(config.layout.width_presets, vec![0.333, 0.5, 0.667]);
         assert!(warnings
             .iter()
-            .any(|w| w.field == "layout.min_column_width"));
-    }
-
-    #[test]
-    fn test_validate_negative_max_column_width_clamped() {
-        let mut config = Config::default();
-        config.layout.min_column_width = 0;
-        config.layout.max_column_width = -900;
-        config.layout.default_column_width = 0;
-        let warnings = config.validate();
-        assert_eq!(config.layout.max_column_width, 0);
-        assert!(warnings
-            .iter()
-            .any(|w| w.field == "layout.max_column_width"));
-    }
-
-    #[test]
-    fn test_validate_negative_default_width_clamped_and_cohered() {
-        let mut config = Config::default();
-        config.layout.min_column_width = 300;
-        config.layout.max_column_width = 1000;
-        config.layout.default_column_width = -50;
-        let warnings = config.validate();
-        assert_eq!(config.layout.default_column_width, 300);
-        assert!(warnings
-            .iter()
-            .any(|w| w.field == "layout.default_column_width"));
-    }
-
-    #[test]
-    fn test_validate_min_gt_max_swapped() {
-        let mut config = Config::default();
-        config.layout.min_column_width = 2000;
-        config.layout.max_column_width = 500;
-        let warnings = config.validate();
-        assert_eq!(config.layout.min_column_width, 500);
-        assert_eq!(config.layout.max_column_width, 2000);
-        assert!(warnings
-            .iter()
-            .any(|w| w.field.contains("min_column_width")));
-    }
-
-    #[test]
-    fn test_validate_default_width_outside_range_clamped() {
-        let mut config = Config::default();
-        config.layout.min_column_width = 600;
-        config.layout.max_column_width = 1000;
-        config.layout.default_column_width = 1500; // above max
-        let warnings = config.validate();
-        assert_eq!(config.layout.default_column_width, 1000);
-        assert!(warnings
-            .iter()
-            .any(|w| w.field == "layout.default_column_width"));
+            .any(|w| w.field == "layout.width_presets"));
     }
 
     #[test]
@@ -1880,10 +1952,10 @@ mod tests {
         let config: Config = toml::from_str("").unwrap();
         let default = Config::default();
         assert_eq!(config.layout.gap, default.layout.gap);
-        assert_eq!(config.layout.outer_gap, default.layout.outer_gap);
+        assert_eq!(config.layout.outer_gap_left, default.layout.outer_gap_left);
         assert_eq!(
-            config.layout.default_column_width,
-            default.layout.default_column_width
+            config.layout.width_presets,
+            default.layout.width_presets
         );
         assert_eq!(
             config.appearance.active_border_color,
@@ -1898,17 +1970,16 @@ mod tests {
         let toml_str = r#"
             [layout]
             gap = 0
-            outer_gap = 0
-            min_column_width = 0
-            max_column_width = 0
-            default_column_width = 0
+            outer_gap_left = 0
+            outer_gap_right = 0
+            outer_gap_top = 0
+            outer_gap_bottom = 0
         "#;
         let mut config: Config = toml::from_str(toml_str).unwrap();
         let warnings = config.validate();
-        // gap=0 and outer_gap=0 are valid (not negative)
+        // gap=0 and outer gaps=0 are valid (not negative)
         assert_eq!(config.layout.gap, 0);
-        assert_eq!(config.layout.outer_gap, 0);
-        // min=max=default=0 is degenerate but should not panic
+        assert_eq!(config.layout.outer_gap_left, 0);
         assert!(!warnings.iter().any(|w| w.field == "layout.gap"));
     }
 
@@ -1996,8 +2067,8 @@ mod tests {
     fn test_empty_string_parses_to_defaults() {
         let config: Config = toml::from_str("").unwrap();
         assert_eq!(config.layout.gap, default_gap());
-        assert_eq!(config.layout.outer_gap, default_outer_gap());
-        assert_eq!(config.layout.default_column_width, default_column_width());
+        assert_eq!(config.layout.outer_gap_left, default_outer_gap());
+        assert_eq!(config.layout.width_presets, default_width_presets());
     }
 
     #[test]
