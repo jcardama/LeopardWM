@@ -421,7 +421,7 @@ impl AppState {
                     let is_floating = self
                         .workspaces
                         .get(&monitor_id)
-                        .map_or(true, |ws| ws.is_floating(hwnd));
+                        .is_none_or(|ws| ws.is_floating(hwnd));
 
                     if is_floating {
                         // Update stored rect so layout won't snap it back
@@ -468,7 +468,7 @@ impl AppState {
                     let is_floating = self
                         .workspaces
                         .get(&monitor_id)
-                        .map_or(true, |ws| ws.is_floating(hwnd));
+                        .is_none_or(|ws| ws.is_floating(hwnd));
 
                     if !is_floating {
                         debug!("Managed window {} moved/resized — snapping back", hwnd);
