@@ -165,6 +165,21 @@ struct HotkeyState {
 /// Register hotkeys from config and return state.
 ///
 /// This function is called both at startup and on config reload.
+/// Sync tray quick-toggle check marks with the current config.
+fn sync_tray_toggles(tray_manager: &Option<tray::TrayManager>, config: &Config) {
+    if let Some(ref mgr) = tray_manager {
+        mgr.update_quick_toggles(
+            config.appearance.active_border,
+            config.behavior.focus_new_windows,
+            config.behavior.focus_follows_mouse,
+            match config.layout.centering_mode {
+                config::CenteringModeConfig::Center => tray::CENTERING_CENTER,
+                config::CenteringModeConfig::JustInView => tray::CENTERING_JUST_IN_VIEW,
+            },
+        );
+    }
+}
+
 fn setup_hotkeys(config: &Config, event_tx: mpsc::Sender<DaemonEvent>) -> HotkeyState {
     let config_hotkeys = &config.hotkeys.bindings;
 
@@ -1102,7 +1117,16 @@ async fn main() -> Result<()> {
             Err(e) => warn!("{}", e),
         }
 
-        match tray::TrayManager::new(tray_sync_tx) {
+        let initial_toggles = tray::QuickToggleState {
+            active_border: config.appearance.active_border,
+            focus_new_windows: config.behavior.focus_new_windows,
+            focus_follows_mouse: config.behavior.focus_follows_mouse,
+            centering_mode: match config.layout.centering_mode {
+                config::CenteringModeConfig::Center => tray::CENTERING_CENTER,
+                config::CenteringModeConfig::JustInView => tray::CENTERING_JUST_IN_VIEW,
+            },
+        };
+        match tray::TrayManager::new(tray_sync_tx, initial_toggles) {
             Ok(manager) => {
                 info!("System tray icon initialized");
                 Some(manager)
@@ -1511,6 +1535,7 @@ async fn main() -> Result<()> {
                                 state.config.clone()
                             };
                             hotkey_state = setup_hotkeys(&new_config, event_tx.clone());
+                            sync_tray_toggles(&tray_manager, &new_config);
                             info!("Hotkeys reloaded after tray config reload");
                         } else if let IpcResponse::Error { message } = response {
                             warn!("Reload failed: {}", message);
@@ -1609,6 +1634,89 @@ async fn main() -> Result<()> {
                             }
                         });
                     }
+                    tray::TrayEvent::ToggleActiveBorder => {
+                        let mut state = state.lock().await;
+                        state.config.appearance.active_border =
+                            !state.config.appearance.active_border;
+                        let on = state.config.appearance.active_border;
+                        info!("Tray: Active border toggled to {}", on);
+                        if on {
+                            if let Some(hwnd) = state.previous_focused_hwnd {
+                                state.show_border(hwnd);
+                            }
+                        } else {
+                            state.hide_border();
+                        }
+                        let _ = state.config.save();
+                    }
+                    tray::TrayEvent::ToggleFocusNewWindows => {
+                        let mut state = state.lock().await;
+                        state.config.behavior.focus_new_windows =
+                            !state.config.behavior.focus_new_windows;
+                        info!(
+                            "Tray: Focus new windows toggled to {}",
+                            state.config.behavior.focus_new_windows
+                        );
+                        let _ = state.config.save();
+                    }
+                    tray::TrayEvent::ToggleFocusFollowsMouse => {
+                        let mut state = state.lock().await;
+                        state.config.behavior.focus_follows_mouse =
+                            !state.config.behavior.focus_follows_mouse;
+                        info!(
+                            "Tray: Focus follows mouse toggled to {}",
+                            state.config.behavior.focus_follows_mouse
+                        );
+                        let _ = state.config.save();
+                    }
+                    tray::TrayEvent::SetCenteringCenter => {
+                        let mut state = state.lock().await;
+                        if state.config.layout.centering_mode
+                            != config::CenteringModeConfig::Center
+                        {
+                            state.config.layout.centering_mode =
+                                config::CenteringModeConfig::Center;
+                            info!("Tray: Centering mode set to Center");
+                            let cfg = state.config.clone();
+                            state.apply_config(cfg);
+                            if let Err(e) = state.apply_layout() {
+                                warn!("Layout apply after centering change failed: {}", e);
+                            }
+                            let _ = state.config.save();
+                        }
+                        if let Some(ref mgr) = tray_manager {
+                            mgr.update_quick_toggles(
+                                state.config.appearance.active_border,
+                                state.config.behavior.focus_new_windows,
+                                state.config.behavior.focus_follows_mouse,
+                                tray::CENTERING_CENTER,
+                            );
+                        }
+                    }
+                    tray::TrayEvent::SetCenteringJustInView => {
+                        let mut state = state.lock().await;
+                        if state.config.layout.centering_mode
+                            != config::CenteringModeConfig::JustInView
+                        {
+                            state.config.layout.centering_mode =
+                                config::CenteringModeConfig::JustInView;
+                            info!("Tray: Centering mode set to JustInView");
+                            let cfg = state.config.clone();
+                            state.apply_config(cfg);
+                            if let Err(e) = state.apply_layout() {
+                                warn!("Layout apply after centering change failed: {}", e);
+                            }
+                            let _ = state.config.save();
+                        }
+                        if let Some(ref mgr) = tray_manager {
+                            mgr.update_quick_toggles(
+                                state.config.appearance.active_border,
+                                state.config.behavior.focus_new_windows,
+                                state.config.behavior.focus_follows_mouse,
+                                tray::CENTERING_JUST_IN_VIEW,
+                            );
+                        }
+                    }
                 }
             }
             DaemonEvent::Settings(settings_event) => {
@@ -1626,6 +1734,7 @@ async fn main() -> Result<()> {
                                 state.config.clone()
                             };
                             hotkey_state = setup_hotkeys(&new_config, event_tx.clone());
+                            sync_tray_toggles(&tray_manager, &new_config);
                             info!("Hotkeys reloaded after settings save");
                         } else if let IpcResponse::Error { message } = response {
                             warn!("Reload after settings save failed: {}", message);

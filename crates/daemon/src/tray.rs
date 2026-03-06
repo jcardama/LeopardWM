@@ -1,9 +1,11 @@
 //! System tray icon management for LeopardWM daemon.
 //!
 //! Provides a system tray icon with a context menu for common operations:
-//! - Refresh windows
-//! - Reload configuration
-//! - Exit daemon
+//! - Pause/resume tiling
+//! - Quick toggles for common settings
+//! - Configuration access (Settings GUI, Edit Config, Reload)
+//! - Troubleshooting (Refresh, View Logs, Release All Windows)
+//! - Exit
 //!
 //! The tray icon and its hidden notification window live on a dedicated thread
 //! that runs a Win32 message pump. This is required for the right-click context
@@ -11,13 +13,13 @@
 //! shell notification messages to be dispatched on the owning thread.
 
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU8, Ordering},
     mpsc, Arc, Mutex,
 };
 use thiserror::Error;
 use tracing::{debug, info};
 use tray_icon::{
-    menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu},
+    menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu},
     TrayIconBuilder,
 };
 
@@ -51,6 +53,8 @@ mod win32_msg {
     pub const WM_APP_UPDATE_TOOLTIP: u32 = 0x8000; // WM_APP
     /// Application-private message: signal the thread to update pause text.
     pub const WM_APP_UPDATE_PAUSE: u32 = 0x8001; // WM_APP + 1
+    /// Application-private message: signal the thread to sync quick-toggle check marks.
+    pub const WM_APP_UPDATE_TOGGLES: u32 = 0x8002; // WM_APP + 2
 
     extern "system" {
         pub fn GetCurrentThreadId() -> u32;
@@ -78,6 +82,11 @@ mod menu_ids {
     pub const EDIT_CONFIG: &str = "edit_config";
     pub const VIEW_LOGS: &str = "view_logs";
     pub const RELEASE_ALL_WINDOWS: &str = "release_all_windows";
+    pub const TOGGLE_ACTIVE_BORDER: &str = "toggle_active_border";
+    pub const TOGGLE_FOCUS_NEW_WINDOWS: &str = "toggle_focus_new_windows";
+    pub const TOGGLE_FOCUS_FOLLOWS_MOUSE: &str = "toggle_focus_follows_mouse";
+    pub const CENTERING_CENTER: &str = "centering_center";
+    pub const CENTERING_JUST_IN_VIEW: &str = "centering_just_in_view";
 }
 
 /// Events emitted by the tray icon.
@@ -99,7 +108,21 @@ pub enum TrayEvent {
     ViewLogs,
     /// User clicked "Release All Windows" menu item.
     ReleaseAllWindows,
+    /// User toggled "Active Border" check item.
+    ToggleActiveBorder,
+    /// User toggled "Focus New Windows" check item.
+    ToggleFocusNewWindows,
+    /// User toggled "Focus Follows Mouse" check item.
+    ToggleFocusFollowsMouse,
+    /// User selected "Center" centering mode.
+    SetCenteringCenter,
+    /// User selected "Just in View" centering mode.
+    SetCenteringJustInView,
 }
+
+/// Centering mode values for atomic storage.
+pub const CENTERING_CENTER: u8 = 0;
+pub const CENTERING_JUST_IN_VIEW: u8 = 1;
 
 /// Shared state between the caller and the message-loop thread.
 ///
@@ -109,6 +132,29 @@ pub enum TrayEvent {
 struct SharedState {
     paused: AtomicBool,
     tooltip_text: Mutex<String>,
+    active_border: AtomicBool,
+    focus_new_windows: AtomicBool,
+    focus_follows_mouse: AtomicBool,
+    centering_mode: AtomicU8,
+}
+
+/// Items returned by `build_tray` that the message-loop thread needs to update.
+struct TrayItems {
+    pause_item: MenuItem,
+    active_border_item: CheckMenuItem,
+    focus_new_windows_item: CheckMenuItem,
+    focus_follows_mouse_item: CheckMenuItem,
+    centering_center_item: CheckMenuItem,
+    centering_just_in_view_item: CheckMenuItem,
+}
+
+/// Initial state for quick-toggle menu items.
+pub struct QuickToggleState {
+    pub active_border: bool,
+    pub focus_new_windows: bool,
+    pub focus_follows_mouse: bool,
+    /// 0 = Center, 1 = JustInView
+    pub centering_mode: u8,
 }
 
 /// Manages the system tray icon and context menu.
@@ -131,14 +177,18 @@ impl TrayManager {
     /// Create a new tray manager with icon and context menu.
     ///
     /// The provided sender will receive tray events when menu items are clicked.
-    /// Internally spawns a dedicated thread with a Win32 message pump so that
-    /// right-click context menus work correctly.
-    pub fn new(event_sender: mpsc::Sender<TrayEvent>) -> Result<Self, TrayError> {
+    /// `initial` sets the starting check state for quick-toggle items.
+    pub fn new(
+        event_sender: mpsc::Sender<TrayEvent>,
+        initial: QuickToggleState,
+    ) -> Result<Self, TrayError> {
         let shared = Arc::new(SharedState {
             paused: AtomicBool::new(false),
-            tooltip_text: Mutex::new(String::from(
-                "LeopardWM - Tiling Window Manager",
-            )),
+            tooltip_text: Mutex::new(String::from("LeopardWM - Tiling Window Manager")),
+            active_border: AtomicBool::new(initial.active_border),
+            focus_new_windows: AtomicBool::new(initial.focus_new_windows),
+            focus_follows_mouse: AtomicBool::new(initial.focus_follows_mouse),
+            centering_mode: AtomicU8::new(initial.centering_mode),
         });
         let shared_for_thread = shared.clone();
         let (init_tx, init_rx) = mpsc::channel::<InitResult>();
@@ -146,7 +196,7 @@ impl TrayManager {
         let thread = std::thread::Builder::new()
             .name("tray-msg-loop".into())
             .spawn(move || {
-                run_tray_thread(init_tx, shared_for_thread);
+                run_tray_thread(init_tx, shared_for_thread, initial);
             })
             .map_err(|e| TrayError::Build(format!("Failed to spawn tray thread: {e}")))?;
 
@@ -194,6 +244,36 @@ impl TrayManager {
         }
     }
 
+    /// Sync quick-toggle check marks with the current config state.
+    pub fn update_quick_toggles(
+        &self,
+        active_border: bool,
+        focus_new_windows: bool,
+        focus_follows_mouse: bool,
+        centering_mode: u8,
+    ) {
+        self.shared
+            .active_border
+            .store(active_border, Ordering::Relaxed);
+        self.shared
+            .focus_new_windows
+            .store(focus_new_windows, Ordering::Relaxed);
+        self.shared
+            .focus_follows_mouse
+            .store(focus_follows_mouse, Ordering::Relaxed);
+        self.shared
+            .centering_mode
+            .store(centering_mode, Ordering::Relaxed);
+        unsafe {
+            win32_msg::PostThreadMessageW(
+                self.msg_thread_id,
+                win32_msg::WM_APP_UPDATE_TOGGLES,
+                0,
+                0,
+            );
+        }
+    }
+
     /// Update the tray tooltip to reflect current state.
     ///
     /// If `hotkey_mismatch` is provided as `Some((registered, requested))` and
@@ -235,10 +315,14 @@ impl Drop for TrayManager {
 }
 
 /// Runs on the dedicated tray thread: builds the tray icon and pumps messages.
-fn run_tray_thread(init_tx: mpsc::Sender<InitResult>, shared: Arc<SharedState>) {
+fn run_tray_thread(
+    init_tx: mpsc::Sender<InitResult>,
+    shared: Arc<SharedState>,
+    initial: QuickToggleState,
+) {
     let thread_id = unsafe { win32_msg::GetCurrentThreadId() };
 
-    let (tray, pause_item) = match build_tray() {
+    let (tray, items) = match build_tray(&initial) {
         Ok(v) => v,
         Err(e) => {
             let _ = init_tx.send(Err(e));
@@ -289,7 +373,26 @@ fn run_tray_thread(init_tx: mpsc::Sender<InitResult>, shared: Arc<SharedState>) 
                         } else {
                             "Pause Tiling\tCtrl+Alt+P"
                         };
-                        pause_item.set_text(label);
+                        items.pause_item.set_text(label);
+                        continue;
+                    }
+                    win32_msg::WM_APP_UPDATE_TOGGLES => {
+                        items
+                            .active_border_item
+                            .set_checked(shared.active_border.load(Ordering::Relaxed));
+                        items
+                            .focus_new_windows_item
+                            .set_checked(shared.focus_new_windows.load(Ordering::Relaxed));
+                        items
+                            .focus_follows_mouse_item
+                            .set_checked(shared.focus_follows_mouse.load(Ordering::Relaxed));
+                        let cm = shared.centering_mode.load(Ordering::Relaxed);
+                        items
+                            .centering_center_item
+                            .set_checked(cm == CENTERING_CENTER);
+                        items
+                            .centering_just_in_view_item
+                            .set_checked(cm == CENTERING_JUST_IN_VIEW);
                         continue;
                     }
                     _ => {}
@@ -300,12 +403,14 @@ fn run_tray_thread(init_tx: mpsc::Sender<InitResult>, shared: Arc<SharedState>) 
             win32_msg::DispatchMessageW(&msg);
         }
     }
-    // `tray` and `pause_item` are dropped here — on the same thread that created them.
+    // `tray` and items are dropped here — on the same thread that created them.
 }
 
 /// Build the tray icon with its context menu. Called on the message-loop
 /// thread so the hidden notification window belongs to that thread.
-fn build_tray() -> Result<(tray_icon::TrayIcon, MenuItem), TrayError> {
+fn build_tray(
+    initial: &QuickToggleState,
+) -> Result<(tray_icon::TrayIcon, TrayItems), TrayError> {
     let menu = Menu::new();
     let append = |item: &dyn tray_icon::menu::IsMenuItem| -> Result<(), TrayError> {
         menu.append(item)
@@ -327,9 +432,72 @@ fn build_tray() -> Result<(tray_icon::TrayIcon, MenuItem), TrayError> {
     append(&toggle_pause)?;
     append(&PredefinedMenuItem::separator())?;
 
+    // Quick toggles
+    let active_border_item = CheckMenuItem::with_id(
+        menu_ids::TOGGLE_ACTIVE_BORDER,
+        "Active Border",
+        true,
+        initial.active_border,
+        None,
+    );
+    append(&active_border_item)?;
+
+    let focus_new_windows_item = CheckMenuItem::with_id(
+        menu_ids::TOGGLE_FOCUS_NEW_WINDOWS,
+        "Focus New Windows",
+        true,
+        initial.focus_new_windows,
+        None,
+    );
+    append(&focus_new_windows_item)?;
+
+    let focus_follows_mouse_item = CheckMenuItem::with_id(
+        menu_ids::TOGGLE_FOCUS_FOLLOWS_MOUSE,
+        "Focus Follows Mouse",
+        true,
+        initial.focus_follows_mouse,
+        None,
+    );
+    append(&focus_follows_mouse_item)?;
+
+    // Centering Mode submenu
+    let centering_sub = Submenu::new("Centering Mode", true);
+    let centering_center_item = CheckMenuItem::with_id(
+        menu_ids::CENTERING_CENTER,
+        "Center",
+        true,
+        initial.centering_mode == CENTERING_CENTER,
+        None,
+    );
+    let centering_just_in_view_item = CheckMenuItem::with_id(
+        menu_ids::CENTERING_JUST_IN_VIEW,
+        "Just in View",
+        true,
+        initial.centering_mode == CENTERING_JUST_IN_VIEW,
+        None,
+    );
+    centering_sub
+        .append(&centering_center_item)
+        .map_err(|e| TrayError::Menu(e.to_string()))?;
+    centering_sub
+        .append(&centering_just_in_view_item)
+        .map_err(|e| TrayError::Menu(e.to_string()))?;
+    append(&centering_sub)?;
+    append(&PredefinedMenuItem::separator())?;
+
     // Configuration group
-    append(&MenuItem::with_id(menu_ids::OPEN_CONFIG, "Settings...", true, None))?;
-    append(&MenuItem::with_id(menu_ids::EDIT_CONFIG, "Edit Config", true, None))?;
+    append(&MenuItem::with_id(
+        menu_ids::OPEN_CONFIG,
+        "Settings...",
+        true,
+        None,
+    ))?;
+    append(&MenuItem::with_id(
+        menu_ids::EDIT_CONFIG,
+        "Edit Config",
+        true,
+        None,
+    ))?;
     append(&MenuItem::with_id(
         menu_ids::RELOAD,
         "Reload Config\tCtrl+Alt+Shift+R",
@@ -349,7 +517,12 @@ fn build_tray() -> Result<(tray_icon::TrayIcon, MenuItem), TrayError> {
         ))
         .map_err(|e| TrayError::Menu(e.to_string()))?;
     troubleshoot
-        .append(&MenuItem::with_id(menu_ids::VIEW_LOGS, "View Logs", true, None))
+        .append(&MenuItem::with_id(
+            menu_ids::VIEW_LOGS,
+            "View Logs",
+            true,
+            None,
+        ))
         .map_err(|e| TrayError::Menu(e.to_string()))?;
     troubleshoot
         .append(&MenuItem::with_id(
@@ -375,7 +548,16 @@ fn build_tray() -> Result<(tray_icon::TrayIcon, MenuItem), TrayError> {
         .build()
         .map_err(|e| TrayError::Build(e.to_string()))?;
 
-    Ok((tray, toggle_pause))
+    let items = TrayItems {
+        pause_item: toggle_pause,
+        active_border_item,
+        focus_new_windows_item,
+        focus_follows_mouse_item,
+        centering_center_item,
+        centering_just_in_view_item,
+    };
+
+    Ok((tray, items))
 }
 
 fn map_menu_id_to_event(menu_id: &str) -> Option<TrayEvent> {
@@ -388,6 +570,11 @@ fn map_menu_id_to_event(menu_id: &str) -> Option<TrayEvent> {
         menu_ids::EDIT_CONFIG => Some(TrayEvent::EditConfig),
         menu_ids::VIEW_LOGS => Some(TrayEvent::ViewLogs),
         menu_ids::RELEASE_ALL_WINDOWS => Some(TrayEvent::ReleaseAllWindows),
+        menu_ids::TOGGLE_ACTIVE_BORDER => Some(TrayEvent::ToggleActiveBorder),
+        menu_ids::TOGGLE_FOCUS_NEW_WINDOWS => Some(TrayEvent::ToggleFocusNewWindows),
+        menu_ids::TOGGLE_FOCUS_FOLLOWS_MOUSE => Some(TrayEvent::ToggleFocusFollowsMouse),
+        menu_ids::CENTERING_CENTER => Some(TrayEvent::SetCenteringCenter),
+        menu_ids::CENTERING_JUST_IN_VIEW => Some(TrayEvent::SetCenteringJustInView),
         _ => None,
     }
 }
@@ -482,6 +669,30 @@ mod tests {
     }
 
     #[test]
+    fn test_tray_event_quick_toggle_variants() {
+        assert!(matches!(
+            TrayEvent::ToggleActiveBorder,
+            TrayEvent::ToggleActiveBorder
+        ));
+        assert!(matches!(
+            TrayEvent::ToggleFocusNewWindows,
+            TrayEvent::ToggleFocusNewWindows
+        ));
+        assert!(matches!(
+            TrayEvent::ToggleFocusFollowsMouse,
+            TrayEvent::ToggleFocusFollowsMouse
+        ));
+        assert!(matches!(
+            TrayEvent::SetCenteringCenter,
+            TrayEvent::SetCenteringCenter
+        ));
+        assert!(matches!(
+            TrayEvent::SetCenteringJustInView,
+            TrayEvent::SetCenteringJustInView
+        ));
+    }
+
+    #[test]
     fn test_map_menu_id_to_event() {
         assert!(matches!(
             map_menu_id_to_event(menu_ids::REFRESH),
@@ -514,6 +725,26 @@ mod tests {
         assert!(matches!(
             map_menu_id_to_event(menu_ids::RELEASE_ALL_WINDOWS),
             Some(TrayEvent::ReleaseAllWindows)
+        ));
+        assert!(matches!(
+            map_menu_id_to_event(menu_ids::TOGGLE_ACTIVE_BORDER),
+            Some(TrayEvent::ToggleActiveBorder)
+        ));
+        assert!(matches!(
+            map_menu_id_to_event(menu_ids::TOGGLE_FOCUS_NEW_WINDOWS),
+            Some(TrayEvent::ToggleFocusNewWindows)
+        ));
+        assert!(matches!(
+            map_menu_id_to_event(menu_ids::TOGGLE_FOCUS_FOLLOWS_MOUSE),
+            Some(TrayEvent::ToggleFocusFollowsMouse)
+        ));
+        assert!(matches!(
+            map_menu_id_to_event(menu_ids::CENTERING_CENTER),
+            Some(TrayEvent::SetCenteringCenter)
+        ));
+        assert!(matches!(
+            map_menu_id_to_event(menu_ids::CENTERING_JUST_IN_VIEW),
+            Some(TrayEvent::SetCenteringJustInView)
         ));
         assert!(map_menu_id_to_event("unknown").is_none());
     }
@@ -562,6 +793,11 @@ mod tests {
             menu_ids::EDIT_CONFIG,
             menu_ids::VIEW_LOGS,
             menu_ids::RELEASE_ALL_WINDOWS,
+            menu_ids::TOGGLE_ACTIVE_BORDER,
+            menu_ids::TOGGLE_FOCUS_NEW_WINDOWS,
+            menu_ids::TOGGLE_FOCUS_FOLLOWS_MOUSE,
+            menu_ids::CENTERING_CENTER,
+            menu_ids::CENTERING_JUST_IN_VIEW,
         ];
         for (i, a) in ids.iter().enumerate() {
             for (j, b) in ids.iter().enumerate() {
