@@ -36,7 +36,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow,
     IsWindowVisible, PeekMessageW, PostMessageW, PostThreadMessageW, RegisterClassW,
     SetForegroundWindow, SetWindowPos, SetWindowsHookExW, ShowWindow, UnhookWindowsHookEx,
-    UnregisterClassW, WindowFromPoint, GA_ROOT, GWL_EXSTYLE, GWL_STYLE, GW_OWNER, HHOOK, MSG,
+    UnregisterClassW, WindowFromPoint, GA_ROOT, GWL_EXSTYLE, GWL_STYLE, GW_OWNER, MSG,
     MSLLHOOKSTRUCT, PM_NOREMOVE, SWP_NOACTIVATE, SWP_NOZORDER, SW_RESTORE, WH_MOUSE_LL,
     WM_HOTKEY, WM_MOUSEMOVE, WM_USER, WNDCLASSW, WS_EX_APPWINDOW, WS_EX_NOACTIVATE,
     WS_EX_TOOLWINDOW, WS_POPUP, WS_VISIBLE,
@@ -202,7 +202,7 @@ pub fn get_window_info(hwnd_id: WindowId) -> Option<WindowInfo> {
             return None;
         }
 
-        let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
+        let _style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
         let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
 
         // Skip tool windows (unless they have WS_EX_APPWINDOW)
@@ -2450,7 +2450,7 @@ pub fn register_gestures() -> Result<(GestureHandle, mpsc::Receiver<GestureEvent
 
                 // Ensure message queue exists before signalling init
                 let mut msg = MSG::default();
-                PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE);
+                let _ = PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE);
 
                 // Install the low-level mouse hook on this thread
                 let hook = match SetWindowsHookExW(
@@ -2659,7 +2659,7 @@ pub fn install_mouse_hook(
 
                 // Ensure message queue exists
                 let mut msg = MSG::default();
-                PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE);
+                let _ = PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE);
 
                 // Install the low-level mouse hook on this thread
                 let hook =

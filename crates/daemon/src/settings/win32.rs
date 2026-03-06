@@ -127,7 +127,7 @@ pub fn run_settings_window(config: Config, event_tx: mpsc::Sender<SettingsEvent>
 
         let webview = wry::WebViewBuilder::new_with_web_context(&mut web_context)
             .with_html(SETTINGS_HTML)
-            .with_initialization_script(&format!("window._initConfig = {};", config_json))
+            .with_initialization_script(format!("window._initConfig = {};", config_json))
             .with_ipc_handler(move |req| {
                 handle_ipc(req.body(), &event_tx, hwnd);
             })
@@ -137,7 +137,7 @@ pub fn run_settings_window(config: Config, event_tx: mpsc::Sender<SettingsEvent>
             .build(&win_handle)?;
 
         // Populate the form with the current config
-        let init_js = format!("init(window._initConfig)");
+        let init_js = "init(window._initConfig)".to_string();
         let _ = webview.evaluate_script(&init_js);
 
         // Show the window

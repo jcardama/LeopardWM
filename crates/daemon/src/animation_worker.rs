@@ -26,6 +26,7 @@ pub struct FrameResult {
     /// Whether the placements were applied successfully.
     pub apply_result: Result<(), String>,
     /// How long the frame took (apply + vsync wait).
+    #[allow(dead_code)]
     pub frame_time: Duration,
 }
 

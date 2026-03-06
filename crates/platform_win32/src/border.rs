@@ -300,7 +300,7 @@ impl BorderFrame {
                     biHeight: -h, // negative = top-down
                     biPlanes: 1,
                     biBitCount: 32,
-                    biCompression: BI_RGB.0 as u32,
+                    biCompression: BI_RGB.0,
                     ..Default::default()
                 },
                 ..Default::default()

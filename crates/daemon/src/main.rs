@@ -850,6 +850,7 @@ async fn main() -> Result<()> {
     };
 
     // Initialize state with config and monitors
+    #[allow(clippy::arc_with_non_send_sync)]
     let state = Arc::new(Mutex::new(AppState::new_with_config(
         config.clone(),
         monitors,
@@ -880,7 +881,7 @@ async fn main() -> Result<()> {
 
         // Restore saved workspace state (after windows are enumerated so scroll
         // offsets aren't clamped against empty workspaces).
-        let restored_monitors = if let Some(snapshot) = AppState::load_state() {
+        let _restored_monitors = if let Some(snapshot) = AppState::load_state() {
             let restored = state.restore_state(&snapshot);
             info!("Restored workspace state from previous session");
             restored

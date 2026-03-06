@@ -28,12 +28,14 @@ mod win32_msg {
     use std::ffi::c_void;
 
     #[repr(C)]
+    #[allow(clippy::upper_case_acronyms)]
     pub struct POINT {
         pub x: i32,
         pub y: i32,
     }
 
     #[repr(C)]
+    #[allow(clippy::upper_case_acronyms)]
     pub struct MSG {
         pub hwnd: *mut c_void,
         pub message: u32,

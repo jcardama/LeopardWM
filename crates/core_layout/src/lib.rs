@@ -643,18 +643,23 @@ impl Workspace {
                     // Adjust focused window in column if this is the focused column
                     if col_idx == self.focused_column {
                         let col_len = self.columns[self.focused_column].len();
-                        if removed_idx < self.focused_window_in_column {
-                            // Removed window was before focused - decrement to stay on same window
-                            self.focused_window_in_column -= 1;
-                        } else if removed_idx == self.focused_window_in_column {
-                            // Removed the focused window - move to next (or previous if at end)
-                            if self.focused_window_in_column >= col_len {
-                                self.focused_window_in_column = col_len.saturating_sub(1);
+                        match removed_idx.cmp(&self.focused_window_in_column) {
+                            std::cmp::Ordering::Less => {
+                                // Removed window was before focused - decrement to stay on same window
+                                self.focused_window_in_column -= 1;
                             }
-                            // If focus index is still valid, it now points to the "next" window
-                            // (which slid into this position), which is the expected behavior
+                            std::cmp::Ordering::Equal => {
+                                // Removed the focused window - move to next (or previous if at end)
+                                if self.focused_window_in_column >= col_len {
+                                    self.focused_window_in_column = col_len.saturating_sub(1);
+                                }
+                                // If focus index is still valid, it now points to the "next" window
+                                // (which slid into this position), which is the expected behavior
+                            }
+                            std::cmp::Ordering::Greater => {
+                                // No adjustment needed
+                            }
                         }
-                        // If removed_idx > focused_window_in_column, no adjustment needed
                     }
                 }
 

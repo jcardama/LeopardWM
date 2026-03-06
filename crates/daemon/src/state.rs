@@ -142,7 +142,7 @@ impl AppState {
             // If map is empty, focused_monitor stays 0; focused_workspace() returns None
         }
 
-        let platform_config = PlatformConfig::default();
+        let platform_config = PlatformConfig;
 
         let compiled_rules = config.compile_window_rules();
 
