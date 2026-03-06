@@ -1998,14 +1998,23 @@ pub fn register_hotkeys(
                     hotkey.vk,
                 );
 
+                let mod_str = format!("{}{}{}{}",
+                    if hotkey.modifiers.win { "Win+" } else { "" },
+                    if hotkey.modifiers.ctrl { "Ctrl+" } else { "" },
+                    if hotkey.modifiers.alt { "Alt+" } else { "" },
+                    if hotkey.modifiers.shift { "Shift+" } else { "" },
+                );
                 if result.is_ok() {
                     registered_ids.push(hotkey.id);
-                    tracing::debug!("Registered hotkey {} (vk=0x{:X})", hotkey.id, hotkey.vk);
+                    tracing::debug!("Registered hotkey {} ({}vk=0x{:X})", hotkey.id, mod_str, hotkey.vk);
                 } else {
+                    let err = std::io::Error::last_os_error();
                     tracing::warn!(
-                        "Failed to register hotkey {} (vk=0x{:X}) - may be in use",
+                        "Failed to register hotkey {} ({}vk=0x{:X}) - {}",
                         hotkey.id,
-                        hotkey.vk
+                        mod_str,
+                        hotkey.vk,
+                        err,
                     );
                 }
             }
@@ -2263,11 +2272,15 @@ pub fn parse_vk(key: &str) -> Option<u32> {
         "ESCAPE" | "ESC" => Some(vk::ESCAPE),
         "MINUS" | "-" => Some(vk::MINUS),
         "EQUALS" | "PLUS" | "=" => Some(vk::EQUALS),
+        "COMMA" | "," => Some(vk::COMMA),
+        "PERIOD" | "." => Some(vk::PERIOD),
+        "BRACKET_LEFT" | "[" => Some(vk::BRACKET_LEFT),
+        "BRACKET_RIGHT" | "]" => Some(vk::BRACKET_RIGHT),
         _ => None,
     }
 }
 
-/// Parse a hotkey string like "Win+H" or "Ctrl+Alt+Left".
+/// Parse a hotkey string like "Win+Alt+H" or "Ctrl+Alt+Left".
 ///
 /// Returns modifiers and virtual key code if valid.
 pub fn parse_hotkey_string(s: &str) -> Option<(Modifiers, u32)> {

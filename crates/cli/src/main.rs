@@ -1194,37 +1194,44 @@ log_level = "info"
 focus_follows_mouse = false
 
 [hotkeys]
-# Vim-style navigation with Win key
-"Win+H" = "focus_left"
-"Win+L" = "focus_right"
-"Win+J" = "focus_down"
-"Win+K" = "focus_up"
+# Navigation (focus) — Ctrl+Alt + HJKL
+"Ctrl+Alt+H" = "focus_left"
+"Ctrl+Alt+L" = "focus_right"
+"Ctrl+Alt+K" = "focus_up"
+"Ctrl+Alt+J" = "focus_down"
 
-# Move columns with Win+Shift
-"Win+Shift+H" = "move_column_left"
-"Win+Shift+L" = "move_column_right"
+# Move column — Ctrl+Alt+Shift
+"Ctrl+Alt+Shift+H" = "move_column_left"
+"Ctrl+Alt+Shift+L" = "move_column_right"
 
-# Resize with Win+Ctrl
-"Win+Ctrl+H" = "resize_shrink"
-"Win+Ctrl+L" = "resize_grow"
+# Resize — Ctrl+Alt + Minus/Equals
+"Ctrl+Alt+Minus" = "resize_shrink"
+"Ctrl+Alt+Equals" = "resize_grow"
+
+# Column width presets
+"Ctrl+Alt+1" = "width_third"
+"Ctrl+Alt+2" = "width_half"
+"Ctrl+Alt+3" = "width_two_thirds"
+"Ctrl+Alt+0" = "equalize_widths"
+
+# Monitor focus — Ctrl+Alt+Win
+"Ctrl+Alt+Win+Comma" = "focus_monitor_left"
+"Ctrl+Alt+Win+Period" = "focus_monitor_right"
+
+# Move to monitor — Ctrl+Alt+Win+Shift
+"Ctrl+Alt+Win+Shift+Comma" = "move_to_monitor_left"
+"Ctrl+Alt+Win+Shift+Period" = "move_to_monitor_right"
+
+# Window management
+"Ctrl+Alt+W" = "close_window"
+"Ctrl+Alt+F" = "toggle_floating"
+"Ctrl+Alt+Shift+F" = "toggle_fullscreen"
+"Ctrl+Alt+P" = "toggle_pause"
+"Ctrl+Alt+R" = "refresh"
+"Ctrl+Alt+Shift+R" = "reload"
 
 # Emergency restore + stop daemon
 "Win+Ctrl+Escape" = "panic_revert"
-# Optional: quick pause/resume kill switch
-#"Win+Ctrl+P" = "toggle_pause"
-
-# Close focused window
-"Win+Shift+Q" = "close_window"
-
-# Toggle floating / fullscreen
-"Win+F" = "toggle_floating"
-"Win+Shift+F" = "toggle_fullscreen"
-
-# Column width presets
-"Win+1" = "width_third"
-"Win+2" = "width_half"
-"Win+3" = "width_two_thirds"
-"Win+0" = "equalize_widths"
 
 [gestures]
 # Touchpad gesture support
@@ -1328,22 +1335,29 @@ log_level = "info"
 focus_follows_mouse = false
 
 [hotkeys]
-"Win+H" = "focus_left"
-"Win+L" = "focus_right"
-"Win+J" = "focus_down"
-"Win+K" = "focus_up"
-"Win+Shift+H" = "move_column_left"
-"Win+Shift+L" = "move_column_right"
-"Win+Ctrl+H" = "resize_shrink"
-"Win+Ctrl+L" = "resize_grow"
+"Ctrl+Alt+H" = "focus_left"
+"Ctrl+Alt+L" = "focus_right"
+"Ctrl+Alt+K" = "focus_up"
+"Ctrl+Alt+J" = "focus_down"
+"Ctrl+Alt+Shift+H" = "move_column_left"
+"Ctrl+Alt+Shift+L" = "move_column_right"
+"Ctrl+Alt+Minus" = "resize_shrink"
+"Ctrl+Alt+Equals" = "resize_grow"
+"Ctrl+Alt+1" = "width_third"
+"Ctrl+Alt+2" = "width_half"
+"Ctrl+Alt+3" = "width_two_thirds"
+"Ctrl+Alt+0" = "equalize_widths"
+"Ctrl+Alt+Win+Comma" = "focus_monitor_left"
+"Ctrl+Alt+Win+Period" = "focus_monitor_right"
+"Ctrl+Alt+Win+Shift+Comma" = "move_to_monitor_left"
+"Ctrl+Alt+Win+Shift+Period" = "move_to_monitor_right"
+"Ctrl+Alt+W" = "close_window"
+"Ctrl+Alt+F" = "toggle_floating"
+"Ctrl+Alt+Shift+F" = "toggle_fullscreen"
+"Ctrl+Alt+P" = "toggle_pause"
+"Ctrl+Alt+R" = "refresh"
+"Ctrl+Alt+Shift+R" = "reload"
 "Win+Ctrl+Escape" = "panic_revert"
-"Win+Shift+Q" = "close_window"
-"Win+F" = "toggle_floating"
-"Win+Shift+F" = "toggle_fullscreen"
-"Win+1" = "width_third"
-"Win+2" = "width_half"
-"Win+3" = "width_two_thirds"
-"Win+0" = "equalize_widths"
 
 [gestures]
 enabled = true
@@ -1686,16 +1700,18 @@ fn handle_setup() -> Result<()> {
     println!("  2. Start daemon: leopardwm-cli run");
     println!("  3. Check health: leopardwm-cli doctor");
     println!();
-    println!("## Default Hotkeys");
-    println!("  Win+H/L    Focus left/right");
-    println!("  Win+J/K    Focus down/up");
-    println!("  Win+Shift+H/L   Move column");
-    println!("  Win+Ctrl+H/L    Resize column");
-    println!("  Win+Ctrl+Escape Emergency restore + stop daemon");
-    println!("  Win+F      Toggle floating");
-    println!("  Win+Shift+F     Toggle fullscreen");
-    println!("  Win+1/2/3/0     Column width presets");
-    println!("  Win+Shift+Q     Close focused window");
+    println!("## Default Hotkeys (Ctrl+Alt prefix)");
+    println!("  Ctrl+Alt+H/L/J/K      Focus left/right/down/up");
+    println!("  Ctrl+Alt+Shift+H/L    Move column left/right");
+    println!("  Ctrl+Alt+Minus/Equals Resize column");
+    println!("  Ctrl+Alt+1/2/3/0      Column width presets");
+    println!("  Ctrl+Alt+Win+,/.      Focus monitor left/right");
+    println!("  Ctrl+Alt+W            Close focused window");
+    println!("  Ctrl+Alt+F            Toggle floating");
+    println!("  Ctrl+Alt+Shift+F      Toggle fullscreen");
+    println!("  Ctrl+Alt+P            Toggle pause");
+    println!("  Ctrl+Alt+R            Refresh");
+    println!("  Win+Ctrl+Escape       Emergency restore + stop daemon");
     println!();
     println!("## Optional: Enable Auto-Start");
     println!("  leopardwm-cli autostart enable");

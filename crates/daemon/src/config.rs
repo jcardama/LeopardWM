@@ -333,7 +333,7 @@ impl WindowRule {
 
 /// Hotkey bindings configuration.
 ///
-/// Each key is a hotkey string (e.g., "Win+H") and each value is a command
+/// Each key is a hotkey string (e.g., "Win+Alt+H") and each value is a command
 /// (e.g., "focus_left"). Supported commands:
 /// - focus_left, focus_right, focus_up, focus_down
 /// - move_column_left, move_column_right
@@ -356,50 +356,50 @@ impl Default for HotkeyConfig {
     fn default() -> Self {
         let mut bindings = HashMap::new();
 
-        // Default vim-style navigation with Win key
-        bindings.insert("Win+H".to_string(), "focus_left".to_string());
-        bindings.insert("Win+L".to_string(), "focus_right".to_string());
-        bindings.insert("Win+J".to_string(), "focus_down".to_string());
-        bindings.insert("Win+K".to_string(), "focus_up".to_string());
+        // Navigation (focus) — Ctrl+Alt + HJKL
+        bindings.insert("Ctrl+Alt+H".to_string(), "focus_left".to_string());
+        bindings.insert("Ctrl+Alt+L".to_string(), "focus_right".to_string());
+        bindings.insert("Ctrl+Alt+K".to_string(), "focus_up".to_string());
+        bindings.insert("Ctrl+Alt+J".to_string(), "focus_down".to_string());
 
-        // Move columns with Win+Shift
-        bindings.insert("Win+Shift+H".to_string(), "move_column_left".to_string());
-        bindings.insert("Win+Shift+L".to_string(), "move_column_right".to_string());
+        // Move column — Ctrl+Alt+Shift + HL
+        bindings.insert("Ctrl+Alt+Shift+H".to_string(), "move_column_left".to_string());
+        bindings.insert("Ctrl+Alt+Shift+L".to_string(), "move_column_right".to_string());
 
-        // Resize with Win+Ctrl
-        bindings.insert("Win+Ctrl+H".to_string(), "resize_shrink".to_string());
-        bindings.insert("Win+Ctrl+L".to_string(), "resize_grow".to_string());
+        // Resize — Ctrl+Alt + Minus/Equals
+        bindings.insert("Ctrl+Alt+Minus".to_string(), "resize_shrink".to_string());
+        bindings.insert("Ctrl+Alt+Equals".to_string(), "resize_grow".to_string());
 
-        // Monitor navigation with Win+Alt
-        bindings.insert("Win+Alt+H".to_string(), "focus_monitor_left".to_string());
-        bindings.insert("Win+Alt+L".to_string(), "focus_monitor_right".to_string());
+        // Column width presets — Ctrl+Alt + number
+        bindings.insert("Ctrl+Alt+1".to_string(), "width_third".to_string());
+        bindings.insert("Ctrl+Alt+2".to_string(), "width_half".to_string());
+        bindings.insert("Ctrl+Alt+3".to_string(), "width_two_thirds".to_string());
+        bindings.insert("Ctrl+Alt+0".to_string(), "equalize_widths".to_string());
 
-        // Move to monitor with Win+Alt+Shift
+        // Monitor focus — Ctrl+Alt+Win + Comma/Period
+        bindings.insert("Ctrl+Alt+Win+Comma".to_string(), "focus_monitor_left".to_string());
+        bindings.insert("Ctrl+Alt+Win+Period".to_string(), "focus_monitor_right".to_string());
+
+        // Move to monitor — Ctrl+Alt+Win+Shift + Comma/Period
         bindings.insert(
-            "Win+Alt+Shift+H".to_string(),
+            "Ctrl+Alt+Win+Shift+Comma".to_string(),
             "move_to_monitor_left".to_string(),
         );
         bindings.insert(
-            "Win+Alt+Shift+L".to_string(),
+            "Ctrl+Alt+Win+Shift+Period".to_string(),
             "move_to_monitor_right".to_string(),
         );
 
-        // Utility
-        bindings.insert("Win+R".to_string(), "refresh".to_string());
+        // Window management
+        bindings.insert("Ctrl+Alt+W".to_string(), "close_window".to_string());
+        bindings.insert("Ctrl+Alt+F".to_string(), "toggle_floating".to_string());
+        bindings.insert("Ctrl+Alt+Shift+F".to_string(), "toggle_fullscreen".to_string());
+        bindings.insert("Ctrl+Alt+P".to_string(), "toggle_pause".to_string());
+        bindings.insert("Ctrl+Alt+R".to_string(), "refresh".to_string());
+        bindings.insert("Ctrl+Alt+Shift+R".to_string(), "reload".to_string());
+
         // Emergency escape hatch: revert visibility state and stop daemon.
         bindings.insert("Win+Ctrl+Escape".to_string(), "panic_revert".to_string());
-
-        // Close focused window
-        bindings.insert("Win+Shift+Q".to_string(), "close_window".to_string());
-        // Toggle floating
-        bindings.insert("Win+F".to_string(), "toggle_floating".to_string());
-        // Toggle fullscreen
-        bindings.insert("Win+Shift+F".to_string(), "toggle_fullscreen".to_string());
-        // Column width presets
-        bindings.insert("Win+1".to_string(), "width_third".to_string());
-        bindings.insert("Win+2".to_string(), "width_half".to_string());
-        bindings.insert("Win+3".to_string(), "width_two_thirds".to_string());
-        bindings.insert("Win+0".to_string(), "equalize_widths".to_string());
 
         Self { bindings }
     }
@@ -952,18 +952,26 @@ mod tests {
     #[test]
     fn test_hotkey_config_default() {
         let config = HotkeyConfig::default();
-        assert!(!config.bindings.is_empty());
+        assert_eq!(config.bindings.len(), 23);
         assert_eq!(
-            config.bindings.get("Win+H"),
+            config.bindings.get("Ctrl+Alt+H"),
             Some(&"focus_left".to_string())
         );
         assert_eq!(
-            config.bindings.get("Win+L"),
+            config.bindings.get("Ctrl+Alt+L"),
             Some(&"focus_right".to_string())
         );
         assert_eq!(
-            config.bindings.get("Win+Shift+H"),
+            config.bindings.get("Ctrl+Alt+Shift+H"),
             Some(&"move_column_left".to_string())
+        );
+        assert_eq!(
+            config.bindings.get("Ctrl+Alt+Minus"),
+            Some(&"resize_shrink".to_string())
+        );
+        assert_eq!(
+            config.bindings.get("Ctrl+Alt+Win+Comma"),
+            Some(&"focus_monitor_left".to_string())
         );
         assert_eq!(
             config.bindings.get("Win+Ctrl+Escape"),

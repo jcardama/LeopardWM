@@ -45,21 +45,24 @@ cargo run -p leopardwm-cli -- run
 
 ## Default Hotkeys
 
+All hotkeys use `Ctrl+Alt` as the base modifier. Layered pattern: base = focus, +Shift = move, +Win = monitor scope.
+
 | Key | Action |
 |---|---|
-| `Win+H` / `Win+L` | Focus left / right |
-| `Win+J` / `Win+K` | Focus down / up |
-| `Win+Shift+H` / `Win+Shift+L` | Move column left / right |
-| `Win+Ctrl+H` / `Win+Ctrl+L` | Shrink / grow column |
+| `Ctrl+Alt+H/L/J/K` | Focus left / right / down / up |
+| `Ctrl+Alt+Shift+H/L` | Move column left / right |
+| `Ctrl+Alt+Minus` / `Ctrl+Alt+Equals` | Shrink / grow column |
+| `Ctrl+Alt+1` / `2` / `3` | Set width to 1/3, 1/2, 2/3 |
+| `Ctrl+Alt+0` | Equalize all column widths |
+| `Ctrl+Alt+Win+,`/`.` | Focus monitor left / right |
+| `Ctrl+Alt+Win+Shift+,`/`.` | Move window to monitor |
+| `Ctrl+Alt+W` | Close focused window |
+| `Ctrl+Alt+F` | Toggle floating |
+| `Ctrl+Alt+Shift+F` | Toggle fullscreen |
+| `Ctrl+Alt+P` | Toggle pause |
+| `Ctrl+Alt+R` | Refresh (re-enumerate windows) |
+| `Ctrl+Alt+Shift+R` | Reload config |
 | `Win+Ctrl+Escape` | Emergency restore + panic-revert |
-| `Win+Alt+H` / `Win+Alt+L` | Focus monitor left / right |
-| `Win+Alt+Shift+H` / `Win+Alt+Shift+L` | Move window to monitor left / right |
-| `Win+Shift+Q` | Close focused window |
-| `Win+F` | Toggle floating |
-| `Win+Shift+F` | Toggle fullscreen |
-| `Win+1` / `Win+2` / `Win+3` | Set width to 1/3, 1/2, 2/3 |
-| `Win+0` | Equalize all column widths |
-| `Win+R` | Refresh (re-enumerate windows) |
 
 ## Autostart
 

@@ -488,6 +488,7 @@ td {
   vertical-align: middle;
 }
 td:first-child { padding-left: 4px; }
+.hk-cmd-label { padding-left: 12px !important; color: var(--text-primary); }
 td:last-child { padding-right: 4px; }
 tr:last-child td { border-bottom: none; }
 td input[type="text"] {
@@ -701,11 +702,11 @@ input[type="range"]::-webkit-slider-thumb {
         <h2 class="section-title">Hotkeys</h2>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Key binding</th><th>Command</th><th style="width:36px"></th></tr></thead>
+            <thead><tr><th>Command</th><th>Key binding</th><th style="width:36px"></th></tr></thead>
             <tbody id="hotkeys-body"></tbody>
           </table>
         </div>
-        <div class="table-actions"><button class="btn btn-sm" onclick="addHotkeyRow('','')">+ Add binding</button></div>
+        <div class="table-actions"><button class="btn btn-sm" onclick="resetHotkeys()">Reset to defaults</button></div>
       </div>
 
       <!-- Rules -->
@@ -873,10 +874,9 @@ function init(cfg) {
   setVal('behavior-focus_follows_mouse_delay_ms', cfg.behavior.focus_follows_mouse_delay_ms);
   setCb('cb-behavior-log_level', cfg.behavior.log_level);
 
-  document.getElementById('hotkeys-body').innerHTML = '';
   if (cfg.hotkeys) {
     var bindings = cfg.hotkeys.bindings || cfg.hotkeys;
-    Object.entries(bindings).forEach(function(e) { addHotkeyRow(e[0], e[1]); });
+    loadHotkeysSorted(bindings);
   }
 
   document.getElementById('rules-body').innerHTML = '';
@@ -897,16 +897,98 @@ function init(cfg) {
 /* ── Delete icon (X) ─────────────────────────────────────────────────── */
 var deleteIcon = '<svg viewBox="0 0 12 12"><line x1="2" y1="2" x2="10" y2="10"/><line x1="10" y1="2" x2="2" y2="10"/></svg>';
 
+var CMD_LABELS = {
+  focus_left: 'Focus left', focus_right: 'Focus right',
+  focus_up: 'Focus up', focus_down: 'Focus down',
+  move_column_left: 'Move column left', move_column_right: 'Move column right',
+  resize_shrink: 'Shrink column', resize_grow: 'Grow column',
+  width_third: 'Width 1/3', width_half: 'Width 1/2',
+  width_two_thirds: 'Width 2/3', equalize_widths: 'Equalize widths',
+  focus_monitor_left: 'Focus monitor left', focus_monitor_right: 'Focus monitor right',
+  move_to_monitor_left: 'Move to monitor left', move_to_monitor_right: 'Move to monitor right',
+  close_window: 'Close window', toggle_floating: 'Toggle floating',
+  toggle_fullscreen: 'Toggle fullscreen', toggle_pause: 'Toggle pause',
+  refresh: 'Refresh', reload: 'Reload config',
+  panic_revert: 'Emergency restore'
+};
+
+/* Defines display order — grouped by category */
+var CMD_ORDER = [
+  'focus_left', 'focus_right', 'focus_up', 'focus_down',
+  'move_column_left', 'move_column_right',
+  'resize_shrink', 'resize_grow',
+  'width_third', 'width_half', 'width_two_thirds', 'equalize_widths',
+  'focus_monitor_left', 'focus_monitor_right',
+  'move_to_monitor_left', 'move_to_monitor_right',
+  'close_window', 'toggle_floating', 'toggle_fullscreen',
+  'toggle_pause', 'refresh', 'reload',
+  'panic_revert'
+];
+
+var DEFAULT_HOTKEYS = {
+  "Ctrl+Alt+H": "focus_left", "Ctrl+Alt+L": "focus_right",
+  "Ctrl+Alt+K": "focus_up", "Ctrl+Alt+J": "focus_down",
+  "Ctrl+Alt+Shift+H": "move_column_left", "Ctrl+Alt+Shift+L": "move_column_right",
+  "Ctrl+Alt+Minus": "resize_shrink", "Ctrl+Alt+Equals": "resize_grow",
+  "Ctrl+Alt+1": "width_third", "Ctrl+Alt+2": "width_half",
+  "Ctrl+Alt+3": "width_two_thirds", "Ctrl+Alt+0": "equalize_widths",
+  "Ctrl+Alt+Win+Comma": "focus_monitor_left", "Ctrl+Alt+Win+Period": "focus_monitor_right",
+  "Ctrl+Alt+Win+Shift+Comma": "move_to_monitor_left", "Ctrl+Alt+Win+Shift+Period": "move_to_monitor_right",
+  "Ctrl+Alt+W": "close_window", "Ctrl+Alt+F": "toggle_floating",
+  "Ctrl+Alt+Shift+F": "toggle_fullscreen", "Ctrl+Alt+P": "toggle_pause",
+  "Ctrl+Alt+R": "refresh", "Ctrl+Alt+Shift+R": "reload",
+  "Win+Ctrl+Escape": "panic_revert"
+};
+
+function cmdLabel(cmd) { return CMD_LABELS[cmd] || cmd; }
+
 function addHotkeyRow(key, cmd) {
   var tbody = document.getElementById('hotkeys-body');
   var tr = document.createElement('tr');
+  tr.dataset.cmd = cmd;
   tr.innerHTML =
-    '<td><input type="text" class="hk-key" value="' + escAttr(key) + '" placeholder="e.g. Win+H"></td>' +
-    '<td><input type="text" class="hk-cmd" value="' + escAttr(cmd) + '" placeholder="e.g. focus_left"></td>' +
-    '<td><button class="row-delete" onclick="this.closest(\'tr\').remove();autoSave(0)">' + deleteIcon + '</button></td>';
+    '<td class="hk-cmd-label">' + escHtml(cmdLabel(cmd)) + '</td>' +
+    '<td><input type="text" class="hk-key" value="' + escAttr(key) + '" placeholder="e.g. Ctrl+Alt+H"></td>' +
+    '<td><button class="row-delete" title="Reset to default" onclick="resetHotkeyRow(this.closest(\'tr\'))">' + resetIcon + '</button></td>';
   tbody.appendChild(tr);
   wrapAllInputs(tr);
-  tr.querySelectorAll('input').forEach(function(el) { el.addEventListener('input', function() { autoSave(500); }); });
+  tr.querySelector('.hk-key').addEventListener('input', function() { autoSave(500); });
+}
+
+function escHtml(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+var resetIcon = '<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 2v3h3"/><path d="M2.1 7.5a4 4 0 1 0 .5-4L1.5 5"/></svg>';
+
+function defaultKeyForCmd(cmd) {
+  for (var k in DEFAULT_HOTKEYS) { if (DEFAULT_HOTKEYS[k] === cmd) return k; }
+  return '';
+}
+
+function resetHotkeyRow(tr) {
+  var defKey = defaultKeyForCmd(tr.dataset.cmd);
+  if (defKey) { tr.querySelector('.hk-key').value = defKey; autoSave(0); }
+}
+
+function loadHotkeysSorted(bindings) {
+  var tbody = document.getElementById('hotkeys-body');
+  tbody.innerHTML = '';
+  /* Build cmd→key map from config */
+  var cmdToKey = {};
+  Object.entries(bindings).forEach(function(e) { cmdToKey[e[1]] = e[0]; });
+  /* Render in defined order */
+  CMD_ORDER.forEach(function(cmd) {
+    var key = cmdToKey[cmd] || defaultKeyForCmd(cmd);
+    addHotkeyRow(key, cmd);
+  });
+  /* Append any custom commands not in CMD_ORDER */
+  Object.entries(bindings).forEach(function(e) {
+    if (CMD_ORDER.indexOf(e[1]) === -1) addHotkeyRow(e[0], e[1]);
+  });
+}
+
+function resetHotkeys() {
+  loadHotkeysSorted(DEFAULT_HOTKEYS);
+  autoSave(0);
 }
 
 function addRuleRow(r) {
@@ -977,7 +1059,7 @@ function readHotkeys() {
   var b = {};
   document.querySelectorAll('#hotkeys-body tr').forEach(function(tr) {
     var k = tr.querySelector('.hk-key').value.trim();
-    var c = tr.querySelector('.hk-cmd').value.trim();
+    var c = tr.dataset.cmd;
     if (k && c) b[k] = c;
   });
   return b;
