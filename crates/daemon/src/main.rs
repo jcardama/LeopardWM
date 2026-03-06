@@ -1573,6 +1573,19 @@ async fn main() -> Result<()> {
                         _settings_handle = settings::SettingsWindowHandle::open(
                             config_snapshot,
                             settings_sync_tx.clone(),
+                            None,
+                        );
+                    }
+                    tray::TrayEvent::OpenAbout => {
+                        info!("Tray: About requested");
+                        let config_snapshot = {
+                            let st = state.lock().await;
+                            st.config.clone()
+                        };
+                        _settings_handle = settings::SettingsWindowHandle::open(
+                            config_snapshot,
+                            settings_sync_tx.clone(),
+                            Some("about"),
                         );
                     }
                     tray::TrayEvent::EditConfig => {

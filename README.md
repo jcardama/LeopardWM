@@ -7,6 +7,7 @@
 [![CI](https://github.com/jcardama/LeopardWM/actions/workflows/ci.yml/badge.svg)](https://github.com/jcardama/LeopardWM/actions/workflows/ci.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
 ![Platform: Windows 10/11](https://img.shields.io/badge/Platform-Windows%2010%2F11-0078D4)
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?logo=buy-me-a-coffee&logoColor=000)](https://buymeacoffee.com/jcardama)
 
 A scrollable tiling window manager for Windows.
 
@@ -111,6 +112,12 @@ LeopardWM is a Rust workspace with five crates:
 ## Platform Constraints
 
 LeopardWM is a **window controller**, not a compositor. DWM remains the compositor. Elevated or protected windows may reject placement/styling changes, and behavior can vary across app frameworks (Win32, WPF, Electron, UWP).
+
+## Support
+
+If you find LeopardWM useful, consider supporting development:
+
+<a href="https://buymeacoffee.com/jcardama"><img src="https://img.buymeacoffee.com/button-api/?text=Buy me a coffee&emoji=&slug=jcardama&button_colour=FFDD00&font_colour=000000&font_family=Inter&outline_colour=000000&coffee_colour=ffffff" height="40" /></a>
 
 ## Contributing
 

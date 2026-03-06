@@ -79,6 +79,7 @@ mod menu_ids {
     pub const EXIT: &str = "exit";
     pub const TOGGLE_PAUSE: &str = "toggle_pause";
     pub const OPEN_CONFIG: &str = "open_config";
+    pub const OPEN_ABOUT: &str = "open_about";
     pub const EDIT_CONFIG: &str = "edit_config";
     pub const VIEW_LOGS: &str = "view_logs";
     pub const RELEASE_ALL_WINDOWS: &str = "release_all_windows";
@@ -102,6 +103,8 @@ pub enum TrayEvent {
     TogglePause,
     /// User clicked "Settings" menu item.
     OpenConfig,
+    /// User clicked the title / "About" menu item.
+    OpenAbout,
     /// User clicked "Edit Config" menu item.
     EditConfig,
     /// User clicked "View Logs" menu item.
@@ -417,9 +420,14 @@ fn build_tray(
             .map_err(|e| TrayError::Menu(e.to_string()))
     };
 
-    // Title item (disabled, shows version)
+    // Title item (clickable — opens About section in Settings)
     let version = env!("CARGO_PKG_VERSION");
-    append(&MenuItem::new(format!("LeopardWM v{version}"), false, None))?;
+    append(&MenuItem::with_id(
+        menu_ids::OPEN_ABOUT,
+        format!("LeopardWM v{version}"),
+        true,
+        None,
+    ))?;
     append(&PredefinedMenuItem::separator())?;
 
     // Toggle Pause (first — most time-sensitive action)
@@ -567,6 +575,7 @@ fn map_menu_id_to_event(menu_id: &str) -> Option<TrayEvent> {
         menu_ids::EXIT => Some(TrayEvent::Exit),
         menu_ids::TOGGLE_PAUSE => Some(TrayEvent::TogglePause),
         menu_ids::OPEN_CONFIG => Some(TrayEvent::OpenConfig),
+        menu_ids::OPEN_ABOUT => Some(TrayEvent::OpenAbout),
         menu_ids::EDIT_CONFIG => Some(TrayEvent::EditConfig),
         menu_ids::VIEW_LOGS => Some(TrayEvent::ViewLogs),
         menu_ids::RELEASE_ALL_WINDOWS => Some(TrayEvent::ReleaseAllWindows),
@@ -715,6 +724,10 @@ mod tests {
             Some(TrayEvent::OpenConfig)
         ));
         assert!(matches!(
+            map_menu_id_to_event(menu_ids::OPEN_ABOUT),
+            Some(TrayEvent::OpenAbout)
+        ));
+        assert!(matches!(
             map_menu_id_to_event(menu_ids::EDIT_CONFIG),
             Some(TrayEvent::EditConfig)
         ));
@@ -790,6 +803,7 @@ mod tests {
             menu_ids::EXIT,
             menu_ids::TOGGLE_PAUSE,
             menu_ids::OPEN_CONFIG,
+            menu_ids::OPEN_ABOUT,
             menu_ids::EDIT_CONFIG,
             menu_ids::VIEW_LOGS,
             menu_ids::RELEASE_ALL_WINDOWS,

@@ -69,7 +69,11 @@ impl HasDisplayHandle for Win32Handle {
 }
 
 /// Build and run the settings window. Blocks until the window is closed.
-pub fn run_settings_window(config: Config, event_tx: mpsc::Sender<SettingsEvent>) -> Result<()> {
+pub fn run_settings_window(
+    config: Config,
+    event_tx: mpsc::Sender<SettingsEvent>,
+    initial_section: Option<&str>,
+) -> Result<()> {
     unsafe {
         let hinstance = GetModuleHandleW(None)?;
         let dark = is_dark_mode();
@@ -155,6 +159,15 @@ pub fn run_settings_window(config: Config, event_tx: mpsc::Sender<SettingsEvent>
         let init_js = "init(window._initConfig)".to_string();
         let _ = webview.evaluate_script(&init_js);
 
+        // Navigate to initial section if requested
+        if let Some(section) = initial_section {
+            let nav_js = format!(
+                "document.querySelector('.nav-item[data-section=\"{}\"]').click()",
+                section
+            );
+            let _ = webview.evaluate_script(&nav_js);
+        }
+
         // Show the window
         let _ = ShowWindow(hwnd, SW_SHOW);
         let _ = UpdateWindow(hwnd);
@@ -195,6 +208,13 @@ fn handle_ipc(body: &str, event_tx: &mpsc::Sender<SettingsEvent>, _hwnd: HWND) {
         "save" => {
             if let Some(cfg_val) = msg.get("config") {
                 do_save(cfg_val, event_tx);
+            }
+        }
+        "open_url" => {
+            if let Some(url) = msg.get("url").and_then(|v| v.as_str()) {
+                let _ = std::process::Command::new("cmd")
+                    .args(["/c", "start", "", url])
+                    .spawn();
             }
         }
         other => {

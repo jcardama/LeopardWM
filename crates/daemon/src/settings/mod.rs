@@ -33,8 +33,13 @@ pub struct SettingsWindowHandle {
 impl SettingsWindowHandle {
     /// Open the settings window on a dedicated thread.
     ///
+    /// `initial_section` optionally navigates to a specific tab (e.g., `"about"`).
     /// Returns `None` if a settings window is already open.
-    pub fn open(config: Config, event_tx: mpsc::Sender<SettingsEvent>) -> Option<Self> {
+    pub fn open(
+        config: Config,
+        event_tx: mpsc::Sender<SettingsEvent>,
+        initial_section: Option<&str>,
+    ) -> Option<Self> {
         if SETTINGS_OPEN
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .is_err()
@@ -43,10 +48,13 @@ impl SettingsWindowHandle {
             return None;
         }
 
+        let section = initial_section.map(String::from);
         let handle = std::thread::Builder::new()
             .name("settings-window".into())
             .spawn(move || {
-                if let Err(e) = win32::run_settings_window(config, event_tx) {
+                if let Err(e) =
+                    win32::run_settings_window(config, event_tx, section.as_deref())
+                {
                     warn!("Settings window error: {}", e);
                 }
                 SETTINGS_OPEN.store(false, Ordering::SeqCst);
