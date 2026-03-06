@@ -17,7 +17,9 @@ use std::sync::mpsc;
 use thiserror::Error;
 use windows::core::BOOL;
 use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, RECT, TRUE};
-use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DwmSetWindowAttribute, DWMWA_CLOAKED};
+use windows::Win32::Graphics::Dwm::{
+    DwmGetWindowAttribute, DwmSetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS,
+};
 use windows::Win32::Graphics::Gdi::{
     EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFOEXW,
 };
@@ -995,6 +997,43 @@ pub fn apply_placements(
 }
 
 /// Set window position immediately using SetWindowPos.
+/// Compute invisible border insets for a window.
+///
+/// Windows 10/11 windows have invisible borders (typically ~7px on left, right,
+/// bottom and 0px on top). `SetWindowPos` operates on the full frame rect
+/// including these borders. To make the *visible* area fill our target rect,
+/// we expand the frame rect by the invisible border amount.
+///
+/// Returns (left, top, right, bottom) insets to subtract/add to the target rect.
+fn invisible_border_insets(hwnd: HWND) -> (i32, i32, i32, i32) {
+    unsafe {
+        let mut frame_rect = RECT::default();
+        if GetWindowRect(hwnd, &mut frame_rect).is_err() {
+            return (0, 0, 0, 0);
+        }
+
+        let mut extended_rect = RECT::default();
+        if DwmGetWindowAttribute(
+            hwnd,
+            DWMWA_EXTENDED_FRAME_BOUNDS,
+            &mut extended_rect as *mut RECT as *mut _,
+            std::mem::size_of::<RECT>() as u32,
+        )
+        .is_err()
+        {
+            return (0, 0, 0, 0);
+        }
+
+        // Insets = how much the frame rect extends beyond the visible area
+        let left = extended_rect.left - frame_rect.left;
+        let top = extended_rect.top - frame_rect.top;
+        let right = frame_rect.right - extended_rect.right;
+        let bottom = frame_rect.bottom - extended_rect.bottom;
+
+        (left.max(0), top.max(0), right.max(0), bottom.max(0))
+    }
+}
+
 fn set_window_pos_immediate(placement: &WindowPlacement) -> Result<(), Win32Error> {
     let window_id = placement.window_id;
     let hwnd = window_id_to_hwnd(window_id)?;
@@ -1010,13 +1049,20 @@ fn set_window_pos_immediate(placement: &WindowPlacement) -> Result<(), Win32Erro
 
         let rect = &placement.rect;
 
+        // Compensate for invisible borders so the visible area fills the target rect
+        let (inset_l, inset_t, inset_r, inset_b) = invisible_border_insets(hwnd);
+        let adjusted_x = rect.x - inset_l;
+        let adjusted_y = rect.y - inset_t;
+        let adjusted_w = rect.width + inset_l + inset_r;
+        let adjusted_h = rect.height + inset_t + inset_b;
+
         if let Err(e) = SetWindowPos(
             hwnd,
             None,
-            rect.x,
-            rect.y,
-            rect.width,
-            rect.height,
+            adjusted_x,
+            adjusted_y,
+            adjusted_w,
+            adjusted_h,
             SWP_NOZORDER | SWP_NOACTIVATE,
         ) {
             if !IsWindow(Some(hwnd)).as_bool() {

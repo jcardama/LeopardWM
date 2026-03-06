@@ -68,11 +68,20 @@ impl AppState {
             self.hide_border();
         }
 
-        for workspace in self.workspaces.values_mut() {
+        for (&monitor_id, workspace) in self.workspaces.iter_mut() {
             workspace.set_gap(self.config.layout.gap);
             workspace.set_outer_gap(self.config.layout.outer_gap);
             workspace.set_default_column_width(self.config.layout.default_column_width);
             workspace.set_centering_mode(self.config.layout.centering_mode.into());
+
+            // Recalculate scroll offset for new gap values so all columns
+            // are positioned correctly (not just the rightmost ones).
+            let viewport_width = self
+                .monitors
+                .get(&monitor_id)
+                .map(|m| m.work_area.width)
+                .unwrap_or(FALLBACK_VIEWPORT_WIDTH);
+            workspace.ensure_focused_visible_animated(viewport_width);
         }
 
         // Re-evaluate window rules for already-managed windows so that
