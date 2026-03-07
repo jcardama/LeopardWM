@@ -12,6 +12,7 @@ pub mod border;
 pub mod overlay;
 
 use leopardwm_core_layout::{Rect, Visibility, WindowId, WindowPlacement};
+use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::mpsc;
 use thiserror::Error;
@@ -935,17 +936,28 @@ pub fn is_window_alive_and_visible(hwnd: WindowId) -> bool {
     }
 }
 
+/// Cache of last-applied window placements, used to skip redundant SetWindowPos calls.
+pub type PlacementCache = HashMap<WindowId, (Rect, Visibility)>;
+
 /// Apply window placements from the layout engine.
 ///
 /// Visible windows are positioned immediately via SetWindowPos.
 /// Off-screen windows are moved to sentinel coordinates far off-screen.
+///
+/// When `cache` is provided, placements whose rect and visibility match the
+/// cached values are skipped, avoiding redundant Win32 calls during animations
+/// where most windows haven't moved.
 pub fn apply_placements(
     placements: &[WindowPlacement],
     _config: &PlatformConfig,
+    cache: Option<&mut PlacementCache>,
 ) -> Result<(), Win32Error> {
     if placements.is_empty() {
         return Ok(());
     }
+
+    let mut applied = 0u32;
+    let mut skipped = 0u32;
 
     // Separate visible and off-screen windows
     let (visible, offscreen): (Vec<_>, Vec<_>) = placements
@@ -953,6 +965,13 @@ pub fn apply_placements(
         .partition(|p| p.visibility == Visibility::Visible);
     // Apply positions for visible windows using immediate SetWindowPos
     for placement in &visible {
+        // Skip if the placement matches the cached value
+        if let Some(ref cache) = cache {
+            if cache.get(&placement.window_id) == Some(&(placement.rect, placement.visibility)) {
+                skipped += 1;
+                continue;
+            }
+        }
         if let Err(e) = set_window_pos_immediate(placement) {
             if is_benign_side_effect_error(&e) {
                 tracing::debug!(
@@ -964,13 +983,24 @@ pub fn apply_placements(
             }
             return Err(e);
         }
+        applied += 1;
     }
 
     // Move off-screen windows to sentinel coordinates
     for placement in &offscreen {
+        let offscreen_rect = move_offscreen_rect_for(&placement.rect);
+        // Skip if already cached as off-screen at the same position
+        if let Some(ref cache) = cache {
+            if cache.get(&placement.window_id)
+                == Some(&(offscreen_rect, Visibility::OffScreenLeft))
+            {
+                skipped += 1;
+                continue;
+            }
+        }
         let offscreen_placement = WindowPlacement {
             window_id: placement.window_id,
-            rect: move_offscreen_rect_for(&placement.rect),
+            rect: offscreen_rect,
             visibility: Visibility::OffScreenLeft,
             column_index: placement.column_index,
         };
@@ -985,11 +1015,25 @@ pub fn apply_placements(
             }
             return Err(e);
         }
+        applied += 1;
+    }
+
+    // Update the cache with current placements
+    if let Some(cache) = cache {
+        cache.clear();
+        for p in &visible {
+            cache.insert(p.window_id, (p.rect, p.visibility));
+        }
+        for p in &offscreen {
+            let offscreen_rect = move_offscreen_rect_for(&p.rect);
+            cache.insert(p.window_id, (offscreen_rect, Visibility::OffScreenLeft));
+        }
     }
 
     tracing::debug!(
-        "Applied {} visible placements, {} off-screen",
-        visible.len(),
+        "Applied {} placements ({} skipped unchanged), {} off-screen total",
+        applied,
+        skipped,
         offscreen.len()
     );
 
@@ -1479,7 +1523,7 @@ pub fn cascade_windows(window_ids: &[WindowId]) {
         }
     }
 
-    let _ = apply_placements(&placements, &PlatformConfig);
+    let _ = apply_placements(&placements, &PlatformConfig, None);
 }
 
 /// Set the process DPI awareness to Per-Monitor Aware V2.
@@ -3380,7 +3424,7 @@ mod tests {
     fn test_apply_placements_empty() {
         // Verify empty placements succeed without error
         let config = PlatformConfig::default();
-        let result = apply_placements(&[], &config);
+        let result = apply_placements(&[], &config, None);
         assert!(result.is_ok());
     }
 
@@ -3394,7 +3438,7 @@ mod tests {
             column_index: 0,
         }];
 
-        let result = apply_placements(&placements, &config);
+        let result = apply_placements(&placements, &config, None);
         assert!(result.is_err());
     }
 

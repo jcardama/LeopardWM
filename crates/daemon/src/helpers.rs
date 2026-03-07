@@ -705,7 +705,7 @@ impl AppState {
                     return;
                 }
                 let result =
-                    leopardwm_platform_win32::apply_placements(&all_placements, &platform_config)
+                    leopardwm_platform_win32::apply_placements(&all_placements, &platform_config, None)
                         .map_err(|e| anyhow!(e.to_string()));
                 if should_cancel() {
                     run_visibility_recovery_pass(&apply_window_ids, "apply-cancelled-late-worker");

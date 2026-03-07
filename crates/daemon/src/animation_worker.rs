@@ -10,7 +10,7 @@
 //! This eliminates per-frame thread spawn overhead and naturally adapts to any refresh rate.
 
 use leopardwm_core_layout::WindowPlacement;
-use leopardwm_platform_win32::PlatformConfig;
+use leopardwm_platform_win32::{PlacementCache, PlatformConfig};
 use std::sync::mpsc as std_mpsc;
 use std::time::{Duration, Instant};
 use tracing::debug;
@@ -95,6 +95,7 @@ fn worker_loop(
     event_tx: tokio::sync::mpsc::Sender<super::DaemonEvent>,
 ) {
     debug!("Animation worker thread started");
+    let mut placement_cache = PlacementCache::new();
 
     loop {
         // Block until we receive a command (zero CPU when idle)
@@ -114,11 +115,12 @@ fn worker_loop(
             WorkerCommand::Frame(request) => {
                 let frame_start = Instant::now();
 
-                // Apply window placements via DeferWindowPos
+                // Apply window placements, skipping unchanged windows via cache
                 let apply_result =
                     leopardwm_platform_win32::apply_placements(
                         &request.placements,
                         &request.platform_config,
+                        Some(&mut placement_cache),
                     )
                     .map_err(|e| e.to_string());
 
