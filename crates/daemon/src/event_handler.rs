@@ -247,14 +247,26 @@ impl AppState {
                 }
             }
             WindowEvent::Focused(hwnd) => {
+                // Skip if this window is already our tracked focus — avoids
+                // feedback loops where sync_foreground_window triggers another
+                // EVENT_SYSTEM_FOREGROUND for the same window.
+                if self.previous_focused_hwnd == Some(hwnd) {
+                    return;
+                }
+
                 // Reconcile: prune windows that vanished without events
                 // (e.g., Electron close-to-tray apps).
-                let pre_count = self.all_managed_window_ids().len();
-                self.prune_stale_windows();
-                let pruned = pre_count - self.all_managed_window_ids().len();
-                if pruned > 0 {
-                    if let Err(e) = self.apply_layout() {
-                        warn!("Failed to apply layout after pruning {} stale window(s): {}", pruned, e);
+                // Throttle to at most once per second to avoid per-event overhead.
+                let now = std::time::Instant::now();
+                if self.last_prune_at.is_none_or(|t| now.duration_since(t).as_secs() >= 1) {
+                    self.last_prune_at = Some(now);
+                    let pre_count = self.all_managed_window_ids().len();
+                    self.prune_stale_windows();
+                    let pruned = pre_count - self.all_managed_window_ids().len();
+                    if pruned > 0 {
+                        if let Err(e) = self.apply_layout() {
+                            warn!("Failed to apply layout after pruning {} stale window(s): {}", pruned, e);
+                        }
                     }
                 }
 
@@ -283,11 +295,11 @@ impl AppState {
                         }
                     }
 
-                    // Update border colors to reflect the new focus.
-                    // Must happen after focus_window() so focused_visible_window()
-                    // returns the correct hwnd, and before updating
-                    // previous_focused_hwnd so the old border gets reset.
-                    self.sync_foreground_window();
+                    // Update border only — do NOT call sync_foreground_window()
+                    // here because the window is already focused (that's why we
+                    // received this event). Calling set_foreground_window again
+                    // would trigger another EVENT_SYSTEM_FOREGROUND feedback loop.
+                    self.show_border(hwnd);
 
                     // Track the OS-foreground window — including floating windows —
                     // so that ToggleFloating can reliably detect and unfloat the

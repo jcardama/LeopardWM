@@ -127,7 +127,7 @@ impl LayoutConfig {
             .saturating_add(self.gap.max(0));
         let gap = self.gap.max(0);
         let frac = self.width_presets.first().copied().unwrap_or(0.5);
-        (base as f64 * frac - gap as f64).round().max(100.0) as i32
+        (base as f64 * frac - gap as f64).floor().max(100.0) as i32
     }
 
     /// Migrate legacy `outer_gap` field to per-side fields if present.

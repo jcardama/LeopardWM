@@ -1905,7 +1905,7 @@ impl Workspace {
         let fraction = fraction.clamp(0.1, 1.0);
         let base = self.width_base(viewport_width);
         let gap = self.gap.max(0);
-        let new_width = (base as f64 * fraction - gap as f64).round() as i32;
+        let new_width = (base as f64 * fraction - gap as f64).floor() as i32;
 
         if let Some(column) = self.columns.get_mut(self.focused_column) {
             column.set_width(new_width);
@@ -2001,7 +2001,7 @@ impl Workspace {
         const TOLERANCE: f64 = 0.005;
         let target = sorted.iter().find(|&&p| p > current_frac + TOLERANCE);
         if let Some(&frac) = target {
-            let new_width = (base as f64 * frac - gap as f64).round() as i32;
+            let new_width = (base as f64 * frac - gap as f64).floor() as i32;
             column.set_width(new_width);
         }
     }
@@ -2027,7 +2027,7 @@ impl Workspace {
         const TOLERANCE: f64 = 0.005;
         let target = sorted.iter().rev().find(|&&p| p < current_frac - TOLERANCE);
         if let Some(&frac) = target {
-            let new_width = (base as f64 * frac - gap as f64).round() as i32;
+            let new_width = (base as f64 * frac - gap as f64).floor() as i32;
             column.set_width(new_width);
         }
     }

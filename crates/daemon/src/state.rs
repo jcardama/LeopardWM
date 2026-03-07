@@ -91,6 +91,8 @@ pub(crate) struct AppState {
     pub(crate) compiled_rules: Vec<config::CompiledWindowRule>,
     /// Previously focused window for border color tracking.
     pub(crate) previous_focused_hwnd: Option<u64>,
+    /// Last time stale-window pruning ran (throttled to 1/sec).
+    pub(crate) last_prune_at: Option<std::time::Instant>,
     /// Border frame overlay for the active window.
     pub(crate) border_frame: Option<leopardwm_platform_win32::border::BorderFrame>,
     /// Whether tiling is paused.
@@ -201,6 +203,7 @@ impl AppState {
             config,
             compiled_rules,
             previous_focused_hwnd: None,
+            last_prune_at: None,
             border_frame: leopardwm_platform_win32::border::BorderFrame::new().ok(),
             paused: false,
             applying_layout: false,
