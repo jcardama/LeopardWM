@@ -13,6 +13,14 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 
+/// Executables whose windows should never be tiled (system dialogs, security prompts, etc.).
+/// These are appended as built-in Ignore rules after user-defined rules.
+const BUILTIN_IGNORE_EXECUTABLES: &[&str] = &[
+    "smartscreen.exe", // Windows Defender SmartScreen
+    "consent.exe",     // UAC elevation prompt
+    "msiexec.exe",     // Windows Installer
+];
+
 /// Main configuration structure for LeopardWM.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -887,6 +895,18 @@ impl Config {
                 action: rule.action,
                 width: rule.width,
                 height: rule.height,
+            });
+        }
+
+        // Append built-in ignore rules (after user rules so user can override)
+        for exe in BUILTIN_IGNORE_EXECUTABLES {
+            compiled.push(CompiledWindowRule {
+                class_regex: None,
+                title_regex: None,
+                match_executable: Some(exe.to_string()),
+                action: WindowAction::Ignore,
+                width: None,
+                height: None,
             });
         }
 
@@ -1818,7 +1838,10 @@ mod tests {
         };
 
         let compiled = config.compile_window_rules();
-        assert_eq!(compiled.len(), 2);
+        assert_eq!(
+            compiled.len(),
+            2 + BUILTIN_IGNORE_EXECUTABLES.len()
+        );
 
         // First rule: class + title regex
         assert!(compiled[0].matches(
@@ -1861,7 +1884,10 @@ mod tests {
 
         let compiled = config.compile_window_rules();
         // First rule should be skipped due to invalid regex
-        assert_eq!(compiled.len(), 1);
+        assert_eq!(
+            compiled.len(),
+            1 + BUILTIN_IGNORE_EXECUTABLES.len()
+        );
         assert!(compiled[0].matches("ValidClass", "Any Title", "any.exe"));
     }
 
