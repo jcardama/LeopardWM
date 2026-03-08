@@ -287,6 +287,14 @@ impl AppState {
             .unwrap_or_else(|| Rect::new(0, 0, FALLBACK_VIEWPORT_WIDTH, FALLBACK_VIEWPORT_HEIGHT))
     }
 
+    /// Get the viewport width for a specific monitor.
+    pub(crate) fn viewport_width_for(&self, monitor_id: MonitorId) -> i32 {
+        self.monitors
+            .get(&monitor_id)
+            .map(|m| m.work_area.width)
+            .unwrap_or(FALLBACK_VIEWPORT_WIDTH)
+    }
+
 }
 
 pub(crate) fn validate_set_width_fraction(fraction: f64) -> std::result::Result<(), String> {

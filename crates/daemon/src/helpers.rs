@@ -79,9 +79,7 @@ impl AppState {
                 self.config.layout.outer_gap_top,
                 self.config.layout.outer_gap_bottom,
             );
-            let viewport_width = self
-                .monitors
-                .get(&monitor_id)
+            let viewport_width = self.monitors.get(&monitor_id)
                 .map(|m| m.work_area.width)
                 .unwrap_or(FALLBACK_VIEWPORT_WIDTH);
 
@@ -1079,11 +1077,7 @@ impl AppState {
             .insert_window(window_id, None)
             .map_err(|e| format!("Failed to add window to target: {}", e))?;
 
-        let target_viewport = self
-            .monitors
-            .get(&target_monitor)
-            .map(|m| m.work_area.width)
-            .unwrap_or(FALLBACK_VIEWPORT_WIDTH);
+        let target_viewport = self.viewport_width_for(target_monitor);
         target_workspace.ensure_focused_visible(target_viewport);
 
         self.workspaces.insert(source_monitor, source_workspace);

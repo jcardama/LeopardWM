@@ -22,9 +22,11 @@ Most Windows tilers use tree or BSP layouts. LeopardWM is **scroll-first**: wind
 
 - Multi-monitor workspaces with monitor-aware focus and move
 - Global hotkeys with live config reload
-- Smooth scroll animations and touchpad gestures
+- Smooth scroll animations with layout transition effects
+- Touchpad gestures with configurable swipe actions
+- Drag-and-drop column reorder (Shift+drag to merge windows)
 - Floating and fullscreen toggles
-- Width presets and column equalization
+- Width and height presets with column equalization
 - System tray with pause, reload, settings, and diagnostics
 - WebView-based settings GUI
 - Safe mode for troubleshooting (`--safe-mode`)
@@ -70,7 +72,7 @@ All hotkeys use `Ctrl+Alt` as the base modifier. Layered pattern: base = focus, 
 | `Ctrl+Alt+[` / `]` | Move window to left / right column |
 | `Ctrl+Alt+Shift+[` / `]` | Expel window to new column left / right |
 | `Ctrl+Alt+Minus` / `Ctrl+Alt+Equals` | Cycle column width down / up |
-| `Ctrl+Alt+Shift+Minus` / `Shift+Equals` | Cycle window height down / up |
+| `Ctrl+Alt+Shift+Minus` / `Ctrl+Alt+Shift+Equals` | Cycle window height down / up |
 | `Ctrl+Alt+0` | Equalize all column widths |
 | `Ctrl+Alt+Shift+0` | Equalize window heights in column |
 | `Ctrl+Alt+Win+,`/`.` | Focus monitor left / right |

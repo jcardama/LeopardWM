@@ -2,7 +2,7 @@
 
 use crate::config::Config;
 use crate::state::{validate_set_width_fraction, AppState};
-use leopardwm_core_layout::Rect;
+use leopardwm_core_layout::{Rect, Workspace};
 use leopardwm_ipc::{IpcCommand, IpcResponse};
 use leopardwm_platform_win32::{
     enumerate_windows, get_process_executable, monitor_to_left, monitor_to_right,
@@ -11,170 +11,127 @@ use std::collections::HashMap;
 use tracing::info;
 
 impl AppState {
+    /// Execute a command on the focused workspace, handling snapshot/transition
+    /// and layout application boilerplate.
+    ///
+    /// - `animated`: if true, snapshots before and starts a layout transition after
+    /// - `sync_focus`: if true, syncs the OS foreground window after layout apply
+    /// - `f`: receives the focused workspace and viewport width
+    fn execute_workspace_command(
+        &mut self,
+        animated: bool,
+        sync_focus: bool,
+        f: impl FnOnce(&mut Workspace, i32),
+    ) -> IpcResponse {
+        let viewport_width = self.focused_viewport().width;
+        let snapshot = if animated {
+            Some(self.snapshot_layout())
+        } else {
+            None
+        };
+        if let Some(workspace) = self.focused_workspace_mut() {
+            f(workspace, viewport_width);
+        }
+        if let Some(snapshot) = snapshot {
+            self.start_layout_transition(snapshot);
+        }
+        if let Err(e) = self.apply_layout() {
+            return IpcResponse::error(format!("Failed to apply layout: {}", e));
+        }
+        if sync_focus {
+            self.sync_foreground_window();
+        }
+        IpcResponse::Ok
+    }
+
     /// Process an IPC command and return a response.
     pub(crate) fn handle_command(&mut self, cmd: IpcCommand) -> IpcResponse {
-        let viewport_width = self.focused_viewport().width;
-
         match cmd {
             IpcCommand::FocusLeft => {
-                if let Some(workspace) = self.focused_workspace_mut() {
-                    workspace.focus_left();
-                    workspace.ensure_focused_visible_animated(viewport_width);
-                    info!("Focus left -> column {}", workspace.focused_column_index());
-                }
-                if let Err(e) = self.apply_layout() {
-                    return IpcResponse::error(format!("Failed to apply layout: {}", e));
-                }
-                self.sync_foreground_window();
-                IpcResponse::Ok
+                self.execute_workspace_command(false, true, |ws, vw| {
+                    ws.focus_left();
+                    ws.ensure_focused_visible_animated(vw);
+                    info!("Focus left -> column {}", ws.focused_column_index());
+                })
             }
             IpcCommand::FocusRight => {
-                if let Some(workspace) = self.focused_workspace_mut() {
-                    workspace.focus_right();
-                    workspace.ensure_focused_visible_animated(viewport_width);
-                    info!("Focus right -> column {}", workspace.focused_column_index());
-                }
-                if let Err(e) = self.apply_layout() {
-                    return IpcResponse::error(format!("Failed to apply layout: {}", e));
-                }
-                self.sync_foreground_window();
-                IpcResponse::Ok
+                self.execute_workspace_command(false, true, |ws, vw| {
+                    ws.focus_right();
+                    ws.ensure_focused_visible_animated(vw);
+                    info!("Focus right -> column {}", ws.focused_column_index());
+                })
             }
             IpcCommand::FocusUp => {
-                if let Some(workspace) = self.focused_workspace_mut() {
-                    workspace.focus_up();
+                self.execute_workspace_command(false, true, |ws, _vw| {
+                    ws.focus_up();
                     info!(
                         "Focus up -> window {}",
-                        workspace.focused_window_index_in_column()
+                        ws.focused_window_index_in_column()
                     );
-                }
-                if let Err(e) = self.apply_layout() {
-                    return IpcResponse::error(format!("Failed to apply layout: {}", e));
-                }
-                self.sync_foreground_window();
-                IpcResponse::Ok
+                })
             }
             IpcCommand::FocusDown => {
-                if let Some(workspace) = self.focused_workspace_mut() {
-                    workspace.focus_down();
+                self.execute_workspace_command(false, true, |ws, _vw| {
+                    ws.focus_down();
                     info!(
                         "Focus down -> window {}",
-                        workspace.focused_window_index_in_column()
+                        ws.focused_window_index_in_column()
                     );
-                }
-                if let Err(e) = self.apply_layout() {
-                    return IpcResponse::error(format!("Failed to apply layout: {}", e));
-                }
-                self.sync_foreground_window();
-                IpcResponse::Ok
+                })
             }
             IpcCommand::MoveColumnLeft => {
-                let snapshot = self.snapshot_layout();
-                if let Some(workspace) = self.focused_workspace_mut() {
-                    workspace.move_column_left();
-                    workspace.ensure_focused_visible_animated(viewport_width);
+                self.execute_workspace_command(true, false, |ws, vw| {
+                    ws.move_column_left();
+                    ws.ensure_focused_visible_animated(vw);
                     info!("Moved column left");
-                }
-                self.start_layout_transition(snapshot);
-                if let Err(e) = self.apply_layout() {
-                    return IpcResponse::error(format!("Failed to apply layout: {}", e));
-                }
-                IpcResponse::Ok
+                })
             }
             IpcCommand::MoveColumnRight => {
-                let snapshot = self.snapshot_layout();
-                if let Some(workspace) = self.focused_workspace_mut() {
-                    workspace.move_column_right();
-                    workspace.ensure_focused_visible_animated(viewport_width);
+                self.execute_workspace_command(true, false, |ws, vw| {
+                    ws.move_column_right();
+                    ws.ensure_focused_visible_animated(vw);
                     info!("Moved column right");
-                }
-                self.start_layout_transition(snapshot);
-                if let Err(e) = self.apply_layout() {
-                    return IpcResponse::error(format!("Failed to apply layout: {}", e));
-                }
-                IpcResponse::Ok
+                })
             }
             IpcCommand::MoveWindowLeft => {
-                let snapshot = self.snapshot_layout();
-                if let Some(workspace) = self.focused_workspace_mut() {
-                    workspace.move_window_left();
-                    workspace.ensure_focused_visible_animated(viewport_width);
+                self.execute_workspace_command(true, true, |ws, vw| {
+                    ws.move_window_left();
+                    ws.ensure_focused_visible_animated(vw);
                     info!("Moved window left to adjacent column");
-                }
-                self.start_layout_transition(snapshot);
-                if let Err(e) = self.apply_layout() {
-                    return IpcResponse::error(format!("Failed to apply layout: {}", e));
-                }
-                self.sync_foreground_window();
-                IpcResponse::Ok
+                })
             }
             IpcCommand::MoveWindowRight => {
-                let snapshot = self.snapshot_layout();
-                if let Some(workspace) = self.focused_workspace_mut() {
-                    workspace.move_window_right();
-                    workspace.ensure_focused_visible_animated(viewport_width);
+                self.execute_workspace_command(true, true, |ws, vw| {
+                    ws.move_window_right();
+                    ws.ensure_focused_visible_animated(vw);
                     info!("Moved window right to adjacent column");
-                }
-                self.start_layout_transition(snapshot);
-                if let Err(e) = self.apply_layout() {
-                    return IpcResponse::error(format!("Failed to apply layout: {}", e));
-                }
-                self.sync_foreground_window();
-                IpcResponse::Ok
+                })
             }
             IpcCommand::ExpelToLeft => {
-                let snapshot = self.snapshot_layout();
-                if let Some(workspace) = self.focused_workspace_mut() {
-                    workspace.expel_to_left();
-                    workspace.ensure_focused_visible_animated(viewport_width);
+                self.execute_workspace_command(true, true, |ws, vw| {
+                    ws.expel_to_left();
+                    ws.ensure_focused_visible_animated(vw);
                     info!("Expelled window to left");
-                }
-                self.start_layout_transition(snapshot);
-                if let Err(e) = self.apply_layout() {
-                    return IpcResponse::error(format!("Failed to apply layout: {}", e));
-                }
-                self.sync_foreground_window();
-                IpcResponse::Ok
+                })
             }
             IpcCommand::ExpelToRight => {
-                let snapshot = self.snapshot_layout();
-                if let Some(workspace) = self.focused_workspace_mut() {
-                    workspace.expel_to_right();
-                    workspace.ensure_focused_visible_animated(viewport_width);
+                self.execute_workspace_command(true, true, |ws, vw| {
+                    ws.expel_to_right();
+                    ws.ensure_focused_visible_animated(vw);
                     info!("Expelled window to right");
-                }
-                self.start_layout_transition(snapshot);
-                if let Err(e) = self.apply_layout() {
-                    return IpcResponse::error(format!("Failed to apply layout: {}", e));
-                }
-                self.sync_foreground_window();
-                IpcResponse::Ok
+                })
             }
             IpcCommand::MoveWindowUp => {
-                let snapshot = self.snapshot_layout();
-                if let Some(workspace) = self.focused_workspace_mut() {
-                    workspace.move_window_up_in_column();
+                self.execute_workspace_command(true, true, |ws, _vw| {
+                    ws.move_window_up_in_column();
                     info!("Moved window up in column");
-                }
-                self.start_layout_transition(snapshot);
-                if let Err(e) = self.apply_layout() {
-                    return IpcResponse::error(format!("Failed to apply layout: {}", e));
-                }
-                self.sync_foreground_window();
-                IpcResponse::Ok
+                })
             }
             IpcCommand::MoveWindowDown => {
-                let snapshot = self.snapshot_layout();
-                if let Some(workspace) = self.focused_workspace_mut() {
-                    workspace.move_window_down_in_column();
+                self.execute_workspace_command(true, true, |ws, _vw| {
+                    ws.move_window_down_in_column();
                     info!("Moved window down in column");
-                }
-                self.start_layout_transition(snapshot);
-                if let Err(e) = self.apply_layout() {
-                    return IpcResponse::error(format!("Failed to apply layout: {}", e));
-                }
-                self.sync_foreground_window();
-                IpcResponse::Ok
+                })
             }
             IpcCommand::FocusMonitorLeft => {
                 let monitors: Vec<_> = self.monitors.values().cloned().collect();
@@ -253,26 +210,16 @@ impl AppState {
                 IpcResponse::Ok
             }
             IpcCommand::Resize { delta } => {
-                let snapshot = self.snapshot_layout();
-                if let Some(workspace) = self.focused_workspace_mut() {
-                    workspace.resize_focused_column(delta);
+                self.execute_workspace_command(true, false, |ws, _vw| {
+                    ws.resize_focused_column(delta);
                     info!("Resized column by {}", delta);
-                }
-                self.start_layout_transition(snapshot);
-                if let Err(e) = self.apply_layout() {
-                    return IpcResponse::error(format!("Failed to apply layout: {}", e));
-                }
-                IpcResponse::Ok
+                })
             }
             IpcCommand::Scroll { delta } => {
-                if let Some(workspace) = self.focused_workspace_mut() {
-                    workspace.scroll_by(delta, viewport_width);
+                self.execute_workspace_command(false, false, |ws, vw| {
+                    ws.scroll_by(delta, vw);
                     info!("Scrolled by {}", delta);
-                }
-                if let Err(e) = self.apply_layout() {
-                    return IpcResponse::error(format!("Failed to apply layout: {}", e));
-                }
-                IpcResponse::Ok
+                })
             }
             IpcCommand::QueryWorkspace => {
                 if let Some(workspace) = self.focused_workspace() {
@@ -467,105 +414,59 @@ impl AppState {
                 IpcResponse::Ok
             }
             IpcCommand::ToggleFullscreen => {
-                if let Some(workspace) = self.focused_workspace_mut() {
-                    let entering = workspace.toggle_fullscreen();
+                self.execute_workspace_command(false, false, |ws, _vw| {
+                    let entering = ws.toggle_fullscreen();
                     info!("Fullscreen: {}", if entering { "on" } else { "off" });
-                }
-                if let Err(e) = self.apply_layout() {
-                    return IpcResponse::error(format!("Failed to apply layout: {}", e));
-                }
-                IpcResponse::Ok
+                })
             }
             IpcCommand::SetColumnWidth { fraction } => {
                 if let Err(message) = validate_set_width_fraction(fraction) {
                     return IpcResponse::error(message);
                 }
-                let snapshot = self.snapshot_layout();
-                if let Some(workspace) = self.focused_workspace_mut() {
-                    workspace.set_focused_column_width_fraction(fraction, viewport_width);
+                self.execute_workspace_command(true, false, |ws, vw| {
+                    ws.set_focused_column_width_fraction(fraction, vw);
                     info!("Set column width fraction to {:.3}", fraction);
-                }
-                self.start_layout_transition(snapshot);
-                if let Err(e) = self.apply_layout() {
-                    return IpcResponse::error(format!("Failed to apply layout: {}", e));
-                }
-                IpcResponse::Ok
+                })
             }
             IpcCommand::EqualizeColumnWidths => {
-                let snapshot = self.snapshot_layout();
-                if let Some(workspace) = self.focused_workspace_mut() {
-                    workspace.equalize_column_widths(viewport_width);
+                self.execute_workspace_command(true, false, |ws, vw| {
+                    ws.equalize_column_widths(vw);
                     info!("Equalized column widths");
-                }
-                self.start_layout_transition(snapshot);
-                if let Err(e) = self.apply_layout() {
-                    return IpcResponse::error(format!("Failed to apply layout: {}", e));
-                }
-                IpcResponse::Ok
+                })
             }
             IpcCommand::CycleWidthUp => {
                 let presets = self.config.layout.width_presets.clone();
-                let snapshot = self.snapshot_layout();
-                if let Some(workspace) = self.focused_workspace_mut() {
-                    workspace.cycle_width_up(&presets, viewport_width);
+                self.execute_workspace_command(true, false, |ws, vw| {
+                    ws.cycle_width_up(&presets, vw);
                     info!("Cycled column width up");
-                }
-                self.start_layout_transition(snapshot);
-                if let Err(e) = self.apply_layout() {
-                    return IpcResponse::error(format!("Failed to apply layout: {}", e));
-                }
-                IpcResponse::Ok
+                })
             }
             IpcCommand::CycleWidthDown => {
                 let presets = self.config.layout.width_presets.clone();
-                let snapshot = self.snapshot_layout();
-                if let Some(workspace) = self.focused_workspace_mut() {
-                    workspace.cycle_width_down(&presets, viewport_width);
+                self.execute_workspace_command(true, false, |ws, vw| {
+                    ws.cycle_width_down(&presets, vw);
                     info!("Cycled column width down");
-                }
-                self.start_layout_transition(snapshot);
-                if let Err(e) = self.apply_layout() {
-                    return IpcResponse::error(format!("Failed to apply layout: {}", e));
-                }
-                IpcResponse::Ok
+                })
             }
             IpcCommand::CycleHeightUp => {
                 let presets = self.config.layout.height_presets.clone();
-                let snapshot = self.snapshot_layout();
-                if let Some(workspace) = self.focused_workspace_mut() {
-                    workspace.cycle_height_up(&presets);
+                self.execute_workspace_command(true, false, |ws, _vw| {
+                    ws.cycle_height_up(&presets);
                     info!("Cycled window height up");
-                }
-                self.start_layout_transition(snapshot);
-                if let Err(e) = self.apply_layout() {
-                    return IpcResponse::error(format!("Failed to apply layout: {}", e));
-                }
-                IpcResponse::Ok
+                })
             }
             IpcCommand::CycleHeightDown => {
                 let presets = self.config.layout.height_presets.clone();
-                let snapshot = self.snapshot_layout();
-                if let Some(workspace) = self.focused_workspace_mut() {
-                    workspace.cycle_height_down(&presets);
+                self.execute_workspace_command(true, false, |ws, _vw| {
+                    ws.cycle_height_down(&presets);
                     info!("Cycled window height down");
-                }
-                self.start_layout_transition(snapshot);
-                if let Err(e) = self.apply_layout() {
-                    return IpcResponse::error(format!("Failed to apply layout: {}", e));
-                }
-                IpcResponse::Ok
+                })
             }
             IpcCommand::EqualizeColumnHeights => {
-                let snapshot = self.snapshot_layout();
-                if let Some(workspace) = self.focused_workspace_mut() {
-                    workspace.equalize_focused_column_heights();
+                self.execute_workspace_command(true, false, |ws, _vw| {
+                    ws.equalize_focused_column_heights();
                     info!("Equalized column heights");
-                }
-                self.start_layout_transition(snapshot);
-                if let Err(e) = self.apply_layout() {
-                    return IpcResponse::error(format!("Failed to apply layout: {}", e));
-                }
-                IpcResponse::Ok
+                })
             }
             IpcCommand::QueryStatus => {
                 let uptime = self.start_time.elapsed().as_secs();
