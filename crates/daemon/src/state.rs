@@ -12,8 +12,46 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::info;
 
+/// Tracks an in-progress window drag for column reorder.
+pub(crate) struct DragState {
+    /// HWND being dragged.
+    pub(crate) hwnd: u64,
+    /// Whether the dragged window is tiled (vs floating).
+    pub(crate) is_tiled: bool,
+    /// Source monitor at drag start.
+    pub(crate) source_monitor: MonitorId,
+    /// Current column index (initialized to source, changes as we live-reorder during drag).
+    pub(crate) current_column_index: usize,
+    /// Last computed drop target (for change detection).
+    pub(crate) last_drop_target: Option<DropTarget>,
+    /// Last time the drop target hint was updated (for throttling).
+    pub(crate) last_hint_update: Option<std::time::Instant>,
+    /// Whether the window was removed from its source column during drag
+    /// (multi-window columns only; single-window columns keep the window to
+    /// preserve column space).
+    pub(crate) removed_from_source: bool,
+}
+
+/// Where a column would be inserted if dropped at the current position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DropTarget {
+    pub(crate) monitor: MonitorId,
+    pub(crate) insert_index: usize,
+    /// For window-merge mode: insertion position within the target column.
+    pub(crate) window_slot: Option<usize>,
+}
+
+/// Action to show/hide the drag hint overlay, communicated from event handler to main loop.
+#[derive(Debug, Clone)]
+pub(crate) enum DragHintAction {
+    /// Show a semi-transparent ghost rectangle at the target column position.
+    ShowGhost { rect: Rect },
+    /// Hide the drag hint overlay.
+    Hide,
+}
+
 /// Duration of layout transition animations in milliseconds.
-pub(crate) const LAYOUT_TRANSITION_DURATION_MS: u64 = 200;
+pub(crate) const LAYOUT_TRANSITION_DURATION_MS: u64 = 150;
 
 /// Fallback viewport dimensions when no monitor is detected.
 pub(crate) const FALLBACK_VIEWPORT_WIDTH: i32 = 1920;
@@ -21,6 +59,9 @@ pub(crate) const FALLBACK_VIEWPORT_HEIGHT: i32 = 1080;
 pub(crate) const FALLBACK_WORK_AREA_HEIGHT: i32 = 1040;
 pub(crate) const MIN_SET_WIDTH_FRACTION: f64 = 0.1;
 pub(crate) const MAX_SET_WIDTH_FRACTION: f64 = 1.0;
+/// Sentinel window ID used as a placeholder during drag to reserve space in the
+/// target column without moving the real window.
+pub(crate) const DRAG_PLACEHOLDER_HWND: u64 = u64::MAX;
 
 /// Max time allowed for a single Win32 placement apply call.
 pub(crate) const APPLY_LAYOUT_TIMEOUT: Duration = Duration::from_millis(1500);
@@ -99,9 +140,10 @@ pub(crate) struct AppState {
     pub(crate) paused: bool,
     /// Guard flag to suppress MovedOrResized events during apply_layout().
     pub(crate) applying_layout: bool,
-    /// Window currently being dragged/resized by the user (if any).
-    /// MovedOrResized events are suppressed during drag; snap-back happens on drop.
-    pub(crate) dragging_window: Option<u64>,
+    /// Active drag state: tracks the window being dragged, source position, and drop target.
+    pub(crate) drag_state: Option<DragState>,
+    /// Pending overlay action from drag event handler (consumed by main loop).
+    pub(crate) pending_drag_hint: Option<DragHintAction>,
     /// Per-window suppression deadline for MovedOrResized events after apply_layout().
     pub(crate) moved_or_resized_suppression: HashMap<u64, std::time::Instant>,
     /// Cooperative cancellation flag for placement workers during shutdown/revert.
@@ -207,7 +249,8 @@ impl AppState {
             border_frame: leopardwm_platform_win32::border::BorderFrame::new().ok(),
             paused: false,
             applying_layout: false,
-            dragging_window: None,
+            drag_state: None,
+            pending_drag_hint: None,
             moved_or_resized_suppression: HashMap::new(),
             apply_worker_cancelled: Arc::new(AtomicBool::new(false)),
             apply_epoch: Arc::new(AtomicU64::new(0)),
@@ -243,6 +286,7 @@ impl AppState {
             .map(|m| m.work_area)
             .unwrap_or_else(|| Rect::new(0, 0, FALLBACK_VIEWPORT_WIDTH, FALLBACK_VIEWPORT_HEIGHT))
     }
+
 }
 
 pub(crate) fn validate_set_width_fraction(fraction: f64) -> std::result::Result<(), String> {

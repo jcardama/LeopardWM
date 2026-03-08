@@ -734,6 +734,30 @@ impl Workspace {
         Ok(())
     }
 
+    /// Insert a window at a specific position within a column.
+    /// `window_index` is clamped to the column length.
+    pub fn insert_window_in_column_at(
+        &mut self,
+        window_id: WindowId,
+        column_index: usize,
+        window_index: usize,
+    ) -> Result<(), LayoutError> {
+        if self.contains_window(window_id) {
+            return Err(LayoutError::DuplicateWindow(window_id));
+        }
+
+        if column_index >= self.columns.len() {
+            return Err(LayoutError::ColumnOutOfBounds(
+                column_index,
+                self.columns.len().saturating_sub(1),
+            ));
+        }
+
+        let clamped = window_index.min(self.columns[column_index].len());
+        self.columns[column_index].insert_at(clamped, window_id);
+        Ok(())
+    }
+
     /// Remove a window from the workspace.
     /// If removing the last window from a column, the column is removed.
     /// If removing the last column, the workspace becomes empty.
@@ -1429,6 +1453,65 @@ impl Workspace {
                 .swap(self.focused_column, self.focused_column + 1);
             self.focused_column += 1;
         }
+    }
+
+    /// Move a column from one index to another, shifting intermediate columns.
+    /// No-op if indices are equal or out of bounds.
+    pub fn reorder_column(&mut self, from: usize, to: usize) {
+        if from == to || from >= self.columns.len() || to >= self.columns.len() {
+            return;
+        }
+        let column = self.columns.remove(from);
+        self.columns.insert(to, column);
+
+        // Update focused_column to track correctly after the shift.
+        if self.focused_column == from {
+            self.focused_column = to;
+        } else if from < to {
+            // Column moved forward: indices in (from, to] shifted left by 1
+            if self.focused_column > from && self.focused_column <= to {
+                self.focused_column -= 1;
+            }
+        } else {
+            // Column moved backward: indices in [to, from) shifted right by 1
+            if self.focused_column >= to && self.focused_column < from {
+                self.focused_column += 1;
+            }
+        }
+        self.clamp_focus_indices();
+    }
+
+    /// Remove an entire column and return it. Used for cross-monitor drag.
+    /// Returns `None` if index is out of bounds.
+    pub fn remove_column(&mut self, index: usize) -> Option<Column> {
+        if index >= self.columns.len() {
+            return None;
+        }
+        let col = self.columns.remove(index);
+        for wid in col.windows() {
+            self.minimized_windows.remove(wid);
+        }
+        if self.columns.is_empty() {
+            self.focused_column = 0;
+            self.focused_window_in_column = 0;
+            self.scroll_offset = 0.0;
+        } else if self.focused_column > index {
+            self.focused_column -= 1;
+        }
+        self.clamp_focus_indices();
+        Some(col)
+    }
+
+    /// Insert a column at the given index. Used for cross-monitor drag.
+    /// Index is clamped to `columns.len()`.
+    pub fn insert_column_at(&mut self, column: Column, index: usize) {
+        let clamped = index.min(self.columns.len());
+        let was_empty = self.columns.is_empty();
+        self.columns.insert(clamped, column);
+        if !was_empty && self.focused_column >= clamped {
+            self.focused_column += 1;
+        }
+        self.clamp_focus_indices();
     }
 
     /// Move the focused window to the column on the left (joining it).
@@ -2298,6 +2381,134 @@ mod tests {
         assert_eq!(ws.focused_column_index(), 1);
         assert_eq!(ws.columns()[0].get(0), Some(1));
         assert_eq!(ws.columns()[1].get(0), Some(2));
+    }
+
+    #[test]
+    fn test_reorder_column_forward() {
+        let mut ws = Workspace::new();
+        ws.insert_window(1, Some(400)).unwrap();
+        ws.insert_window(2, Some(400)).unwrap();
+        ws.insert_window(3, Some(400)).unwrap();
+        // Focus on col 0 (window 1)
+        ws.test_set_focus_unchecked(0, 0);
+
+        // Move col 0 to col 2: [1,2,3] → [2,3,1]
+        ws.reorder_column(0, 2);
+        assert_eq!(ws.columns()[0].get(0), Some(2));
+        assert_eq!(ws.columns()[1].get(0), Some(3));
+        assert_eq!(ws.columns()[2].get(0), Some(1));
+        // Focus should track the moved column
+        assert_eq!(ws.focused_column_index(), 2);
+    }
+
+    #[test]
+    fn test_reorder_column_backward() {
+        let mut ws = Workspace::new();
+        ws.insert_window(1, Some(400)).unwrap();
+        ws.insert_window(2, Some(400)).unwrap();
+        ws.insert_window(3, Some(400)).unwrap();
+        ws.test_set_focus_unchecked(2, 0);
+
+        // Move col 2 to col 0: [1,2,3] → [3,1,2]
+        ws.reorder_column(2, 0);
+        assert_eq!(ws.columns()[0].get(0), Some(3));
+        assert_eq!(ws.columns()[1].get(0), Some(1));
+        assert_eq!(ws.columns()[2].get(0), Some(2));
+        assert_eq!(ws.focused_column_index(), 0);
+    }
+
+    #[test]
+    fn test_reorder_column_noop() {
+        let mut ws = Workspace::new();
+        ws.insert_window(1, Some(400)).unwrap();
+        ws.insert_window(2, Some(400)).unwrap();
+        ws.reorder_column(0, 0);
+        assert_eq!(ws.columns()[0].get(0), Some(1));
+        assert_eq!(ws.columns()[1].get(0), Some(2));
+    }
+
+    #[test]
+    fn test_reorder_column_out_of_bounds() {
+        let mut ws = Workspace::new();
+        ws.insert_window(1, Some(400)).unwrap();
+        // Should not panic
+        ws.reorder_column(0, 5);
+        ws.reorder_column(5, 0);
+        assert_eq!(ws.columns()[0].get(0), Some(1));
+    }
+
+    #[test]
+    fn test_reorder_non_focused_column_adjusts_focus() {
+        let mut ws = Workspace::new();
+        ws.insert_window(1, Some(400)).unwrap();
+        ws.insert_window(2, Some(400)).unwrap();
+        ws.insert_window(3, Some(400)).unwrap();
+        // Focus col 1 (window 2)
+        ws.test_set_focus_unchecked(1, 0);
+
+        // Move col 0 to col 2: [1,2,3] → [2,3,1]
+        // Focused col was 1 which is in (from=0, to=2] range → shifts left to 0
+        ws.reorder_column(0, 2);
+        assert_eq!(ws.focused_column_index(), 0);
+        // The focused column still has window 2
+        assert_eq!(ws.columns()[ws.focused_column_index()].get(0), Some(2));
+    }
+
+    #[test]
+    fn test_remove_column() {
+        let mut ws = Workspace::new();
+        ws.insert_window(1, Some(400)).unwrap();
+        ws.insert_window(2, Some(400)).unwrap();
+        ws.insert_window(3, Some(400)).unwrap();
+        ws.test_set_focus_unchecked(2, 0);
+
+        let col = ws.remove_column(1);
+        assert!(col.is_some());
+        assert_eq!(col.unwrap().get(0), Some(2));
+        assert_eq!(ws.column_count(), 2);
+        assert_eq!(ws.columns()[0].get(0), Some(1));
+        assert_eq!(ws.columns()[1].get(0), Some(3));
+        // Focus was 2, removed index 1 → focus stays at 1 (now points to window 3's column)
+        assert_eq!(ws.focused_column_index(), 1);
+    }
+
+    #[test]
+    fn test_remove_column_out_of_bounds() {
+        let mut ws = Workspace::new();
+        ws.insert_window(1, Some(400)).unwrap();
+        assert!(ws.remove_column(5).is_none());
+        assert_eq!(ws.column_count(), 1);
+    }
+
+    #[test]
+    fn test_insert_column_at() {
+        let mut ws = Workspace::new();
+        ws.insert_window(1, Some(400)).unwrap();
+        ws.insert_window(2, Some(400)).unwrap();
+        ws.test_set_focus_unchecked(0, 0);
+
+        // Insert a new column at index 0
+        let col = Column::new(99, 300);
+        ws.insert_column_at(col, 0);
+        assert_eq!(ws.column_count(), 3);
+        assert_eq!(ws.columns()[0].get(0), Some(99));
+        assert_eq!(ws.columns()[1].get(0), Some(1));
+        assert_eq!(ws.columns()[2].get(0), Some(2));
+        // Focus was 0, insertion at 0 → shifts to 1
+        assert_eq!(ws.focused_column_index(), 1);
+    }
+
+    #[test]
+    fn test_insert_column_at_end() {
+        let mut ws = Workspace::new();
+        ws.insert_window(1, Some(400)).unwrap();
+        ws.test_set_focus_unchecked(0, 0);
+
+        let col = Column::new(99, 300);
+        ws.insert_column_at(col, 100); // clamped to len
+        assert_eq!(ws.column_count(), 2);
+        assert_eq!(ws.columns()[1].get(0), Some(99));
+        assert_eq!(ws.focused_column_index(), 0); // unchanged
     }
 
     #[test]

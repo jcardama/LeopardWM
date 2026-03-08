@@ -29,8 +29,8 @@ use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
 use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    RegisterHotKey, UnregisterHotKey, HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT,
-    MOD_SHIFT, MOD_WIN,
+    GetKeyState, RegisterHotKey, UnregisterHotKey, HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL,
+    MOD_NOREPEAT, MOD_SHIFT, MOD_WIN, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     BringWindowToTop, CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyWindow,
@@ -916,6 +916,27 @@ pub fn is_window_visible(hwnd: WindowId) -> bool {
     unsafe {
         let hwnd = HWND(hwnd as *mut c_void);
         IsWindow(Some(hwnd)).as_bool() && IsWindowVisible(hwnd).as_bool()
+    }
+}
+
+/// Check if the Shift key is currently held down.
+///
+/// Uses `GetKeyState` to poll the keyboard state. Returns `true`
+/// if the high bit is set (key is down).
+pub fn is_shift_key_pressed() -> bool {
+    unsafe { GetKeyState(VK_SHIFT.0 as i32) < 0 }
+}
+
+/// Get the current mouse cursor position in screen coordinates.
+pub fn get_cursor_pos() -> Option<(i32, i32)> {
+    use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
+    let mut pt = windows::Win32::Foundation::POINT::default();
+    unsafe {
+        if GetCursorPos(&mut pt).is_ok() {
+            Some((pt.x, pt.y))
+        } else {
+            None
+        }
     }
 }
 

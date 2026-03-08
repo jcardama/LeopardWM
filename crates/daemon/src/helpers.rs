@@ -532,9 +532,11 @@ impl AppState {
         start_rects: std::collections::HashMap<u64, leopardwm_core_layout::Rect>,
     ) {
         use crate::state::LAYOUT_TRANSITION_DURATION_MS;
+        // Start with one frame (~16ms) already elapsed so the first
+        // apply_layout/send_animation_frame shows visible movement.
         self.layout_transition = Some(LayoutTransition {
             start_rects,
-            elapsed_ms: 0,
+            elapsed_ms: 16,
             duration_ms: LAYOUT_TRANSITION_DURATION_MS,
         });
     }
@@ -573,6 +575,17 @@ impl AppState {
                             + ((p.rect.height - start.height) as f64 * t).round() as i32,
                     );
                 }
+            }
+        }
+
+        // Filter out the dragged window and placeholder so SetWindowPos doesn't
+        // fight the OS drag or try to position the sentinel.
+        if let Some(ref drag) = self.drag_state {
+            if drag.is_tiled {
+                all_placements.retain(|p| {
+                    p.window_id != drag.hwnd
+                        && p.window_id != crate::state::DRAG_PLACEHOLDER_HWND
+                });
             }
         }
 
@@ -645,6 +658,17 @@ impl AppState {
                             + ((p.rect.height - start.height) as f64 * t).round() as i32,
                     );
                 }
+            }
+        }
+
+        // Filter out the dragged window and placeholder so SetWindowPos doesn't
+        // fight the OS drag or try to position the sentinel.
+        if let Some(ref drag) = self.drag_state {
+            if drag.is_tiled {
+                all_placements.retain(|p| {
+                    p.window_id != drag.hwnd
+                        && p.window_id != crate::state::DRAG_PLACEHOLDER_HWND
+                });
             }
         }
 
@@ -786,8 +810,28 @@ impl AppState {
     }
 
     /// Show the border frame on the given window, or hide it if borders are disabled.
+    /// During an active tiled drag, the border is hidden so it doesn't follow
+    /// the OS-dragged window — the ghost overlay provides visual feedback instead.
     pub(crate) fn show_border(&self, hwnd: u64) {
         if let Some(ref frame) = self.border_frame {
+            // During tiled drag: show border at the window's layout position.
+            if let Some(ref drag) = self.drag_state {
+                if drag.is_tiled && self.config.appearance.active_border {
+                    if let Some(bgr) = self.border_color_bgr() {
+                        if let Some(layout_rect) = self.compute_window_layout_rect(hwnd) {
+                            frame.show_at_rect(
+                                layout_rect,
+                                self.config.appearance.active_border_width,
+                                self.border_position(),
+                                bgr,
+                            );
+                            return;
+                        }
+                    }
+                    frame.hide();
+                    return;
+                }
+            }
             if self.config.appearance.active_border {
                 if let Some(bgr) = self.border_color_bgr() {
                     frame.show(
@@ -801,6 +845,18 @@ impl AppState {
             }
             frame.hide();
         }
+    }
+
+    /// Compute the layout rect for a window from the workspace placements.
+    fn compute_window_layout_rect(&self, hwnd: u64) -> Option<leopardwm_core_layout::Rect> {
+        let monitor_id = self.find_window_workspace(hwnd)?;
+        let viewport = self.monitors.get(&monitor_id)?.work_area;
+        let workspace = self.workspaces.get(&monitor_id)?;
+        let placements = workspace.compute_placements_animated(viewport);
+        placements
+            .iter()
+            .find(|p| p.window_id == hwnd)
+            .map(|p| p.rect)
     }
 
     /// Hide the border frame.

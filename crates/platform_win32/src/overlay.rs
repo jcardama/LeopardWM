@@ -23,6 +23,7 @@ use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWINDOWATTRIBUTE};
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, CreateSolidBrush, DeleteObject, EndPaint, FillRect, InvalidateRect, PAINTSTRUCT,
 };
@@ -169,6 +170,16 @@ impl OverlayWindow {
                 };
                 let _ = SetLayeredWindowAttributes(hwnd, Default::default(), 128, LWA_ALPHA);
 
+                // Enable DWM rounded corners (Windows 11 compositor handles AA).
+                // DWMWA_WINDOW_CORNER_PREFERENCE = 33, DWMWCP_ROUND = 2
+                let corner_pref: i32 = 2;
+                let _ = DwmSetWindowAttribute(
+                    hwnd,
+                    DWMWINDOWATTRIBUTE(33),
+                    &corner_pref as *const _ as *const c_void,
+                    std::mem::size_of::<i32>() as u32,
+                );
+
                 let hwnd_raw = hwnd.0 as isize;
                 let _ = init_tx.send(Ok(hwnd_raw));
 
@@ -288,6 +299,16 @@ impl OverlayWindow {
 
         unsafe {
             let _ = ShowWindow(self.hwnd, SW_HIDE);
+        }
+    }
+
+    /// Update the overlay opacity (0–255).
+    pub fn set_opacity(&self, alpha: u8) {
+        unsafe {
+            use windows::Win32::UI::WindowsAndMessaging::{
+                SetLayeredWindowAttributes, LWA_ALPHA,
+            };
+            let _ = SetLayeredWindowAttributes(self.hwnd, Default::default(), alpha, LWA_ALPHA);
         }
     }
 

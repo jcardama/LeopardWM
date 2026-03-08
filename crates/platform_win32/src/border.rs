@@ -154,6 +154,60 @@ impl BorderFrame {
         self.reposition(target_hwnd, width, position);
     }
 
+    /// Show the border at a specific screen rect (not tracking any window).
+    /// Used during drag to keep the border at the layout position.
+    pub fn show_at_rect(
+        &self,
+        rect: leopardwm_core_layout::Rect,
+        width: u32,
+        position: BorderPosition,
+        color_bgr: u32,
+    ) {
+        if let Ok(mut state) = BORDER_STATE.lock() {
+            state.color_bgr = color_bgr;
+        }
+
+        let bw = width as i32;
+        let tw = rect.width;
+        let th = rect.height;
+
+        let (x, y, w, h) = match position {
+            BorderPosition::Outside => (
+                rect.x - bw,
+                rect.y - bw,
+                tw + 2 * bw,
+                th + 2 * bw,
+            ),
+            BorderPosition::Inside => (rect.x, rect.y, tw, th),
+        };
+
+        let needs_render = {
+            let state = BORDER_STATE.lock().unwrap();
+            w != state.cached_w
+                || h != state.cached_h
+                || width != state.cached_width
+                || position != state.cached_position
+                || state.color_bgr != state.cached_color
+        };
+
+        if needs_render {
+            self.render_and_update(x, y, w, h, width, position);
+        } else {
+            unsafe {
+                let _ = SetWindowPos(
+                    self.hwnd,
+                    Some(HWND_TOP),
+                    x,
+                    y,
+                    0,
+                    0,
+                    SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOSIZE,
+                );
+                let _ = ShowWindow(self.hwnd, SW_SHOWNA);
+            }
+        }
+    }
+
     /// Hide the border frame.
     pub fn hide(&self) {
         unsafe {

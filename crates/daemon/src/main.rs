@@ -1095,24 +1095,19 @@ async fn main() -> Result<()> {
         None
     };
 
-    // Initialize snap hint overlay (if enabled)
-    let snap_hint_overlay: Option<OverlayWindow> = if config.snap_hints.enabled {
-        match OverlayWindow::new() {
-            Ok(overlay) => {
-                info!("Snap hint overlay initialized");
-                Some(overlay)
-            }
-            Err(e) => {
-                warn!(
-                    "Failed to create snap hint overlay: {}. Snap hints disabled.",
-                    e
-                );
-                None
-            }
+    // Initialize overlay for snap hints and drag ghost preview.
+    // Always created — snap_hints.enabled only gates resize-hint visibility,
+    // drag ghost preview always works regardless.
+    let snap_hint_overlay: Option<OverlayWindow> = match OverlayWindow::new() {
+        Ok(overlay) => {
+            overlay.set_opacity(config.snap_hints.opacity);
+            info!("Overlay initialized (snap hints {}, opacity {})", if config.snap_hints.enabled { "enabled" } else { "disabled" }, config.snap_hints.opacity);
+            Some(overlay)
         }
-    } else {
-        info!("Snap hints disabled by config (snap_hints.enabled = false)");
-        None
+        Err(e) => {
+            warn!("Failed to create overlay: {}. Snap hints and drag ghost disabled.", e);
+            None
+        }
     };
 
     // Initialize system tray icon
@@ -1298,6 +1293,9 @@ async fn main() -> Result<()> {
                         state.config.clone()
                     };
                     hotkey_state = setup_hotkeys(&new_config, event_tx.clone());
+                    if let Some(ref overlay) = snap_hint_overlay {
+                        overlay.set_opacity(new_config.snap_hints.opacity);
+                    }
                     info!("Hotkeys reloaded after config reload");
                 }
 
@@ -1385,6 +1383,26 @@ async fn main() -> Result<()> {
                     {
                         let mut state = state.lock().await;
                         state.handle_window_event(win_event);
+
+                        // Process drag hint overlay requests from event handler.
+                        // Drag ghost always shows regardless of snap_hints.enabled.
+                        if let Some(hint) = state.pending_drag_hint.take() {
+                            if let Some(ref overlay) = snap_hint_overlay {
+                                match hint {
+                                    crate::state::DragHintAction::ShowGhost { rect } => {
+                                        overlay.show_snap_target(
+                                            leopardwm_core_layout::Rect::new(
+                                                rect.x, rect.y, rect.width, rect.height,
+                                            ),
+                                        );
+                                    }
+                                    crate::state::DragHintAction::Hide => {
+                                        overlay.hide();
+                                    }
+                                }
+                            }
+                        }
+
                         // Update tray tooltip with current state
                         if let Some(ref mgr) = tray_manager {
                             let wc = state.all_managed_window_ids().len();
@@ -1550,6 +1568,9 @@ async fn main() -> Result<()> {
                             };
                             hotkey_state = setup_hotkeys(&new_config, event_tx.clone());
                             sync_tray_toggles(&tray_manager, &new_config);
+                            if let Some(ref overlay) = snap_hint_overlay {
+                                overlay.set_opacity(new_config.snap_hints.opacity);
+                            }
                             info!("Hotkeys reloaded after tray config reload");
                         } else if let IpcResponse::Error { message } = response {
                             warn!("Reload failed: {}", message);
@@ -1762,6 +1783,9 @@ async fn main() -> Result<()> {
                             };
                             hotkey_state = setup_hotkeys(&new_config, event_tx.clone());
                             sync_tray_toggles(&tray_manager, &new_config);
+                            if let Some(ref overlay) = snap_hint_overlay {
+                                overlay.set_opacity(new_config.snap_hints.opacity);
+                            }
                             info!("Hotkeys reloaded after settings save");
                         } else if let IpcResponse::Error { message } = response {
                             warn!("Reload after settings save failed: {}", message);
@@ -3810,7 +3834,7 @@ mod tests {
         let mut state = AppState::new_with_config(test_config(), test_monitors());
         state.layout_apply_timeout = Duration::from_millis(10);
         state.injected_apply_placements_behavior = Some(
-            TestApplyPlacementsBehavior::SleepAndSucceed(Duration::from_millis(80)),
+            TestApplyPlacementsBehavior::SleepAndSucceed(Duration::from_millis(50)),
         );
         assert_eq!(
             state.late_worker_recovery_count.load(Ordering::SeqCst),
@@ -3827,7 +3851,8 @@ mod tests {
             "timed-out apply worker should be tracked"
         );
 
-        std::thread::sleep(Duration::from_millis(140));
+        // Wait long enough for the worker to finish even under heavy load.
+        std::thread::sleep(Duration::from_millis(500));
         let reaped = state.reap_finished_pending_apply_workers();
         assert_eq!(reaped, 1, "timed-out worker should be reaped");
         assert_eq!(

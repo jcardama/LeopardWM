@@ -368,7 +368,12 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 2px; }
   padding: 4px;
   z-index: 10000;
   box-shadow: var(--shadow);
+  overflow-y: auto;
 }
+.combobox-popup::-webkit-scrollbar { width: 3px; }
+.combobox-popup::-webkit-scrollbar-track { background: transparent; }
+.combobox-popup::-webkit-scrollbar-thumb { background: var(--text-tertiary); border-radius: 3px; }
+.combobox-popup::-webkit-scrollbar-thumb:hover { background: var(--text-secondary); }
 .combobox.open .combobox-popup { display: block; }
 .combobox-option {
   padding: 6px 12px;
@@ -378,6 +383,7 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 2px; }
   line-height: 20px;
   color: var(--text-primary);
   transition: background 0.06s;
+  white-space: nowrap;
 }
 .combobox-option:hover { background: var(--subtle-secondary); }
 .combobox-option.selected {
@@ -816,19 +822,19 @@ input[type="range"]::-webkit-slider-thumb {
           </div>
           <div class="field">
             <div class="field-info"><div class="field-label">Swipe left</div><div class="field-desc">Three-finger swipe left command</div></div>
-            <input type="text" id="gestures-swipe_left">
+            <div class="combobox" id="cb-gestures-swipe_left" data-value="focus_left"></div>
           </div>
           <div class="field">
             <div class="field-info"><div class="field-label">Swipe right</div><div class="field-desc">Three-finger swipe right command</div></div>
-            <input type="text" id="gestures-swipe_right">
+            <div class="combobox" id="cb-gestures-swipe_right" data-value="focus_right"></div>
           </div>
           <div class="field">
             <div class="field-info"><div class="field-label">Swipe up</div><div class="field-desc">Three-finger swipe up command</div></div>
-            <input type="text" id="gestures-swipe_up">
+            <div class="combobox" id="cb-gestures-swipe_up" data-value="focus_up"></div>
           </div>
           <div class="field">
             <div class="field-info"><div class="field-label">Swipe down</div><div class="field-desc">Three-finger swipe down command</div></div>
-            <input type="text" id="gestures-swipe_down">
+            <div class="combobox" id="cb-gestures-swipe_down" data-value="focus_down"></div>
           </div>
         </div>
       </div>
@@ -915,15 +921,20 @@ function initCombobox(cb) {
     if (!cb.classList.contains('open')) {
       /* Position popup using fixed coords from trigger rect */
       var rect = trigger.getBoundingClientRect();
+      popup.style.minWidth = Math.max(rect.width, 100) + 'px';
+      popup.style.width = 'auto';
+      popup.style.maxWidth = (window.innerWidth - rect.left - 8) + 'px';
       popup.style.left = rect.left + 'px';
-      popup.style.width = Math.max(rect.width, 100) + 'px';
       var spaceBelow = window.innerHeight - rect.bottom - 8;
-      if (spaceBelow < 160) {
-        popup.style.bottom = (window.innerHeight - rect.top + 4) + 'px';
-        popup.style.top = 'auto';
-      } else {
+      var spaceAbove = rect.top - 8;
+      if (spaceBelow >= spaceAbove) {
         popup.style.top = (rect.bottom + 4) + 'px';
         popup.style.bottom = 'auto';
+        popup.style.maxHeight = (spaceBelow - 4) + 'px';
+      } else {
+        popup.style.bottom = (window.innerHeight - rect.top + 4) + 'px';
+        popup.style.top = 'auto';
+        popup.style.maxHeight = (spaceAbove - 4) + 'px';
       }
     }
     cb.classList.toggle('open');
@@ -940,7 +951,9 @@ function initCombobox(cb) {
     });
   });
 }
-document.querySelectorAll('.combobox').forEach(function(cb) { initCombobox(cb); });
+document.querySelectorAll('.combobox').forEach(function(cb) {
+  if (cb.querySelector('.combobox-trigger')) initCombobox(cb);
+});
 document.addEventListener('click', function() {
   document.querySelectorAll('.combobox.open').forEach(function(cb) { cb.classList.remove('open'); });
 });
@@ -1023,10 +1036,10 @@ function init(cfg) {
   if (cfg.window_rules) { cfg.window_rules.forEach(function(r) { addRuleRow(r); }); }
 
   setChecked('gestures-enabled', cfg.gestures.enabled);
-  setVal('gestures-swipe_left', cfg.gestures.swipe_left);
-  setVal('gestures-swipe_right', cfg.gestures.swipe_right);
-  setVal('gestures-swipe_up', cfg.gestures.swipe_up);
-  setVal('gestures-swipe_down', cfg.gestures.swipe_down);
+  setCb('cb-gestures-swipe_left', cfg.gestures.swipe_left);
+  setCb('cb-gestures-swipe_right', cfg.gestures.swipe_right);
+  setCb('cb-gestures-swipe_up', cfg.gestures.swipe_up);
+  setCb('cb-gestures-swipe_down', cfg.gestures.swipe_down);
 
   setChecked('snaphints-enabled', cfg.snap_hints.enabled);
   setVal('snaphints-duration_ms', cfg.snap_hints.duration_ms);
@@ -1092,6 +1105,21 @@ var DEFAULT_HOTKEYS = {
 };
 
 function cmdLabel(cmd) { return CMD_LABELS[cmd] || cmd; }
+
+/* Build gesture comboboxes from CMD_ORDER/CMD_LABELS */
+function initGestureCombo(id) {
+  var cb = document.getElementById(id);
+  if (!cb) return;
+  var chevron = '<svg class="combobox-chevron" viewBox="0 0 12 12"><path d="M2.15 4.65a.5.5 0 01.7 0L6 7.79l3.15-3.14a.5.5 0 11.7.7l-3.5 3.5a.5.5 0 01-.7 0l-3.5-3.5a.5.5 0 010-.7z"/></svg>';
+  var current = cb.dataset.value || '';
+  var options = CMD_ORDER.map(function(cmd) {
+    return '<div class="combobox-option' + (cmd === current ? ' selected' : '') + '" data-value="' + cmd + '">' + cmdLabel(cmd) + '</div>';
+  }).join('');
+  cb.innerHTML = '<button class="combobox-trigger" type="button"><span class="combobox-text">' + cmdLabel(current) + '</span>' + chevron + '</button>' +
+    '<div class="combobox-popup">' + options + '</div>';
+  initCombobox(cb);
+}
+['cb-gestures-swipe_left','cb-gestures-swipe_right','cb-gestures-swipe_up','cb-gestures-swipe_down'].forEach(initGestureCombo);
 
 function addHotkeyRow(key, cmd) {
   var tbody = document.getElementById('hotkeys-body');
@@ -1198,8 +1226,8 @@ function readConfig() {
     window_rules: readRules(),
     gestures: {
       enabled: checked('gestures-enabled'),
-      swipe_left: val('gestures-swipe_left'), swipe_right: val('gestures-swipe_right'),
-      swipe_up: val('gestures-swipe_up'), swipe_down: val('gestures-swipe_down')
+      swipe_left: cbVal('cb-gestures-swipe_left'), swipe_right: cbVal('cb-gestures-swipe_right'),
+      swipe_up: cbVal('cb-gestures-swipe_up'), swipe_down: cbVal('cb-gestures-swipe_down')
     },
     snap_hints: {
       enabled: checked('snaphints-enabled'),
