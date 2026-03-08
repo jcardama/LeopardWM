@@ -23,7 +23,24 @@ jobs:
           cp target/x86_64-pc-windows-msvc/release/leopardwm-cli.exe "$DIR/"
           cp README.md LICENSE "$DIR/"
           7z a "${DIR}.zip" "$DIR"
+      - name: Extract changelog
+        id: changelog
+        shell: bash
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          # Extract the section for this version from CHANGELOG.md
+          NOTES=$(awk "/^## \\[?${VERSION//./\\.}\\]?/{found=1; next} /^## /{if(found) exit} found{print}" CHANGELOG.md 2>/dev/null || true)
+          if [ -z "$NOTES" ]; then
+            echo "body=" >> $GITHUB_OUTPUT
+          else
+            # Use a delimiter for multiline output
+            EOF=$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
+            echo "body<<$EOF" >> $GITHUB_OUTPUT
+            echo "$NOTES" >> $GITHUB_OUTPUT
+            echo "$EOF" >> $GITHUB_OUTPUT
+          fi
       - uses: softprops/action-gh-release@v2
         with:
           files: LeopardWM-*.zip
-          generate_release_notes: true
+          body: ${{ steps.changelog.outputs.body }}
+          generate_release_notes: ${{ steps.changelog.outputs.body == '' }}
