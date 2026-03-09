@@ -20,6 +20,8 @@ pub(crate) struct DragState {
     pub(crate) is_tiled: bool,
     /// Source monitor at drag start.
     pub(crate) source_monitor: MonitorId,
+    /// Source workspace index at drag start (0-based).
+    pub(crate) source_workspace_idx: usize,
     /// Current column index (initialized to source, changes as we live-reorder during drag).
     pub(crate) current_column_index: usize,
     /// Last computed drop target (for change detection).

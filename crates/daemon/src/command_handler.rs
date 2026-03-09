@@ -613,17 +613,47 @@ impl AppState {
                     return IpcResponse::Ok;
                 }
 
-                // Get focused window
-                let focused_hwnd = match self.focused_workspace().and_then(|ws| ws.focused_window()) {
-                    Some(hwnd) => hwnd,
-                    None => return IpcResponse::Ok,
+                // Get focused window — prefer the OS-foreground window (previous_focused_hwnd)
+                // so that floating windows can also be moved between workspaces.
+                // Fall back to tiled focus if previous_focused_hwnd is not on this workspace.
+                let focused_hwnd = {
+                    let tiled_focus = self.focused_workspace().and_then(|ws| ws.focused_window());
+                    let os_focus = self.previous_focused_hwnd.and_then(|hwnd| {
+                        // Verify the OS-focused window is actually on the current workspace
+                        self.workspaces.get(&monitor)
+                            .and_then(|v| v.get(current_idx))
+                            .filter(|ws| ws.contains_window(hwnd))
+                            .map(|_| hwnd)
+                    });
+                    match os_focus.or(tiled_focus) {
+                        Some(hwnd) => hwnd,
+                        None => return IpcResponse::Ok,
+                    }
                 };
 
                 let snapshot = self.snapshot_layout();
 
-                // Remove window from current workspace
+                // Ensure target workspace exists (lazy creation)
+                self.ensure_workspace_exists(monitor, idx);
+
+                // Check if the window is floating so we use the correct add/remove APIs.
+                let is_floating = self.workspaces.get(&monitor)
+                    .and_then(|v| v.get(current_idx))
+                    .is_some_and(|ws| ws.is_floating(focused_hwnd));
+
+                // Remove from source and insert into target.
+                // For floating windows, get the rect before removal.
+                let floating_rect = if is_floating {
+                    self.lookup_window_info(focused_hwnd)
+                        .map(|info| info.rect)
+                } else {
+                    None
+                };
+
                 if let Some(workspace) = self.workspaces.get_mut(&monitor).and_then(|v| v.get_mut(current_idx)) {
-                    if let Err(e) = workspace.remove_window(focused_hwnd) {
+                    if is_floating {
+                        workspace.remove_floating(focused_hwnd);
+                    } else if let Err(e) = workspace.remove_window(focused_hwnd) {
                         return IpcResponse::error(format!("Failed to remove window: {}", e));
                     }
                 }
@@ -631,15 +661,28 @@ impl AppState {
                 // Ensure target workspace exists (lazy creation)
                 self.ensure_workspace_exists(monitor, idx);
 
-                // Insert window into target workspace
+                // Insert into target workspace
                 if let Some(workspace) = self.workspaces.get_mut(&monitor).and_then(|v| v.get_mut(idx)) {
-                    if let Err(e) = workspace.insert_window(focused_hwnd, None) {
+                    if is_floating {
+                        let rect = floating_rect.unwrap_or(leopardwm_core_layout::Rect::new(0, 0, 800, 600));
+                        let _ = workspace.add_floating(focused_hwnd, rect);
+                    } else if let Err(e) = workspace.insert_window(focused_hwnd, None) {
+                        // Rollback: re-insert into source since target insert failed
+                        if let Some(src_ws) = self.workspaces.get_mut(&monitor).and_then(|v| v.get_mut(current_idx)) {
+                            let _ = src_ws.insert_window(focused_hwnd, None);
+                        }
                         return IpcResponse::error(format!("Failed to add window to target workspace: {}", e));
                     }
                 }
 
                 // Target workspace is not active — hide the moved window
                 let _ = move_window_offscreen(focused_hwnd);
+
+                // Ensure the source workspace scrolls to show its new focused window
+                let viewport_width = self.viewport_width_for(monitor);
+                if let Some(workspace) = self.workspaces.get_mut(&monitor).and_then(|v| v.get_mut(current_idx)) {
+                    workspace.ensure_focused_visible_animated(viewport_width);
+                }
 
                 self.start_layout_transition(snapshot);
                 if let Err(e) = self.apply_layout() {

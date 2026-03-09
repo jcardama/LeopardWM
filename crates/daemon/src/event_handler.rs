@@ -375,10 +375,12 @@ impl AppState {
                         } else {
                             debug!("Focus changed to window {} on monitor {}", hwnd, monitor_id);
                             workspace.ensure_focused_visible_animated(viewport_width);
-                            if let Err(e) = self.apply_layout() {
-                                warn!("Failed to apply layout after focus change: {}", e);
-                            }
                         }
+                    }
+                    // Always apply layout — even if focus_window failed (floating windows),
+                    // we still need to repaint if we just switched workspaces.
+                    if let Err(e) = self.apply_layout() {
+                        warn!("Failed to apply layout after focus change: {}", e);
                     }
 
                     // Update border only — do NOT call sync_foreground_window()
@@ -527,10 +529,12 @@ impl AppState {
                     } else {
                         (false, self.focused_monitor, 0)
                     };
+                let source_ws_idx = self.active_workspace_idx(source_monitor);
                 self.drag_state = Some(DragState {
                     hwnd,
                     is_tiled,
                     source_monitor,
+                    source_workspace_idx: source_ws_idx,
                     current_column_index: col_idx,
                     last_drop_target: None,
                     last_hint_update: None,

@@ -38,8 +38,8 @@ impl AppState {
         let shift_held = is_shift_key_pressed();
 
         // Read drag state fields.
-        let (current_col, source_monitor) = match self.drag_state {
-            Some(ref d) => (d.current_column_index, d.source_monitor),
+        let (current_col, source_monitor, source_ws_idx) = match self.drag_state {
+            Some(ref d) => (d.current_column_index, d.source_monitor, d.source_workspace_idx),
             None => return,
         };
 
@@ -81,8 +81,7 @@ impl AppState {
                 Some(m) => m.work_area,
                 None => return,
             };
-            let ws_idx = self.active_workspace_idx(source_monitor);
-            let Some(workspace) = self.workspaces.get(&source_monitor).and_then(|v| v.get(ws_idx)) else {
+            let Some(workspace) = self.workspaces.get(&source_monitor).and_then(|v| v.get(source_ws_idx)) else {
                 return;
             };
 
@@ -106,8 +105,7 @@ impl AppState {
                     current_col, target_idx, source_monitor
                 );
                 let snapshot = self.snapshot_layout();
-                let idx = self.active_workspace_idx(source_monitor);
-                if let Some(workspace) = self.workspaces.get_mut(&source_monitor).and_then(|v| v.get_mut(idx)) {
+                if let Some(workspace) = self.workspaces.get_mut(&source_monitor).and_then(|v| v.get_mut(source_ws_idx)) {
                     workspace.reorder_column(current_col, target_idx);
                 }
                 if let Some(ref mut drag) = self.drag_state {
@@ -120,8 +118,7 @@ impl AppState {
             }
 
             // Show ghost at the dragged column's new position.
-            let ws_idx = self.active_workspace_idx(source_monitor);
-            let workspace = match self.workspaces.get(&source_monitor).and_then(|v| v.get(ws_idx)) {
+            let workspace = match self.workspaces.get(&source_monitor).and_then(|v| v.get(source_ws_idx)) {
                 Some(ws) => ws,
                 None => return,
             };
@@ -230,18 +227,17 @@ impl AppState {
                     // Remove window from multi-window source columns so remaining
                     // windows expand. Single-window columns keep the window to
                     // preserve column space until drop.
-                    let src_idx = self.active_workspace_idx(source_monitor);
                     let should_remove = self
                         .workspaces
                         .get(&source_monitor)
-                        .and_then(|v| v.get(src_idx))
+                        .and_then(|v| v.get(source_ws_idx))
                         .and_then(|ws| {
                             let (col, _) = ws.find_window_location(hwnd)?;
                             Some(ws.column(col)?.len() > 1)
                         })
                         .unwrap_or(false);
                     if should_remove {
-                        if let Some(ws) = self.workspaces.get_mut(&source_monitor).and_then(|v| v.get_mut(src_idx)) {
+                        if let Some(ws) = self.workspaces.get_mut(&source_monitor).and_then(|v| v.get_mut(source_ws_idx)) {
                             let _ = ws.remove_window(hwnd);
                         }
                         if let Some(ref mut drag) = self.drag_state {
@@ -390,7 +386,7 @@ impl AppState {
         let already_removed = drag.removed_from_source;
 
         // Find source column info before removal.
-        let src_ws_idx = self.active_workspace_idx(source_monitor);
+        let src_ws_idx = drag.source_workspace_idx;
         let src_col_info = if !already_removed && target_monitor == source_monitor {
             self.workspaces
                 .get(&source_monitor)
@@ -423,8 +419,7 @@ impl AppState {
 
         // Remove the window from its source column (skip if already removed during drag).
         if !already_removed {
-            let src_mut_idx = self.active_workspace_idx(source_monitor);
-            if let Some(workspace) = self.workspaces.get_mut(&source_monitor).and_then(|v| v.get_mut(src_mut_idx)) {
+            if let Some(workspace) = self.workspaces.get_mut(&source_monitor).and_then(|v| v.get_mut(src_ws_idx)) {
                 if let Err(e) = workspace.remove_window(hwnd) {
                     warn!("Failed to remove window {} for merge: {}", hwnd, e);
                     self.snap_back_tiled(source_monitor);
@@ -502,17 +497,17 @@ impl AppState {
 
         if let Some((ph_col, ph_slot)) = placeholder_location {
             // Capture source column info BEFORE any removals.
-            let src_idx = self.active_workspace_idx(source_monitor);
+            let src_ws_idx = drag.source_workspace_idx;
             let src_info = if !drag.removed_from_source && target_monitor == source_monitor {
                 self.workspaces
                     .get(&source_monitor)
-                    .and_then(|v| v.get(src_idx))
+                    .and_then(|v| v.get(src_ws_idx))
                     .and_then(|ws| ws.find_window_location(hwnd))
                     .map(|(col, _)| {
                         let len = self
                             .workspaces
                             .get(&source_monitor)
-                            .and_then(|v| v.get(src_idx))
+                            .and_then(|v| v.get(src_ws_idx))
                             .and_then(|ws| ws.column(col))
                             .map(|c| c.len())
                             .unwrap_or(0);
@@ -529,8 +524,7 @@ impl AppState {
 
             // Remove real window from source (if not already removed during drag).
             if !drag.removed_from_source {
-                let src_mut_idx = self.active_workspace_idx(source_monitor);
-                if let Some(ws) = self.workspaces.get_mut(&source_monitor).and_then(|v| v.get_mut(src_mut_idx)) {
+                if let Some(ws) = self.workspaces.get_mut(&source_monitor).and_then(|v| v.get_mut(src_ws_idx)) {
                     let _ = ws.remove_window(hwnd);
                 }
             }
@@ -597,8 +591,9 @@ impl AppState {
         let source_monitor = drag.source_monitor;
         let snapshot = self.snapshot_layout();
 
-        // Get current column index (may differ from drag start if events intervened).
-        let src_idx = self.active_workspace_idx(source_monitor);
+        // Use the workspace index from drag start — it's stable even if
+        // active workspace changed during drag.
+        let src_idx = drag.source_workspace_idx;
         let col_idx = match self
             .workspaces
             .get(&source_monitor)
