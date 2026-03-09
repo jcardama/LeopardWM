@@ -344,14 +344,18 @@ impl AppState {
             }
         }
 
-        // Restore active workspace indices
+        // Restore active workspace indices (validate in range)
         for (device_name, &ws_idx) in &snapshot.active_workspace {
             if let Some((&id, _)) = self
                 .monitors
                 .iter()
                 .find(|(_, m)| &m.device_name == device_name)
             {
-                self.active_workspace.insert(id, ws_idx);
+                // Clamp to valid range — index must be within the workspace vec
+                let max_idx = self.workspaces.get(&id)
+                    .map(|v| v.len().saturating_sub(1))
+                    .unwrap_or(0);
+                self.active_workspace.insert(id, ws_idx.min(max_idx));
             }
         }
 
@@ -408,21 +412,34 @@ impl AppState {
         // Handle removed monitors - migrate ALL workspaces' windows to primary's active workspace
         for removed_id in old_ids.difference(&new_ids) {
             if let Some(old_ws_vec) = self.workspaces.remove(removed_id) {
-                let mut all_window_ids = Vec::new();
+                // Collect tiled and floating windows separately to preserve their type
+                let mut tiled_window_ids = Vec::new();
+                let mut floating_windows = Vec::new();
                 for old_workspace in &old_ws_vec {
-                    all_window_ids.extend(old_workspace.all_window_ids());
+                    for col in old_workspace.columns() {
+                        tiled_window_ids.extend(col.windows().iter().copied());
+                    }
+                    for fw in old_workspace.floating_windows() {
+                        floating_windows.push((fw.id, fw.rect));
+                    }
                 }
                 if let Some(primary) = primary_id {
                     let primary_active_idx = self.active_workspace_idx(primary);
                     if let Some(primary_ws) = self.workspaces.get_mut(&primary).and_then(|v| v.get_mut(primary_active_idx)) {
-                        for window_id in &all_window_ids {
+                        for window_id in &tiled_window_ids {
                             if let Err(e) = primary_ws.insert_window(*window_id, None) {
-                                warn!("Failed to migrate window {}: {}", window_id, e);
+                                warn!("Failed to migrate tiled window {}: {}", window_id, e);
+                            }
+                        }
+                        for (wid, rect) in &floating_windows {
+                            if let Err(e) = primary_ws.add_floating(*wid, *rect) {
+                                warn!("Failed to migrate floating window {}: {}", wid, e);
                             }
                         }
                         info!(
-                            "Migrated {} windows from removed monitor {} to primary",
-                            all_window_ids.len(),
+                            "Migrated {} tiled + {} floating windows from removed monitor {} to primary",
+                            tiled_window_ids.len(),
+                            floating_windows.len(),
                             removed_id
                         );
                     }
@@ -1000,7 +1017,9 @@ impl AppState {
         if let Some(hwnd) = focused_hwnd {
             self.show_border(hwnd);
 
-            // Set foreground window
+            // Set foreground window — track it regardless of OS result since
+            // this is our intended focus. The call can fail if the window
+            // vanished between layout and here, which is a transient condition.
             let _ = leopardwm_platform_win32::set_foreground_window(hwnd);
             self.previous_focused_hwnd = Some(hwnd);
         } else {
@@ -1183,12 +1202,20 @@ impl AppState {
             return Ok(None);
         }
 
-        let Some(window_id) = self.focused_workspace().and_then(|ws| ws.focused_window()) else {
-            return Ok(None);
-        };
-
+        // Prefer the OS-foreground window so floating windows can be moved too.
         let src_idx = self.active_workspace_idx(source_monitor);
         let tgt_idx = self.active_workspace_idx(target_monitor);
+
+        let os_focus = self.previous_focused_hwnd.and_then(|hwnd| {
+            self.workspaces.get(&source_monitor)
+                .and_then(|v| v.get(src_idx))
+                .filter(|ws| ws.contains_window(hwnd))
+                .map(|_| hwnd)
+        });
+        let tiled_focus = self.focused_workspace().and_then(|ws| ws.focused_window());
+        let Some(window_id) = os_focus.or(tiled_focus) else {
+            return Ok(None);
+        };
 
         let Some(source_ws_vec) = self.workspaces.get(&source_monitor) else {
             return Err(format!(
@@ -1215,15 +1242,30 @@ impl AppState {
             ));
         };
 
-        source_workspace
-            .remove_window(window_id)
-            .map_err(|e| format!("Failed to remove window: {}", e))?;
-        target_workspace
-            .insert_window(window_id, None)
-            .map_err(|e| format!("Failed to add window to target: {}", e))?;
+        let is_floating = source_workspace.is_floating(window_id);
+        if is_floating {
+            let rect = source_workspace.floating_windows()
+                .iter()
+                .find(|f| f.id == window_id)
+                .map(|f| f.rect)
+                .unwrap_or(leopardwm_core_layout::Rect::new(0, 0, 800, 600));
+            source_workspace.remove_floating(window_id);
+            target_workspace
+                .add_floating(window_id, rect)
+                .map_err(|e| format!("Failed to add floating window to target: {}", e))?;
+        } else {
+            source_workspace
+                .remove_window(window_id)
+                .map_err(|e| format!("Failed to remove window: {}", e))?;
+            target_workspace
+                .insert_window(window_id, None)
+                .map_err(|e| format!("Failed to add window to target: {}", e))?;
+        }
 
         let target_viewport = self.viewport_width_for(target_monitor);
-        target_workspace.ensure_focused_visible(target_viewport);
+        if !is_floating {
+            target_workspace.ensure_focused_visible(target_viewport);
+        }
 
         self.workspaces.get_mut(&source_monitor).unwrap()[src_idx] = source_workspace;
         self.workspaces.get_mut(&target_monitor).unwrap()[tgt_idx] = target_workspace;

@@ -424,6 +424,10 @@ impl AppState {
                                 // Safe: we already removed hwnd from recently_hidden_hwnds
                                 // above, so the Created handler won't re-suppress it.
                                 self.handle_window_event(WindowEvent::Created(hwnd));
+                                // Update focus state to match OS — the user just
+                                // focused this window, so track it and show border.
+                                self.previous_focused_hwnd = Some(hwnd);
+                                self.show_border(hwnd);
                                 return;
                             }
                         }
@@ -440,9 +444,22 @@ impl AppState {
                 if let Some((monitor_id, ws_idx)) = self.find_window_workspace(hwnd) {
                     let viewport_width = self.viewport_width_for(monitor_id);
                     let snapshot = self.snapshot_layout();
+
+                    // If the minimized window is a floating window tracked as
+                    // previous_focused_hwnd, clear it so sync_foreground_window
+                    // doesn't try to re-focus a minimized floating window.
+                    let is_floating = self.workspaces.get(&monitor_id)
+                        .and_then(|v| v.get(ws_idx))
+                        .is_some_and(|ws| ws.is_floating(hwnd));
+                    if is_floating && self.previous_focused_hwnd == Some(hwnd) {
+                        self.previous_focused_hwnd = None;
+                    }
+
                     if let Some(workspace) = self.workspaces.get_mut(&monitor_id).and_then(|v| v.get_mut(ws_idx)) {
                         let cleared_fullscreen = workspace.clear_fullscreen_if_window(hwnd);
-                        if workspace.mark_minimized(hwnd) || cleared_fullscreen {
+                        // mark_minimized only handles tiled windows; floating windows
+                        // are not in the minimized set. Handle both paths.
+                        if workspace.mark_minimized(hwnd) || cleared_fullscreen || is_floating {
                             info!("Window {} minimized", hwnd);
 
                             // If the minimized window was the focused window, move focus
@@ -550,6 +567,14 @@ impl AppState {
             }
             WindowEvent::MoveSizeEnd(hwnd) => {
                 debug!("User finished dragging/resizing window {}", hwnd);
+
+                // Verify this MoveSizeEnd matches the active drag — a mismatched
+                // event for a different window should not tear down the drag state.
+                if self.drag_state.as_ref().is_some_and(|d| d.hwnd != hwnd) {
+                    debug!("Ignoring MoveSizeEnd for {} — drag active for different window", hwnd);
+                    return;
+                }
+
                 let drag = self.drag_state.take();
                 // Always hide the drag hint overlay on drop.
                 self.pending_drag_hint = Some(DragHintAction::Hide);
@@ -574,6 +599,20 @@ impl AppState {
 
                 // Tiled window: determine final drop target.
                 let Some(win_info) = self.lookup_window_info(hwnd) else {
+                    // Window vanished during drag — clean up placeholder and
+                    // reinsert window if it was removed from source.
+                    for (_, ws_vec) in self.workspaces.iter_mut() {
+                        for ws in ws_vec.iter_mut() {
+                            let _ = ws.remove_window(crate::state::DRAG_PLACEHOLDER_HWND);
+                        }
+                    }
+                    if drag.removed_from_source {
+                        if let Some(ws) = self.workspaces.get_mut(&drag.source_monitor)
+                            .and_then(|v| v.get_mut(drag.source_workspace_idx))
+                        {
+                            let _ = ws.insert_window(drag.hwnd, None);
+                        }
+                    }
                     self.snap_back_tiled(drag.source_monitor);
                     return;
                 };

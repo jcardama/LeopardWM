@@ -899,8 +899,8 @@ pub fn get_process_executable(pid: u32) -> Option<String> {
             Err(_) => return None,
         };
 
-        // Get the executable path
-        let mut buffer: Vec<u16> = vec![0; 260]; // MAX_PATH
+        // Get the executable path — use extended-length buffer for long paths
+        let mut buffer: Vec<u16> = vec![0; 1024];
         let len = K32GetModuleFileNameExW(Some(handle), None, &mut buffer);
 
         // Close the handle
@@ -1081,6 +1081,9 @@ pub fn apply_placements(
         });
     }
 
+    // Track windows that failed positioning (excluded from cache).
+    let mut failed_window_ids: std::collections::HashSet<u64> = std::collections::HashSet::new();
+
     // Batch all SetWindowPos calls via DeferWindowPos for atomic repositioning.
     if !entries.is_empty() {
         unsafe {
@@ -1088,13 +1091,15 @@ pub fn apply_placements(
             Err(_) => {
                 // Fallback: apply individually if batching fails
                 for entry in &entries {
-                    let _ = SetWindowPos(
+                    if SetWindowPos(
                         entry.hwnd, None,
                         entry.x, entry.y, entry.w, entry.h,
                         entry.flags,
-                    );
+                    ).is_err() {
+                        failed_window_ids.insert(entry.window_id);
+                    }
                 }
-                applied = entries.len() as u32;
+                applied = (entries.len() - failed_window_ids.len()) as u32;
             }
             Ok(initial_hdwp) => {
                 let mut hdwp = initial_hdwp;
@@ -1120,13 +1125,15 @@ pub fn apply_placements(
                     let _ = EndDeferWindowPos(hdwp);
                     // Batch was interrupted — fall back to individual calls
                     for entry in &entries {
-                        let _ = SetWindowPos(
+                        if SetWindowPos(
                             entry.hwnd, None,
                             entry.x, entry.y, entry.w, entry.h,
                             entry.flags,
-                        );
+                        ).is_err() {
+                            failed_window_ids.insert(entry.window_id);
+                        }
                     }
-                    applied = entries.len() as u32;
+                    applied = (entries.len() - failed_window_ids.len()) as u32;
                 }
             }
             }
@@ -1227,11 +1234,14 @@ pub fn apply_placements(
     }
 
     // Update the cache with only windows that were actually positioned
-    // (skip windows that failed IsWindow/IsIconic checks to avoid cache poisoning)
+    // (skip windows that failed IsWindow/IsIconic checks or SetWindowPos failures)
     if let Some(cache) = cache {
         cache.clear();
         let positioned: std::collections::HashSet<u64> =
-            entries.iter().map(|e| e.window_id).collect();
+            entries.iter()
+                .filter(|e| !failed_window_ids.contains(&e.window_id))
+                .map(|e| e.window_id)
+                .collect();
         for p in &visible {
             if positioned.contains(&p.window_id) {
                 cache.insert(p.window_id, (p.rect, p.visibility));
@@ -1967,11 +1977,15 @@ fn win_event_callback_inner(
     // Exception: EVENT_OBJECT_FOCUS fires with OBJID_CLIENT, and
     // EVENT_SYSTEM_* events always have id_object == 0, so we allow
     // focus/foreground events regardless of id_object.
-    let is_focus_or_visibility = matches!(
+    // EVENT_SYSTEM_FOREGROUND and EVENT_OBJECT_FOCUS fire with id_object == 0
+    // or OBJID_CLIENT, so allow them regardless. But EVENT_OBJECT_SHOW/HIDE
+    // must be OBJID_WINDOW only — child control visibility changes should not
+    // be emitted as top-level window lifecycle events.
+    let is_focus_event = matches!(
         event,
-        EVENT_SYSTEM_FOREGROUND | EVENT_OBJECT_FOCUS | EVENT_OBJECT_SHOW | EVENT_OBJECT_HIDE
+        EVENT_SYSTEM_FOREGROUND | EVENT_OBJECT_FOCUS
     );
-    if id_object != OBJID_WINDOW && !is_focus_or_visibility {
+    if id_object != OBJID_WINDOW && !is_focus_event {
         return;
     }
 

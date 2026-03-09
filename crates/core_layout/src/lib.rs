@@ -1490,6 +1490,10 @@ impl Workspace {
         let col = self.columns.remove(index);
         for wid in col.windows() {
             self.minimized_windows.remove(wid);
+            // Clear fullscreen if the removed column contained the fullscreen window
+            if self.fullscreen_window == Some(*wid) {
+                self.fullscreen_window = None;
+            }
         }
         if self.columns.is_empty() {
             self.focused_column = 0;
@@ -1503,8 +1507,12 @@ impl Workspace {
     }
 
     /// Insert a column at the given index. Used for cross-monitor drag.
-    /// Index is clamped to `columns.len()`.
+    /// Index is clamped to `columns.len()`. Empty columns are rejected to
+    /// preserve the invariant that all columns contain at least one window.
     pub fn insert_column_at(&mut self, column: Column, index: usize) {
+        if column.is_empty() {
+            return;
+        }
         let clamped = index.min(self.columns.len());
         let was_empty = self.columns.is_empty();
         self.columns.insert(clamped, column);
@@ -1641,7 +1649,11 @@ impl Workspace {
         // Treat NaN and Infinity as zero for safety
         let safe_delta = if delta.is_finite() { delta } else { 0.0 };
         self.scroll_offset += safe_delta;
-        let max_scroll = (self.total_width() - viewport_width).max(0);
+        // Use visible width (viewport minus outer gaps) to match ensure_focused_visible
+        let outer_left = self.outer_gap_left.max(0);
+        let outer_right = self.outer_gap_right.max(0);
+        let vis_w = (viewport_width - outer_left - outer_right).max(1);
+        let max_scroll = (self.total_width() - vis_w).max(0);
         self.scroll_offset = self.scroll_offset.clamp(0.0, max_scroll as f64);
     }
 
@@ -1997,20 +2009,31 @@ impl Workspace {
 
     /// Equalize all column widths to share the viewport equally.
     /// Uses gap-aware formula so equalized columns perfectly fill the viewport.
+    /// Only counts active (non-fully-minimized) columns to match layout calculations.
     pub fn equalize_column_widths(&mut self, viewport_width: i32) {
         if self.columns.is_empty() {
+            return;
+        }
+
+        // Identify which columns are active (have at least one non-minimized window)
+        let active_flags: Vec<bool> = self.columns.iter()
+            .map(|c| self.is_column_active(c))
+            .collect();
+        let active_count = active_flags.iter().filter(|&&a| a).count() as i32;
+        if active_count == 0 {
             return;
         }
 
         let outer_left = self.outer_gap_left.max(0);
         let outer_right = self.outer_gap_right.max(0);
         let gap = self.gap.max(0);
-        let n = self.columns.len() as i32;
-        let total_gaps = gap * (n - 1) + outer_left + outer_right;
-        let per_column = ((viewport_width - total_gaps).max(MIN_COLUMN_WIDTH * n)) / n;
+        let total_gaps = gap * (active_count - 1) + outer_left + outer_right;
+        let per_column = ((viewport_width - total_gaps).max(MIN_COLUMN_WIDTH * active_count)) / active_count;
 
-        for col in &mut self.columns {
-            col.set_width(per_column);
+        for (col, &is_active) in self.columns.iter_mut().zip(active_flags.iter()) {
+            if is_active {
+                col.set_width(per_column);
+            }
         }
     }
 
@@ -2519,13 +2542,15 @@ mod tests {
         ws.insert_window(3, Some(400)).unwrap();
 
         let viewport_width = 500;
+        // Visible width = viewport - outer_left - outer_right = 500 - 10 - 10 = 480
+        let vis_w = viewport_width - 10 - 10;
 
         ws.scroll_by(100.0, viewport_width);
         assert_eq!(ws.scroll_offset(), 100.0);
 
         ws.scroll_by(2000.0, viewport_width);
-        // Should clamp to max scroll
-        let max_scroll = (ws.total_width() - viewport_width).max(0) as f64;
+        // Should clamp to max scroll (total_width - visible_width)
+        let max_scroll = (ws.total_width() - vis_w).max(0) as f64;
         assert_eq!(ws.scroll_offset(), max_scroll);
 
         ws.scroll_by(-5000.0, viewport_width);
