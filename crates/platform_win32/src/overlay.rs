@@ -267,6 +267,14 @@ impl OverlayWindow {
         }
     }
 
+    /// Get the raw HWND value for direct cross-thread access.
+    ///
+    /// The returned value can be used with [`reposition_overlay`] from any thread
+    /// to update the overlay position without going through the event loop.
+    pub fn hwnd_raw(&self) -> isize {
+        self.hwnd.0 as isize
+    }
+
     /// Show a column boundary hint (vertical line at x position).
     ///
     /// Displays a vertical line centered at the given x coordinate.
@@ -417,6 +425,38 @@ fn overlay_window_proc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARA
             LRESULT(0)
         }
         _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+    }
+}
+
+/// Reposition the overlay window directly using a raw HWND.
+///
+/// This is a lightweight alternative to [`OverlayWindow::show_snap_target`] designed
+/// for use from animation threads that need to bypass the event loop for low-latency,
+/// vsync-aligned updates. Calls `SetWindowPos` + `InvalidateRect` directly.
+///
+/// # Safety
+///
+/// `hwnd_raw` must be a valid overlay window HWND obtained from [`OverlayWindow::hwnd_raw`].
+pub fn reposition_overlay(hwnd_raw: isize, rect: Rect) {
+    let hwnd = HWND(hwnd_raw as *mut c_void);
+
+    // Update global state so WM_PAINT draws correctly.
+    if let Ok(mut state) = OVERLAY_STATE.lock() {
+        state.rect = Some(rect);
+    }
+
+    unsafe {
+        let _ = SetWindowPos(
+            hwnd,
+            Some(HWND_TOPMOST),
+            rect.x,
+            rect.y,
+            rect.width,
+            rect.height,
+            SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        );
+        let _ = ShowWindow(hwnd, SW_SHOWNA);
+        let _ = InvalidateRect(Some(hwnd), None, true);
     }
 }
 

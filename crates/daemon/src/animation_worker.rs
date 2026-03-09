@@ -28,6 +28,8 @@ pub struct FrameResult {
     /// How long the frame took (apply + vsync wait).
     #[allow(dead_code)]
     pub frame_time: Duration,
+    /// Width violations detected (windows enforcing a minimum width).
+    pub width_violations: Vec<leopardwm_platform_win32::WidthViolation>,
 }
 
 /// Commands the main thread can send to the worker.
@@ -116,13 +118,15 @@ fn worker_loop(
                 let frame_start = Instant::now();
 
                 // Apply window placements, skipping unchanged windows via cache
-                let apply_result =
-                    leopardwm_platform_win32::apply_placements(
+                let (apply_result, width_violations) =
+                    match leopardwm_platform_win32::apply_placements(
                         &request.placements,
                         &request.platform_config,
                         Some(&mut placement_cache),
-                    )
-                    .map_err(|e| e.to_string());
+                    ) {
+                        Ok(r) => (Ok(()), r.width_violations),
+                        Err(e) => (Err(e.to_string()), Vec::new()),
+                    };
 
                 // Wait for next vsync via DwmFlush
                 dwm_flush_or_fallback();
@@ -132,6 +136,7 @@ fn worker_loop(
                 let result = FrameResult {
                     apply_result,
                     frame_time,
+                    width_violations,
                 };
 
                 // Send result back to main event loop

@@ -2,6 +2,29 @@
 
 All notable changes to LeopardWM will be documented in this file.
 
+## 0.1.2
+
+### Features
+
+- Border resize snap — dragging a window's border now snaps to width/height presets with animated ghost preview overlay
+- DWM composition surface preservation — off-screen windows are cloaked via DWMWA_CLOAK to prevent content shifting when scrolling back into view after 10-15+ seconds
+
+### Improvements
+
+- Width violations (min-width enforcement) now detected and fed back from the animation worker, not just the landing pass
+- Overlay window exposes `hwnd_raw()` + `reposition_overlay()` for low-latency vsync-aligned updates from animation threads
+- `core_layout` crate refactored from monolithic 5200-line file into focused modules (`types`, `animation`, `column`, `workspace`)
+
+### Bug Fixes
+
+- Fix off-screen windows losing DWM composition surfaces after ~15 seconds, causing content to render at wrong offset when scrolled back
+- Fix cloaked windows permanently disappearing when switching workspaces or scrolling with centering mode (orphan uncloak on prune)
+- Fix empty placement list leaving previously cloaked windows invisible (uncloak all tracked on empty)
+- Fix GLOBAL_CLOAKED mutex poison recovery — shutdown/panic cleanup no longer silently skips uncloaking
+- Reduce lock contention: Win32 cloak/uncloak calls happen after releasing GLOBAL_CLOAKED mutex
+- Remove unused `IsWindow` import from border module
+- Remove dead `offscreen_buffer` field from `PlatformConfig`
+
 ## 0.1.1
 
 ### Features

@@ -551,6 +551,16 @@ impl AppState {
             }
             WindowEvent::MoveSizeStart(hwnd) => {
                 debug!("User started dragging/resizing window {}", hwnd);
+
+                // Distinguish resize (border drag) from move (title bar drag).
+                // Only create drag state for moves — resizes should not trigger
+                // the drag-and-drop overlay.
+                if leopardwm_platform_win32::is_cursor_on_resize_border(hwnd) {
+                    debug!("Detected resize (not move) for window {}, tracking", hwnd);
+                    self.resize_hwnd = Some(hwnd);
+                    return;
+                }
+
                 let (is_tiled, source_monitor, source_ws_idx, col_idx) =
                     if let Some((monitor_id, ws_idx)) = self.find_window_workspace(hwnd) {
                         let is_floating = self
@@ -585,6 +595,12 @@ impl AppState {
             }
             WindowEvent::MoveSizeEnd(hwnd) => {
                 debug!("User finished dragging/resizing window {}", hwnd);
+
+                // Handle resize completion (border drag) — snap to nearest preset.
+                if self.resize_hwnd.take() == Some(hwnd) {
+                    self.handle_resize_complete(hwnd);
+                    return;
+                }
 
                 // Verify this MoveSizeEnd matches the active drag — a mismatched
                 // event for a different window should not tear down the drag state.
@@ -660,6 +676,22 @@ impl AppState {
             WindowEvent::MovedOrResized(hwnd) => {
                 // Skip events triggered by our own apply_layout() to avoid feedback loop.
                 if self.applying_layout || self.should_suppress_moved_or_resized(hwnd) {
+                    return;
+                }
+                // During active border resize: show ghost preview of the snap target.
+                if self.resize_hwnd == Some(hwnd) {
+                    if self.config.snap_hints.enabled {
+                        // Throttle preview updates to ~60fps
+                        let now = std::time::Instant::now();
+                        if self
+                            .last_resize_hint_update
+                            .is_some_and(|t| now.duration_since(t).as_millis() < 16)
+                        {
+                            return;
+                        }
+                        self.last_resize_hint_update = Some(now);
+                        self.update_resize_preview(hwnd);
+                    }
                     return;
                 }
                 // During drag: compute drop target and show snap hint for tiled windows.
@@ -740,6 +772,175 @@ impl AppState {
                 // This is handled by the main event loop with debouncing
                 // (focus_follows_mouse delay)
             }
+        }
+    }
+
+    /// Compute and show the resize preview ghost overlay during active border resize.
+    /// When the snap target changes, requests a vsync-aligned animation thread
+    /// for smooth interpolation between snap positions.
+    fn update_resize_preview(&mut self, hwnd: u64) {
+        let Some(visible_rect) = leopardwm_platform_win32::get_window_visible_rect(hwnd) else {
+            return;
+        };
+        let Some((monitor_id, ws_idx)) = self.find_window_workspace(hwnd) else {
+            return;
+        };
+        let is_floating = self
+            .workspaces
+            .get(&monitor_id)
+            .and_then(|v| v.get(ws_idx))
+            .is_none_or(|ws| ws.is_floating(hwnd));
+        if is_floating {
+            return;
+        }
+
+        let work_area = match self.monitors.get(&monitor_id) {
+            Some(m) => m.work_area,
+            None => return,
+        };
+        let width_presets = self.config.layout.width_presets.clone();
+        let height_presets = self.config.layout.height_presets.clone();
+
+        let snap_rect = self
+            .workspaces
+            .get_mut(&monitor_id)
+            .and_then(|v| v.get_mut(ws_idx))
+            .and_then(|ws| {
+                ws.preview_resize_snap(
+                    hwnd,
+                    visible_rect.width,
+                    visible_rect.height,
+                    &width_presets,
+                    &height_presets,
+                    work_area,
+                )
+            });
+
+        let Some(target_rect) = snap_rect else {
+            return;
+        };
+
+        if self.resize_preview_target == Some(target_rect) {
+            // Target unchanged — if animation thread is driving the overlay, let it.
+            if !self
+                .resize_animation_active
+                .load(std::sync::atomic::Ordering::Relaxed)
+            {
+                self.pending_drag_hint =
+                    Some(crate::state::DragHintAction::ShowGhost { rect: target_rect });
+            }
+            self.resize_preview_display_rect = Some(target_rect);
+            self.show_border(hwnd);
+            return;
+        }
+
+        // Snap target changed — request a vsync-aligned animation.
+        let start_rect = self
+            .resize_preview_display_rect
+            .unwrap_or(target_rect);
+        self.resize_preview_target = Some(target_rect);
+        self.resize_preview_display_rect = Some(start_rect);
+        self.pending_resize_animation = Some(crate::state::ResizeAnimationRequest {
+            start_rect,
+            target_rect,
+        });
+
+        // Show overlay at current position immediately (animation will take over).
+        self.pending_drag_hint =
+            Some(crate::state::DragHintAction::ShowGhost { rect: start_rect });
+        self.show_border(hwnd);
+    }
+
+    /// Handle resize completion: snap the resized window's column width and height
+    /// to the nearest presets, then re-apply layout.
+    fn handle_resize_complete(&mut self, hwnd: u64) {
+        // Hide the resize preview overlay and clear all preview state.
+        self.pending_drag_hint = Some(crate::state::DragHintAction::Hide);
+        self.resize_preview_cancel
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.resize_preview_target = None;
+        self.resize_preview_display_rect = None;
+        self.pending_resize_animation = None;
+        self.last_resize_hint_update = None;
+        let Some((monitor_id, ws_idx)) = self.find_window_workspace(hwnd) else {
+            let _ = self.apply_layout();
+            return;
+        };
+
+        let is_floating = self
+            .workspaces
+            .get(&monitor_id)
+            .and_then(|v| v.get(ws_idx))
+            .is_none_or(|ws| ws.is_floating(hwnd));
+
+        if is_floating {
+            // Floating: just update stored rect from the visible area.
+            if let Some(visible_rect) = leopardwm_platform_win32::get_window_visible_rect(hwnd) {
+                if let Some(ws) = self
+                    .workspaces
+                    .get_mut(&monitor_id)
+                    .and_then(|v| v.get_mut(ws_idx))
+                {
+                    ws.update_floating(hwnd, visible_rect);
+                }
+            }
+            return;
+        }
+
+        // Tiled: snap to width/height presets.
+        let Some(visible_rect) = leopardwm_platform_win32::get_window_visible_rect(hwnd) else {
+            let _ = self.apply_layout();
+            return;
+        };
+
+        let viewport_width = self.viewport_width_for(monitor_id);
+        let width_presets = self.config.layout.width_presets.clone();
+        let height_presets = self.config.layout.height_presets.clone();
+
+        if let Some(ws) = self
+            .workspaces
+            .get_mut(&monitor_id)
+            .and_then(|v| v.get_mut(ws_idx))
+        {
+            if let Some((col_idx, win_idx)) = ws.find_window_location(hwnd) {
+                // Snap width to nearest preset
+                ws.snap_column_width_to_preset(
+                    col_idx,
+                    visible_rect.width,
+                    &width_presets,
+                    viewport_width,
+                );
+
+                // Snap height to nearest preset (multi-window columns only)
+                let col_len = ws.columns().get(col_idx).map(|c| c.len()).unwrap_or(0);
+                if col_len > 1 {
+                    let viewport_height = self
+                        .monitors
+                        .get(&monitor_id)
+                        .map(|m| m.work_area.height)
+                        .unwrap_or(crate::state::FALLBACK_WORK_AREA_HEIGHT);
+                    ws.snap_window_height_to_preset(
+                        col_idx,
+                        win_idx,
+                        visible_rect.height,
+                        &height_presets,
+                        viewport_height,
+                    );
+                }
+
+                info!(
+                    "Resize snap: window {} → width preset, new column width = {}",
+                    hwnd,
+                    ws.columns()
+                        .get(col_idx)
+                        .map(|c| c.width())
+                        .unwrap_or(0)
+                );
+            }
+        }
+
+        if let Err(e) = self.apply_layout() {
+            warn!("Failed to apply layout after resize snap: {}", e);
         }
     }
 

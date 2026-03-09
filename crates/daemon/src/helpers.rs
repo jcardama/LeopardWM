@@ -801,14 +801,25 @@ impl AppState {
                     // Use animated placements to support smooth scrolling
                     let placements = workspace.compute_placements_animated(monitor.work_area);
                     debug!(
-                        "Monitor {}: {} placements for viewport {}x{} (animating: {}, minimized: {})",
+                        "Monitor {}: {} placements for viewport {}x{} (animating: {}, scroll: {:.1}, minimized: {})",
                         monitor_id,
                         placements.len(),
                         monitor.work_area.width,
                         monitor.work_area.height,
                         workspace.is_animating(),
+                        workspace.effective_scroll_offset(),
                         workspace.minimized_count()
                     );
+                    for p in &placements {
+                        if p.visibility == leopardwm_core_layout::Visibility::Visible {
+                            debug!(
+                                "  placement hwnd={:#x} col={} rect=({},{} {}x{}) vis={:?}",
+                                p.window_id, p.column_index,
+                                p.rect.x, p.rect.y, p.rect.width, p.rect.height,
+                                p.visibility,
+                            );
+                        }
+                    }
                     all_placements.extend(placements);
                 }
             }
@@ -843,7 +854,7 @@ impl AppState {
         #[cfg(test)]
         let late_worker_recovery_count = self.late_worker_recovery_count.clone();
 
-        let (tx, rx) = std::sync::mpsc::channel::<Result<()>>();
+        let (tx, rx) = std::sync::mpsc::channel::<(Result<()>, Vec<leopardwm_platform_win32::WidthViolation>)>();
         let spawn_result = std::thread::Builder::new()
             .name("leopardwm-apply-layout".to_string())
             .spawn(move || {
@@ -852,7 +863,7 @@ impl AppState {
                         || apply_epoch_ref.load(Ordering::SeqCst) != apply_epoch
                 };
                 if should_cancel() {
-                    let _ = tx.send(Ok(()));
+                    let _ = tx.send((Ok(()), Vec::new()));
                     return;
                 }
 
@@ -875,28 +886,30 @@ impl AppState {
                         );
                         #[cfg(test)]
                         late_worker_recovery_count.fetch_add(1, Ordering::SeqCst);
-                        let _ = tx.send(Ok(()));
+                        let _ = tx.send((Ok(()), Vec::new()));
                         return;
                     }
-                    let _ = tx.send(result);
+                    let _ = tx.send((result, Vec::new()));
                     return;
                 }
 
                 if should_cancel() {
-                    let _ = tx.send(Ok(()));
+                    let _ = tx.send((Ok(()), Vec::new()));
                     return;
                 }
-                let result =
-                    leopardwm_platform_win32::apply_placements(&all_placements, &platform_config, None)
-                        .map_err(|e| anyhow!(e.to_string()));
+                let (result, violations) =
+                    match leopardwm_platform_win32::apply_placements(&all_placements, &platform_config, None) {
+                        Ok(r) => (Ok(()), r.width_violations),
+                        Err(e) => (Err(anyhow!(e.to_string())), Vec::new()),
+                    };
                 if should_cancel() {
                     run_visibility_recovery_pass(&apply_window_ids, "apply-cancelled-late-worker");
                     #[cfg(test)]
                     late_worker_recovery_count.fetch_add(1, Ordering::SeqCst);
-                    let _ = tx.send(Ok(()));
+                    let _ = tx.send((Ok(()), Vec::new()));
                     return;
                 }
-                let _ = tx.send(result);
+                let _ = tx.send((result, violations));
             });
 
         let worker_handle = match spawn_result {
@@ -908,10 +921,27 @@ impl AppState {
         };
 
         let result = match rx.recv_timeout(timeout) {
-            Ok(result) => {
+            Ok((result, violations)) => {
                 let _ = worker_handle.join();
                 if result.is_err() {
                     self.moved_or_resized_suppression.clear();
+                }
+                // Feed width violations back to the layout engine
+                if result.is_ok() && !violations.is_empty() {
+                    for v in &violations {
+                        for ws_vec in self.workspaces.values_mut() {
+                            for ws in ws_vec.iter_mut() {
+                                if ws.contains_window(v.window_id) {
+                                    ws.set_window_min_width(v.window_id, v.min_width);
+                                }
+                            }
+                        }
+                    }
+                    for ws_vec in self.workspaces.values_mut() {
+                        for ws in ws_vec.iter_mut() {
+                            ws.apply_min_width_constraints();
+                        }
+                    }
                 }
                 result
             }
@@ -972,6 +1002,20 @@ impl AppState {
     /// the OS-dragged window — the ghost overlay provides visual feedback instead.
     pub(crate) fn show_border(&self, hwnd: u64) {
         if let Some(ref frame) = self.border_frame {
+            // During resize preview: show border at the preview snap target.
+            if let Some(rect) = self.resize_preview_display_rect {
+                if self.config.appearance.active_border {
+                    if let Some(bgr) = self.border_color_bgr() {
+                        frame.show_at_rect(
+                            rect,
+                            self.config.appearance.active_border_width,
+                            self.border_position(),
+                            bgr,
+                        );
+                        return;
+                    }
+                }
+            }
             // During tiled drag: show border at the window's layout position.
             if let Some(ref drag) = self.drag_state {
                 if drag.is_tiled && self.config.appearance.active_border {

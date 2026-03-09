@@ -13,7 +13,6 @@ use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWINDOWATTRIBUTE};
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-use crate::IsWindow;
 use crate::Win32Error;
 
 /// Position of the border relative to the window frame.

@@ -86,6 +86,19 @@ pub(crate) enum TestApplyPlacementsBehavior {
     SleepAndFail(Duration),
 }
 
+/// Request for the main loop to spawn a resize preview animation thread.
+pub(crate) struct ResizeAnimationRequest {
+    pub(crate) start_rect: Rect,
+    pub(crate) target_rect: Rect,
+}
+
+/// Duration of resize preview transition animation in milliseconds.
+pub(crate) const RESIZE_PREVIEW_DURATION_MS: u64 = 100;
+
+pub(crate) fn lerp_i32(a: i32, b: i32, t: f64) -> i32 {
+    (a as f64 + (b as f64 - a as f64) * t).round() as i32
+}
+
 /// Tracks an in-progress layout transition animation.
 /// Interpolates window positions from a pre-change snapshot to the new layout.
 pub(crate) struct LayoutTransition {
@@ -154,6 +167,22 @@ pub(crate) struct AppState {
     pub(crate) applying_layout: bool,
     /// Active drag state: tracks the window being dragged, source position, and drop target.
     pub(crate) drag_state: Option<DragState>,
+    /// HWND being actively resized via border drag (not title bar move).
+    /// Set on MoveSizeStart when cursor is on resize border, cleared on MoveSizeEnd.
+    /// While set, layout snap-back is suppressed to prevent jitter.
+    pub(crate) resize_hwnd: Option<u64>,
+    /// Throttle timestamp for resize preview hint updates (~60fps).
+    pub(crate) last_resize_hint_update: Option<std::time::Instant>,
+    /// Current snap target rect during resize (for change detection).
+    pub(crate) resize_preview_target: Option<Rect>,
+    /// Current displayed rect for overlay/border during resize preview.
+    pub(crate) resize_preview_display_rect: Option<Rect>,
+    /// Pending animation request (consumed by main loop to spawn DwmFlush thread).
+    pub(crate) pending_resize_animation: Option<ResizeAnimationRequest>,
+    /// Cancel flag for running resize preview animation thread.
+    pub(crate) resize_preview_cancel: Arc<AtomicBool>,
+    /// Whether a resize preview animation thread is currently running.
+    pub(crate) resize_animation_active: Arc<AtomicBool>,
     /// Pending overlay action from drag event handler (consumed by main loop).
     pub(crate) pending_drag_hint: Option<DragHintAction>,
     /// Per-window suppression deadline for MovedOrResized events after apply_layout().
@@ -255,7 +284,7 @@ impl AppState {
             // If map is empty, focused_monitor stays 0; focused_workspace() returns None
         }
 
-        let platform_config = PlatformConfig;
+        let platform_config = PlatformConfig::default();
 
         let compiled_rules = config.compile_window_rules();
 
@@ -273,6 +302,13 @@ impl AppState {
             paused: false,
             applying_layout: false,
             drag_state: None,
+            resize_hwnd: None,
+            last_resize_hint_update: None,
+            resize_preview_target: None,
+            resize_preview_display_rect: None,
+            pending_resize_animation: None,
+            resize_preview_cancel: Arc::new(AtomicBool::new(false)),
+            resize_animation_active: Arc::new(AtomicBool::new(false)),
             pending_drag_hint: None,
             moved_or_resized_suppression: HashMap::new(),
             apply_worker_cancelled: Arc::new(AtomicBool::new(false)),
