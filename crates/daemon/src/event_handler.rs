@@ -161,6 +161,10 @@ impl AppState {
                                 win_info.title, win_info.class_name, monitor_id, action
                             );
                             if self.config.behavior.focus_new_windows {
+                                self.focused_monitor = monitor_id;
+                                if matches!(action, config::WindowAction::Float) {
+                                    self.previous_focused_hwnd = Some(hwnd);
+                                }
                                 workspace.ensure_focused_visible_animated(viewport_width);
                             }
                             if let Some(snapshot) = snapshot {
@@ -220,6 +224,11 @@ impl AppState {
                 // Lazily evict stale entries
                 self.recently_hidden_hwnds
                     .retain(|_, t| t.elapsed() < RECENTLY_HIDDEN_TTL);
+
+                // Clear stale focus reference
+                if self.previous_focused_hwnd == Some(hwnd) {
+                    self.previous_focused_hwnd = None;
+                }
 
                 // Find which workspace contains this window
                 if let Some((monitor_id, ws_idx)) = self.find_window_workspace(hwnd) {
@@ -293,8 +302,11 @@ impl AppState {
 
                         // Clean up any in-progress drag: reinsert window if it was
                         // removed from source during live preview, then remove placeholders.
+                        // Only reinsert if the window still exists (it may have been closed).
                         if let Some(drag) = self.drag_state.take() {
-                            if drag.removed_from_source && drag.is_tiled {
+                            if drag.removed_from_source && drag.is_tiled
+                                && leopardwm_platform_win32::is_valid_window(drag.hwnd)
+                            {
                                 if let Some(ws) = self.workspaces.get_mut(&drag.source_monitor)
                                     .and_then(|v| v.get_mut(drag.source_workspace_idx))
                                 {
@@ -424,8 +436,14 @@ impl AppState {
                                 // Safe: we already removed hwnd from recently_hidden_hwnds
                                 // above, so the Created handler won't re-suppress it.
                                 self.handle_window_event(WindowEvent::Created(hwnd));
-                                // Update focus state to match OS — the user just
-                                // focused this window, so track it and show border.
+                                // Update tiled focus to match OS — the user just
+                                // focused this window. focus_window may fail for
+                                // floating windows, which is fine.
+                                if let Some((mid, widx)) = self.find_window_workspace(hwnd) {
+                                    if let Some(ws) = self.workspaces.get_mut(&mid).and_then(|v| v.get_mut(widx)) {
+                                        let _ = ws.focus_window(hwnd);
+                                    }
+                                }
                                 self.previous_focused_hwnd = Some(hwnd);
                                 self.show_border(hwnd);
                                 return;
@@ -599,21 +617,14 @@ impl AppState {
 
                 // Tiled window: determine final drop target.
                 let Some(win_info) = self.lookup_window_info(hwnd) else {
-                    // Window vanished during drag — clean up placeholder and
-                    // reinsert window if it was removed from source.
+                    // Window vanished during drag — clean up placeholder.
+                    // Do NOT reinsert the window — it no longer exists.
                     for (_, ws_vec) in self.workspaces.iter_mut() {
                         for ws in ws_vec.iter_mut() {
                             let _ = ws.remove_window(crate::state::DRAG_PLACEHOLDER_HWND);
                         }
                     }
-                    if drag.removed_from_source {
-                        if let Some(ws) = self.workspaces.get_mut(&drag.source_monitor)
-                            .and_then(|v| v.get_mut(drag.source_workspace_idx))
-                        {
-                            let _ = ws.insert_window(drag.hwnd, None);
-                        }
-                    }
-                    self.snap_back_tiled(drag.source_monitor);
+                    self.snap_back_tiled(drag.source_monitor, drag.source_workspace_idx);
                     return;
                 };
                 let monitors: Vec<_> = self.monitors.values().cloned().collect();
@@ -632,7 +643,7 @@ impl AppState {
                     }
                     // Shift+drop: column reorder (already live-reordered, or cross-monitor).
                     if target_monitor == drag.source_monitor {
-                        self.snap_back_tiled(drag.source_monitor);
+                        self.snap_back_tiled(drag.source_monitor, drag.source_workspace_idx);
                     } else {
                         self.execute_cross_monitor_drag(
                             hwnd,

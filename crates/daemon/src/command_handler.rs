@@ -501,8 +501,11 @@ impl AppState {
 
                 // Cancel any in-progress drag: reinsert window if it was
                 // removed from source during live preview, then remove placeholders.
+                // Only reinsert if the window still exists.
                 if let Some(drag) = self.drag_state.take() {
-                    if drag.removed_from_source && drag.is_tiled {
+                    if drag.removed_from_source && drag.is_tiled
+                        && leopardwm_platform_win32::is_valid_window(drag.hwnd)
+                    {
                         if let Some(ws) = self.workspaces.get_mut(&drag.source_monitor)
                             .and_then(|v| v.get_mut(drag.source_workspace_idx))
                         {
@@ -650,10 +653,12 @@ impl AppState {
                     .is_some_and(|ws| ws.is_floating(focused_hwnd));
 
                 // Remove from source and insert into target.
-                // For floating windows, get the rect before removal.
+                // For floating windows, get the rect from workspace state (canonical position).
                 let floating_rect = if is_floating {
-                    self.lookup_window_info(focused_hwnd)
-                        .map(|info| info.rect)
+                    self.workspaces.get(&monitor)
+                        .and_then(|v| v.get(current_idx))
+                        .and_then(|ws| ws.floating_windows().iter()
+                            .find(|f| f.id == focused_hwnd).map(|f| f.rect))
                 } else {
                     None
                 };
@@ -673,7 +678,13 @@ impl AppState {
                 if let Some(workspace) = self.workspaces.get_mut(&monitor).and_then(|v| v.get_mut(idx)) {
                     if is_floating {
                         let rect = floating_rect.unwrap_or(leopardwm_core_layout::Rect::new(0, 0, 800, 600));
-                        let _ = workspace.add_floating(focused_hwnd, rect);
+                        if let Err(e) = workspace.add_floating(focused_hwnd, rect) {
+                            // Rollback: re-add to source
+                            if let Some(src_ws) = self.workspaces.get_mut(&monitor).and_then(|v| v.get_mut(current_idx)) {
+                                let _ = src_ws.add_floating(focused_hwnd, rect);
+                            }
+                            return IpcResponse::error(format!("Failed to move floating window: {}", e));
+                        }
                     } else if let Err(e) = workspace.insert_window(focused_hwnd, None) {
                         // Rollback: re-insert into source since target insert failed
                         if let Some(src_ws) = self.workspaces.get_mut(&monitor).and_then(|v| v.get_mut(current_idx)) {

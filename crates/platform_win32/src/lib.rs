@@ -906,7 +906,8 @@ pub fn get_process_executable(pid: u32) -> Option<String> {
         // Close the handle
         let _ = CloseHandle(handle);
 
-        if len == 0 {
+        if len == 0 || len as usize >= buffer.len() {
+            // len == 0: call failed; len >= buffer size: path was truncated
             return None;
         }
 
@@ -999,6 +1000,9 @@ pub fn apply_placements(
     cache: Option<&mut PlacementCache>,
 ) -> Result<(), Win32Error> {
     if placements.is_empty() {
+        if let Some(cache) = cache {
+            cache.clear();
+        }
         return Ok(());
     }
 
@@ -1057,7 +1061,7 @@ pub fn apply_placements(
         let offscreen_rect = move_offscreen_rect_for(&placement.rect);
         if let Some(ref cache) = cache {
             if cache.get(&placement.window_id)
-                == Some(&(offscreen_rect, Visibility::OffScreenLeft))
+                == Some(&(offscreen_rect, placement.visibility))
             {
                 skipped += 1;
                 continue;
@@ -1118,12 +1122,24 @@ pub fn apply_placements(
                     }
                 }
                 if batch_ok {
-                    let _ = EndDeferWindowPos(hdwp);
-                    applied = entries.len() as u32;
+                    if EndDeferWindowPos(hdwp).is_err() {
+                        // EndDeferWindowPos failed — fall back to individual calls
+                        for entry in &entries {
+                            if SetWindowPos(
+                                entry.hwnd, None,
+                                entry.x, entry.y, entry.w, entry.h,
+                                entry.flags,
+                            ).is_err() {
+                                failed_window_ids.insert(entry.window_id);
+                            }
+                        }
+                        applied = (entries.len() - failed_window_ids.len()) as u32;
+                    } else {
+                        applied = entries.len() as u32;
+                    }
                 } else {
-                    // Release the HDWP handle before falling back
-                    let _ = EndDeferWindowPos(hdwp);
-                    // Batch was interrupted — fall back to individual calls
+                    // DeferWindowPos failed — HDWP is already freed by Win32.
+                    // Fall back to individual SetWindowPos calls.
                     for entry in &entries {
                         if SetWindowPos(
                             entry.hwnd, None,
@@ -1148,7 +1164,10 @@ pub fn apply_placements(
         // Group visible entries by column (only multi-window columns matter).
         let mut col_indices: HashMap<usize, Vec<usize>> = HashMap::new();
         for (i, entry) in entries.iter().enumerate() {
-            if entry.column_index != usize::MAX && entry.x != MOVE_OFFSCREEN_SENTINEL_COORD {
+            if entry.column_index != usize::MAX
+                && entry.x != MOVE_OFFSCREEN_SENTINEL_COORD
+                && !failed_window_ids.contains(&entry.window_id)
+            {
                 col_indices.entry(entry.column_index).or_default().push(i);
             }
         }
@@ -1233,10 +1252,14 @@ pub fn apply_placements(
         }
     }
 
-    // Update the cache with only windows that were actually positioned
-    // (skip windows that failed IsWindow/IsIconic checks or SetWindowPos failures)
+    // Update cache: remove stale entries (windows no longer in placements),
+    // update positioned entries, and keep skipped-unchanged entries intact.
     if let Some(cache) = cache {
-        cache.clear();
+        let current_ids: std::collections::HashSet<u64> =
+            placements.iter().map(|p| p.window_id).collect();
+        // Remove windows that are no longer in the layout
+        cache.retain(|id, _| current_ids.contains(id));
+        // Update entries for windows that were actually positioned
         let positioned: std::collections::HashSet<u64> =
             entries.iter()
                 .filter(|e| !failed_window_ids.contains(&e.window_id))
@@ -1250,7 +1273,7 @@ pub fn apply_placements(
         for p in &offscreen {
             if positioned.contains(&p.window_id) {
                 let offscreen_rect = move_offscreen_rect_for(&p.rect);
-                cache.insert(p.window_id, (offscreen_rect, Visibility::OffScreenLeft));
+                cache.insert(p.window_id, (offscreen_rect, p.visibility));
             }
         }
     }

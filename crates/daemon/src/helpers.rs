@@ -327,9 +327,7 @@ impl AppState {
                     }
                     // Restore scroll offset from saved workspace
                     let saved_offset = ws_snapshot.workspace.scroll_offset();
-                    if saved_offset != 0.0 {
-                        ws_vec[ws_idx].set_scroll_offset(saved_offset);
-                    }
+                    ws_vec[ws_idx].set_scroll_offset(saved_offset);
                     restored_monitors.insert(id);
                     info!(
                         "Restored workspace state for monitor '{}' workspace {}",
@@ -415,16 +413,28 @@ impl AppState {
                 // Collect tiled and floating windows separately to preserve their type
                 let mut tiled_window_ids = Vec::new();
                 let mut floating_windows = Vec::new();
+                let mut minimized_ids = Vec::new();
                 for old_workspace in &old_ws_vec {
                     for col in old_workspace.columns() {
-                        tiled_window_ids.extend(col.windows().iter().copied());
+                        for &wid in col.windows() {
+                            tiled_window_ids.push(wid);
+                            if old_workspace.is_minimized(wid) {
+                                minimized_ids.push(wid);
+                            }
+                        }
                     }
                     for fw in old_workspace.floating_windows() {
                         floating_windows.push((fw.id, fw.rect));
+                        if old_workspace.is_minimized(fw.id) {
+                            minimized_ids.push(fw.id);
+                        }
                     }
                 }
                 if let Some(primary) = primary_id {
                     let primary_active_idx = self.active_workspace_idx(primary);
+                    // Source monitor info is still available (removed from self.monitors later).
+                    let source_wa = self.monitors.get(removed_id).map(|m| m.work_area);
+                    let target_wa = self.monitors.get(&primary).map(|m| m.work_area);
                     if let Some(primary_ws) = self.workspaces.get_mut(&primary).and_then(|v| v.get_mut(primary_active_idx)) {
                         for window_id in &tiled_window_ids {
                             if let Err(e) = primary_ws.insert_window(*window_id, None) {
@@ -432,9 +442,28 @@ impl AppState {
                             }
                         }
                         for (wid, rect) in &floating_windows {
-                            if let Err(e) = primary_ws.add_floating(*wid, *rect) {
+                            let translated = match (source_wa, target_wa) {
+                                (Some(src), Some(tgt)) => {
+                                    let dx = tgt.x - src.x;
+                                    let dy = tgt.y - src.y;
+                                    let max_x = (tgt.x + tgt.width - rect.width).max(tgt.x);
+                                    let max_y = (tgt.y + tgt.height - rect.height).max(tgt.y);
+                                    leopardwm_core_layout::Rect::new(
+                                        (rect.x + dx).clamp(tgt.x, max_x),
+                                        (rect.y + dy).clamp(tgt.y, max_y),
+                                        rect.width,
+                                        rect.height,
+                                    )
+                                }
+                                _ => *rect,
+                            };
+                            if let Err(e) = primary_ws.add_floating(*wid, translated) {
                                 warn!("Failed to migrate floating window {}: {}", wid, e);
                             }
+                        }
+                        // Restore minimized state for migrated windows
+                        for wid in &minimized_ids {
+                            primary_ws.mark_minimized(*wid);
                         }
                         info!(
                             "Migrated {} tiled + {} floating windows from removed monitor {} to primary",
@@ -1023,6 +1052,10 @@ impl AppState {
             let _ = leopardwm_platform_win32::set_foreground_window(hwnd);
             self.previous_focused_hwnd = Some(hwnd);
         } else {
+            // No focused window on the active workspace — clear stale state
+            // so border/focus don't target a window that's no longer here.
+            self.previous_focused_hwnd = None;
+            self.hide_border();
             debug!("sync_foreground_window: no focused visible window");
         }
     }
@@ -1249,9 +1282,28 @@ impl AppState {
                 .find(|f| f.id == window_id)
                 .map(|f| f.rect)
                 .unwrap_or(leopardwm_core_layout::Rect::new(0, 0, 800, 600));
+            // Translate floating coordinates from source to target monitor work area
+            let translated_rect = match (
+                self.monitors.get(&source_monitor),
+                self.monitors.get(&target_monitor),
+            ) {
+                (Some(src_mon), Some(tgt_mon)) => {
+                    let dx = tgt_mon.work_area.x - src_mon.work_area.x;
+                    let dy = tgt_mon.work_area.y - src_mon.work_area.y;
+                    let max_x = (tgt_mon.work_area.x + tgt_mon.work_area.width - rect.width).max(tgt_mon.work_area.x);
+                    let max_y = (tgt_mon.work_area.y + tgt_mon.work_area.height - rect.height).max(tgt_mon.work_area.y);
+                    leopardwm_core_layout::Rect::new(
+                        (rect.x + dx).clamp(tgt_mon.work_area.x, max_x),
+                        (rect.y + dy).clamp(tgt_mon.work_area.y, max_y),
+                        rect.width,
+                        rect.height,
+                    )
+                }
+                _ => rect,
+            };
             source_workspace.remove_floating(window_id);
             target_workspace
-                .add_floating(window_id, rect)
+                .add_floating(window_id, translated_rect)
                 .map_err(|e| format!("Failed to add floating window to target: {}", e))?;
         } else {
             source_workspace

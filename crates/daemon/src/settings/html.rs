@@ -1072,11 +1072,11 @@ var CMD_LABELS = {
   switch_workspace_5: 'Workspace 5', switch_workspace_6: 'Workspace 6',
   switch_workspace_7: 'Workspace 7', switch_workspace_8: 'Workspace 8',
   switch_workspace_9: 'Workspace 9',
-  move_to_workspace_1: 'Move to WS 1', move_to_workspace_2: 'Move to WS 2',
-  move_to_workspace_3: 'Move to WS 3', move_to_workspace_4: 'Move to WS 4',
-  move_to_workspace_5: 'Move to WS 5', move_to_workspace_6: 'Move to WS 6',
-  move_to_workspace_7: 'Move to WS 7', move_to_workspace_8: 'Move to WS 8',
-  move_to_workspace_9: 'Move to WS 9'
+  move_to_workspace_1: 'Move to Workspace 1', move_to_workspace_2: 'Move to Workspace 2',
+  move_to_workspace_3: 'Move to Workspace 3', move_to_workspace_4: 'Move to Workspace 4',
+  move_to_workspace_5: 'Move to Workspace 5', move_to_workspace_6: 'Move to Workspace 6',
+  move_to_workspace_7: 'Move to Workspace 7', move_to_workspace_8: 'Move to Workspace 8',
+  move_to_workspace_9: 'Move to Workspace 9'
 };
 
 /* Defines display order — grouped by category */

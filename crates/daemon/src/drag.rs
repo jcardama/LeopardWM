@@ -340,7 +340,7 @@ impl AppState {
         let target_viewport = match self.monitors.get(&target_monitor) {
             Some(m) => m.work_area,
             None => {
-                self.snap_back_tiled(source_monitor);
+                self.snap_back_tiled(source_monitor, drag.source_workspace_idx);
                 return;
             }
         };
@@ -348,7 +348,7 @@ impl AppState {
         let (target_col_idx, window_slot) = {
             let ws_idx = self.active_workspace_idx(target_monitor);
             let Some(workspace) = self.workspaces.get(&target_monitor).and_then(|v| v.get(ws_idx)) else {
-                self.snap_back_tiled(source_monitor);
+                self.snap_back_tiled(source_monitor, drag.source_workspace_idx);
                 return;
             };
             let column_bounds = column_bounds_from_placements(workspace, target_viewport);
@@ -362,7 +362,7 @@ impl AppState {
             let col_idx = match compute_target_column_index(&column_bounds, cx) {
                 Some(idx) => idx,
                 None => {
-                    self.snap_back_tiled(source_monitor);
+                    self.snap_back_tiled(source_monitor, drag.source_workspace_idx);
                     return;
                 }
             };
@@ -409,9 +409,16 @@ impl AppState {
         // Single-window column dropped onto itself → snap back, nothing to merge.
         if let Some((src_col, src_len)) = src_col_info {
             if target_col_idx == src_col && src_len == 1 {
-                self.snap_back_tiled(source_monitor);
+                self.snap_back_tiled(source_monitor, drag.source_workspace_idx);
                 return;
             }
+        }
+
+        // Verify target workspace exists before mutating source.
+        let tgt_check_idx = self.active_workspace_idx(target_monitor);
+        if self.workspaces.get(&target_monitor).and_then(|v| v.get(tgt_check_idx)).is_none() {
+            self.snap_back_tiled(source_monitor, drag.source_workspace_idx);
+            return;
         }
 
         // Snapshot AFTER all early returns, right before structural changes.
@@ -422,7 +429,7 @@ impl AppState {
             if let Some(workspace) = self.workspaces.get_mut(&source_monitor).and_then(|v| v.get_mut(src_ws_idx)) {
                 if let Err(e) = workspace.remove_window(hwnd) {
                     warn!("Failed to remove window {} for merge: {}", hwnd, e);
-                    self.snap_back_tiled(source_monitor);
+                    self.snap_back_tiled(source_monitor, drag.source_workspace_idx);
                     return;
                 }
             }
@@ -603,7 +610,7 @@ impl AppState {
         {
             Some(idx) => idx,
             None => {
-                self.snap_back_tiled(source_monitor);
+                self.snap_back_tiled(source_monitor, drag.source_workspace_idx);
                 return;
             }
         };
@@ -612,7 +619,7 @@ impl AppState {
         let target_viewport = match self.monitors.get(&target_monitor) {
             Some(m) => m.work_area,
             None => {
-                self.snap_back_tiled(source_monitor);
+                self.snap_back_tiled(source_monitor, drag.source_workspace_idx);
                 return;
             }
         };
@@ -627,6 +634,28 @@ impl AppState {
         let win_center_x = win_rect.x + win_rect.width / 2;
         let insert_idx = compute_insertion_index(&target_bounds, win_center_x);
 
+        // Collect minimized window IDs before removal (remove_column clears them
+        // from the source workspace's minimized set).
+        let minimized_in_col: Vec<u64> = self
+            .workspaces
+            .get(&source_monitor)
+            .and_then(|v| v.get(src_idx))
+            .map(|ws| {
+                ws.columns().get(col_idx)
+                    .map(|col| col.windows().iter().copied()
+                        .filter(|wid| ws.is_minimized(*wid))
+                        .collect())
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default();
+
+        // Verify target workspace exists before mutating source.
+        let tgt_idx = self.active_workspace_idx(target_monitor);
+        if self.workspaces.get(&target_monitor).and_then(|v| v.get(tgt_idx)).is_none() {
+            self.snap_back_tiled(source_monitor, drag.source_workspace_idx);
+            return;
+        }
+
         // Remove column from source workspace.
         let column = match self
             .workspaces
@@ -636,7 +665,7 @@ impl AppState {
         {
             Some(col) => col,
             None => {
-                self.snap_back_tiled(source_monitor);
+                self.snap_back_tiled(source_monitor, drag.source_workspace_idx);
                 return;
             }
         };
@@ -649,9 +678,12 @@ impl AppState {
             insert_idx
         );
 
-        // Insert into target workspace.
+        // Insert into target workspace and restore minimized state.
         if let Some(target_ws) = self.workspaces.get_mut(&target_monitor).and_then(|v| v.get_mut(tgt_idx)) {
             target_ws.insert_column_at(column, insert_idx);
+            for wid in &minimized_in_col {
+                target_ws.mark_minimized(*wid);
+            }
             if let Err(e) = target_ws.focus_window(hwnd) {
                 debug!("Failed to focus moved window after cross-monitor drag: {}", e);
             }
@@ -668,10 +700,11 @@ impl AppState {
     }
 
     /// Snap a tiled window back to its layout position with animation.
-    pub(crate) fn snap_back_tiled(&mut self, monitor_id: MonitorId) {
+    /// Uses the given workspace index instead of `active_workspace_idx` so that
+    /// snap-back targets the workspace where the drag originated.
+    pub(crate) fn snap_back_tiled(&mut self, monitor_id: MonitorId, ws_idx: usize) {
         let snapshot = self.snapshot_layout();
         let viewport_width = self.viewport_width_for(monitor_id);
-        let ws_idx = self.active_workspace_idx(monitor_id);
         if let Some(workspace) = self.workspaces.get_mut(&monitor_id).and_then(|v| v.get_mut(ws_idx)) {
             workspace.ensure_focused_visible_animated(viewport_width);
         }

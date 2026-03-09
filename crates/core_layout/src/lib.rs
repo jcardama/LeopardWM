@@ -1416,8 +1416,11 @@ impl Workspace {
             current_x = current_x.saturating_add(column.width).saturating_add(gap);
         }
 
-        // Add floating windows (always visible, at their absolute positions)
+        // Add floating windows (visible unless minimized, at their absolute positions)
         for floating in &self.floating_windows {
+            if self.minimized_windows.contains(&floating.id) {
+                continue;
+            }
             placements.push(WindowPlacement {
                 window_id: floating.id,
                 rect: floating.rect,
@@ -1499,8 +1502,13 @@ impl Workspace {
             self.focused_column = 0;
             self.focused_window_in_column = 0;
             self.scroll_offset = 0.0;
-        } else if self.focused_column > index {
-            self.focused_column -= 1;
+        } else {
+            if self.focused_column > index {
+                self.focused_column -= 1;
+            }
+            // Reclamp scroll offset — the strip may have shrunk
+            let max_scroll = self.total_width().max(0) as f64;
+            self.scroll_offset = self.scroll_offset.clamp(0.0, max_scroll);
         }
         self.clamp_focus_indices();
         Some(col)
@@ -1511,6 +1519,10 @@ impl Workspace {
     /// preserve the invariant that all columns contain at least one window.
     pub fn insert_column_at(&mut self, column: Column, index: usize) {
         if column.is_empty() {
+            return;
+        }
+        // Reject if any window already exists in this workspace
+        if column.windows().iter().any(|wid| self.contains_window(*wid)) {
             return;
         }
         let clamped = index.min(self.columns.len());
@@ -1644,15 +1656,15 @@ impl Workspace {
 
     /// Scroll the viewport by a pixel delta.
     ///
-    /// Special float values (NaN, Infinity) are treated as zero for safety.
+    /// Cancels any active scroll animation so the manual scroll takes effect
+    /// immediately. Special float values (NaN, Infinity) are treated as zero.
     pub fn scroll_by(&mut self, delta: f64, viewport_width: i32) {
+        // Cancel any in-flight animation so manual scroll is not overridden
+        self.cancel_animation();
         // Treat NaN and Infinity as zero for safety
         let safe_delta = if delta.is_finite() { delta } else { 0.0 };
         self.scroll_offset += safe_delta;
-        // Use visible width (viewport minus outer gaps) to match ensure_focused_visible
-        let outer_left = self.outer_gap_left.max(0);
-        let outer_right = self.outer_gap_right.max(0);
-        let vis_w = (viewport_width - outer_left - outer_right).max(1);
+        let vis_w = self.visible_width(viewport_width);
         let max_scroll = (self.total_width() - vis_w).max(0);
         self.scroll_offset = self.scroll_offset.clamp(0.0, max_scroll as f64);
     }
@@ -1716,7 +1728,7 @@ impl Workspace {
 
         if !still_running {
             // Animation complete - finalize scroll offset and clear animation
-            self.scroll_offset = anim.target();
+            self.scroll_offset = anim.target().max(0.0);
             self.active_animation = None;
             false
         } else {
@@ -1727,14 +1739,14 @@ impl Workspace {
     /// Stop the current animation and snap to the target position.
     pub fn stop_animation(&mut self) {
         if let Some(anim) = self.active_animation.take() {
-            self.scroll_offset = anim.target();
+            self.scroll_offset = anim.target().max(0.0);
         }
     }
 
     /// Cancel the current animation and stay at the current position.
     pub fn cancel_animation(&mut self) {
         if let Some(anim) = self.active_animation.take() {
-            self.scroll_offset = anim.current_offset();
+            self.scroll_offset = anim.current_offset().max(0.0);
         }
     }
 
@@ -1836,6 +1848,9 @@ impl Workspace {
 
         // Floating windows are also hidden during fullscreen
         for floating in &self.floating_windows {
+            if self.minimized_windows.contains(&floating.id) {
+                continue;
+            }
             if floating.id == fs_wid {
                 placements.push(WindowPlacement {
                     window_id: floating.id,
@@ -1860,20 +1875,24 @@ impl Workspace {
     // Minimize Methods
     // ========================================================================
 
-    /// Mark a window as minimized. The window stays in its column but is
-    /// excluded from layout placement calculations.
+    /// Mark a window as minimized. The window stays in its column (or floating
+    /// list) but is excluded from layout placement calculations.
     ///
     /// If the minimized window is the current fullscreen window, fullscreen
     /// mode is exited so that other windows become visible again.
     ///
-    /// Returns `true` if the window was managed (tiled) and is now marked minimized.
-    /// Returns `false` if the window is not in this workspace or is floating.
+    /// Returns `true` if the window was managed and is now marked minimized.
+    /// Returns `false` if the window is not in this workspace.
     pub fn mark_minimized(&mut self, window_id: WindowId) -> bool {
-        // Only mark tiled windows as minimized (not floating)
-        if self.find_window_location(window_id).is_some() {
-            // If the fullscreen window is being minimized, exit fullscreen
+        let is_tiled = self.find_window_location(window_id).is_some();
+        let is_floating = self.is_floating(window_id);
+        if is_tiled || is_floating {
             if self.fullscreen_window == Some(window_id) {
                 self.fullscreen_window = None;
+            }
+            // Cancel active animation — its target is now stale after minimize
+            if is_tiled {
+                self.active_animation = None;
             }
             self.minimized_windows.insert(window_id)
         } else {
@@ -2035,6 +2054,12 @@ impl Workspace {
                 col.set_width(per_column);
             }
         }
+        // Cancel stale animation — it would overwrite the reclamped scroll offset
+        self.active_animation = None;
+        // Reclamp scroll offset — column widths may have shrunk
+        let vis_w = self.visible_width(viewport_width);
+        let max_scroll = (self.total_width() - vis_w).max(0);
+        self.scroll_offset = self.scroll_offset.clamp(0.0, max_scroll as f64);
     }
 
     /// Rescale all column widths after gap values change.
@@ -4181,9 +4206,9 @@ mod tests {
     fn test_mark_minimized_floating_window() {
         let mut ws = Workspace::new();
         ws.add_floating(1, Rect::new(0, 0, 100, 100)).unwrap();
-        // Floating windows cannot be marked minimized
-        assert!(!ws.mark_minimized(1));
-        assert!(!ws.is_minimized(1));
+        // Floating windows can be marked minimized
+        assert!(ws.mark_minimized(1));
+        assert!(ws.is_minimized(1));
     }
 
     #[test]
