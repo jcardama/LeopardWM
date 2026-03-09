@@ -1010,6 +1010,7 @@ pub fn apply_placements(
     // time between BeginDeferWindowPos and EndDeferWindowPos.
     struct DeferEntry {
         hwnd: HWND,
+        window_id: u64,
         x: i32,
         y: i32,
         w: i32,
@@ -1041,6 +1042,7 @@ pub fn apply_placements(
         let (inset_l, inset_t, inset_r, inset_b) = invisible_border_insets(hwnd);
         entries.push(DeferEntry {
             hwnd,
+            window_id: placement.window_id,
             x: placement.rect.x - inset_l,
             y: placement.rect.y - inset_t,
             w: placement.rect.width + inset_l + inset_r,
@@ -1069,6 +1071,7 @@ pub fn apply_placements(
         }
         entries.push(DeferEntry {
             hwnd,
+            window_id: placement.window_id,
             x: MOVE_OFFSCREEN_SENTINEL_COORD,
             y: MOVE_OFFSCREEN_SENTINEL_COORD,
             w: 0,
@@ -1113,6 +1116,8 @@ pub fn apply_placements(
                     let _ = EndDeferWindowPos(hdwp);
                     applied = entries.len() as u32;
                 } else {
+                    // Release the HDWP handle before falling back
+                    let _ = EndDeferWindowPos(hdwp);
                     // Batch was interrupted — fall back to individual calls
                     for entry in &entries {
                         let _ = SetWindowPos(
@@ -1221,15 +1226,22 @@ pub fn apply_placements(
         }
     }
 
-    // Update the cache with current placements
+    // Update the cache with only windows that were actually positioned
+    // (skip windows that failed IsWindow/IsIconic checks to avoid cache poisoning)
     if let Some(cache) = cache {
         cache.clear();
+        let positioned: std::collections::HashSet<u64> =
+            entries.iter().map(|e| e.window_id).collect();
         for p in &visible {
-            cache.insert(p.window_id, (p.rect, p.visibility));
+            if positioned.contains(&p.window_id) {
+                cache.insert(p.window_id, (p.rect, p.visibility));
+            }
         }
         for p in &offscreen {
-            let offscreen_rect = move_offscreen_rect_for(&p.rect);
-            cache.insert(p.window_id, (offscreen_rect, Visibility::OffScreenLeft));
+            if positioned.contains(&p.window_id) {
+                let offscreen_rect = move_offscreen_rect_for(&p.rect);
+                cache.insert(p.window_id, (offscreen_rect, Visibility::OffScreenLeft));
+            }
         }
     }
 

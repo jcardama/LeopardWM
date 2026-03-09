@@ -291,7 +291,21 @@ impl AppState {
                     if ws_idx != active_idx {
                         info!("Auto-switching to workspace {} on monitor {} (focus follows window)", ws_idx + 1, monitor_id);
 
-                        self.drag_state = None;
+                        // Clean up any in-progress drag and placeholder
+                        if self.drag_state.take().is_some() {
+                            for (_, ws_vec) in self.workspaces.iter_mut() {
+                                for ws in ws_vec.iter_mut() {
+                                    let _ = ws.remove_window(crate::state::DRAG_PLACEHOLDER_HWND);
+                                }
+                            }
+                        }
+                        self.pending_drag_hint = Some(crate::state::DragHintAction::Hide);
+                        // Move exit windows offscreen before clearing the transition
+                        if let Some(ref transition) = self.layout_transition {
+                            for wid in transition.exit_rects.keys() {
+                                let _ = leopardwm_platform_win32::move_window_offscreen(*wid);
+                            }
+                        }
                         self.layout_transition = None;
 
                         let slide_height = self.monitors.get(&monitor_id)

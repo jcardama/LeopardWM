@@ -715,9 +715,10 @@ impl AppState {
             placements: all_placements,
             platform_config: self.platform_config.clone(),
         };
-        worker
-            .send_frame(request)
-            .map_err(|e| anyhow::anyhow!(e))?;
+        if let Err(e) = worker.send_frame(request) {
+            self.applying_layout = false;
+            return Err(anyhow::anyhow!(e));
+        }
         Ok(true)
     }
 
