@@ -980,10 +980,22 @@ impl AppState {
 
     /// Set the OS foreground window to match the workspace's focused window.
     /// Also updates active window border if configured.
+    ///
+    /// Prefers `previous_focused_hwnd` if it points to a floating window on the
+    /// active workspace, so that floating window focus isn't stolen by tiled focus.
     pub(crate) fn sync_foreground_window(&mut self) {
-        let focused_hwnd = self
-            .focused_workspace()
-            .and_then(|ws| ws.focused_visible_window());
+        // If the OS-focused window is a floating window on the active workspace,
+        // keep it focused rather than overriding with the tiled focus.
+        let floating_focus = self.previous_focused_hwnd.and_then(|hwnd| {
+            self.focused_workspace()
+                .filter(|ws| ws.is_floating(hwnd))
+                .map(|_| hwnd)
+        });
+
+        let focused_hwnd = floating_focus.or_else(|| {
+            self.focused_workspace()
+                .and_then(|ws| ws.focused_visible_window())
+        });
 
         if let Some(hwnd) = focused_hwnd {
             self.show_border(hwnd);

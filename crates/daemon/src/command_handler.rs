@@ -499,8 +499,16 @@ impl AppState {
                     return IpcResponse::Ok;
                 }
 
-                // Cancel any in-progress drag and clean up placeholder
-                if self.drag_state.take().is_some() {
+                // Cancel any in-progress drag: reinsert window if it was
+                // removed from source during live preview, then remove placeholders.
+                if let Some(drag) = self.drag_state.take() {
+                    if drag.removed_from_source && drag.is_tiled {
+                        if let Some(ws) = self.workspaces.get_mut(&drag.source_monitor)
+                            .and_then(|v| v.get_mut(drag.source_workspace_idx))
+                        {
+                            let _ = ws.insert_window(drag.hwnd, None);
+                        }
+                    }
                     for (_, ws_vec) in self.workspaces.iter_mut() {
                         for ws in ws_vec.iter_mut() {
                             let _ = ws.remove_window(crate::state::DRAG_PLACEHOLDER_HWND);

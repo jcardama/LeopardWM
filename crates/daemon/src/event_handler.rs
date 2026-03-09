@@ -291,8 +291,16 @@ impl AppState {
                     if ws_idx != active_idx {
                         info!("Auto-switching to workspace {} on monitor {} (focus follows window)", ws_idx + 1, monitor_id);
 
-                        // Clean up any in-progress drag and placeholder
-                        if self.drag_state.take().is_some() {
+                        // Clean up any in-progress drag: reinsert window if it was
+                        // removed from source during live preview, then remove placeholders.
+                        if let Some(drag) = self.drag_state.take() {
+                            if drag.removed_from_source && drag.is_tiled {
+                                if let Some(ws) = self.workspaces.get_mut(&drag.source_monitor)
+                                    .and_then(|v| v.get_mut(drag.source_workspace_idx))
+                                {
+                                    let _ = ws.insert_window(drag.hwnd, None);
+                                }
+                            }
                             for (_, ws_vec) in self.workspaces.iter_mut() {
                                 for ws in ws_vec.iter_mut() {
                                     let _ = ws.remove_window(crate::state::DRAG_PLACEHOLDER_HWND);
@@ -508,7 +516,7 @@ impl AppState {
             }
             WindowEvent::MoveSizeStart(hwnd) => {
                 debug!("User started dragging/resizing window {}", hwnd);
-                let (is_tiled, source_monitor, col_idx) =
+                let (is_tiled, source_monitor, source_ws_idx, col_idx) =
                     if let Some((monitor_id, ws_idx)) = self.find_window_workspace(hwnd) {
                         let is_floating = self
                             .workspaces
@@ -525,11 +533,10 @@ impl AppState {
                         } else {
                             0
                         };
-                        (!is_floating, monitor_id, col_idx)
+                        (!is_floating, monitor_id, ws_idx, col_idx)
                     } else {
-                        (false, self.focused_monitor, 0)
+                        (false, self.focused_monitor, self.active_workspace_idx(self.focused_monitor), 0)
                     };
-                let source_ws_idx = self.active_workspace_idx(source_monitor);
                 self.drag_state = Some(DragState {
                     hwnd,
                     is_tiled,
