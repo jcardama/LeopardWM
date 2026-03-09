@@ -53,6 +53,9 @@ pub(crate) enum DragHintAction {
 /// Duration of layout transition animations in milliseconds.
 pub(crate) const LAYOUT_TRANSITION_DURATION_MS: u64 = 150;
 
+/// Duration of workspace switch slide animation in milliseconds.
+pub(crate) const WORKSPACE_SWITCH_DURATION_MS: u64 = 200;
+
 /// Fallback viewport dimensions when no monitor is detected.
 pub(crate) const FALLBACK_VIEWPORT_WIDTH: i32 = 1920;
 pub(crate) const FALLBACK_VIEWPORT_HEIGHT: i32 = 1080;
@@ -86,6 +89,11 @@ pub(crate) enum TestApplyPlacementsBehavior {
 pub(crate) struct LayoutTransition {
     /// Per-window starting rects (before the structural change).
     pub(crate) start_rects: HashMap<u64, Rect>,
+    /// Windows exiting the screen during the transition.
+    /// Maps window_id → target rect (offscreen). Start rects are in `start_rects`.
+    /// These windows are included in animation frames alongside entering windows.
+    /// When the transition completes, they are moved offscreen.
+    pub(crate) exit_rects: HashMap<u64, Rect>,
     /// Elapsed time in milliseconds.
     pub(crate) elapsed_ms: u64,
     /// Total duration in milliseconds.
@@ -118,8 +126,10 @@ impl LayoutTransition {
 
 /// Application state supporting multiple monitors.
 pub(crate) struct AppState {
-    /// Workspaces indexed by monitor ID.
-    pub(crate) workspaces: HashMap<MonitorId, Workspace>,
+    /// Per-monitor workspace lists (multiple workspaces per monitor).
+    pub(crate) workspaces: HashMap<MonitorId, Vec<Workspace>>,
+    /// Active workspace index (0-based) per monitor.
+    pub(crate) active_workspace: HashMap<MonitorId, usize>,
     /// Monitor info indexed by monitor ID.
     pub(crate) monitors: HashMap<MonitorId, MonitorInfo>,
     /// Currently focused monitor.
@@ -183,6 +193,10 @@ pub(crate) struct AppState {
 pub(crate) struct WorkspaceSnapshot {
     /// Monitor device name (stable across restarts, unlike MonitorId/HMONITOR).
     pub(crate) monitor_device_name: String,
+    /// Workspace index within the monitor's workspace list (0-based).
+    /// Defaults to 0 for backward compatibility with old snapshots.
+    #[serde(default)]
+    pub(crate) workspace_index: usize,
     /// Saved workspace state.
     pub(crate) workspace: Workspace,
 }
@@ -196,12 +210,17 @@ pub(crate) struct StateSnapshot {
     pub(crate) workspaces: Vec<WorkspaceSnapshot>,
     /// Which monitor was focused (by device name).
     pub(crate) focused_monitor_name: String,
+    /// Active workspace index per monitor (by device name).
+    /// Defaults to empty for backward compatibility.
+    #[serde(default)]
+    pub(crate) active_workspace: HashMap<String, usize>,
 }
 
 impl AppState {
     /// Create new state with config and monitors.
     pub(crate) fn new_with_config(config: Config, monitors: Vec<MonitorInfo>) -> Self {
         let mut workspaces = HashMap::new();
+        let mut active_workspace_map = HashMap::new();
         let mut monitor_map = HashMap::new();
         let mut focused_monitor = 0;
 
@@ -221,7 +240,8 @@ impl AppState {
                 focused_monitor = monitor.id;
             }
 
-            workspaces.insert(monitor.id, workspace);
+            workspaces.insert(monitor.id, vec![workspace]);
+            active_workspace_map.insert(monitor.id, 0usize);
             monitor_map.insert(monitor.id, monitor);
         }
 
@@ -239,6 +259,7 @@ impl AppState {
 
         Self {
             workspaces,
+            active_workspace: active_workspace_map,
             monitors: monitor_map,
             focused_monitor,
             platform_config,
@@ -269,14 +290,45 @@ impl AppState {
         }
     }
 
-    /// Get the currently focused workspace.
+    /// Get the active workspace index (0-based) for a given monitor.
+    pub(crate) fn active_workspace_idx(&self, monitor_id: MonitorId) -> usize {
+        self.active_workspace.get(&monitor_id).copied().unwrap_or(0)
+    }
+
+    /// Get the currently focused workspace (active workspace on the focused monitor).
     pub(crate) fn focused_workspace(&self) -> Option<&Workspace> {
-        self.workspaces.get(&self.focused_monitor)
+        let idx = self.active_workspace_idx(self.focused_monitor);
+        self.workspaces.get(&self.focused_monitor)?.get(idx)
     }
 
     /// Get the currently focused workspace mutably.
     pub(crate) fn focused_workspace_mut(&mut self) -> Option<&mut Workspace> {
-        self.workspaces.get_mut(&self.focused_monitor)
+        let idx = self.active_workspace_idx(self.focused_monitor);
+        self.workspaces.get_mut(&self.focused_monitor)?.get_mut(idx)
+    }
+
+    /// Ensure workspace index exists for a monitor, creating empty workspaces as needed.
+    /// Returns a mutable reference to the workspace at the given index.
+    pub(crate) fn ensure_workspace_exists(&mut self, monitor_id: MonitorId, idx: usize) -> Option<&mut Workspace> {
+        let config = &self.config;
+        let monitors = &self.monitors;
+        let ws_vec = self.workspaces.get_mut(&monitor_id)?;
+        while ws_vec.len() <= idx {
+            let mut ws = Workspace::with_directional_gaps(
+                config.layout.gap,
+                config.layout.outer_gap_left,
+                config.layout.outer_gap_right,
+                config.layout.outer_gap_top,
+                config.layout.outer_gap_bottom,
+            );
+            let vw = monitors.get(&monitor_id)
+                .map(|m| m.work_area.width)
+                .unwrap_or(FALLBACK_VIEWPORT_WIDTH);
+            ws.set_default_column_width(config.layout.default_column_width_px(vw));
+            ws.set_centering_mode(config.layout.centering_mode.into());
+            ws_vec.push(ws);
+        }
+        ws_vec.get_mut(idx)
     }
 
     /// Get the focused monitor's viewport.

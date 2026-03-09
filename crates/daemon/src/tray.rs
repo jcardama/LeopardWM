@@ -287,8 +287,15 @@ impl TrayManager {
         monitor_count: usize,
         paused: bool,
         hotkey_mismatch: Option<(usize, usize)>,
+        active_workspace: u8,
     ) {
-        let tooltip = format_tooltip_text(window_count, monitor_count, paused, hotkey_mismatch);
+        let tooltip = format_tooltip_text(
+            window_count,
+            monitor_count,
+            paused,
+            hotkey_mismatch,
+            active_workspace,
+        );
         if let Ok(mut text) = self.shared.tooltip_text.lock() {
             *text = tooltip;
         }
@@ -594,11 +601,12 @@ pub fn format_tooltip_text(
     monitor_count: usize,
     paused: bool,
     hotkey_mismatch: Option<(usize, usize)>,
+    active_workspace: u8,
 ) -> String {
     let status = if paused { "Paused" } else { "Active" };
     let mut tooltip = format!(
-        "LeopardWM - {} ({} windows, {} monitors)",
-        status, window_count, monitor_count
+        "LeopardWM - {} (WS {}, {} windows, {} monitors)",
+        status, active_workspace, window_count, monitor_count
     );
     if let Some((registered, requested)) = hotkey_mismatch {
         if registered < requested {
@@ -764,32 +772,41 @@ mod tests {
 
     #[test]
     fn test_tooltip_format() {
-        let active = format_tooltip_text(14, 2, false, None);
-        assert_eq!(active, "LeopardWM - Active (14 windows, 2 monitors)");
+        let active = format_tooltip_text(14, 2, false, None, 1);
+        assert_eq!(
+            active,
+            "LeopardWM - Active (WS 1, 14 windows, 2 monitors)"
+        );
 
-        let paused = format_tooltip_text(3, 1, true, None);
-        assert_eq!(paused, "LeopardWM - Paused (3 windows, 1 monitors)");
+        let paused = format_tooltip_text(3, 1, true, None, 1);
+        assert_eq!(
+            paused,
+            "LeopardWM - Paused (WS 1, 3 windows, 1 monitors)"
+        );
     }
 
     #[test]
     fn test_tooltip_format_with_hotkey_mismatch() {
-        let tooltip = format_tooltip_text(10, 2, false, Some((7, 10)));
+        let tooltip = format_tooltip_text(10, 2, false, Some((7, 10)), 1);
         assert_eq!(
             tooltip,
-            "LeopardWM - Active (10 windows, 2 monitors)\nHotkeys: 7/10 (3 failed)"
+            "LeopardWM - Active (WS 1, 10 windows, 2 monitors)\nHotkeys: 7/10 (3 failed)"
         );
     }
 
     #[test]
     fn test_tooltip_format_no_hotkey_mismatch() {
         // When registered == requested, no mismatch line
-        let tooltip = format_tooltip_text(10, 2, false, Some((10, 10)));
-        assert_eq!(tooltip, "LeopardWM - Active (10 windows, 2 monitors)");
+        let tooltip = format_tooltip_text(10, 2, false, Some((10, 10)), 1);
+        assert_eq!(
+            tooltip,
+            "LeopardWM - Active (WS 1, 10 windows, 2 monitors)"
+        );
     }
 
     #[test]
     fn test_tooltip_format_paused_with_mismatch() {
-        let tooltip = format_tooltip_text(5, 1, true, Some((3, 8)));
+        let tooltip = format_tooltip_text(5, 1, true, Some((3, 8)), 1);
         assert!(tooltip.contains("Paused"));
         assert!(tooltip.contains("3/8 (5 failed)"));
     }

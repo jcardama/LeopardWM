@@ -80,6 +80,7 @@ fn test_all_responses_roundtrip() {
             focused_window: 0,
             scroll_offset: 123.5,
             total_width: 2400,
+            active_workspace: 1,
         },
         IpcResponse::FocusedWindow {
             window_id: Some(12345),
@@ -289,6 +290,7 @@ fn test_workspace_state_edge_values() {
         focused_window: 0,
         scroll_offset: 0.0,
         total_width: 0,
+        active_workspace: 1,
     };
 
     let json = serde_json::to_string(&resp).expect("serialize");
@@ -315,6 +317,7 @@ fn test_workspace_state_large_values() {
         focused_window: 10,
         scroll_offset: 50000.5,
         total_width: 100000,
+        active_workspace: 1,
     };
 
     let json = serde_json::to_string(&resp).expect("serialize");
@@ -343,6 +346,7 @@ fn test_workspace_state_negative_scroll() {
         focused_window: 0,
         scroll_offset: -100.0,
         total_width: 2400,
+        active_workspace: 1,
     };
 
     let json = serde_json::to_string(&resp).expect("serialize");

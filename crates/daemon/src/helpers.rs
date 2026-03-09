@@ -10,7 +10,7 @@ use leopardwm_platform_win32::{
 };
 #[cfg(not(test))]
 use leopardwm_platform_win32::is_window_alive_and_visible;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::Ordering;
 use tracing::{debug, info, warn};
 
@@ -71,31 +71,34 @@ impl AppState {
             self.hide_border();
         }
 
-        for (&monitor_id, workspace) in self.workspaces.iter_mut() {
-            workspace.set_gap(self.config.layout.gap);
-            workspace.set_outer_gaps(
-                self.config.layout.outer_gap_left,
-                self.config.layout.outer_gap_right,
-                self.config.layout.outer_gap_top,
-                self.config.layout.outer_gap_bottom,
-            );
+        for (&monitor_id, ws_vec) in self.workspaces.iter_mut() {
             let viewport_width = self.monitors.get(&monitor_id)
                 .map(|m| m.work_area.width)
                 .unwrap_or(FALLBACK_VIEWPORT_WIDTH);
 
-            // Rescale column widths to preserve fractions under new gap values
-            workspace.rescale_column_widths(
-                old_gap, old_outer_left, old_outer_right, viewport_width,
-            );
+            for workspace in ws_vec.iter_mut() {
+                workspace.set_gap(self.config.layout.gap);
+                workspace.set_outer_gaps(
+                    self.config.layout.outer_gap_left,
+                    self.config.layout.outer_gap_right,
+                    self.config.layout.outer_gap_top,
+                    self.config.layout.outer_gap_bottom,
+                );
 
-            workspace.set_default_column_width(
-                self.config.layout.default_column_width_px(viewport_width),
-            );
-            workspace.set_centering_mode(self.config.layout.centering_mode.into());
+                // Rescale column widths to preserve fractions under new gap values
+                workspace.rescale_column_widths(
+                    old_gap, old_outer_left, old_outer_right, viewport_width,
+                );
 
-            // Recalculate scroll offset for new gap values so all columns
-            // are positioned correctly (not just the rightmost ones).
-            workspace.ensure_focused_visible_animated(viewport_width);
+                workspace.set_default_column_width(
+                    self.config.layout.default_column_width_px(viewport_width),
+                );
+                workspace.set_centering_mode(self.config.layout.centering_mode.into());
+
+                // Recalculate scroll offset for new gap values so all columns
+                // are positioned correctly (not just the rightmost ones).
+                workspace.ensure_focused_visible_animated(viewport_width);
+            }
         }
 
         // Re-evaluate window rules for already-managed windows so that
@@ -113,11 +116,12 @@ impl AppState {
     /// Moves windows between tiled/floating/ignored states based on current rules.
     fn reapply_window_rules(&mut self) {
         // Collect all managed windows with their current state
-        let mut transitions: Vec<(u64, MonitorId, config::WindowAction, bool)> = Vec::new();
+        let mut transitions: Vec<(u64, MonitorId, usize, config::WindowAction, bool)> = Vec::new();
 
-        for (&monitor_id, workspace) in &self.workspaces {
-            for wid in workspace.all_window_ids() {
-                let is_floating = workspace.is_floating(wid);
+        for (&monitor_id, ws_vec) in &self.workspaces {
+            for (ws_idx, workspace) in ws_vec.iter().enumerate() {
+                for wid in workspace.all_window_ids() {
+                    let is_floating = workspace.is_floating(wid);
                 if let Some(win_info) = self.lookup_window_info(wid) {
                     let executable =
                         get_process_executable(win_info.process_id).unwrap_or_default();
@@ -126,18 +130,19 @@ impl AppState {
                         &win_info.title,
                         &executable,
                     );
-                    transitions.push((wid, monitor_id, action, is_floating));
+                    transitions.push((wid, monitor_id, ws_idx, action, is_floating));
                 }
+            }
             }
         }
 
         // Pre-compute floating rects before mutating workspaces (avoids borrow conflicts)
         let float_rects: std::collections::HashMap<u64, Rect> = transitions
             .iter()
-            .filter(|(_, _, action, is_floating)| {
+            .filter(|(_, _, _, action, is_floating)| {
                 *action == config::WindowAction::Float && !is_floating
             })
-            .filter_map(|(wid, _monitor_id, _, _)| {
+            .filter_map(|(wid, _monitor_id, _, _, _)| {
                 let win_info = self.lookup_window_info(*wid)?;
                 let executable =
                     get_process_executable(win_info.process_id).unwrap_or_default();
@@ -151,7 +156,7 @@ impl AppState {
             })
             .collect();
 
-        for (wid, monitor_id, action, is_floating) in transitions {
+        for (wid, monitor_id, ws_idx, action, is_floating) in transitions {
             match action {
                 config::WindowAction::Float if !is_floating => {
                     // Currently tiled, should be floating
@@ -170,7 +175,7 @@ impl AppState {
                             600,
                         )
                     });
-                    if let Some(workspace) = self.workspaces.get_mut(&monitor_id) {
+                    if let Some(workspace) = self.workspaces.get_mut(&monitor_id).and_then(|v| v.get_mut(ws_idx)) {
                         let _ = workspace.remove_window(wid);
                         let _ = workspace.add_floating(wid, rect);
                         info!("Rule change: moved window {} to floating", wid);
@@ -178,14 +183,14 @@ impl AppState {
                 }
                 config::WindowAction::Tile if is_floating => {
                     // Currently floating, should be tiled
-                    if let Some(workspace) = self.workspaces.get_mut(&monitor_id) {
+                    if let Some(workspace) = self.workspaces.get_mut(&monitor_id).and_then(|v| v.get_mut(ws_idx)) {
                         workspace.unfloat_window(wid);
                         info!("Rule change: moved window {} to tiled", wid);
                     }
                 }
                 config::WindowAction::Ignore => {
                     // Should no longer be managed — remove from workspace
-                    if let Some(workspace) = self.workspaces.get_mut(&monitor_id) {
+                    if let Some(workspace) = self.workspaces.get_mut(&monitor_id).and_then(|v| v.get_mut(ws_idx)) {
                         if is_floating {
                             workspace.remove_floating(wid);
                         } else {
@@ -202,24 +207,36 @@ impl AppState {
 
     /// Save current workspace state to disk.
     pub(crate) fn save_state(&self) -> Result<()> {
-        let snapshots: Vec<WorkspaceSnapshot> = self
-            .workspaces
-            .iter()
-            .filter_map(|(monitor_id, workspace)| {
-                self.monitors
-                    .get(monitor_id)
-                    .map(|monitor| WorkspaceSnapshot {
-                        monitor_device_name: monitor.device_name.clone(),
-                        workspace: workspace.clone(),
-                    })
-            })
-            .collect();
+        let mut snapshots: Vec<WorkspaceSnapshot> = Vec::new();
+        for (monitor_id, ws_vec) in &self.workspaces {
+            let active_idx = self.active_workspace_idx(*monitor_id);
+            if let Some(monitor) = self.monitors.get(monitor_id) {
+                for (idx, workspace) in ws_vec.iter().enumerate() {
+                    // Save non-empty workspaces and the active workspace (even if empty)
+                    if !workspace.all_window_ids().is_empty() || idx == active_idx {
+                        snapshots.push(WorkspaceSnapshot {
+                            monitor_device_name: monitor.device_name.clone(),
+                            workspace_index: idx,
+                            workspace: workspace.clone(),
+                        });
+                    }
+                }
+            }
+        }
 
         let focused_name = self
             .monitors
             .get(&self.focused_monitor)
             .map(|m| m.device_name.clone())
             .unwrap_or_default();
+
+        // Build active workspace map by device name
+        let mut active_ws_map = HashMap::new();
+        for (&monitor_id, &ws_idx) in &self.active_workspace {
+            if let Some(monitor) = self.monitors.get(&monitor_id) {
+                active_ws_map.insert(monitor.device_name.clone(), ws_idx);
+            }
+        }
 
         let saved_at = {
             let now = std::time::SystemTime::now();
@@ -233,6 +250,7 @@ impl AppState {
             saved_at,
             workspaces: snapshots,
             focused_monitor_name: focused_name,
+            active_workspace: active_ws_map,
         };
 
         let state_path = Self::state_file_path();
@@ -289,16 +307,33 @@ impl AppState {
                 .map(|(&id, _)| id);
 
             if let Some(id) = monitor_id {
-                // Restore scroll offset from saved workspace
-                if let Some(workspace) = self.workspaces.get_mut(&id) {
+                let ws_idx = ws_snapshot.workspace_index;
+                if let Some(ws_vec) = self.workspaces.get_mut(&id) {
+                    // Extend the vec with empty workspaces if needed
+                    while ws_vec.len() <= ws_idx {
+                        let mut ws = Workspace::with_directional_gaps(
+                            self.config.layout.gap,
+                            self.config.layout.outer_gap_left,
+                            self.config.layout.outer_gap_right,
+                            self.config.layout.outer_gap_top,
+                            self.config.layout.outer_gap_bottom,
+                        );
+                        let vw = self.monitors.get(&id)
+                            .map(|m| m.work_area.width)
+                            .unwrap_or(FALLBACK_VIEWPORT_WIDTH);
+                        ws.set_default_column_width(self.config.layout.default_column_width_px(vw));
+                        ws.set_centering_mode(self.config.layout.centering_mode.into());
+                        ws_vec.push(ws);
+                    }
+                    // Restore scroll offset from saved workspace
                     let saved_offset = ws_snapshot.workspace.scroll_offset();
                     if saved_offset != 0.0 {
-                        workspace.set_scroll_offset(saved_offset);
+                        ws_vec[ws_idx].set_scroll_offset(saved_offset);
                     }
                     restored_monitors.insert(id);
                     info!(
-                        "Restored workspace state for monitor '{}'",
-                        ws_snapshot.monitor_device_name
+                        "Restored workspace state for monitor '{}' workspace {}",
+                        ws_snapshot.monitor_device_name, ws_idx
                     );
                 }
             } else {
@@ -306,6 +341,17 @@ impl AppState {
                     "Skipping saved workspace for unknown monitor '{}'",
                     ws_snapshot.monitor_device_name
                 );
+            }
+        }
+
+        // Restore active workspace indices
+        for (device_name, &ws_idx) in &snapshot.active_workspace {
+            if let Some((&id, _)) = self
+                .monitors
+                .iter()
+                .find(|(_, m)| &m.device_name == device_name)
+            {
+                self.active_workspace.insert(id, ws_idx);
             }
         }
 
@@ -353,30 +399,36 @@ impl AppState {
                     self.config.layout.default_column_width_px(vw),
                 );
                 workspace.set_centering_mode(self.config.layout.centering_mode.into());
-                self.workspaces.insert(monitor.id, workspace);
+                self.workspaces.insert(monitor.id, vec![workspace]);
+                self.active_workspace.insert(monitor.id, 0);
                 info!("Created workspace for new monitor {}", monitor.id);
             }
         }
 
-        // Handle removed monitors - migrate windows to primary
+        // Handle removed monitors - migrate ALL workspaces' windows to primary's active workspace
         for removed_id in old_ids.difference(&new_ids) {
-            if let Some(old_workspace) = self.workspaces.remove(removed_id) {
-                let window_ids = old_workspace.all_window_ids();
+            if let Some(old_ws_vec) = self.workspaces.remove(removed_id) {
+                let mut all_window_ids = Vec::new();
+                for old_workspace in &old_ws_vec {
+                    all_window_ids.extend(old_workspace.all_window_ids());
+                }
                 if let Some(primary) = primary_id {
-                    if let Some(primary_ws) = self.workspaces.get_mut(&primary) {
-                        for window_id in &window_ids {
+                    let primary_active_idx = self.active_workspace_idx(primary);
+                    if let Some(primary_ws) = self.workspaces.get_mut(&primary).and_then(|v| v.get_mut(primary_active_idx)) {
+                        for window_id in &all_window_ids {
                             if let Err(e) = primary_ws.insert_window(*window_id, None) {
                                 warn!("Failed to migrate window {}: {}", window_id, e);
                             }
                         }
                         info!(
                             "Migrated {} windows from removed monitor {} to primary",
-                            window_ids.len(),
+                            all_window_ids.len(),
                             removed_id
                         );
                     }
                 }
             }
+            self.active_workspace.remove(removed_id);
             self.monitors.remove(removed_id);
         }
 
@@ -394,8 +446,10 @@ impl AppState {
     /// Returns tiled and floating window IDs from every monitor's workspace.
     pub(crate) fn all_managed_window_ids(&self) -> Vec<u64> {
         let mut ids = Vec::new();
-        for workspace in self.workspaces.values() {
-            ids.extend(workspace.all_window_ids());
+        for ws_vec in self.workspaces.values() {
+            for workspace in ws_vec {
+                ids.extend(workspace.all_window_ids());
+            }
         }
         ids
     }
@@ -412,16 +466,18 @@ impl AppState {
 
         #[cfg(not(test))]
         {
-            let mut stale: Vec<(MonitorId, u64)> = Vec::new();
-            for (&monitor_id, workspace) in &self.workspaces {
-                for &wid in &workspace.all_window_ids() {
-                    if !is_window_alive_and_visible(wid) && !workspace.is_minimized(wid) {
-                        stale.push((monitor_id, wid));
+            let mut stale: Vec<(MonitorId, usize, u64)> = Vec::new();
+            for (&monitor_id, ws_vec) in &self.workspaces {
+                for (ws_idx, workspace) in ws_vec.iter().enumerate() {
+                    for &wid in &workspace.all_window_ids() {
+                        if !is_window_alive_and_visible(wid) && !workspace.is_minimized(wid) {
+                            stale.push((monitor_id, ws_idx, wid));
+                        }
                     }
                 }
             }
-            for (monitor_id, wid) in &stale {
-                if let Some(workspace) = self.workspaces.get_mut(monitor_id) {
+            for (monitor_id, ws_idx, wid) in &stale {
+                if let Some(workspace) = self.workspaces.get_mut(monitor_id).and_then(|v| v.get_mut(*ws_idx)) {
                     let was_floating = workspace.remove_floating(*wid);
                     if !was_floating {
                         let _ = workspace.remove_window(*wid);
@@ -487,23 +543,32 @@ impl AppState {
     /// Check if any workspace has an active animation or layout transition.
     pub(crate) fn is_animating(&self) -> bool {
         self.layout_transition.is_some()
-            || self.workspaces.values().any(|w| w.is_animating())
+            || self.workspaces.values().any(|ws_vec| ws_vec.iter().any(|w| w.is_animating()))
     }
 
     /// Tick all active animations by the given delta time.
     /// Returns true if any animation is still running.
     pub(crate) fn tick_animations(&mut self, delta_ms: u64) -> bool {
         let mut still_animating = false;
-        for workspace in self.workspaces.values_mut() {
-            if workspace.tick_animation(delta_ms) {
-                still_animating = true;
+        for ws_vec in self.workspaces.values_mut() {
+            for workspace in ws_vec.iter_mut() {
+                if workspace.tick_animation(delta_ms) {
+                    still_animating = true;
+                }
             }
         }
         if let Some(ref mut transition) = self.layout_transition {
             if transition.tick(delta_ms) {
                 still_animating = true;
             } else {
+                // Transition complete — move exiting windows offscreen.
+                for wid in transition.exit_rects.keys() {
+                    let _ = leopardwm_platform_win32::move_window_offscreen(*wid);
+                }
                 self.layout_transition = None;
+                // Signal one more frame so entering windows land at their
+                // exact final positions (previous frame had t < 1.0).
+                still_animating = true;
             }
         }
         still_animating
@@ -513,10 +578,13 @@ impl AppState {
     /// Call this *before* a structural layout change.
     pub(crate) fn snapshot_layout(&self) -> std::collections::HashMap<u64, leopardwm_core_layout::Rect> {
         let mut rects = std::collections::HashMap::new();
-        for (monitor_id, workspace) in &self.workspaces {
-            if let Some(monitor) = self.monitors.get(monitor_id) {
-                for p in workspace.compute_placements_animated(monitor.work_area) {
-                    rects.insert(p.window_id, p.rect);
+        for (monitor_id, ws_vec) in &self.workspaces {
+            let idx = self.active_workspace_idx(*monitor_id);
+            if let Some(workspace) = ws_vec.get(idx) {
+                if let Some(monitor) = self.monitors.get(monitor_id) {
+                    for p in workspace.compute_placements_animated(monitor.work_area) {
+                        rects.insert(p.window_id, p.rect);
+                    }
                 }
             }
         }
@@ -530,13 +598,74 @@ impl AppState {
         start_rects: std::collections::HashMap<u64, leopardwm_core_layout::Rect>,
     ) {
         use crate::state::LAYOUT_TRANSITION_DURATION_MS;
+        self.start_layout_transition_with_duration(start_rects, LAYOUT_TRANSITION_DURATION_MS);
+    }
+
+    pub(crate) fn start_layout_transition_with_duration(
+        &mut self,
+        start_rects: std::collections::HashMap<u64, leopardwm_core_layout::Rect>,
+        duration_ms: u64,
+    ) {
         // Start with one frame (~16ms) already elapsed so the first
         // apply_layout/send_animation_frame shows visible movement.
         self.layout_transition = Some(LayoutTransition {
             start_rects,
+            exit_rects: HashMap::new(),
             elapsed_ms: 16,
-            duration_ms: LAYOUT_TRANSITION_DURATION_MS,
+            duration_ms,
         });
+    }
+
+    /// Start a workspace switch transition that animates both entering and
+    /// exiting windows simultaneously (continuous vertical scroll effect).
+    pub(crate) fn start_workspace_switch_transition(
+        &mut self,
+        start_rects: std::collections::HashMap<u64, leopardwm_core_layout::Rect>,
+        exit_rects: std::collections::HashMap<u64, leopardwm_core_layout::Rect>,
+        duration_ms: u64,
+    ) {
+        self.layout_transition = Some(LayoutTransition {
+            start_rects,
+            exit_rects,
+            elapsed_ms: 16,
+            duration_ms,
+        });
+    }
+
+    /// Apply layout transition interpolation to placements, including exit windows.
+    fn apply_transition_interpolation(
+        transition: &LayoutTransition,
+        placements: &mut Vec<leopardwm_core_layout::WindowPlacement>,
+    ) {
+        let t = transition.eased_progress();
+        // Interpolate entering/morphing windows.
+        for p in placements.iter_mut() {
+            if let Some(start) = transition.start_rects.get(&p.window_id) {
+                p.rect = leopardwm_core_layout::Rect::new(
+                    start.x + ((p.rect.x - start.x) as f64 * t).round() as i32,
+                    start.y + ((p.rect.y - start.y) as f64 * t).round() as i32,
+                    start.width + ((p.rect.width - start.width) as f64 * t).round() as i32,
+                    start.height + ((p.rect.height - start.height) as f64 * t).round() as i32,
+                );
+            }
+        }
+        // Interpolate exiting windows (e.g., old workspace sliding out).
+        for (wid, target) in &transition.exit_rects {
+            if let Some(start) = transition.start_rects.get(wid) {
+                placements.push(leopardwm_core_layout::WindowPlacement {
+                    window_id: *wid,
+                    rect: leopardwm_core_layout::Rect::new(
+                        start.x + ((target.x - start.x) as f64 * t).round() as i32,
+                        start.y + ((target.y - start.y) as f64 * t).round() as i32,
+                        start.width + ((target.width - start.width) as f64 * t).round() as i32,
+                        start.height
+                            + ((target.height - start.height) as f64 * t).round() as i32,
+                    ),
+                    visibility: leopardwm_core_layout::Visibility::Visible,
+                    column_index: 0,
+                });
+            }
+        }
     }
 
     /// Compute animated placements and send them to the animation worker.
@@ -550,30 +679,22 @@ impl AppState {
             return Ok(false);
         }
         let mut all_placements = Vec::new();
-        for (monitor_id, workspace) in &self.workspaces {
-            if let Some(monitor) = self.monitors.get(monitor_id) {
-                let placements = workspace.compute_placements_animated(monitor.work_area);
-                all_placements.extend(placements);
+        for (monitor_id, ws_vec) in &self.workspaces {
+            let idx = self.active_workspace_idx(*monitor_id);
+            if let Some(workspace) = ws_vec.get(idx) {
+                if let Some(monitor) = self.monitors.get(monitor_id) {
+                    let placements = workspace.compute_placements_animated(monitor.work_area);
+                    all_placements.extend(placements);
+                }
             }
         }
-        if all_placements.is_empty() {
+        if all_placements.is_empty() && self.layout_transition.as_ref().is_none_or(|t| t.exit_rects.is_empty()) {
             return Ok(false);
         }
 
         // Interpolate layout transitions (structural changes like move/expel).
         if let Some(ref transition) = self.layout_transition {
-            let t = transition.eased_progress();
-            for p in &mut all_placements {
-                if let Some(start) = transition.start_rects.get(&p.window_id) {
-                    p.rect = leopardwm_core_layout::Rect::new(
-                        start.x + ((p.rect.x - start.x) as f64 * t).round() as i32,
-                        start.y + ((p.rect.y - start.y) as f64 * t).round() as i32,
-                        start.width + ((p.rect.width - start.width) as f64 * t).round() as i32,
-                        start.height
-                            + ((p.rect.height - start.height) as f64 * t).round() as i32,
-                    );
-                }
-            }
+            Self::apply_transition_interpolation(transition, &mut all_placements);
         }
 
         // Filter out the dragged window and placeholder so SetWindowPos doesn't
@@ -626,37 +747,29 @@ impl AppState {
         self.applying_layout = true;
         let mut all_placements = Vec::new();
 
-        for (monitor_id, workspace) in &self.workspaces {
-            if let Some(monitor) = self.monitors.get(monitor_id) {
-                // Use animated placements to support smooth scrolling
-                let placements = workspace.compute_placements_animated(monitor.work_area);
-                debug!(
-                    "Monitor {}: {} placements for viewport {}x{} (animating: {}, minimized: {})",
-                    monitor_id,
-                    placements.len(),
-                    monitor.work_area.width,
-                    monitor.work_area.height,
-                    workspace.is_animating(),
-                    workspace.minimized_count()
-                );
-                all_placements.extend(placements);
+        for (monitor_id, ws_vec) in &self.workspaces {
+            let idx = self.active_workspace_idx(*monitor_id);
+            if let Some(workspace) = ws_vec.get(idx) {
+                if let Some(monitor) = self.monitors.get(monitor_id) {
+                    // Use animated placements to support smooth scrolling
+                    let placements = workspace.compute_placements_animated(monitor.work_area);
+                    debug!(
+                        "Monitor {}: {} placements for viewport {}x{} (animating: {}, minimized: {})",
+                        monitor_id,
+                        placements.len(),
+                        monitor.work_area.width,
+                        monitor.work_area.height,
+                        workspace.is_animating(),
+                        workspace.minimized_count()
+                    );
+                    all_placements.extend(placements);
+                }
             }
         }
 
         // Interpolate layout transitions (structural changes like move/expel).
         if let Some(ref transition) = self.layout_transition {
-            let t = transition.eased_progress();
-            for p in &mut all_placements {
-                if let Some(start) = transition.start_rects.get(&p.window_id) {
-                    p.rect = leopardwm_core_layout::Rect::new(
-                        start.x + ((p.rect.x - start.x) as f64 * t).round() as i32,
-                        start.y + ((p.rect.y - start.y) as f64 * t).round() as i32,
-                        start.width + ((p.rect.width - start.width) as f64 * t).round() as i32,
-                        start.height
-                            + ((p.rect.height - start.height) as f64 * t).round() as i32,
-                    );
-                }
-            }
+            Self::apply_transition_interpolation(transition, &mut all_placements);
         }
 
         // Filter out the dragged window and placeholder so SetWindowPos doesn't
@@ -847,9 +960,9 @@ impl AppState {
 
     /// Compute the layout rect for a window from the workspace placements.
     fn compute_window_layout_rect(&self, hwnd: u64) -> Option<leopardwm_core_layout::Rect> {
-        let monitor_id = self.find_window_workspace(hwnd)?;
+        let (monitor_id, ws_idx) = self.find_window_workspace(hwnd)?;
         let viewport = self.monitors.get(&monitor_id)?.work_area;
-        let workspace = self.workspaces.get(&monitor_id)?;
+        let workspace = self.workspaces.get(&monitor_id)?.get(ws_idx)?;
         let placements = workspace.compute_placements_animated(viewport);
         placements
             .iter()
@@ -922,7 +1035,8 @@ impl AppState {
                 None
             };
 
-            if let Some(workspace) = self.workspaces.get_mut(&monitor_id) {
+            let active_idx = self.active_workspace_idx(monitor_id);
+            if let Some(workspace) = self.workspaces.get_mut(&monitor_id).and_then(|v| v.get_mut(active_idx)) {
                 match action {
                     config::WindowAction::Float => {
                         // Use rule dimensions or default to centered 800x600 window
@@ -1031,10 +1145,13 @@ impl AppState {
     }
 
     /// Find which workspace contains a window.
-    pub(crate) fn find_window_workspace(&self, window_id: u64) -> Option<MonitorId> {
-        for (monitor_id, workspace) in &self.workspaces {
-            if workspace.contains_window(window_id) {
-                return Some(*monitor_id);
+    /// Returns `(monitor_id, workspace_index)` so callers can index into the correct workspace.
+    pub(crate) fn find_window_workspace(&self, window_id: u64) -> Option<(MonitorId, usize)> {
+        for (monitor_id, ws_vec) in &self.workspaces {
+            for (idx, workspace) in ws_vec.iter().enumerate() {
+                if workspace.contains_window(window_id) {
+                    return Some((*monitor_id, idx));
+                }
             }
         }
         None
@@ -1057,16 +1174,31 @@ impl AppState {
             return Ok(None);
         };
 
-        let Some(mut source_workspace) = self.workspaces.get(&source_monitor).cloned() else {
+        let src_idx = self.active_workspace_idx(source_monitor);
+        let tgt_idx = self.active_workspace_idx(target_monitor);
+
+        let Some(source_ws_vec) = self.workspaces.get(&source_monitor) else {
             return Err(format!(
                 "Source workspace missing for monitor {}",
                 source_monitor
             ));
         };
-        let Some(mut target_workspace) = self.workspaces.get(&target_monitor).cloned() else {
+        let Some(mut source_workspace) = source_ws_vec.get(src_idx).cloned() else {
+            return Err(format!(
+                "Source workspace index {} missing for monitor {}",
+                src_idx, source_monitor
+            ));
+        };
+        let Some(target_ws_vec) = self.workspaces.get(&target_monitor) else {
             return Err(format!(
                 "Target workspace missing for monitor {}",
                 target_monitor
+            ));
+        };
+        let Some(mut target_workspace) = target_ws_vec.get(tgt_idx).cloned() else {
+            return Err(format!(
+                "Target workspace index {} missing for monitor {}",
+                tgt_idx, target_monitor
             ));
         };
 
@@ -1080,8 +1212,8 @@ impl AppState {
         let target_viewport = self.viewport_width_for(target_monitor);
         target_workspace.ensure_focused_visible(target_viewport);
 
-        self.workspaces.insert(source_monitor, source_workspace);
-        self.workspaces.insert(target_monitor, target_workspace);
+        self.workspaces.get_mut(&source_monitor).unwrap()[src_idx] = source_workspace;
+        self.workspaces.get_mut(&target_monitor).unwrap()[tgt_idx] = target_workspace;
         self.focused_monitor = target_monitor;
         Ok(Some(window_id))
     }

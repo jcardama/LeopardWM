@@ -519,8 +519,12 @@ async fn main() -> Result<()> {
         }
 
         // Log workspace state for all monitors
-        let total_windows: usize = state.workspaces.values().map(|w| w.window_count()).sum();
-        let total_columns: usize = state.workspaces.values().map(|w| w.column_count()).sum();
+        let total_windows: usize = state.workspaces.values()
+            .flat_map(|ws_vec| ws_vec.iter())
+            .map(|w| w.window_count()).sum();
+        let total_columns: usize = state.workspaces.values()
+            .flat_map(|ws_vec| ws_vec.iter())
+            .map(|w| w.column_count()).sum();
         info!(
             "Workspaces initialized across {} monitors: {} total columns, {} total windows",
             state.workspaces.len(),
@@ -548,13 +552,15 @@ async fn main() -> Result<()> {
         // Ensure the focused column is visible in the viewport for every workspace.
         // This also corrects stale scroll offsets from restored state that no longer
         // match the current window set.
-        for (monitor_id, workspace) in state.workspaces.iter_mut() {
-            if workspace.column_count() > 0 {
-                let width = monitor_widths
-                    .get(monitor_id)
-                    .copied()
-                    .unwrap_or(FALLBACK_VIEWPORT_WIDTH);
-                workspace.ensure_focused_visible(width);
+        for (monitor_id, ws_vec) in state.workspaces.iter_mut() {
+            for workspace in ws_vec.iter_mut() {
+                if workspace.column_count() > 0 {
+                    let width = monitor_widths
+                        .get(monitor_id)
+                        .copied()
+                        .unwrap_or(FALLBACK_VIEWPORT_WIDTH);
+                    workspace.ensure_focused_visible(width);
+                }
             }
         }
 
@@ -569,19 +575,23 @@ async fn main() -> Result<()> {
                 (id, state.config.layout.default_column_width_px(vw))
             })
             .collect();
-        for (&monitor_id, workspace) in state.workspaces.iter_mut() {
+        for (&monitor_id, ws_vec) in state.workspaces.iter_mut() {
             let default_width = monitor_widths_for_default
                 .get(&monitor_id)
                 .copied()
                 .unwrap_or(800);
-            workspace.set_all_column_widths(default_width);
+            for workspace in ws_vec.iter_mut() {
+                workspace.set_all_column_widths(default_width);
+            }
         }
 
         // Reset scroll offset to 0 so windows tile from the left edge on startup
         // (like niri). The ensure_focused_visible call above may leave a stale
         // centered offset when restoring state.
-        for (_monitor_id, workspace) in state.workspaces.iter_mut() {
-            workspace.set_scroll_offset(0.0);
+        for (_monitor_id, ws_vec) in state.workspaces.iter_mut() {
+            for workspace in ws_vec.iter_mut() {
+                workspace.set_scroll_offset(0.0);
+            }
         }
     }
 
@@ -817,7 +827,9 @@ async fn main() -> Result<()> {
             .values()
             .map(|m| m.device_name.clone())
             .collect();
-        let window_count: usize = state.workspaces.values().map(|w| w.window_count()).sum();
+        let window_count: usize = state.workspaces.values()
+            .flat_map(|ws_vec| ws_vec.iter())
+            .map(|w| w.window_count()).sum();
         let config_path = config::config_paths()
             .into_iter()
             .find(|p| p.exists())
@@ -932,11 +944,13 @@ async fn main() -> Result<()> {
                         mgr.update_pause_text(state.paused);
                         let wc = state.all_managed_window_ids().len();
                         let mc = state.monitors.len();
+                        let aws = (state.active_workspace_idx(state.focused_monitor) + 1) as u8;
                         mgr.update_tooltip(
                             wc,
                             mc,
                             state.paused,
                             Some((hotkey_state.registered_count, hotkey_state.requested_count)),
+                            aws,
                         );
                     }
                 }
@@ -1029,11 +1043,13 @@ async fn main() -> Result<()> {
                         if let Some(ref mgr) = tray_manager {
                             let wc = state.all_managed_window_ids().len();
                             let mc = state.monitors.len();
+                            let aws = (state.active_workspace_idx(state.focused_monitor) + 1) as u8;
                             mgr.update_tooltip(
                                 wc,
                                 mc,
                                 state.paused,
                                 Some((hotkey_state.registered_count, hotkey_state.requested_count)),
+                                aws,
                             );
                         }
                         // Start animation if needed (e.g. animated snap-back)
@@ -1207,11 +1223,13 @@ async fn main() -> Result<()> {
                             mgr.update_pause_text(state.paused);
                             let wc = state.all_managed_window_ids().len();
                             let mc = state.monitors.len();
+                            let aws = (state.active_workspace_idx(state.focused_monitor) + 1) as u8;
                             mgr.update_tooltip(
                                 wc,
                                 mc,
                                 state.paused,
                                 Some((hotkey_state.registered_count, hotkey_state.requested_count)),
+                                aws,
                             );
                         }
                     }
@@ -1671,6 +1689,7 @@ mod tests {
             saved_at: "2026-02-04T12:00:00".to_string(),
             workspaces: vec![],
             focused_monitor_name: "DISPLAY1".to_string(),
+            active_workspace: HashMap::new(),
         };
         let json = serde_json::to_string(&snapshot).expect("serialize");
         let parsed: StateSnapshot = serde_json::from_str(&json).expect("deserialize");
@@ -1683,6 +1702,7 @@ mod tests {
         let workspace = Workspace::new();
         let snapshot = WorkspaceSnapshot {
             monitor_device_name: "DISPLAY1".to_string(),
+            workspace_index: 0,
             workspace,
         };
         let json = serde_json::to_string(&snapshot).expect("serialize");
@@ -1697,9 +1717,11 @@ mod tests {
             saved_at: "2026-02-04T12:00:00".to_string(),
             workspaces: vec![WorkspaceSnapshot {
                 monitor_device_name: "DISPLAY1".to_string(),
+                workspace_index: 0,
                 workspace: Workspace::with_gaps(10, 10),
             }],
             focused_monitor_name: "DISPLAY1".to_string(),
+            active_workspace: HashMap::new(),
         };
         let json = serde_json::to_string_pretty(&snapshot).expect("serialize");
         let parsed: StateSnapshot = serde_json::from_str(&json).expect("deserialize");
@@ -2003,17 +2025,11 @@ mod tests {
     fn test_cmd_move_to_monitor_right_rollback_on_insert_failure() {
         let mut state = AppState::new_with_config(test_config(), two_monitors());
         state.focused_monitor = 1;
-        state
-            .workspaces
-            .get_mut(&1)
-            .unwrap()
+        state.workspaces.get_mut(&1).unwrap()[0]
             .insert_window(100, Some(800))
             .unwrap();
         // Force target insert failure (duplicate in target workspace).
-        state
-            .workspaces
-            .get_mut(&2)
-            .unwrap()
+        state.workspaces.get_mut(&2).unwrap()[0]
             .insert_window(100, Some(800))
             .unwrap();
 
@@ -2025,8 +2041,8 @@ mod tests {
             other => panic!("Expected error, got {:?}", other),
         }
 
-        let source = state.workspaces.get(&1).unwrap();
-        let target = state.workspaces.get(&2).unwrap();
+        let source = &state.workspaces.get(&1).unwrap()[0];
+        let target = &state.workspaces.get(&2).unwrap()[0];
         assert_eq!(state.focused_monitor, 1);
         assert_eq!(source.window_count(), 1);
         assert_eq!(source.focused_window(), Some(100));
@@ -2038,17 +2054,11 @@ mod tests {
     fn test_cmd_move_to_monitor_left_rollback_on_insert_failure() {
         let mut state = AppState::new_with_config(test_config(), two_monitors());
         state.focused_monitor = 2;
-        state
-            .workspaces
-            .get_mut(&2)
-            .unwrap()
+        state.workspaces.get_mut(&2).unwrap()[0]
             .insert_window(200, Some(800))
             .unwrap();
         // Force target insert failure (duplicate in target workspace).
-        state
-            .workspaces
-            .get_mut(&1)
-            .unwrap()
+        state.workspaces.get_mut(&1).unwrap()[0]
             .insert_window(200, Some(800))
             .unwrap();
 
@@ -2060,8 +2070,8 @@ mod tests {
             other => panic!("Expected error, got {:?}", other),
         }
 
-        let source = state.workspaces.get(&2).unwrap();
-        let target = state.workspaces.get(&1).unwrap();
+        let source = &state.workspaces.get(&2).unwrap()[0];
+        let target = &state.workspaces.get(&1).unwrap()[0];
         assert_eq!(state.focused_monitor, 2);
         assert_eq!(source.window_count(), 1);
         assert_eq!(source.focused_window(), Some(200));
@@ -2151,15 +2161,15 @@ mod tests {
     fn test_reconcile_preserves_windows() {
         let mut state = AppState::new_with_config(test_config(), two_monitors());
         // Add windows to workspace on monitor 2
-        if let Some(ws) = state.workspaces.get_mut(&2) {
-            ws.insert_window(1001, None).unwrap();
-            ws.insert_window(1002, None).unwrap();
+        if let Some(ws_vec) = state.workspaces.get_mut(&2) {
+            ws_vec[0].insert_window(1001, None).unwrap();
+            ws_vec[0].insert_window(1002, None).unwrap();
         }
-        assert_eq!(state.workspaces.get(&2).unwrap().window_count(), 2);
+        assert_eq!(state.workspaces.get(&2).unwrap()[0].window_count(), 2);
 
         // Remove monitor 2 - windows should migrate to primary
         state.reconcile_monitors(test_monitors());
-        let primary_ws = state.workspaces.get(&1).unwrap();
+        let primary_ws = &state.workspaces.get(&1).unwrap()[0];
         assert_eq!(primary_ws.window_count(), 2);
     }
 
@@ -2167,22 +2177,13 @@ mod tests {
     fn test_reconcile_full_monitor_churn() {
         // Start with monitors 1 and 2, add windows to both
         let mut state = AppState::new_with_config(test_config(), two_monitors());
-        state
-            .workspaces
-            .get_mut(&1)
-            .unwrap()
+        state.workspaces.get_mut(&1).unwrap()[0]
             .insert_window(100, None)
             .unwrap();
-        state
-            .workspaces
-            .get_mut(&1)
-            .unwrap()
+        state.workspaces.get_mut(&1).unwrap()[0]
             .insert_window(101, None)
             .unwrap();
-        state
-            .workspaces
-            .get_mut(&2)
-            .unwrap()
+        state.workspaces.get_mut(&2).unwrap()[0]
             .insert_window(200, None)
             .unwrap();
 
@@ -2207,7 +2208,7 @@ mod tests {
 
         // All 3 windows must have been migrated to the new primary (id 3)
         assert_eq!(state.workspaces.len(), 2);
-        let primary_ws = state.workspaces.get(&3).unwrap();
+        let primary_ws = &state.workspaces.get(&3).unwrap()[0];
         assert_eq!(primary_ws.window_count(), 3);
         assert!(state.workspaces.contains_key(&4));
         // Old monitors must be gone
@@ -2453,11 +2454,11 @@ mod tests {
         let mut state = AppState::new_with_config(test_config(), monitors);
 
         // Add windows to both workspaces
-        if let Some(ws) = state.workspaces.get_mut(&1) {
-            ws.insert_window(100, Some(800)).unwrap();
+        if let Some(ws_vec) = state.workspaces.get_mut(&1) {
+            ws_vec[0].insert_window(100, Some(800)).unwrap();
         }
-        if let Some(ws) = state.workspaces.get_mut(&2) {
-            ws.insert_window(200, Some(800)).unwrap();
+        if let Some(ws_vec) = state.workspaces.get_mut(&2) {
+            ws_vec[0].insert_window(200, Some(800)).unwrap();
         }
 
         let ids = state.all_managed_window_ids();
@@ -2503,16 +2504,10 @@ mod tests {
     #[test]
     fn test_minimized_event_updates_focused_monitor_to_source_monitor() {
         let mut state = AppState::new_with_config(test_config(), two_monitors());
-        state
-            .workspaces
-            .get_mut(&1)
-            .unwrap()
+        state.workspaces.get_mut(&1).unwrap()[0]
             .insert_window(100, Some(800))
             .unwrap();
-        state
-            .workspaces
-            .get_mut(&2)
-            .unwrap()
+        state.workspaces.get_mut(&2).unwrap()[0]
             .insert_window(200, Some(800))
             .unwrap();
         state.focused_monitor = 1;
@@ -2570,27 +2565,27 @@ mod tests {
     #[test]
     fn test_find_window_workspace_tiled() {
         let mut state = AppState::new_with_config(test_config(), test_monitors());
-        let ws = state.workspaces.get_mut(&1).unwrap();
+        let ws = &mut state.workspaces.get_mut(&1).unwrap()[0];
         ws.insert_window(100, Some(800)).unwrap();
 
         // Should find the tiled window
-        assert_eq!(state.find_window_workspace(100), Some(1));
+        assert_eq!(state.find_window_workspace(100), Some((1, 0)));
         // Not floating
-        let ws = state.workspaces.get(&1).unwrap();
+        let ws = &state.workspaces.get(&1).unwrap()[0];
         assert!(!ws.is_floating(100));
     }
 
     #[test]
     fn test_find_window_workspace_floating_not_snapped() {
         let mut state = AppState::new_with_config(test_config(), test_monitors());
-        let ws = state.workspaces.get_mut(&1).unwrap();
+        let ws = &mut state.workspaces.get_mut(&1).unwrap()[0];
         let rect = Rect::new(100, 100, 800, 600);
         ws.add_floating(200, rect).unwrap();
 
         // Should find the floating window
-        assert_eq!(state.find_window_workspace(200), Some(1));
+        assert_eq!(state.find_window_workspace(200), Some((1, 0)));
         // Is floating — snap-back should NOT apply
-        let ws = state.workspaces.get(&1).unwrap();
+        let ws = &state.workspaces.get(&1).unwrap()[0];
         assert!(ws.is_floating(200));
     }
 
@@ -2810,16 +2805,13 @@ mod tests {
     fn test_focus_changes_monitor() {
         let mut state = AppState::new_with_config(test_config(), two_monitors());
         // Add window to monitor 2
-        state
-            .workspaces
-            .get_mut(&2)
-            .unwrap()
+        state.workspaces.get_mut(&2).unwrap()[0]
             .insert_window(200, Some(800))
             .unwrap();
 
         // Find which workspace contains window 200
         let monitor = state.find_window_workspace(200);
-        assert_eq!(monitor, Some(2));
+        assert_eq!(monitor, Some((2, 0)));
 
         // Simulate focus change: update focused_monitor
         state.focused_monitor = 2;
@@ -2873,16 +2865,10 @@ mod tests {
     fn test_multiple_monitors_focus_cross_monitor() {
         let mut state = AppState::new_with_config(test_config(), two_monitors());
         // Add windows to both monitors
-        state
-            .workspaces
-            .get_mut(&1)
-            .unwrap()
+        state.workspaces.get_mut(&1).unwrap()[0]
             .insert_window(100, Some(800))
             .unwrap();
-        state
-            .workspaces
-            .get_mut(&2)
-            .unwrap()
+        state.workspaces.get_mut(&2).unwrap()[0]
             .insert_window(200, Some(800))
             .unwrap();
 
@@ -2894,7 +2880,7 @@ mod tests {
         assert_eq!(state.focused_monitor, 2);
 
         // Verify the focused workspace is on monitor 2
-        let ws = state.workspaces.get(&state.focused_monitor).unwrap();
+        let ws = &state.workspaces.get(&state.focused_monitor).unwrap()[0];
         assert!(ws.contains_window(200));
     }
 
@@ -2932,7 +2918,7 @@ mod tests {
         let mut state = AppState::new_with_config(test_config(), test_monitors());
 
         // Insert windows so the workspace has scrollable content
-        let ws = state.workspaces.get_mut(&1).unwrap();
+        let ws = &mut state.workspaces.get_mut(&1).unwrap()[0];
         ws.insert_window(100, Some(800)).unwrap();
         ws.insert_window(200, Some(800)).unwrap();
         ws.insert_window(300, Some(800)).unwrap();
@@ -2944,15 +2930,17 @@ mod tests {
             saved_at: "test".to_string(),
             workspaces: vec![WorkspaceSnapshot {
                 monitor_device_name: "DISPLAY1".to_string(),
+                workspace_index: 0,
                 workspace: saved_ws,
             }],
             focused_monitor_name: "DISPLAY1".to_string(),
+            active_workspace: HashMap::new(),
         };
 
         let restored = state.restore_state(&snapshot);
         assert!(restored.contains(&1), "Monitor 1 should be in restored set");
 
-        let ws = state.workspaces.get(&1).unwrap();
+        let ws = &state.workspaces.get(&1).unwrap()[0];
         assert_eq!(
             ws.scroll_offset(),
             500.0,
@@ -2971,16 +2959,18 @@ mod tests {
             saved_at: "test".to_string(),
             workspaces: vec![WorkspaceSnapshot {
                 monitor_device_name: "DISPLAY1".to_string(),
+                workspace_index: 0,
                 workspace: saved_ws,
             }],
             focused_monitor_name: "DISPLAY1".to_string(),
+            active_workspace: HashMap::new(),
         };
 
         // Should not panic even on empty workspace
         let restored = state.restore_state(&snapshot);
         assert!(restored.contains(&1), "Monitor 1 should be in restored set");
 
-        let ws = state.workspaces.get(&1).unwrap();
+        let ws = &state.workspaces.get(&1).unwrap()[0];
         assert_eq!(
             ws.scroll_offset(),
             300.0,
@@ -3016,9 +3006,11 @@ mod tests {
             saved_at: "test".to_string(),
             workspaces: vec![WorkspaceSnapshot {
                 monitor_device_name: "DISPLAY1".to_string(),
+                workspace_index: 0,
                 workspace: saved_ws,
             }],
             focused_monitor_name: "DISPLAY1".to_string(),
+            active_workspace: HashMap::new(),
         };
 
         let restored = state.restore_state(&snapshot);
@@ -3034,9 +3026,11 @@ mod tests {
             saved_at: "test".to_string(),
             workspaces: vec![WorkspaceSnapshot {
                 monitor_device_name: "UNKNOWN".to_string(),
+                workspace_index: 0,
                 workspace: saved_ws2,
             }],
             focused_monitor_name: "DISPLAY1".to_string(),
+            active_workspace: HashMap::new(),
         };
 
         let restored2 = state.restore_state(&snapshot2);
@@ -3301,7 +3295,7 @@ mod tests {
         let mut state = AppState::new_with_config(test_config(), test_monitors());
 
         // Add windows so apply_layout computes real placements (not empty)
-        let ws = state.workspaces.get_mut(&1).unwrap();
+        let ws = &mut state.workspaces.get_mut(&1).unwrap()[0];
         ws.insert_window(100, Some(800)).unwrap();
         ws.insert_window(200, Some(800)).unwrap();
 

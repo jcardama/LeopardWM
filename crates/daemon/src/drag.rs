@@ -52,7 +52,8 @@ impl AppState {
                     Some(m) => m.work_area,
                     None => return,
                 };
-                let Some(workspace) = self.workspaces.get(&target_monitor_id) else {
+                let ws_idx = self.active_workspace_idx(target_monitor_id);
+                let Some(workspace) = self.workspaces.get(&target_monitor_id).and_then(|v| v.get(ws_idx)) else {
                     return;
                 };
                 let column_bounds = column_bounds_from_placements(workspace, viewport);
@@ -80,7 +81,8 @@ impl AppState {
                 Some(m) => m.work_area,
                 None => return,
             };
-            let Some(workspace) = self.workspaces.get(&source_monitor) else {
+            let ws_idx = self.active_workspace_idx(source_monitor);
+            let Some(workspace) = self.workspaces.get(&source_monitor).and_then(|v| v.get(ws_idx)) else {
                 return;
             };
 
@@ -104,7 +106,8 @@ impl AppState {
                     current_col, target_idx, source_monitor
                 );
                 let snapshot = self.snapshot_layout();
-                if let Some(workspace) = self.workspaces.get_mut(&source_monitor) {
+                let idx = self.active_workspace_idx(source_monitor);
+                if let Some(workspace) = self.workspaces.get_mut(&source_monitor).and_then(|v| v.get_mut(idx)) {
                     workspace.reorder_column(current_col, target_idx);
                 }
                 if let Some(ref mut drag) = self.drag_state {
@@ -117,7 +120,8 @@ impl AppState {
             }
 
             // Show ghost at the dragged column's new position.
-            let workspace = match self.workspaces.get(&source_monitor) {
+            let ws_idx = self.active_workspace_idx(source_monitor);
+            let workspace = match self.workspaces.get(&source_monitor).and_then(|v| v.get(ws_idx)) {
                 Some(ws) => ws,
                 None => return,
             };
@@ -140,11 +144,14 @@ impl AppState {
             };
 
             // Remove any existing placeholder before recomputing bounds.
-            for (_, ws) in self.workspaces.iter_mut() {
-                let _ = ws.remove_window(DRAG_PLACEHOLDER_HWND);
+            for (_, ws_vec) in self.workspaces.iter_mut() {
+                for ws in ws_vec.iter_mut() {
+                    let _ = ws.remove_window(DRAG_PLACEHOLDER_HWND);
+                }
             }
 
-            let Some(workspace) = self.workspaces.get(&target_monitor_id) else {
+            let ws_idx = self.active_workspace_idx(target_monitor_id);
+            let Some(workspace) = self.workspaces.get(&target_monitor_id).and_then(|v| v.get(ws_idx)) else {
                 return;
             };
             let column_bounds = column_bounds_from_placements(workspace, viewport);
@@ -200,7 +207,8 @@ impl AppState {
                 };
                 if needs_move {
                     let snapshot = self.snapshot_layout();
-                    if let Some(ws) = self.workspaces.get_mut(&target_monitor_id) {
+                    let idx = self.active_workspace_idx(target_monitor_id);
+                    if let Some(ws) = self.workspaces.get_mut(&target_monitor_id).and_then(|v| v.get_mut(idx)) {
                         let _ = ws.remove_window(hwnd);
                         let _ = ws.insert_window_in_column_at(hwnd, target_col, window_slot);
                     }
@@ -222,16 +230,18 @@ impl AppState {
                     // Remove window from multi-window source columns so remaining
                     // windows expand. Single-window columns keep the window to
                     // preserve column space until drop.
+                    let src_idx = self.active_workspace_idx(source_monitor);
                     let should_remove = self
                         .workspaces
                         .get(&source_monitor)
+                        .and_then(|v| v.get(src_idx))
                         .and_then(|ws| {
                             let (col, _) = ws.find_window_location(hwnd)?;
                             Some(ws.column(col)?.len() > 1)
                         })
                         .unwrap_or(false);
                     if should_remove {
-                        if let Some(ws) = self.workspaces.get_mut(&source_monitor) {
+                        if let Some(ws) = self.workspaces.get_mut(&source_monitor).and_then(|v| v.get_mut(src_idx)) {
                             let _ = ws.remove_window(hwnd);
                         }
                         if let Some(ref mut drag) = self.drag_state {
@@ -248,7 +258,8 @@ impl AppState {
                     .is_some_and(|d| d.removed_from_source)
                 {
                     // Re-derive from updated layout.
-                    let ws = match self.workspaces.get(&target_monitor_id) {
+                    let tgt_idx = self.active_workspace_idx(target_monitor_id);
+                    let ws = match self.workspaces.get(&target_monitor_id).and_then(|v| v.get(tgt_idx)) {
                         Some(ws) => ws,
                         None => return,
                     };
@@ -261,7 +272,8 @@ impl AppState {
                     target_col
                 };
 
-                if let Some(ws) = self.workspaces.get_mut(&target_monitor_id) {
+                let tgt_idx = self.active_workspace_idx(target_monitor_id);
+                if let Some(ws) = self.workspaces.get_mut(&target_monitor_id).and_then(|v| v.get_mut(tgt_idx)) {
                     if adj_target_col < ws.column_count() {
                         let _ = ws.insert_window_in_column_at(
                             DRAG_PLACEHOLDER_HWND,
@@ -279,7 +291,8 @@ impl AppState {
             }
 
             // Show ghost at the target slot position (recompute from updated layout).
-            let workspace = match self.workspaces.get(&target_monitor_id) {
+            let ws_idx = self.active_workspace_idx(target_monitor_id);
+            let workspace = match self.workspaces.get(&target_monitor_id).and_then(|v| v.get(ws_idx)) {
                 Some(ws) => ws,
                 None => return,
             };
@@ -337,7 +350,8 @@ impl AppState {
         };
 
         let (target_col_idx, window_slot) = {
-            let Some(workspace) = self.workspaces.get(&target_monitor) else {
+            let ws_idx = self.active_workspace_idx(target_monitor);
+            let Some(workspace) = self.workspaces.get(&target_monitor).and_then(|v| v.get(ws_idx)) else {
                 self.snap_back_tiled(source_monitor);
                 return;
             };
@@ -376,14 +390,17 @@ impl AppState {
         let already_removed = drag.removed_from_source;
 
         // Find source column info before removal.
+        let src_ws_idx = self.active_workspace_idx(source_monitor);
         let src_col_info = if !already_removed && target_monitor == source_monitor {
             self.workspaces
                 .get(&source_monitor)
+                .and_then(|v| v.get(src_ws_idx))
                 .and_then(|ws| ws.find_window_location(hwnd))
                 .map(|(col_idx, _)| {
                     let col_len = self
                         .workspaces
                         .get(&source_monitor)
+                        .and_then(|v| v.get(src_ws_idx))
                         .and_then(|ws| ws.column(col_idx))
                         .map(|c| c.len())
                         .unwrap_or(0);
@@ -406,7 +423,8 @@ impl AppState {
 
         // Remove the window from its source column (skip if already removed during drag).
         if !already_removed {
-            if let Some(workspace) = self.workspaces.get_mut(&source_monitor) {
+            let src_mut_idx = self.active_workspace_idx(source_monitor);
+            if let Some(workspace) = self.workspaces.get_mut(&source_monitor).and_then(|v| v.get_mut(src_mut_idx)) {
                 if let Err(e) = workspace.remove_window(hwnd) {
                     warn!("Failed to remove window {} for merge: {}", hwnd, e);
                     self.snap_back_tiled(source_monitor);
@@ -429,7 +447,8 @@ impl AppState {
         };
 
         // Add window to the target column at the computed slot.
-        if let Some(workspace) = self.workspaces.get_mut(&target_monitor) {
+        let tgt_mut_idx = self.active_workspace_idx(target_monitor);
+        if let Some(workspace) = self.workspaces.get_mut(&target_monitor).and_then(|v| v.get_mut(tgt_mut_idx)) {
             if workspace.column_count() == 0 {
                 let _ = workspace.insert_window(hwnd, None);
             } else if let Err(e) =
@@ -474,21 +493,26 @@ impl AppState {
         let source_monitor = drag.source_monitor;
 
         // Find where the placeholder is (this is where the real window should go).
+        let tgt_idx = self.active_workspace_idx(target_monitor);
         let placeholder_location = self
             .workspaces
             .get(&target_monitor)
+            .and_then(|v| v.get(tgt_idx))
             .and_then(|ws| ws.find_window_location(DRAG_PLACEHOLDER_HWND));
 
         if let Some((ph_col, ph_slot)) = placeholder_location {
             // Capture source column info BEFORE any removals.
+            let src_idx = self.active_workspace_idx(source_monitor);
             let src_info = if !drag.removed_from_source && target_monitor == source_monitor {
                 self.workspaces
                     .get(&source_monitor)
+                    .and_then(|v| v.get(src_idx))
                     .and_then(|ws| ws.find_window_location(hwnd))
                     .map(|(col, _)| {
                         let len = self
                             .workspaces
                             .get(&source_monitor)
+                            .and_then(|v| v.get(src_idx))
                             .and_then(|ws| ws.column(col))
                             .map(|c| c.len())
                             .unwrap_or(0);
@@ -499,13 +523,14 @@ impl AppState {
             };
 
             // Remove placeholder.
-            if let Some(ws) = self.workspaces.get_mut(&target_monitor) {
+            if let Some(ws) = self.workspaces.get_mut(&target_monitor).and_then(|v| v.get_mut(tgt_idx)) {
                 let _ = ws.remove_window(DRAG_PLACEHOLDER_HWND);
             }
 
             // Remove real window from source (if not already removed during drag).
             if !drag.removed_from_source {
-                if let Some(ws) = self.workspaces.get_mut(&source_monitor) {
+                let src_mut_idx = self.active_workspace_idx(source_monitor);
+                if let Some(ws) = self.workspaces.get_mut(&source_monitor).and_then(|v| v.get_mut(src_mut_idx)) {
                     let _ = ws.remove_window(hwnd);
                 }
             }
@@ -522,7 +547,7 @@ impl AppState {
             };
 
             // Insert real window at the placeholder's former position.
-            if let Some(ws) = self.workspaces.get_mut(&target_monitor) {
+            if let Some(ws) = self.workspaces.get_mut(&target_monitor).and_then(|v| v.get_mut(tgt_idx)) {
                 if ws.column_count() == 0 {
                     let _ = ws.insert_window(hwnd, None);
                 } else if let Err(e) = ws.insert_window_in_column_at(hwnd, adj_col, ph_slot)
@@ -543,6 +568,7 @@ impl AppState {
             }
 
             self.focused_monitor = target_monitor;
+
             // Clear any in-progress transition so windows stay at their current positions.
             self.layout_transition = None;
             if let Err(e) = self.apply_layout() {
@@ -551,8 +577,10 @@ impl AppState {
             self.sync_foreground_window();
         } else {
             // No placeholder found — fall back to full merge (cross-monitor or edge case).
-            for (_, ws) in self.workspaces.iter_mut() {
-                let _ = ws.remove_window(DRAG_PLACEHOLDER_HWND);
+            for (_, ws_vec) in self.workspaces.iter_mut() {
+                for ws in ws_vec.iter_mut() {
+                    let _ = ws.remove_window(DRAG_PLACEHOLDER_HWND);
+                }
             }
             self.execute_window_merge(hwnd, drag, target_monitor, win_rect);
         }
@@ -570,9 +598,11 @@ impl AppState {
         let snapshot = self.snapshot_layout();
 
         // Get current column index (may differ from drag start if events intervened).
+        let src_idx = self.active_workspace_idx(source_monitor);
         let col_idx = match self
             .workspaces
             .get(&source_monitor)
+            .and_then(|v| v.get(src_idx))
             .and_then(|ws| ws.find_window_location(hwnd))
             .map(|(col, _)| col)
         {
@@ -592,9 +622,11 @@ impl AppState {
             }
         };
 
+        let tgt_idx = self.active_workspace_idx(target_monitor);
         let target_bounds = self
             .workspaces
             .get(&target_monitor)
+            .and_then(|v| v.get(tgt_idx))
             .map(|ws| column_bounds_from_placements(ws, target_viewport))
             .unwrap_or_default();
         let win_center_x = win_rect.x + win_rect.width / 2;
@@ -604,6 +636,7 @@ impl AppState {
         let column = match self
             .workspaces
             .get_mut(&source_monitor)
+            .and_then(|v| v.get_mut(src_idx))
             .and_then(|ws| ws.remove_column(col_idx))
         {
             Some(col) => col,
@@ -622,7 +655,7 @@ impl AppState {
         );
 
         // Insert into target workspace.
-        if let Some(target_ws) = self.workspaces.get_mut(&target_monitor) {
+        if let Some(target_ws) = self.workspaces.get_mut(&target_monitor).and_then(|v| v.get_mut(tgt_idx)) {
             target_ws.insert_column_at(column, insert_idx);
             if let Err(e) = target_ws.focus_window(hwnd) {
                 debug!("Failed to focus moved window after cross-monitor drag: {}", e);
@@ -643,7 +676,8 @@ impl AppState {
     pub(crate) fn snap_back_tiled(&mut self, monitor_id: MonitorId) {
         let snapshot = self.snapshot_layout();
         let viewport_width = self.viewport_width_for(monitor_id);
-        if let Some(workspace) = self.workspaces.get_mut(&monitor_id) {
+        let ws_idx = self.active_workspace_idx(monitor_id);
+        if let Some(workspace) = self.workspaces.get_mut(&monitor_id).and_then(|v| v.get_mut(ws_idx)) {
             workspace.ensure_focused_visible_animated(viewport_width);
         }
         self.start_layout_transition(snapshot);

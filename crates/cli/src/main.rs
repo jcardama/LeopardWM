@@ -184,6 +184,18 @@ enum Commands {
     CycleHeightDown,
     /// Equalize window heights in the focused column
     EqualizeHeights,
+    /// Switch to workspace N (1-9)
+    Workspace {
+        /// Workspace number (1-9)
+        #[arg(value_parser = clap::value_parser!(u8).range(1..=9))]
+        number: u8,
+    },
+    /// Move the focused window to workspace N (1-9)
+    MoveToWorkspace {
+        /// Workspace number (1-9)
+        #[arg(value_parser = clap::value_parser!(u8).range(1..=9))]
+        number: u8,
+    },
     /// Query daemon status
     Status,
     /// Run diagnostic checks
@@ -365,6 +377,8 @@ fn to_ipc_command(cmd: &Commands) -> IpcCommand {
         Commands::CycleHeightUp => IpcCommand::CycleHeightUp,
         Commands::CycleHeightDown => IpcCommand::CycleHeightDown,
         Commands::EqualizeHeights => IpcCommand::EqualizeColumnHeights,
+        Commands::Workspace { number } => IpcCommand::SwitchWorkspace { index: *number },
+        Commands::MoveToWorkspace { number } => IpcCommand::MoveToWorkspace { index: *number },
         Commands::Status => IpcCommand::QueryStatus,
         Commands::PanicRevert => IpcCommand::PanicRevert,
         Commands::Run { .. } => unreachable!("Run handled separately"),
@@ -1073,8 +1087,10 @@ fn print_response(response: &IpcResponse) {
             focused_window,
             scroll_offset,
             total_width,
+            active_workspace,
         } => {
             println!("Workspace State:");
+            println!("  Active workspace: {}", active_workspace);
             println!("  Columns: {}", columns);
             println!("  Windows: {}", windows);
             println!("  Focused column: {}", focused_column);

@@ -40,8 +40,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     BringWindowToTop, DispatchMessageW, EnumWindows, GetAncestor, GetClassNameW, GetMessageW,
     GetWindow, GetWindowLongW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
     GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, PeekMessageW, PostMessageW,
-    PostThreadMessageW, SetForegroundWindow, SetWindowPos, ShowWindow, GA_ROOT, GWL_EXSTYLE,
-    GWL_STYLE, GW_OWNER, MSG, PM_NOREMOVE, SWP_NOACTIVATE, SWP_NOZORDER, SW_RESTORE, WM_USER,
+    BeginDeferWindowPos, DeferWindowPos, EndDeferWindowPos, PostThreadMessageW,
+    SetForegroundWindow, SetWindowPos, ShowWindow, GA_ROOT, GWL_EXSTYLE, GWL_STYLE, GW_OWNER,
+    MSG, PM_NOREMOVE, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SW_RESTORE, WM_USER,
     WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_VISIBLE,
 };
 
@@ -769,6 +770,29 @@ pub fn is_move_offscreen_sentinel_rect(rect: &Rect) -> bool {
     is_move_offscreen_sentinel_position(rect.x, rect.y)
 }
 
+/// Move a single window to the off-screen sentinel position.
+/// Used by workspace switching to hide inactive workspace windows.
+pub fn move_window_offscreen(window_id: WindowId) -> Result<(), Win32Error> {
+    let hwnd = window_id_to_hwnd(window_id)?;
+    unsafe {
+        if let Err(e) = SetWindowPos(
+            hwnd,
+            None,
+            MOVE_OFFSCREEN_SENTINEL_COORD,
+            MOVE_OFFSCREEN_SENTINEL_COORD,
+            0,
+            0,
+            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+        ) {
+            return Err(Win32Error::SetPositionFailed(format!(
+                "Failed to move window {} offscreen: {}",
+                window_id, e
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn move_offscreen_rect_for(rect: &Rect) -> Rect {
     Rect::new(
         MOVE_OFFSCREEN_SENTINEL_COORD,
@@ -981,37 +1005,54 @@ pub fn apply_placements(
     let mut applied = 0u32;
     let mut skipped = 0u32;
 
+    // Collect all (hwnd, adjusted_rect, flags) entries for deferred positioning.
+    // Pre-compute border insets and cache checks before the batch to minimize
+    // time between BeginDeferWindowPos and EndDeferWindowPos.
+    struct DeferEntry {
+        hwnd: HWND,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        flags: windows::Win32::UI::WindowsAndMessaging::SET_WINDOW_POS_FLAGS,
+        column_index: usize,
+    }
+    let mut entries: Vec<DeferEntry> = Vec::with_capacity(placements.len());
+
     // Separate visible and off-screen windows
     let (visible, offscreen): (Vec<_>, Vec<_>) = placements
         .iter()
         .partition(|p| p.visibility == Visibility::Visible);
-    // Apply positions for visible windows using immediate SetWindowPos
+
+    // Prepare visible window entries
     for placement in &visible {
-        // Skip if the placement matches the cached value
         if let Some(ref cache) = cache {
             if cache.get(&placement.window_id) == Some(&(placement.rect, placement.visibility)) {
                 skipped += 1;
                 continue;
             }
         }
-        if let Err(e) = set_window_pos_immediate(placement) {
-            if is_benign_side_effect_error(&e) {
-                tracing::debug!(
-                    "Ignoring benign race during placement for window {}: {}",
-                    placement.window_id,
-                    e
-                );
+        let Ok(hwnd) = window_id_to_hwnd(placement.window_id) else { continue };
+        unsafe {
+            if !IsWindow(Some(hwnd)).as_bool() || IsIconic(hwnd).as_bool() {
                 continue;
             }
-            return Err(e);
         }
-        applied += 1;
+        let (inset_l, inset_t, inset_r, inset_b) = invisible_border_insets(hwnd);
+        entries.push(DeferEntry {
+            hwnd,
+            x: placement.rect.x - inset_l,
+            y: placement.rect.y - inset_t,
+            w: placement.rect.width + inset_l + inset_r,
+            h: placement.rect.height + inset_t + inset_b,
+            flags: SWP_NOZORDER | SWP_NOACTIVATE,
+            column_index: placement.column_index,
+        });
     }
 
-    // Move off-screen windows to sentinel coordinates
+    // Prepare off-screen window entries
     for placement in &offscreen {
         let offscreen_rect = move_offscreen_rect_for(&placement.rect);
-        // Skip if already cached as off-screen at the same position
         if let Some(ref cache) = cache {
             if cache.get(&placement.window_id)
                 == Some(&(offscreen_rect, Visibility::OffScreenLeft))
@@ -1020,24 +1061,164 @@ pub fn apply_placements(
                 continue;
             }
         }
-        let offscreen_placement = WindowPlacement {
-            window_id: placement.window_id,
-            rect: offscreen_rect,
-            visibility: Visibility::OffScreenLeft,
-            column_index: placement.column_index,
-        };
-        if let Err(e) = set_window_pos_immediate(&offscreen_placement) {
-            if is_benign_side_effect_error(&e) {
-                tracing::debug!(
-                    "Ignoring benign race during off-screen move for window {}: {}",
-                    placement.window_id,
-                    e
-                );
+        let Ok(hwnd) = window_id_to_hwnd(placement.window_id) else { continue };
+        unsafe {
+            if !IsWindow(Some(hwnd)).as_bool() || IsIconic(hwnd).as_bool() {
                 continue;
             }
-            return Err(e);
         }
-        applied += 1;
+        entries.push(DeferEntry {
+            hwnd,
+            x: MOVE_OFFSCREEN_SENTINEL_COORD,
+            y: MOVE_OFFSCREEN_SENTINEL_COORD,
+            w: 0,
+            h: 0,
+            flags: SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            column_index: usize::MAX,
+        });
+    }
+
+    // Batch all SetWindowPos calls via DeferWindowPos for atomic repositioning.
+    if !entries.is_empty() {
+        unsafe {
+            match BeginDeferWindowPos(entries.len() as i32) {
+            Err(_) => {
+                // Fallback: apply individually if batching fails
+                for entry in &entries {
+                    let _ = SetWindowPos(
+                        entry.hwnd, None,
+                        entry.x, entry.y, entry.w, entry.h,
+                        entry.flags,
+                    );
+                }
+                applied = entries.len() as u32;
+            }
+            Ok(initial_hdwp) => {
+                let mut hdwp = initial_hdwp;
+                let mut batch_ok = true;
+                for entry in &entries {
+                    match DeferWindowPos(
+                        hdwp, entry.hwnd, None,
+                        entry.x, entry.y, entry.w, entry.h,
+                        entry.flags,
+                    ) {
+                        Ok(new_hdwp) => hdwp = new_hdwp,
+                        Err(_) => {
+                            batch_ok = false;
+                            break;
+                        }
+                    }
+                }
+                if batch_ok {
+                    let _ = EndDeferWindowPos(hdwp);
+                    applied = entries.len() as u32;
+                } else {
+                    // Batch was interrupted — fall back to individual calls
+                    for entry in &entries {
+                        let _ = SetWindowPos(
+                            entry.hwnd, None,
+                            entry.x, entry.y, entry.w, entry.h,
+                            entry.flags,
+                        );
+                    }
+                    applied = entries.len() as u32;
+                }
+            }
+            }
+        }
+    }
+
+    // Fix-up pass: some windows enforce minimum sizes and Windows silently
+    // resizes them, causing overlaps in stacked columns. Detect violations
+    // and re-layout affected columns.
+    {
+        use std::collections::HashMap;
+        // Group visible entries by column (only multi-window columns matter).
+        let mut col_indices: HashMap<usize, Vec<usize>> = HashMap::new();
+        for (i, entry) in entries.iter().enumerate() {
+            if entry.column_index != usize::MAX && entry.x != MOVE_OFFSCREEN_SENTINEL_COORD {
+                col_indices.entry(entry.column_index).or_default().push(i);
+            }
+        }
+        for indices in col_indices.values() {
+            if indices.len() < 2 {
+                continue;
+            }
+            // Sort by y position (top to bottom).
+            let mut sorted: Vec<usize> = indices.clone();
+            sorted.sort_by_key(|&i| entries[i].y);
+
+            // Check each window's actual height against requested.
+            let mut needs_fixup = false;
+            for &idx in &sorted {
+                let entry = &entries[idx];
+                let actual_h = unsafe {
+                    let mut r = RECT::default();
+                    if GetWindowRect(entry.hwnd, &mut r).is_ok() {
+                        r.bottom - r.top
+                    } else {
+                        entry.h
+                    }
+                };
+                if actual_h > entry.h + 2 {
+                    needs_fixup = true;
+                    break;
+                }
+            }
+            if !needs_fixup {
+                continue;
+            }
+
+            // Compute column bottom boundary from the last entry's original position.
+            let last = &entries[*sorted.last().unwrap()];
+            let column_bottom = last.y + last.h;
+
+            // Re-layout: walk top-to-bottom, query actual heights, push
+            // subsequent windows down. Last window absorbs remaining space.
+            let mut current_y = entries[sorted[0]].y;
+            for (pos, &idx) in sorted.iter().enumerate() {
+                let entry = &entries[idx];
+                let actual_h = unsafe {
+                    let mut r = RECT::default();
+                    if GetWindowRect(entry.hwnd, &mut r).is_ok() {
+                        r.bottom - r.top
+                    } else {
+                        entry.h
+                    }
+                };
+                let gap = if pos > 0 {
+                    // Infer gap from original layout spacing.
+                    let prev = &entries[sorted[pos - 1]];
+                    (entry.y - (prev.y + prev.h)).max(0)
+                } else {
+                    0
+                };
+                let new_y = current_y + gap;
+                let new_h = if pos == sorted.len() - 1 {
+                    // Last window: fill remaining space.
+                    (column_bottom - new_y).max(1)
+                } else if actual_h > entry.h + 2 {
+                    // This window enforces a minimum — use its actual height.
+                    actual_h
+                } else {
+                    entry.h
+                };
+                if new_y != entry.y || new_h != entry.h {
+                    tracing::debug!(
+                        "Min-size fixup: {:?} y {} → {}, h {} → {}",
+                        entry.hwnd, entry.y, new_y, entry.h, new_h,
+                    );
+                    unsafe {
+                        let _ = SetWindowPos(
+                            entry.hwnd, None,
+                            entry.x, new_y, entry.w, new_h,
+                            SWP_NOZORDER | SWP_NOACTIVATE,
+                        );
+                    }
+                }
+                current_y = new_y + new_h;
+            }
+        }
     }
 
     // Update the cache with current placements
@@ -1098,49 +1279,6 @@ fn invisible_border_insets(hwnd: HWND) -> (i32, i32, i32, i32) {
 
         (left.max(0), top.max(0), right.max(0), bottom.max(0))
     }
-}
-
-fn set_window_pos_immediate(placement: &WindowPlacement) -> Result<(), Win32Error> {
-    let window_id = placement.window_id;
-    let hwnd = window_id_to_hwnd(window_id)?;
-    unsafe {
-        if !IsWindow(Some(hwnd)).as_bool() {
-            return Err(Win32Error::WindowNotFound(window_id));
-        }
-
-        // Skip iconic (minimized) windows — SetWindowPos has no visible effect on them
-        if IsIconic(hwnd).as_bool() {
-            return Ok(());
-        }
-
-        let rect = &placement.rect;
-
-        // Compensate for invisible borders so the visible area fills the target rect
-        let (inset_l, inset_t, inset_r, inset_b) = invisible_border_insets(hwnd);
-        let adjusted_x = rect.x - inset_l;
-        let adjusted_y = rect.y - inset_t;
-        let adjusted_w = rect.width + inset_l + inset_r;
-        let adjusted_h = rect.height + inset_t + inset_b;
-
-        if let Err(e) = SetWindowPos(
-            hwnd,
-            None,
-            adjusted_x,
-            adjusted_y,
-            adjusted_w,
-            adjusted_h,
-            SWP_NOZORDER | SWP_NOACTIVATE,
-        ) {
-            if !IsWindow(Some(hwnd)).as_bool() {
-                return Err(Win32Error::WindowNotFound(window_id));
-            }
-            return Err(Win32Error::SetPositionFailed(format!(
-                "SetWindowPos failed for window {}: {}",
-                window_id, e
-            )));
-        }
-    }
-    Ok(())
 }
 
 /// Set the foreground window using Win32 SetForegroundWindow.
@@ -2189,7 +2327,7 @@ mod tests {
     }
 
     #[test]
-    fn test_apply_placements_reports_cloak_errors() {
+    fn test_apply_placements_skips_invalid_windows() {
         let config = PlatformConfig;
         let placements = vec![WindowPlacement {
             window_id: 0,
@@ -2198,8 +2336,9 @@ mod tests {
             column_index: 0,
         }];
 
+        // Invalid windows (hwnd 0) are silently skipped in the deferred batch
         let result = apply_placements(&placements, &config, None);
-        assert!(result.is_err());
+        assert!(result.is_ok());
     }
 
     #[test]

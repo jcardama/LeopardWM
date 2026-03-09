@@ -6,6 +6,7 @@ use leopardwm_core_layout::{Rect, Workspace};
 use leopardwm_ipc::{IpcCommand, IpcResponse};
 use leopardwm_platform_win32::{
     enumerate_windows, get_process_executable, monitor_to_left, monitor_to_right,
+    move_window_offscreen,
 };
 use std::collections::HashMap;
 use tracing::info;
@@ -223,6 +224,7 @@ impl AppState {
             }
             IpcCommand::QueryWorkspace => {
                 if let Some(workspace) = self.focused_workspace() {
+                    let active_ws = self.active_workspace_idx(self.focused_monitor) as u8 + 1;
                     IpcResponse::WorkspaceState {
                         columns: workspace.column_count(),
                         windows: workspace.window_count(),
@@ -230,6 +232,7 @@ impl AppState {
                         focused_window: workspace.focused_window_index_in_column(),
                         scroll_offset: workspace.scroll_offset(),
                         total_width: workspace.total_width(),
+                        active_workspace: active_ws,
                     }
                 } else {
                     IpcResponse::error("No focused workspace")
@@ -302,7 +305,8 @@ impl AppState {
                     Err(_) => HashMap::new(),
                 };
 
-                for (monitor_id, workspace) in &self.workspaces {
+                for (monitor_id, ws_vec) in &self.workspaces {
+                  for workspace in ws_vec {
                     // Tiled windows
                     for (col_idx, column) in workspace.columns().iter().enumerate() {
                         for (win_idx, &window_id) in column.windows().iter().enumerate() {
@@ -375,6 +379,7 @@ impl AppState {
                             is_focused: Some(floating.id) == focused_hwnd,
                         });
                     }
+                  }
                 }
 
                 IpcResponse::WindowList { windows }
@@ -473,6 +478,7 @@ impl AppState {
                 let total_windows: usize = self
                     .workspaces
                     .values()
+                    .flat_map(|ws_vec| ws_vec.iter())
                     .map(|ws| ws.window_count() + ws.floating_count())
                     .sum();
                 IpcResponse::StatusInfo {
@@ -482,11 +488,160 @@ impl AppState {
                     uptime_seconds: uptime,
                 }
             }
+            IpcCommand::SwitchWorkspace { index } => {
+                if !(1..=9).contains(&index) {
+                    return IpcResponse::error("Workspace index must be 1-9");
+                }
+                let idx = (index - 1) as usize;
+                let monitor = self.focused_monitor;
+                let current_idx = self.active_workspace_idx(monitor);
+                if idx == current_idx {
+                    return IpcResponse::Ok;
+                }
+
+                // Cancel any in-progress drag
+                self.drag_state = None;
+                self.pending_drag_hint = Some(crate::state::DragHintAction::Hide);
+                self.layout_transition = None;
+
+                let slide_height = self.monitors.get(&monitor)
+                    .map(|m| m.work_area.height)
+                    .unwrap_or(crate::state::FALLBACK_WORK_AREA_HEIGHT);
+                // Positive offset = new workspace enters from below (scrolling up).
+                let y_offset = if idx > current_idx { slide_height } else { -slide_height };
+
+                // Snapshot old workspace's current positions (start for exiting windows).
+                let old_placements: Vec<(u64, leopardwm_core_layout::Rect)> =
+                    self.workspaces.get(&monitor)
+                        .and_then(|v| v.get(current_idx))
+                        .and_then(|ws| self.monitors.get(&monitor).map(|m| (ws, m)))
+                        .map(|(ws, mon)| {
+                            ws.compute_placements_animated(mon.work_area)
+                                .into_iter()
+                                .map(|p| (p.window_id, p.rect))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+
+                // Ensure target workspace exists (lazy creation)
+                self.ensure_workspace_exists(monitor, idx);
+
+                // Switch active workspace
+                self.active_workspace.insert(monitor, idx);
+
+                // Compute new workspace's final placements.
+                let new_placements: Vec<(u64, leopardwm_core_layout::Rect)> =
+                    self.workspaces.get(&monitor)
+                        .and_then(|v| v.get(idx))
+                        .and_then(|ws| self.monitors.get(&monitor).map(|m| (ws, m)))
+                        .map(|(ws, mon)| {
+                            ws.compute_placements_animated(mon.work_area)
+                                .into_iter()
+                                .map(|p| (p.window_id, p.rect))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+
+                // Build animation rects:
+                // - Entering windows: start offscreen, end at final position
+                // - Exiting windows: start at current position, end offscreen
+                let mut start_rects = std::collections::HashMap::new();
+                let mut exit_rects = std::collections::HashMap::new();
+
+                // New workspace windows enter from the opposite side.
+                for (wid, rect) in &new_placements {
+                    start_rects.insert(*wid, leopardwm_core_layout::Rect::new(
+                        rect.x,
+                        rect.y + y_offset,
+                        rect.width,
+                        rect.height,
+                    ));
+                }
+
+                // Old workspace windows slide out.
+                for (wid, rect) in &old_placements {
+                    start_rects.insert(*wid, *rect);
+                    exit_rects.insert(*wid, leopardwm_core_layout::Rect::new(
+                        rect.x,
+                        rect.y - y_offset,
+                        rect.width,
+                        rect.height,
+                    ));
+                }
+
+                if !start_rects.is_empty() {
+                    self.start_workspace_switch_transition(
+                        start_rects,
+                        exit_rects,
+                        crate::state::WORKSPACE_SWITCH_DURATION_MS,
+                    );
+                } else {
+                    // No windows to animate — hide old immediately
+                    for (wid, _) in &old_placements {
+                        let _ = move_window_offscreen(*wid);
+                    }
+                }
+
+                if let Err(e) = self.apply_layout() {
+                    return IpcResponse::error(format!("Failed to apply layout: {}", e));
+                }
+                self.sync_foreground_window();
+                info!("Switched to workspace {}", index);
+                IpcResponse::Ok
+            }
+            IpcCommand::MoveToWorkspace { index } => {
+                if !(1..=9).contains(&index) {
+                    return IpcResponse::error("Workspace index must be 1-9");
+                }
+                let idx = (index - 1) as usize;
+                let monitor = self.focused_monitor;
+                let current_idx = self.active_workspace_idx(monitor);
+                if idx == current_idx {
+                    return IpcResponse::Ok;
+                }
+
+                // Get focused window
+                let focused_hwnd = match self.focused_workspace().and_then(|ws| ws.focused_window()) {
+                    Some(hwnd) => hwnd,
+                    None => return IpcResponse::Ok,
+                };
+
+                let snapshot = self.snapshot_layout();
+
+                // Remove window from current workspace
+                if let Some(workspace) = self.workspaces.get_mut(&monitor).and_then(|v| v.get_mut(current_idx)) {
+                    if let Err(e) = workspace.remove_window(focused_hwnd) {
+                        return IpcResponse::error(format!("Failed to remove window: {}", e));
+                    }
+                }
+
+                // Ensure target workspace exists (lazy creation)
+                self.ensure_workspace_exists(monitor, idx);
+
+                // Insert window into target workspace
+                if let Some(workspace) = self.workspaces.get_mut(&monitor).and_then(|v| v.get_mut(idx)) {
+                    if let Err(e) = workspace.insert_window(focused_hwnd, None) {
+                        return IpcResponse::error(format!("Failed to add window to target workspace: {}", e));
+                    }
+                }
+
+                // Target workspace is not active — hide the moved window
+                let _ = move_window_offscreen(focused_hwnd);
+
+                self.start_layout_transition(snapshot);
+                if let Err(e) = self.apply_layout() {
+                    return IpcResponse::error(format!("Failed to apply layout: {}", e));
+                }
+                self.sync_foreground_window();
+                info!("Moved window {} to workspace {}", focused_hwnd, index);
+                IpcResponse::Ok
+            }
             IpcCommand::HealthCheck => {
                 let uptime = self.start_time.elapsed().as_secs();
                 let total_windows: usize = self
                     .workspaces
                     .values()
+                    .flat_map(|ws_vec| ws_vec.iter())
                     .map(|ws| ws.window_count() + ws.floating_count())
                     .sum();
                 IpcResponse::HealthInfo {

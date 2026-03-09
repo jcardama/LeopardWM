@@ -1066,7 +1066,17 @@ var CMD_LABELS = {
   close_window: 'Close window', toggle_floating: 'Toggle floating',
   toggle_fullscreen: 'Toggle fullscreen', toggle_pause: 'Toggle pause',
   refresh: 'Refresh', reload: 'Reload config',
-  panic_revert: 'Emergency restore'
+  panic_revert: 'Emergency restore',
+  switch_workspace_1: 'Workspace 1', switch_workspace_2: 'Workspace 2',
+  switch_workspace_3: 'Workspace 3', switch_workspace_4: 'Workspace 4',
+  switch_workspace_5: 'Workspace 5', switch_workspace_6: 'Workspace 6',
+  switch_workspace_7: 'Workspace 7', switch_workspace_8: 'Workspace 8',
+  switch_workspace_9: 'Workspace 9',
+  move_to_workspace_1: 'Move to WS 1', move_to_workspace_2: 'Move to WS 2',
+  move_to_workspace_3: 'Move to WS 3', move_to_workspace_4: 'Move to WS 4',
+  move_to_workspace_5: 'Move to WS 5', move_to_workspace_6: 'Move to WS 6',
+  move_to_workspace_7: 'Move to WS 7', move_to_workspace_8: 'Move to WS 8',
+  move_to_workspace_9: 'Move to WS 9'
 };
 
 /* Defines display order — grouped by category */
@@ -1082,7 +1092,13 @@ var CMD_ORDER = [
   'move_to_monitor_left', 'move_to_monitor_right',
   'close_window', 'toggle_floating', 'toggle_fullscreen',
   'toggle_pause', 'refresh', 'reload',
-  'panic_revert'
+  'panic_revert',
+  'switch_workspace_1', 'switch_workspace_2', 'switch_workspace_3',
+  'switch_workspace_4', 'switch_workspace_5', 'switch_workspace_6',
+  'switch_workspace_7', 'switch_workspace_8', 'switch_workspace_9',
+  'move_to_workspace_1', 'move_to_workspace_2', 'move_to_workspace_3',
+  'move_to_workspace_4', 'move_to_workspace_5', 'move_to_workspace_6',
+  'move_to_workspace_7', 'move_to_workspace_8', 'move_to_workspace_9'
 ];
 
 var DEFAULT_HOTKEYS = {
@@ -1101,7 +1117,17 @@ var DEFAULT_HOTKEYS = {
   "Ctrl+Alt+W": "close_window", "Ctrl+Alt+F": "toggle_floating",
   "Ctrl+Alt+Shift+F": "toggle_fullscreen", "Ctrl+Alt+P": "toggle_pause",
   "Ctrl+Alt+R": "refresh", "Ctrl+Alt+Shift+R": "reload",
-  "Win+Ctrl+Escape": "panic_revert"
+  "Win+Ctrl+Escape": "panic_revert",
+  "Ctrl+Alt+1": "switch_workspace_1", "Ctrl+Alt+2": "switch_workspace_2",
+  "Ctrl+Alt+3": "switch_workspace_3", "Ctrl+Alt+4": "switch_workspace_4",
+  "Ctrl+Alt+5": "switch_workspace_5", "Ctrl+Alt+6": "switch_workspace_6",
+  "Ctrl+Alt+7": "switch_workspace_7", "Ctrl+Alt+8": "switch_workspace_8",
+  "Ctrl+Alt+9": "switch_workspace_9",
+  "Ctrl+Alt+Shift+1": "move_to_workspace_1", "Ctrl+Alt+Shift+2": "move_to_workspace_2",
+  "Ctrl+Alt+Shift+3": "move_to_workspace_3", "Ctrl+Alt+Shift+4": "move_to_workspace_4",
+  "Ctrl+Alt+Shift+5": "move_to_workspace_5", "Ctrl+Alt+Shift+6": "move_to_workspace_6",
+  "Ctrl+Alt+Shift+7": "move_to_workspace_7", "Ctrl+Alt+Shift+8": "move_to_workspace_8",
+  "Ctrl+Alt+Shift+9": "move_to_workspace_9"
 };
 
 function cmdLabel(cmd) { return CMD_LABELS[cmd] || cmd; }

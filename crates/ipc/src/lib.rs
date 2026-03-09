@@ -4,6 +4,10 @@
 
 use serde::{Deserialize, Serialize};
 
+fn default_active_workspace() -> u8 {
+    1
+}
+
 /// Named pipe path for IPC communication.
 pub const PIPE_NAME: &str = r"\\.\pipe\leopardwm";
 /// Maximum length of sanitized user scope appended to the pipe path.
@@ -233,6 +237,17 @@ pub enum IpcCommand {
     QueryStatus,
     /// Health check — returns uptime, window count, and error count.
     HealthCheck,
+
+    /// Switch to workspace N (1-9) on the focused monitor.
+    SwitchWorkspace {
+        /// Workspace number (1-9).
+        index: u8,
+    },
+    /// Move the focused window to workspace N (1-9) on the focused monitor.
+    MoveToWorkspace {
+        /// Workspace number (1-9).
+        index: u8,
+    },
 }
 
 /// Responses from the daemon to the CLI.
@@ -260,6 +275,9 @@ pub enum IpcResponse {
         scroll_offset: f64,
         /// Total width of all columns.
         total_width: i32,
+        /// Active workspace number (1-based).
+        #[serde(default = "default_active_workspace")]
+        active_workspace: u8,
     },
     /// Focused window query response.
     FocusedWindow {
@@ -375,6 +393,7 @@ mod tests {
             focused_window: 0,
             scroll_offset: 100.5,
             total_width: 2400,
+            active_workspace: 1,
         };
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains("workspace_state"));
@@ -440,6 +459,10 @@ mod tests {
             IpcCommand::EqualizeColumnHeights,
             IpcCommand::QueryStatus,
             IpcCommand::HealthCheck,
+            IpcCommand::SwitchWorkspace { index: 1 },
+            IpcCommand::SwitchWorkspace { index: 9 },
+            IpcCommand::MoveToWorkspace { index: 1 },
+            IpcCommand::MoveToWorkspace { index: 5 },
         ];
 
         for cmd in commands {
@@ -465,6 +488,7 @@ mod tests {
                 focused_window: 1,
                 scroll_offset: 200.0,
                 total_width: 4000,
+                active_workspace: 1,
             },
             IpcResponse::FocusedWindow {
                 window_id: Some(12345),
@@ -605,6 +629,7 @@ mod tests {
             focused_window: 0,
             scroll_offset: 0.0,
             total_width: 1600,
+            active_workspace: 1,
         };
         let wire_format = serde_json::to_string(&resp).unwrap() + "\n";
         let parsed: IpcResponse = serde_json::from_str(wire_format.trim()).unwrap();

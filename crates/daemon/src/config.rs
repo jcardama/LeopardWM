@@ -478,6 +478,16 @@ impl Default for HotkeyConfig {
         bindings.insert("Ctrl+Alt+Shift+K".to_string(), "move_window_up".to_string());
         bindings.insert("Ctrl+Alt+Shift+J".to_string(), "move_window_down".to_string());
 
+        // Workspace switching — Ctrl+Alt + 1-9
+        for i in 1..=9u8 {
+            bindings.insert(format!("Ctrl+Alt+{}", i), format!("switch_workspace_{}", i));
+        }
+
+        // Move window to workspace — Ctrl+Alt+Shift + 1-9
+        for i in 1..=9u8 {
+            bindings.insert(format!("Ctrl+Alt+Shift+{}", i), format!("move_to_workspace_{}", i));
+        }
+
         // Emergency escape hatch: revert visibility state and stop daemon.
         bindings.insert("Win+Ctrl+Escape".to_string(), "panic_revert".to_string());
 
@@ -680,6 +690,24 @@ pub fn parse_command(cmd: &str) -> Option<leopardwm_ipc::IpcCommand> {
         "expel_to_right" => Some(IpcCommand::ExpelToRight),
         "move_window_up" => Some(IpcCommand::MoveWindowUp),
         "move_window_down" => Some(IpcCommand::MoveWindowDown),
+        "switch_workspace_1" => Some(IpcCommand::SwitchWorkspace { index: 1 }),
+        "switch_workspace_2" => Some(IpcCommand::SwitchWorkspace { index: 2 }),
+        "switch_workspace_3" => Some(IpcCommand::SwitchWorkspace { index: 3 }),
+        "switch_workspace_4" => Some(IpcCommand::SwitchWorkspace { index: 4 }),
+        "switch_workspace_5" => Some(IpcCommand::SwitchWorkspace { index: 5 }),
+        "switch_workspace_6" => Some(IpcCommand::SwitchWorkspace { index: 6 }),
+        "switch_workspace_7" => Some(IpcCommand::SwitchWorkspace { index: 7 }),
+        "switch_workspace_8" => Some(IpcCommand::SwitchWorkspace { index: 8 }),
+        "switch_workspace_9" => Some(IpcCommand::SwitchWorkspace { index: 9 }),
+        "move_to_workspace_1" => Some(IpcCommand::MoveToWorkspace { index: 1 }),
+        "move_to_workspace_2" => Some(IpcCommand::MoveToWorkspace { index: 2 }),
+        "move_to_workspace_3" => Some(IpcCommand::MoveToWorkspace { index: 3 }),
+        "move_to_workspace_4" => Some(IpcCommand::MoveToWorkspace { index: 4 }),
+        "move_to_workspace_5" => Some(IpcCommand::MoveToWorkspace { index: 5 }),
+        "move_to_workspace_6" => Some(IpcCommand::MoveToWorkspace { index: 6 }),
+        "move_to_workspace_7" => Some(IpcCommand::MoveToWorkspace { index: 7 }),
+        "move_to_workspace_8" => Some(IpcCommand::MoveToWorkspace { index: 8 }),
+        "move_to_workspace_9" => Some(IpcCommand::MoveToWorkspace { index: 9 }),
         _ => None,
     }
 }
@@ -1187,7 +1215,7 @@ mod tests {
     #[test]
     fn test_hotkey_config_default() {
         let config = HotkeyConfig::default();
-        assert_eq!(config.bindings.len(), 29);
+        assert_eq!(config.bindings.len(), 47);
         assert_eq!(
             config.bindings.get("Ctrl+Alt+H"),
             Some(&"focus_left".to_string())
