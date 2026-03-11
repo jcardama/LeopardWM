@@ -781,6 +781,10 @@ impl AppState {
         if self.paused {
             return Ok(());
         }
+        // During layout transitions, the animation worker drives positioning.
+        if self.layout_transition.is_some() {
+            return Ok(());
+        }
         if self.apply_worker_cancelled.load(Ordering::SeqCst) {
             return Err(anyhow!(
                 "Layout application skipped: shutdown/revert cleanup is in progress"

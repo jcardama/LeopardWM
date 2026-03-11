@@ -218,13 +218,14 @@ pub fn apply_placements(
 
         if placement.visibility == Visibility::Visible {
             let mut flags = SWP_NOZORDER | SWP_NOACTIVATE;
-            let size_changed = if let Some(ref cache) = cache {
-                cache.positions.get(&placement.window_id)
-                    .is_none_or(|(prev, _)| prev.width != placement.rect.width || prev.height != placement.rect.height)
+            // Only send SWP_FRAMECHANGED (expensive WM_NCCALCSIZE) on first
+            // frame or landing pass — not every animation frame.
+            let needs_frame_changed = if let Some(ref cache) = cache {
+                !cache.positions.contains_key(&placement.window_id)
             } else {
                 true
             };
-            if size_changed {
+            if needs_frame_changed {
                 flags |= SWP_FRAMECHANGED;
             }
             entries.push(DeferEntry {

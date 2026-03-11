@@ -1041,6 +1041,15 @@ async fn main() -> Result<()> {
                         let mut state = state.lock().await;
                         state.handle_window_event(win_event);
 
+                        // Start animation worker if the event triggered a transition.
+                        if state.is_animating() && !animation_active {
+                            state.tick_animations(0);
+                            if let Ok(true) = state.send_animation_frame(&animation_worker) {
+                                animation_active = true;
+                                last_frame_instant = Some(std::time::Instant::now());
+                            }
+                        }
+
                         // Process drag hint overlay requests from event handler.
                         // Drag ghost always shows regardless of snap_hints.enabled.
                         if let Some(hint) = state.pending_drag_hint.take() {
