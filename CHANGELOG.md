@@ -10,8 +10,14 @@ All notable changes to LeopardWM will be documented in this file.
 - Live theme switching — settings window responds to system dark/light mode changes in real-time via `WM_SETTINGCHANGE`
 - Dark mode tray menu — native context menu follows the system theme via `uxtheme.dll` `SetPreferredAppMode`
 
+### Improvements
+
+- Smooth layout transition animations — animation worker drives all frames via DwmFlush vsync instead of blocking `apply_layout()` thread, eliminating contention between the two positioning paths
+- Skip `SWP_FRAMECHANGED` on cached animation frames — avoids expensive per-window `WM_NCCALCSIZE` on every frame, significant improvement for XAML/Electron windows
+
 ### Bug Fixes
 
+- Fix new windows appearing invisible — animation worker now starts after window events that trigger scroll/layout transitions
 - Fix `WM_CLOSE` lifecycle — now properly calls `DestroyWindow` before `PostQuitMessage`, preventing HWND leak
 - Fix `apply_win11_theming` to explicitly set dark mode off (value 0) when in light mode, enabling correct theme toggle
 
