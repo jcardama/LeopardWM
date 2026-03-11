@@ -18,6 +18,7 @@ All notable changes to LeopardWM will be documented in this file.
 
 ### Bug Fixes
 
+- Auto-retile previously-ignored windows on config reload — changing or removing an ignore rule now picks up unmanaged windows
 - Fix new windows appearing invisible — animation worker now starts after window events that trigger scroll/layout transitions
 - Fix `WM_CLOSE` lifecycle — now properly calls `DestroyWindow` before `PostQuitMessage`, preventing HWND leak
 - Fix `apply_win11_theming` to explicitly set dark mode off (value 0) when in light mode, enabling correct theme toggle

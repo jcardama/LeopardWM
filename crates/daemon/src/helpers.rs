@@ -105,6 +105,13 @@ impl AppState {
         // newly added/changed rules take effect without restart.
         self.reapply_window_rules();
 
+        // Pick up previously-ignored windows that should now be tiled/floated.
+        if let Ok(added) = self.enumerate_and_add_windows() {
+            if added > 0 {
+                info!("Config reload: tiled {} previously-ignored windows", added);
+            }
+        }
+
         info!(
             "Configuration applied to all {} workspaces",
             self.workspaces.len()
