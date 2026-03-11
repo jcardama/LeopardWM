@@ -26,6 +26,9 @@ Be respectful and constructive in all interactions.
 7. Commit with conventional commits (`feat:`, `fix:`, `docs:`, `chore:`)
 8. Push and open a PR
 
+PRs must pass CI and receive at least one approving review before merging.
+Changes to `.github/` or `SECURITY.md` require owner review.
+
 ### Commit Messages
 
 We use [Conventional Commits](https://www.conventionalcommits.org/):

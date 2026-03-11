@@ -18,5 +18,17 @@ node_modules/
 .vscode/
 .idea/
 
+# Secrets / credentials
+.env
+.env.*
+*.pem
+*.key
+*.pfx
+*.p12
+*.cert
+
+# Crash dumps
+bash.exe.stackdump
+
 # Claude Code
 .claude/
