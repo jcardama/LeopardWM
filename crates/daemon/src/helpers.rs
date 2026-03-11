@@ -323,6 +323,7 @@ impl AppState {
                             .unwrap_or(FALLBACK_VIEWPORT_WIDTH);
                         ws.set_default_column_width(self.config.layout.default_column_width_px(vw));
                         ws.set_centering_mode(self.config.layout.centering_mode.into());
+                        ws.set_reduce_motion(self.reduce_motion);
                         ws_vec.push(ws);
                     }
                     // Restore scroll offset from saved workspace
@@ -401,6 +402,7 @@ impl AppState {
                     self.config.layout.default_column_width_px(vw),
                 );
                 workspace.set_centering_mode(self.config.layout.centering_mode.into());
+                workspace.set_reduce_motion(self.reduce_motion);
                 self.workspaces.insert(monitor.id, vec![workspace]);
                 self.active_workspace.insert(monitor.id, 0);
                 info!("Created workspace for new monitor {}", monitor.id);
@@ -639,10 +641,14 @@ impl AppState {
 
     /// Start a layout transition animation from a pre-change snapshot.
     /// Call this *after* the structural change and ensure_focused_visible_animated.
+    /// No-op when reduce_motion is active.
     pub(crate) fn start_layout_transition(
         &mut self,
         start_rects: std::collections::HashMap<u64, leopardwm_core_layout::Rect>,
     ) {
+        if self.reduce_motion {
+            return;
+        }
         use crate::state::LAYOUT_TRANSITION_DURATION_MS;
         self.start_layout_transition_with_duration(start_rects, LAYOUT_TRANSITION_DURATION_MS);
     }
@@ -664,12 +670,16 @@ impl AppState {
 
     /// Start a workspace switch transition that animates both entering and
     /// exiting windows simultaneously (continuous vertical scroll effect).
+    /// No-op when reduce_motion is active.
     pub(crate) fn start_workspace_switch_transition(
         &mut self,
         start_rects: std::collections::HashMap<u64, leopardwm_core_layout::Rect>,
         exit_rects: std::collections::HashMap<u64, leopardwm_core_layout::Rect>,
         duration_ms: u64,
     ) {
+        if self.reduce_motion {
+            return;
+        }
         self.layout_transition = Some(LayoutTransition {
             start_rects,
             exit_rects,

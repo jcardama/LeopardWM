@@ -205,6 +205,8 @@ pub(crate) struct AppState {
     /// distinguish transient popups (managed briefly) from real windows
     /// (managed for a long time, e.g., close-to-tray apps).
     pub(crate) window_managed_at: HashMap<u64, std::time::Instant>,
+    /// Skip animations and snap instantly (Windows "Show animations" is off).
+    pub(crate) reduce_motion: bool,
     /// Active layout transition animation (window position interpolation).
     pub(crate) layout_transition: Option<LayoutTransition>,
     /// Injected window info for testing. When set, `lookup_window_info()` returns
@@ -266,6 +268,7 @@ impl AppState {
             let vw = monitor.work_area.width;
             workspace.set_default_column_width(config.layout.default_column_width_px(vw));
             workspace.set_centering_mode(config.layout.centering_mode.into());
+            workspace.set_reduce_motion(!leopardwm_platform_win32::are_animations_enabled());
 
             if monitor.is_primary {
                 focused_monitor = monitor.id;
@@ -318,6 +321,7 @@ impl AppState {
             start_time: std::time::Instant::now(),
             recently_hidden_hwnds: HashMap::new(),
             window_managed_at: HashMap::new(),
+            reduce_motion: !leopardwm_platform_win32::are_animations_enabled(),
             layout_transition: None,
             #[cfg(test)]
             injected_window_info: HashMap::new(),
@@ -364,6 +368,7 @@ impl AppState {
                 .unwrap_or(FALLBACK_VIEWPORT_WIDTH);
             ws.set_default_column_width(config.layout.default_column_width_px(vw));
             ws.set_centering_mode(config.layout.centering_mode.into());
+            ws.set_reduce_motion(self.reduce_motion);
             ws_vec.push(ws);
         }
         ws_vec.get_mut(idx)

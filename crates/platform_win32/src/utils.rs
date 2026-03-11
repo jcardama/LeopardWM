@@ -1,6 +1,26 @@
 //! Utility functions for window manipulation, focus, border colors, etc.
 
 use crate::enumeration::{collect_all_top_level_window_ids, get_primary_monitor};
+
+/// Check if Windows "Show animations" accessibility setting is enabled.
+/// Returns `false` when the user has disabled client-area animations
+/// (Settings > Accessibility > Visual effects > Animation effects).
+pub fn are_animations_enabled() -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::SystemParametersInfoW;
+    use windows::Win32::UI::WindowsAndMessaging::SPI_GETCLIENTAREAANIMATION;
+    use windows::Win32::UI::WindowsAndMessaging::SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS;
+
+    let mut enabled: i32 = 1;
+    unsafe {
+        let _ = SystemParametersInfoW(
+            SPI_GETCLIENTAREAANIMATION,
+            0,
+            Some(&mut enabled as *mut i32 as *mut std::ffi::c_void),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        );
+    }
+    enabled != 0
+}
 use crate::placement::apply_placements;
 use crate::types::{PlatformConfig, Win32Error};
 use crate::{combine_operation_failures, is_benign_side_effect_error, window_id_to_hwnd};

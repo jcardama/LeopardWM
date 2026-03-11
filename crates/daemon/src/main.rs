@@ -873,6 +873,7 @@ async fn main() -> Result<()> {
             log_path,
             safe_mode: args.safe_mode,
             no_hotkeys: args.skip_hotkeys(),
+            reduce_motion: state.reduce_motion,
         });
     }
 

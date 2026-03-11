@@ -411,7 +411,13 @@ impl Workspace {
 
     /// Ensure the focused column is visible with animation.
     /// Like `ensure_focused_visible` but animates the scroll instead of jumping.
+    /// Snaps instantly when `reduce_motion` is set.
     pub fn ensure_focused_visible_animated(&mut self, viewport_width: i32) {
+        if self.reduce_motion {
+            self.stop_animation();
+            self.ensure_focused_visible(viewport_width);
+            return;
+        }
         if self.columns.is_empty() {
             return;
         }

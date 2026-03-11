@@ -12,6 +12,7 @@ All notable changes to LeopardWM will be documented in this file.
 
 ### Improvements
 
+- Reduced motion detection — respects Windows "Show animations" accessibility setting; snaps windows instantly when disabled
 - Smooth layout transition animations — animation worker drives all frames via DwmFlush vsync instead of blocking `apply_layout()` thread, eliminating contention between the two positioning paths
 - Skip `SWP_FRAMECHANGED` on cached animation frames — avoids expensive per-window `WM_NCCALCSIZE` on every frame, significant improvement for XAML/Electron windows
 

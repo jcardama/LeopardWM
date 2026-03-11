@@ -99,6 +99,9 @@ pub struct Workspace {
     /// fallback index is used when the neighbor no longer exists.
     #[serde(skip)]
     pub(crate) float_origin_column: HashMap<WindowId, (Option<WindowId>, usize)>,
+    /// Snap scroll instantly instead of animating (Windows "Show animations" off).
+    #[serde(skip)]
+    pub(crate) reduce_motion: bool,
 }
 
 impl Default for Workspace {
@@ -121,6 +124,7 @@ impl Default for Workspace {
             minimized_windows: HashSet::new(),
             window_min_widths: HashMap::new(),
             float_origin_column: HashMap::new(),
+            reduce_motion: false,
         }
     }
 }
@@ -367,6 +371,11 @@ impl Workspace {
     /// Set the centering mode for focus changes.
     pub fn set_centering_mode(&mut self, mode: CenteringMode) {
         self.centering_mode = mode;
+    }
+
+    /// Set whether to skip scroll animations (snap instantly).
+    pub fn set_reduce_motion(&mut self, reduce: bool) {
+        self.reduce_motion = reduce;
     }
 
     /// Calculate the x-coordinate of a column's left edge on the strip.

@@ -1142,6 +1142,7 @@ fn make_banner_info() -> StartupInfo {
         log_path: "C:\\Users\\test\\AppData\\Local\\Temp\\leopardwm-daemon.log".to_string(),
         safe_mode: false,
         no_hotkeys: false,
+        reduce_motion: false,
     }
 }
 
