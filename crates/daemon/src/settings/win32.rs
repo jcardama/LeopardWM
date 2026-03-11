@@ -12,7 +12,10 @@ use anyhow::Result;
 use tracing::{info, warn};
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::*;
-use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWINDOWATTRIBUTE};
+use windows::Win32::Graphics::Dwm::{
+    DwmExtendFrameIntoClientArea, DwmSetWindowAttribute, DWMWINDOWATTRIBUTE,
+};
+use windows::Win32::UI::Controls::MARGINS;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -129,8 +132,17 @@ pub fn run_settings_window(
             None,
         )?;
 
-        // Apply Windows 11 DWM theming
+        // Apply Windows 11 DWM theming (Mica backdrop, dark title bar, rounded corners)
         apply_win11_theming(hwnd, dark);
+
+        // Extend the DWM frame into the entire client area so Mica renders behind content
+        let margins = MARGINS {
+            cxLeftWidth: -1,
+            cxRightWidth: -1,
+            cyTopHeight: -1,
+            cyBottomHeight: -1,
+        };
+        let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
 
         // Persistent data directory so WebView2 reuses its browser profile
         // across settings opens (avoids cold-start each time).
@@ -260,7 +272,26 @@ unsafe extern "system" fn wndproc(
     lparam: LPARAM,
 ) -> LRESULT {
     match message {
-        WM_CLOSE | WM_DESTROY => {
+        WM_ERASEBKGND => {
+            // Paint black — DWM treats black in the extended frame as transparent,
+            // letting the Mica backdrop show through.
+            let hdc = HDC(wparam.0 as *mut _);
+            let mut rc = RECT::default();
+            let _ = GetClientRect(hwnd, &mut rc);
+            FillRect(hdc, &rc, HBRUSH(GetStockObject(BLACK_BRUSH).0));
+            LRESULT(1)
+        }
+        WM_SETTINGCHANGE => {
+            // Re-apply DWM theming on any system setting change (theme toggle, etc.).
+            // Cheap and idempotent — avoids unsafe lparam string parsing.
+            apply_win11_theming(hwnd, is_dark_mode());
+            DefWindowProcW(hwnd, message, wparam, lparam)
+        }
+        WM_CLOSE => {
+            let _ = DestroyWindow(hwnd);
+            LRESULT(0)
+        }
+        WM_DESTROY => {
             PostQuitMessage(0);
             LRESULT(0)
         }
@@ -301,15 +332,13 @@ fn is_dark_mode() -> bool {
 
 /// Apply Windows 11 DWM attributes: dark title bar, rounded corners, Mica backdrop.
 unsafe fn apply_win11_theming(hwnd: HWND, dark: bool) {
-    if dark {
-        let val: i32 = 1;
-        let _ = DwmSetWindowAttribute(
-            hwnd,
-            DWMWINDOWATTRIBUTE(DWMWA_USE_IMMERSIVE_DARK_MODE_VAL),
-            &val as *const i32 as *const std::ffi::c_void,
-            std::mem::size_of::<i32>() as u32,
-        );
-    }
+    let val: i32 = if dark { 1 } else { 0 };
+    let _ = DwmSetWindowAttribute(
+        hwnd,
+        DWMWINDOWATTRIBUTE(DWMWA_USE_IMMERSIVE_DARK_MODE_VAL),
+        &val as *const i32 as *const std::ffi::c_void,
+        std::mem::size_of::<i32>() as u32,
+    );
 
     let corner: u32 = DWMWCP_ROUND;
     let _ = DwmSetWindowAttribute(

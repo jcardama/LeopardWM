@@ -111,7 +111,7 @@ html, body {
   font-size: 14px;
   line-height: 20px;
   color: var(--text-primary);
-  background: var(--bg);
+  background: transparent;
   overflow: hidden;
   -webkit-user-select: none;
   user-select: none;
@@ -569,7 +569,7 @@ input[type="range"]::-webkit-slider-thumb {
   border-radius: 10px;
   background: var(--accent);
   cursor: pointer;
-  border: 4px solid var(--bg);
+  border: 4px solid var(--bg-solid-quaternary);
   box-shadow: 0 0 0 1px var(--ctrl-stroke-secondary);
 }
 .slider-val {
