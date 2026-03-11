@@ -116,9 +116,24 @@ impl Workspace {
         // fullscreen before moving it to floating state.
         self.clear_fullscreen_if_window(wid);
 
-        // Check if the focused window is tiled (it always is since focus tracks tiled columns)
+        // Save origin info before removing from tiling: left neighbor + column index.
+        // Left neighbor lets us find the right spot even after columns change.
+        let origin = self.find_window_location(wid).map(|(col_idx, _)| {
+            let left_neighbor = if col_idx > 0 {
+                self.columns[col_idx - 1].windows.first().copied()
+            } else {
+                None
+            };
+            (left_neighbor, col_idx)
+        });
+
         // Remove from columns
         let _ = self.remove_window(wid);
+
+        // Store origin (after remove_window, which doesn't touch float_origin_column)
+        if let Some(origin) = origin {
+            self.float_origin_column.insert(wid, origin);
+        }
 
         // Center a floating window of 800x600 or clamped to viewport
         let float_w = 800.min(viewport.width - 40);
@@ -132,11 +147,33 @@ impl Workspace {
     }
 
     /// Move a floating window back to the tiling layout.
+    /// Restores to original column position if available.
     /// Returns true if the window was unfloated.
     pub fn unfloat_window(&mut self, window_id: WindowId) -> bool {
+        // Read origin before remove_floating (which clears it)
+        let origin = self.float_origin_column.remove(&window_id);
         if self.remove_floating(window_id) {
-            // Insert as a new column
-            let _ = self.insert_window(window_id, None);
+            if let Some((left_neighbor, fallback_idx)) = origin {
+                // Try to find the left neighbor's current column and insert after it.
+                // Falls back to the saved index if the neighbor no longer exists.
+                let target = if let Some(neighbor_id) = left_neighbor {
+                    self.find_window_location(neighbor_id)
+                        .map(|(col_idx, _)| col_idx + 1)
+                        .unwrap_or_else(|| fallback_idx.min(self.columns.len()))
+                } else {
+                    // Was the leftmost column — insert at 0
+                    0
+                };
+                let column_width = self.default_column_width.max(crate::MIN_COLUMN_WIDTH);
+                let column = Column::new(window_id, column_width);
+                let target = target.min(self.columns.len());
+                self.insert_column_at(column, target);
+                self.focused_column = target;
+                self.focused_window_in_column = 0;
+            } else {
+                // No origin recorded — insert after focused column
+                let _ = self.insert_window(window_id, None);
+            }
             true
         } else {
             false

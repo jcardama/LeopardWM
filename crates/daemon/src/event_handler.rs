@@ -678,9 +678,24 @@ impl AppState {
                 if self.applying_layout || self.should_suppress_moved_or_resized(hwnd) {
                     return;
                 }
-                // During active border resize: show ghost preview of the snap target.
+                // During active border resize: show ghost preview of the snap target
+                // for tiled windows, or update border for floating windows.
                 if self.resize_hwnd == Some(hwnd) {
-                    if self.config.snap_hints.enabled {
+                    let is_floating = self.find_window_workspace(hwnd)
+                        .and_then(|(mid, wsi)| self.workspaces.get(&mid)?.get(wsi).map(|ws| ws.is_floating(hwnd)))
+                        .unwrap_or(false);
+                    if is_floating {
+                        // Throttle floating border updates to ~60fps
+                        let now = std::time::Instant::now();
+                        if self
+                            .last_resize_hint_update
+                            .is_some_and(|t| now.duration_since(t).as_millis() < 16)
+                        {
+                            return;
+                        }
+                        self.last_resize_hint_update = Some(now);
+                        self.show_border(hwnd);
+                    } else if self.config.snap_hints.enabled {
                         // Throttle preview updates to ~60fps
                         let now = std::time::Instant::now();
                         if self
@@ -695,6 +710,7 @@ impl AppState {
                     return;
                 }
                 // During drag: compute drop target and show snap hint for tiled windows.
+                // For floating drags, update the border to follow the window.
                 if let Some(ref mut drag) = self.drag_state {
                     if drag.hwnd == hwnd {
                         if drag.is_tiled {
@@ -708,11 +724,23 @@ impl AppState {
                             }
                             drag.last_hint_update = Some(now);
                             self.update_drag_hint(hwnd);
+                        } else {
+                            // Floating window drag — throttle border updates to ~60fps
+                            let now = std::time::Instant::now();
+                            if drag
+                                .last_hint_update
+                                .is_some_and(|t| now.duration_since(t).as_millis() < 16)
+                            {
+                                return;
+                            }
+                            drag.last_hint_update = Some(now);
+                            self.show_border(hwnd);
                         }
                         return;
                     }
                 }
                 // Non-drag: if the window is managed (tiled), snap it back to its layout position.
+                // For floating windows, update the border to track position changes.
                 if let Some((monitor_id, ws_idx)) = self.find_window_workspace(hwnd) {
                     let is_floating = self
                         .workspaces
@@ -720,7 +748,11 @@ impl AppState {
                         .and_then(|v| v.get(ws_idx))
                         .is_none_or(|ws| ws.is_floating(hwnd));
 
-                    if !is_floating {
+                    if is_floating {
+                        if self.previous_focused_hwnd == Some(hwnd) {
+                            self.show_border(hwnd);
+                        }
+                    } else {
                         debug!("Managed window {} moved/resized — snapping back", hwnd);
                         if let Err(e) = self.apply_layout() {
                             warn!("Failed to snap back layout after move/resize: {}", e);
