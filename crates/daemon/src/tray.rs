@@ -674,7 +674,7 @@ fn create_default_icon() -> Result<tray_icon::Icon, TrayError> {
     let mut reader = decoder
         .read_info()
         .map_err(|e| TrayError::Icon(format!("PNG decode error: {e}")))?;
-    let mut buf = vec![0u8; reader.output_buffer_size()];
+    let mut buf = vec![0u8; reader.output_buffer_size().unwrap_or(0)];
     let info = reader
         .next_frame(&mut buf)
         .map_err(|e| TrayError::Icon(format!("PNG frame error: {e}")))?;
