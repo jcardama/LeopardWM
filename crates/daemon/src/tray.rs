@@ -324,6 +324,49 @@ impl Drop for TrayManager {
     }
 }
 
+/// Enable dark mode for native Win32 context menus.
+///
+/// Calls undocumented but stable `uxtheme.dll` ordinals (135, 136) used by
+/// Windows Terminal, VS Code, Notepad, etc. Requires Windows 10 1903+.
+/// Silently no-ops on older Windows versions.
+fn enable_dark_mode_menus() {
+    extern "system" {
+        fn LoadLibraryW(name: *const u16) -> isize;
+        fn GetProcAddress(
+            module: isize,
+            name: *const u8,
+        ) -> Option<unsafe extern "system" fn() -> isize>;
+        fn FreeLibrary(module: isize) -> i32;
+    }
+
+    const ALLOW_DARK: i32 = 1; // PreferredAppMode::AllowDark — follows system theme
+
+    unsafe {
+        let lib: Vec<u16> = "uxtheme.dll\0".encode_utf16().collect();
+        let hmodule = LoadLibraryW(lib.as_ptr());
+        if hmodule == 0 {
+            return;
+        }
+
+        // Ordinal 135: SetPreferredAppMode(AllowDark)
+        // Tells Windows to use dark theme for native controls when the system is in dark mode.
+        if let Some(f) = GetProcAddress(hmodule, 135usize as *const u8) {
+            let set_preferred_app_mode: unsafe extern "system" fn(i32) -> i32 =
+                std::mem::transmute(f);
+            set_preferred_app_mode(ALLOW_DARK);
+        }
+
+        // Ordinal 136: FlushMenuThemes()
+        // Discards cached menu theme so the new preference takes effect immediately.
+        if let Some(f) = GetProcAddress(hmodule, 136usize as *const u8) {
+            let flush_menu_themes: unsafe extern "system" fn() = std::mem::transmute(f);
+            flush_menu_themes();
+        }
+
+        FreeLibrary(hmodule);
+    }
+}
+
 /// Runs on the dedicated tray thread: builds the tray icon and pumps messages.
 fn run_tray_thread(
     init_tx: mpsc::Sender<InitResult>,
@@ -331,6 +374,9 @@ fn run_tray_thread(
     initial: QuickToggleState,
 ) {
     let thread_id = unsafe { win32_msg::GetCurrentThreadId() };
+
+    // Enable dark mode for native context menus before any menu is created.
+    enable_dark_mode_menus();
 
     let (tray, items) = match build_tray(&initial) {
         Ok(v) => v,

@@ -8,6 +8,7 @@ All notable changes to LeopardWM will be documented in this file.
 
 - Mica backdrop on settings WebView — Windows 11 Mica material shows through the settings window, matching the title bar appearance. Extends DWM frame into client area with transparent WebView2 rendering
 - Live theme switching — settings window responds to system dark/light mode changes in real-time via `WM_SETTINGCHANGE`
+- Dark mode tray menu — native context menu follows the system theme via `uxtheme.dll` `SetPreferredAppMode`
 
 ### Bug Fixes
 
