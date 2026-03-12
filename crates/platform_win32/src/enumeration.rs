@@ -605,6 +605,11 @@ pub(crate) fn should_skip_window_by_class(class_name: &str) -> bool {
         // Empty/cloaked UWP frames are already filtered by the cloaked window check.
         "XamlExplorerHostIslandWindow", // XAML islands
         "TopLevelWindowForOverflowXamlIsland", // Overflow islands
+        "RAIL_WINDOW",                // WSLg RemoteApp (msrdc.exe) — RDP-projected from Linux;
+                                      // tiling breaks them because the remote session controls sizing
+        "Ghost",                      // DWM hung-window replacement — tiling duplicates the original
+        "#32770",                     // Standard Win32 dialog (Open/Save/Print/Properties)
+        "Chrome_RenderWidgetHostHWND", // Internal Electron/Chrome render widget, not a real window
         "LeopardWMSettings",          // Our own settings window
         "LeopardWMBorderFrame",       // Our own border overlay
     ];

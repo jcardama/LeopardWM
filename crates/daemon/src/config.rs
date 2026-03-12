@@ -16,9 +16,11 @@ use std::path::PathBuf;
 /// Executables whose windows should never be tiled (system dialogs, security prompts, etc.).
 /// These are appended as built-in Ignore rules after user-defined rules.
 const BUILTIN_IGNORE_EXECUTABLES: &[&str] = &[
-    "smartscreen.exe", // Windows Defender SmartScreen
-    "consent.exe",     // UAC elevation prompt
-    "msiexec.exe",     // Windows Installer
+    "smartscreen.exe",        // Windows Defender SmartScreen
+    "consent.exe",            // UAC elevation prompt
+    "msiexec.exe",            // Windows Installer
+    "CredentialUIBroker.exe", // Windows credential/login prompt
+    "SnippingTool.exe",       // Screen capture overlay — breaks when repositioned
 ];
 
 /// Main configuration structure for LeopardWM.

@@ -2,6 +2,13 @@
 
 All notable changes to LeopardWM will be documented in this file.
 
+## 0.1.4
+
+### Improvements
+
+- Expanded built-in skip classes — WSLg `RAIL_WINDOW`, DWM `Ghost` hung-window placeholders, `#32770` standard dialogs, and `Chrome_RenderWidgetHostHWND` internal Electron render widgets are now ignored at the platform layer
+- Additional built-in ignore executables — `CredentialUIBroker.exe` (Windows credential prompts) and `SnippingTool.exe` (screen capture overlay) are now ignored by default
+
 ## 0.1.3
 
 ### Features
