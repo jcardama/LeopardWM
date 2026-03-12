@@ -119,6 +119,38 @@ LeopardWM is a Rust workspace with five crates:
 
 LeopardWM is a **window controller**, not a compositor. DWM remains the compositor. Elevated or protected windows may reject placement/styling changes, and behavior can vary across app frameworks (Win32, WPF, Electron, UWP).
 
+## Built-in Window Exclusions
+
+LeopardWM automatically skips certain windows that should never be tiled. You can add your own rules via `[[window_rules]]` in the config, but these are always active.
+
+### Skipped window classes (platform layer)
+
+These windows are filtered out during enumeration and never enter the layout engine:
+
+| Class | Why |
+|---|---|
+| `Progman` | Program Manager (desktop) |
+| `Shell_TrayWnd` / `Shell_SecondaryTrayWnd` | Taskbar |
+| `WorkerW` | Desktop worker |
+| `Windows.UI.Core.CoreWindow` | UWP system windows |
+| `XamlExplorerHostIslandWindow` / `TopLevelWindowForOverflowXamlIsland` | XAML islands |
+| `RAIL_WINDOW` | WSLg RemoteApp — RDP-projected Linux windows that break when repositioned |
+| `Ghost` | DWM hung-window replacement — tiling would duplicate the original |
+| `#32770` | Standard Win32 dialog (Open/Save/Print/Properties) |
+| `Chrome_RenderWidgetHostHWND` | Internal Electron/Chrome render widget, not a real window |
+
+### Ignored executables (window rules)
+
+These processes are ignored via built-in window rules (action = `ignore`):
+
+| Executable | Why |
+|---|---|
+| `smartscreen.exe` | Windows Defender SmartScreen |
+| `consent.exe` | UAC elevation prompt |
+| `msiexec.exe` | Windows Installer |
+| `CredentialUIBroker.exe` | Windows credential/login prompt |
+| `SnippingTool.exe` | Screen capture overlay |
+
 ## Support
 
 If you find LeopardWM useful, consider supporting development:
