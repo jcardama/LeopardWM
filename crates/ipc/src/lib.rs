@@ -149,6 +149,10 @@ pub enum IpcCommand {
     FocusUp,
     /// Focus the window below (in stacked columns).
     FocusDown,
+    /// Focus the next window in linear order (across columns).
+    FocusNext,
+    /// Focus the previous window in linear order (across columns).
+    FocusPrev,
 
     /// Move the focused column left.
     MoveColumnLeft,

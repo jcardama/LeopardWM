@@ -726,6 +726,9 @@ async fn main() -> Result<()> {
 
     // Register gesture detection (if enabled)
     let _gesture_handle = if config.gestures.enabled {
+        // Set scroll modifier before registering the hook
+        leopardwm_platform_win32::set_scroll_modifier(&config.hotkeys.scroll_modifier);
+
         match register_gestures() {
             Ok((handle, gesture_receiver)) => {
                 info!("Gesture detection enabled");
@@ -1230,6 +1233,8 @@ async fn main() -> Result<()> {
                     GestureEvent::SwipeRight => &gesture_config.swipe_right,
                     GestureEvent::SwipeUp => &gesture_config.swipe_up,
                     GestureEvent::SwipeDown => &gesture_config.swipe_down,
+                    GestureEvent::ScrollUp => &gesture_config.scroll_up,
+                    GestureEvent::ScrollDown => &gesture_config.scroll_down,
                 };
 
                 if let Some(cmd) = config::parse_command(cmd_str) {

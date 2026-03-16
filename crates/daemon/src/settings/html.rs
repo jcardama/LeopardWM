@@ -947,6 +947,14 @@ input[type="range"]::-webkit-slider-thumb {
             <div class="field-info"><div class="field-label">Swipe down</div><div class="field-desc">Three-finger swipe down command</div></div>
             <div class="combobox" id="cb-gestures-swipe_down" data-value="focus_down"></div>
           </div>
+          <div class="field">
+            <div class="field-info"><div class="field-label" id="lbl-scroll-up">Scroll up</div><div class="field-desc">Scroll wheel up command</div></div>
+            <div class="combobox" id="cb-gestures-scroll_up" data-value="focus_next"></div>
+          </div>
+          <div class="field">
+            <div class="field-info"><div class="field-label" id="lbl-scroll-down">Scroll down</div><div class="field-desc">Scroll wheel down command</div></div>
+            <div class="combobox" id="cb-gestures-scroll_down" data-value="focus_prev"></div>
+          </div>
         </div>
       </div>
 
@@ -1154,8 +1162,14 @@ function init(cfg) {
   setCb('cb-behavior-log_level', cfg.behavior.log_level);
 
   if (cfg.hotkeys) {
-    var bindings = cfg.hotkeys.bindings || cfg.hotkeys;
-    loadHotkeysSorted(bindings);
+    var raw = cfg.hotkeys.bindings || cfg.hotkeys;
+    var bindings = {};
+    var scrollMod = 'Ctrl+Alt';
+    for (var k in raw) {
+      if (k === 'scroll_modifier') { scrollMod = raw[k]; }
+      else { bindings[k] = raw[k]; }
+    }
+    loadHotkeysSorted(bindings, scrollMod);
   }
 
   document.getElementById('rules-body').innerHTML = '';
@@ -1166,6 +1180,9 @@ function init(cfg) {
   setCb('cb-gestures-swipe_right', cfg.gestures.swipe_right);
   setCb('cb-gestures-swipe_up', cfg.gestures.swipe_up);
   setCb('cb-gestures-swipe_down', cfg.gestures.swipe_down);
+  setCb('cb-gestures-scroll_up', cfg.gestures.scroll_up);
+  setCb('cb-gestures-scroll_down', cfg.gestures.scroll_down);
+  updateScrollLabels();
 
   setChecked('snaphints-enabled', cfg.snap_hints.enabled);
   setVal('snaphints-duration_ms', cfg.snap_hints.duration_ms);
@@ -1179,6 +1196,7 @@ var deleteIcon = '<svg viewBox="0 0 12 12"><line x1="2" y1="2" x2="10" y2="10"/>
 var CMD_LABELS = {
   focus_left: 'Focus left', focus_right: 'Focus right',
   focus_up: 'Focus up', focus_down: 'Focus down',
+  focus_next: 'Focus next', focus_prev: 'Focus prev',
   move_column_left: 'Move column left', move_column_right: 'Move column right',
   move_window_left: 'Move window left', move_window_right: 'Move window right',
   expel_to_left: 'Expel to left', expel_to_right: 'Expel to right',
@@ -1258,6 +1276,15 @@ var DEFAULT_HOTKEYS = {
 
 function cmdLabel(cmd) { return CMD_LABELS[cmd] || cmd; }
 
+function updateScrollLabels() {
+  var mod = readScrollModifier();
+  var modDisplay = mod.split('+').map(function(s) { return s.trim(); }).join(' + ');
+  var up = document.getElementById('lbl-scroll-up');
+  var dn = document.getElementById('lbl-scroll-down');
+  if (up) up.textContent = modDisplay + ' + Scroll up';
+  if (dn) dn.textContent = modDisplay + ' + Scroll down';
+}
+
 /* Build gesture comboboxes from CMD_ORDER/CMD_LABELS */
 function initGestureCombo(id) {
   var cb = document.getElementById(id);
@@ -1271,7 +1298,7 @@ function initGestureCombo(id) {
     '<div class="combobox-popup">' + options + '</div>';
   initCombobox(cb);
 }
-['cb-gestures-swipe_left','cb-gestures-swipe_right','cb-gestures-swipe_up','cb-gestures-swipe_down'].forEach(initGestureCombo);
+['cb-gestures-swipe_left','cb-gestures-swipe_right','cb-gestures-swipe_up','cb-gestures-swipe_down','cb-gestures-scroll_up','cb-gestures-scroll_down'].forEach(initGestureCombo);
 
 function addHotkeyRow(key, cmd) {
   var tbody = document.getElementById('hotkeys-body');
@@ -1300,7 +1327,7 @@ function resetHotkeyRow(tr) {
   if (defKey) { tr.querySelector('.hk-key').value = defKey; autoSave(0); }
 }
 
-function loadHotkeysSorted(bindings) {
+function loadHotkeysSorted(bindings, scrollModifier) {
   var tbody = document.getElementById('hotkeys-body');
   tbody.innerHTML = '';
   /* Build cmd→key map from config */
@@ -1315,10 +1342,24 @@ function loadHotkeysSorted(bindings) {
   Object.entries(bindings).forEach(function(e) {
     if (CMD_ORDER.indexOf(e[1]) === -1) addHotkeyRow(e[0], e[1]);
   });
+  /* Scroll modifier row — insert after focus navigation group */
+  var tr = document.createElement('tr');
+  tr.dataset.special = 'scroll_modifier';
+  tr.innerHTML =
+    '<td class="hk-cmd-label">Scroll modifier</td>' +
+    '<td><input type="text" class="hk-key" value="' + escAttr(scrollModifier || 'Ctrl+Alt') + '" placeholder="e.g. Ctrl+Alt"></td>' +
+    '<td><button class="row-delete" title="Reset to default" onclick="this.closest(\'tr\').querySelector(\'.hk-key\').value=\'Ctrl+Alt\';updateScrollLabels();autoSave(0);">' + resetIcon + '</button></td>';
+  var focusRows = tbody.querySelectorAll('tr[data-cmd="focus_down"]');
+  var anchor = focusRows.length ? focusRows[0] : null;
+  if (anchor && anchor.nextSibling) { tbody.insertBefore(tr, anchor.nextSibling); }
+  else { tbody.appendChild(tr); }
+  wrapAllInputs(tr);
+  tr.querySelector('.hk-key').addEventListener('input', function() { updateScrollLabels(); autoSave(500); });
 }
 
 function resetHotkeys() {
-  loadHotkeysSorted(DEFAULT_HOTKEYS);
+  loadHotkeysSorted(DEFAULT_HOTKEYS, 'Ctrl+Alt');
+  updateScrollLabels();
   autoSave(0);
 }
 
@@ -1374,12 +1415,15 @@ function readConfig() {
       focus_follows_mouse_delay_ms: num('behavior-focus_follows_mouse_delay_ms'),
       log_level: cbVal('cb-behavior-log_level')
     },
-    hotkeys: readHotkeys(),
+    hotkeys: Object.assign(readHotkeys(), {
+      scroll_modifier: readScrollModifier()
+    }),
     window_rules: readRules(),
     gestures: {
       enabled: checked('gestures-enabled'),
       swipe_left: cbVal('cb-gestures-swipe_left'), swipe_right: cbVal('cb-gestures-swipe_right'),
-      swipe_up: cbVal('cb-gestures-swipe_up'), swipe_down: cbVal('cb-gestures-swipe_down')
+      swipe_up: cbVal('cb-gestures-swipe_up'), swipe_down: cbVal('cb-gestures-swipe_down'),
+      scroll_up: cbVal('cb-gestures-scroll_up'), scroll_down: cbVal('cb-gestures-scroll_down')
     },
     snap_hints: {
       enabled: checked('snaphints-enabled'),
@@ -1392,11 +1436,17 @@ function readConfig() {
 function readHotkeys() {
   var b = {};
   document.querySelectorAll('#hotkeys-body tr').forEach(function(tr) {
+    if (tr.dataset.special) return;
     var k = tr.querySelector('.hk-key').value.trim();
     var c = tr.dataset.cmd;
     if (k && c) b[k] = c;
   });
   return b;
+}
+
+function readScrollModifier() {
+  var tr = document.querySelector('#hotkeys-body tr[data-special="scroll_modifier"]');
+  return tr ? tr.querySelector('.hk-key').value.trim() || 'Ctrl+Alt' : 'Ctrl+Alt';
 }
 
 function readRules() {

@@ -2,6 +2,19 @@
 
 All notable changes to LeopardWM will be documented in this file.
 
+## 0.1.5
+
+### Features
+
+- Scroll wheel navigation — hold a configurable modifier (default Ctrl+Alt) and scroll the mouse wheel to cycle focus between windows linearly across columns
+- `focus_next` / `focus_prev` commands — traverse windows top-to-bottom within columns, then left-to-right across columns, wrapping around at boundaries
+- Configurable scroll modifier in the Hotkeys tab, scroll up/down command mapping in the Gestures tab
+
+### Bug Fixes
+
+- Fix rapid mouse scrolling causing focus border to flicker between windows — physical mouse wheel events are now distinguished from touchpad-injected events via the LLMHF_INJECTED flag
+- Harden EVENT_OBJECT_FOCUS handling — verify the window is actually the foreground window before emitting a Focused event, preventing spurious focus switches during scroll
+
 ## 0.1.4
 
 ### Features

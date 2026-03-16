@@ -157,6 +157,9 @@ pub(crate) struct AppState {
     pub(crate) compiled_rules: Vec<config::CompiledWindowRule>,
     /// Previously focused window for border color tracking.
     pub(crate) previous_focused_hwnd: Option<u64>,
+    /// Timestamp of the last Focused event that changed `previous_focused_hwnd`.
+    /// Used to debounce rapid same-column focus switches (e.g., from scroll events).
+    pub(crate) last_focus_change_at: Option<std::time::Instant>,
     /// Last time stale-window pruning ran (throttled to 1/sec).
     pub(crate) last_prune_at: Option<std::time::Instant>,
     /// Border frame overlay for the active window.
@@ -305,6 +308,7 @@ impl AppState {
             config,
             compiled_rules,
             previous_focused_hwnd: None,
+            last_focus_change_at: None,
             last_prune_at: None,
             border_frame: leopardwm_platform_win32::border::BorderFrame::new().ok(),
             paused: false,

@@ -80,6 +80,28 @@ impl AppState {
                     );
                 })
             }
+            IpcCommand::FocusNext => {
+                self.execute_workspace_command(false, true, |ws, vw| {
+                    ws.focus_next();
+                    ws.ensure_focused_visible_animated(vw);
+                    info!(
+                        "Focus next -> column {} window {}",
+                        ws.focused_column_index(),
+                        ws.focused_window_index_in_column()
+                    );
+                })
+            }
+            IpcCommand::FocusPrev => {
+                self.execute_workspace_command(false, true, |ws, vw| {
+                    ws.focus_prev();
+                    ws.ensure_focused_visible_animated(vw);
+                    info!(
+                        "Focus prev -> column {} window {}",
+                        ws.focused_column_index(),
+                        ws.focused_window_index_in_column()
+                    );
+                })
+            }
             IpcCommand::MoveColumnLeft => {
                 self.execute_workspace_command(true, false, |ws, vw| {
                     ws.move_column_left();

@@ -3,6 +3,7 @@
 use crate::{recover_poisoned_mutex, Win32Error, WM_QUIT_LLHOOK_THREAD};
 use std::sync::mpsc;
 use windows::Win32::System::Threading::GetCurrentThreadId;
+use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetMessageW, PeekMessageW, PostThreadMessageW,
     SetWindowsHookExW, UnhookWindowsHookEx, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, WH_MOUSE_LL,
@@ -19,6 +20,10 @@ pub enum GestureEvent {
     SwipeUp,
     /// Three-finger swipe down
     SwipeDown,
+    /// Modifier + mouse wheel scroll up
+    ScrollUp,
+    /// Modifier + mouse wheel scroll down
+    ScrollDown,
 }
 
 /// Wheel message constants (not all exposed by windows-rs).
@@ -42,6 +47,11 @@ struct GestureAccumState {
     /// Timestamp of the last scroll event.
     last_scroll_time: std::time::Instant,
 }
+
+/// Modifier flags for scroll wheel navigation, stored as a bitmask.
+/// Bit 0 = Ctrl, Bit 1 = Alt, Bit 2 = Shift, Bit 3 = Win.
+static SCROLL_MODIFIER_FLAGS: std::sync::atomic::AtomicU8 =
+    std::sync::atomic::AtomicU8::new(0x03); // default: Ctrl + Alt
 
 /// Global sender for gesture events.
 static GESTURE_SENDER: std::sync::Mutex<Option<mpsc::Sender<GestureEvent>>> =
@@ -91,6 +101,29 @@ impl Drop for GestureHandle {
 
         tracing::debug!("Gesture detection stopped");
     }
+}
+
+/// Set the modifier keys required for scroll wheel navigation.
+///
+/// Parses a modifier string like "Ctrl+Alt", "Ctrl+Shift", etc.
+/// Unrecognized tokens are ignored.
+pub fn set_scroll_modifier(modifier_str: &str) {
+    let mut flags: u8 = 0;
+    for part in modifier_str.split('+') {
+        match part.trim().to_lowercase().as_str() {
+            "ctrl" | "control" => flags |= 0x01,
+            "alt" | "menu" => flags |= 0x02,
+            "shift" => flags |= 0x04,
+            "win" | "super" => flags |= 0x08,
+            _ => {}
+        }
+    }
+    if flags == 0 {
+        // Fallback to Ctrl+Alt if nothing valid was parsed
+        flags = 0x03;
+    }
+    SCROLL_MODIFIER_FLAGS.store(flags, std::sync::atomic::Ordering::Relaxed);
+    tracing::debug!("Scroll modifier set to: {} (flags=0x{:02x})", modifier_str, flags);
 }
 
 /// Register a low-level mouse hook for gesture detection via wheel events.
@@ -211,8 +244,52 @@ unsafe extern "system" fn gesture_mouse_hook_proc(
         let msg = wparam.0 as u32;
         if msg == WM_MOUSEHWHEEL || msg == WM_MOUSEWHEEL {
             let mouse_struct = &*(lparam.0 as *const MSLLHOOKSTRUCT);
+
             // The high word of mouseData contains the wheel delta (signed).
             let delta = (mouse_struct.mouseData >> 16) as i16 as i32;
+
+            // Check if this is a physical mouse wheel event (not injected by
+            // touchpad driver). Physical events with Ctrl+Alt held trigger
+            // modifier+scroll navigation instead of touchpad gestures.
+            const LLMHF_INJECTED: u32 = 0x01;
+            let is_physical = mouse_struct.flags & LLMHF_INJECTED == 0;
+
+            if is_physical {
+                // Check if the configured scroll modifier keys are held
+                const VK_CONTROL: i32 = 0x11;
+                const VK_MENU: i32 = 0x12; // Alt
+                const VK_SHIFT: i32 = 0x10;
+                const VK_LWIN: i32 = 0x5B;
+                const VK_RWIN: i32 = 0x5C;
+
+                let flags = SCROLL_MODIFIER_FLAGS
+                    .load(std::sync::atomic::Ordering::Relaxed);
+                let mods_held = (flags & 0x01 == 0 || GetAsyncKeyState(VK_CONTROL) < 0)
+                    && (flags & 0x02 == 0 || GetAsyncKeyState(VK_MENU) < 0)
+                    && (flags & 0x04 == 0 || GetAsyncKeyState(VK_SHIFT) < 0)
+                    && (flags & 0x08 == 0
+                        || GetAsyncKeyState(VK_LWIN) < 0
+                        || GetAsyncKeyState(VK_RWIN) < 0);
+
+                if mods_held && flags != 0 && msg == WM_MOUSEWHEEL {
+                    // Modifier+scroll: emit ScrollUp/ScrollDown per wheel notch
+                    let event = if delta > 0 {
+                        GestureEvent::ScrollUp
+                    } else {
+                        GestureEvent::ScrollDown
+                    };
+                    let sender_guard =
+                        GESTURE_SENDER.lock().unwrap_or_else(recover_poisoned_mutex);
+                    if let Some(sender) = sender_guard.as_ref() {
+                        let _ = sender.send(event);
+                    }
+                    // Consume the event so it doesn't scroll the window
+                    return windows::Win32::Foundation::LRESULT(1);
+                }
+
+                // Physical mouse wheel without modifier — pass through
+                return CallNextHookEx(None, ncode, wparam, lparam);
+            }
 
             // Recover from mutex poisoning for both state and sender
             let mut state_guard = GESTURE_STATE.lock().unwrap_or_else(recover_poisoned_mutex);

@@ -419,6 +419,10 @@ impl WindowRule {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HotkeyConfig {
+    /// Modifier keys required for scroll wheel navigation (e.g., "Ctrl+Alt").
+    #[serde(default = "default_scroll_modifier")]
+    pub scroll_modifier: String,
+
     /// Map of hotkey string to command name.
     #[serde(flatten)]
     pub bindings: HashMap<String, String>,
@@ -493,7 +497,10 @@ impl Default for HotkeyConfig {
         // Emergency escape hatch: revert visibility state and stop daemon.
         bindings.insert("Win+Ctrl+Escape".to_string(), "panic_revert".to_string());
 
-        Self { bindings }
+        Self {
+            scroll_modifier: default_scroll_modifier(),
+            bindings,
+        }
     }
 }
 
@@ -522,6 +529,14 @@ pub struct GestureConfig {
     /// Command for three-finger swipe down.
     #[serde(default = "default_swipe_down")]
     pub swipe_down: String,
+
+    /// Command for modifier+scroll up (physical mouse wheel).
+    #[serde(default = "default_scroll_up")]
+    pub scroll_up: String,
+
+    /// Command for modifier+scroll down (physical mouse wheel).
+    #[serde(default = "default_scroll_down")]
+    pub scroll_down: String,
 }
 
 fn default_false() -> bool {
@@ -544,6 +559,18 @@ fn default_swipe_down() -> String {
     "focus_down".to_string()
 }
 
+fn default_scroll_up() -> String {
+    "focus_next".to_string()
+}
+
+fn default_scroll_down() -> String {
+    "focus_prev".to_string()
+}
+
+fn default_scroll_modifier() -> String {
+    "Ctrl+Alt".to_string()
+}
+
 impl Default for GestureConfig {
     fn default() -> Self {
         Self {
@@ -552,6 +579,8 @@ impl Default for GestureConfig {
             swipe_right: default_swipe_right(),
             swipe_up: default_swipe_up(),
             swipe_down: default_swipe_down(),
+            scroll_up: default_scroll_up(),
+            scroll_down: default_scroll_down(),
         }
     }
 }
@@ -662,6 +691,8 @@ pub fn parse_command(cmd: &str) -> Option<leopardwm_ipc::IpcCommand> {
         "focus_right" => Some(IpcCommand::FocusRight),
         "focus_up" => Some(IpcCommand::FocusUp),
         "focus_down" => Some(IpcCommand::FocusDown),
+        "focus_next" => Some(IpcCommand::FocusNext),
+        "focus_prev" => Some(IpcCommand::FocusPrev),
         "move_column_left" => Some(IpcCommand::MoveColumnLeft),
         "move_column_right" => Some(IpcCommand::MoveColumnRight),
         "focus_monitor_left" => Some(IpcCommand::FocusMonitorLeft),
@@ -1333,6 +1364,7 @@ mod tests {
         // would merge defaults for unbound commands.
         let defaults = HotkeyConfig::default();
         let mut user = HotkeyConfig {
+            scroll_modifier: default_scroll_modifier(),
             bindings: HashMap::new(),
         };
         // User only binds focus_left to a custom key

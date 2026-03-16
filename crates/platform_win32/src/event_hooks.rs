@@ -11,7 +11,8 @@ use windows::Win32::Foundation::HWND;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
 use windows::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, GetMessageW, PeekMessageW, PostThreadMessageW, MSG, PM_NOREMOVE, WM_USER,
+    DispatchMessageW, GetForegroundWindow, GetMessageW, PeekMessageW, PostThreadMessageW, MSG,
+    PM_NOREMOVE, WM_USER,
 };
 
 // WinEvent constants (not all are exposed by windows-rs)
@@ -336,7 +337,20 @@ fn win_event_callback_inner(
         EVENT_OBJECT_CREATE | EVENT_OBJECT_SHOW => WindowEvent::Created(window_id),
         EVENT_OBJECT_DESTROY => WindowEvent::Destroyed(window_id),
         EVENT_OBJECT_HIDE => WindowEvent::Hidden(window_id),
-        EVENT_SYSTEM_FOREGROUND | EVENT_OBJECT_FOCUS => WindowEvent::Focused(window_id),
+        EVENT_SYSTEM_FOREGROUND => WindowEvent::Focused(window_id),
+        EVENT_OBJECT_FOCUS => {
+            // Only emit Focused for EVENT_OBJECT_FOCUS if the window is actually
+            // the foreground window. This filters out spurious focus events from
+            // Windows' "scroll inactive windows" feature — when the mouse wheel
+            // is delivered to a non-foreground window (e.g., the other window in
+            // a stacked column), some apps fire EVENT_OBJECT_FOCUS without the
+            // window truly becoming foreground, causing the border to flicker.
+            let fg = unsafe { GetForegroundWindow() };
+            if fg != hwnd {
+                return;
+            }
+            WindowEvent::Focused(window_id)
+        }
         EVENT_SYSTEM_MINIMIZESTART => WindowEvent::Minimized(window_id),
         EVENT_SYSTEM_MINIMIZEEND => WindowEvent::Restored(window_id),
         EVENT_SYSTEM_MOVESIZESTART => WindowEvent::MoveSizeStart(window_id),

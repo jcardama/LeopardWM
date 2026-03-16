@@ -273,10 +273,42 @@ impl AppState {
                     return;
                 }
 
+                // Suppress rapid same-column focus switches caused by mouse wheel
+                // scrolling near the boundary between stacked windows. Windows'
+                // "scroll inactive windows" feature can cause the foreground to
+                // ping-pong between adjacent windows during rapid scrolling.
+                let now = std::time::Instant::now();
+                if let Some(prev_hwnd) = self.previous_focused_hwnd {
+                    if let Some(last_change) = self.last_focus_change_at {
+                        if now.duration_since(last_change).as_millis() < 200 {
+                            // Check if both windows are in the same column
+                            if let Some((mon_a, ws_a)) = self.find_window_workspace(prev_hwnd) {
+                                if let Some((mon_b, ws_b)) = self.find_window_workspace(hwnd) {
+                                    if mon_a == mon_b && ws_a == ws_b {
+                                        let same_col = self.workspaces.get(&mon_a)
+                                            .and_then(|v| v.get(ws_a))
+                                            .is_some_and(|ws| {
+                                                let loc_a = ws.find_window_location(prev_hwnd);
+                                                let loc_b = ws.find_window_location(hwnd);
+                                                matches!((loc_a, loc_b), (Some((ca, _)), Some((cb, _))) if ca == cb)
+                                            });
+                                        if same_col {
+                                            debug!(
+                                                "Suppressed rapid same-column focus switch: {} -> {}",
+                                                prev_hwnd, hwnd
+                                            );
+                                            return;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Reconcile: prune windows that vanished without events
                 // (e.g., Electron close-to-tray apps).
                 // Throttle to at most once per second to avoid per-event overhead.
-                let now = std::time::Instant::now();
                 if self.last_prune_at.is_none_or(|t| now.duration_since(t).as_secs() >= 1) {
                     self.last_prune_at = Some(now);
                     let pre_count = self.all_managed_window_ids().len();
@@ -413,6 +445,7 @@ impl AppState {
                     // so that ToggleFloating can reliably detect and unfloat the
                     // currently focused floating window.
                     self.previous_focused_hwnd = Some(hwnd);
+                    self.last_focus_change_at = Some(now);
                 } else {
                     // Recovery path: if a user focuses a window that was
                     // suppressed by recently_hidden_hwnds (e.g., tray-restored

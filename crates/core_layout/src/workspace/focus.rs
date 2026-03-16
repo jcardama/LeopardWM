@@ -310,6 +310,86 @@ impl Workspace {
         }
     }
 
+    /// Move focus to the next window in linear order across all columns.
+    ///
+    /// Traverses columns left-to-right, windows top-to-bottom. When at the
+    /// last window of a column, wraps to the first window of the next column.
+    /// When at the last window of the last column, wraps to the first window
+    /// of the first column.
+    pub fn focus_next(&mut self) {
+        if self.columns.is_empty() {
+            return;
+        }
+        let start_col = self.focused_column;
+        let start_win = self.focused_window_in_column;
+
+        // Try moving down in the current column first
+        if let Some(column) = self.columns.get(start_col) {
+            let mut target = start_win;
+            while target + 1 < column.len() {
+                target += 1;
+                if !self.minimized_windows.contains(&column.windows[target]) {
+                    self.focused_window_in_column = target;
+                    return;
+                }
+            }
+        }
+
+        // Move to next columns, wrapping around
+        let n = self.columns.len();
+        for offset in 1..=n {
+            let col_idx = (start_col + offset) % n;
+            if self.has_visible_window_in_column(col_idx) {
+                self.focused_column = col_idx;
+                self.focused_window_in_column = 0;
+                self.adjust_focus_to_visible_in_column();
+                return;
+            }
+        }
+    }
+
+    /// Move focus to the previous window in linear order across all columns.
+    ///
+    /// Traverses columns right-to-left, windows bottom-to-top. When at the
+    /// first window of a column, wraps to the last window of the previous
+    /// column. When at the first window of the first column, wraps to the
+    /// last window of the last column.
+    pub fn focus_prev(&mut self) {
+        if self.columns.is_empty() {
+            return;
+        }
+        let start_col = self.focused_column;
+        let start_win = self.focused_window_in_column;
+
+        // Try moving up in the current column first
+        if let Some(column) = self.columns.get(start_col) {
+            let mut target = start_win;
+            while target > 0 {
+                target -= 1;
+                if !self.minimized_windows.contains(&column.windows[target]) {
+                    self.focused_window_in_column = target;
+                    return;
+                }
+            }
+        }
+
+        // Move to previous columns, wrapping around
+        let n = self.columns.len();
+        for offset in 1..=n {
+            let col_idx = (start_col + n - offset) % n;
+            if let Some(column) = self.columns.get(col_idx) {
+                // Find the last visible window in this column
+                for i in (0..column.len()).rev() {
+                    if !self.minimized_windows.contains(&column.windows[i]) {
+                        self.focused_column = col_idx;
+                        self.focused_window_in_column = i;
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
     /// Clamp focus indices to valid column/window bounds.
     pub(crate) fn clamp_focus_indices(&mut self) {
         if self.columns.is_empty() {
