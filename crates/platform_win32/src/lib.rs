@@ -32,12 +32,13 @@ pub use enumeration::{
 };
 pub use event_hooks::{install_event_hooks, EventHookHandle, WindowEvent};
 pub use placement::{
-    apply_placements, dwm_uncloak_all, dwm_uncloak_window, is_placement_cloaked,
-    ApplyPlacementsResult, PlacementCache, WidthViolation,
+    apply_placements, clear_inset_cache, dwm_uncloak_all, dwm_uncloak_window,
+    is_placement_cloaked, ApplyPlacementsResult, PlacementCache, WidthViolation,
 };
 pub use types::{MonitorId, MonitorInfo, PlatformConfig, Win32Error, WindowInfo};
 pub use utils::{
-    are_animations_enabled, cascade_windows, close_window, get_cursor_pos, get_window_visible_rect,
+    are_animations_enabled, cascade_windows, close_window, get_cursor_pos,
+    get_system_highlight_color_bgr, get_window_visible_rect, is_high_contrast_enabled,
     is_cursor_on_resize_border, is_move_offscreen_sentinel_position,
     is_move_offscreen_sentinel_rect, is_shift_key_pressed, is_valid_window,
     is_window_alive_and_visible, is_window_visible, move_window_offscreen,

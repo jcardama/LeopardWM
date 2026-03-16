@@ -130,6 +130,13 @@ impl PlacementCache {
         self.positions.clear();
         // Keep inset cache — insets are a window property, not position-dependent
     }
+
+    /// Clear the cached border insets. Call when system theme or DWM metrics
+    /// change (e.g., high contrast toggle) so that stale invisible-border
+    /// values don't cause incorrect window sizing.
+    pub fn clear_insets(&mut self) {
+        self.insets.clear();
+    }
 }
 
 /// A window whose actual width exceeds the requested placement width,
@@ -197,6 +204,11 @@ pub fn apply_placements(
     // to prevent DWM from releasing composition surfaces.
     let offscreen_count = placements.iter().filter(|p| p.visibility != Visibility::Visible).count();
 
+    // In high contrast mode, DWM paints a visible border in the normally-invisible
+    // frame area.  If we expand by the usual insets, adjacent windows' visible borders
+    // overlap and the layout gaps disappear.  Zero the insets to keep correct spacing.
+    let high_contrast = crate::is_high_contrast_enabled();
+
     for placement in placements {
         if let Some(ref cache) = cache {
             if cache.positions.get(&placement.window_id) == Some(&(placement.rect, placement.visibility)) {
@@ -211,8 +223,11 @@ pub fn apply_placements(
             }
         }
 
-        let (inset_l, inset_t, inset_r, inset_b) =
-            cached_border_insets(hwnd, placement.window_id, cache.as_deref_mut());
+        let (inset_l, inset_t, inset_r, inset_b) = if high_contrast {
+            (0, 0, 0, 0)
+        } else {
+            cached_border_insets(hwnd, placement.window_id, cache.as_deref_mut())
+        };
         let frame_w = placement.rect.width + inset_l + inset_r;
         let frame_h = placement.rect.height + inset_t + inset_b;
 
@@ -467,7 +482,11 @@ pub fn apply_placements(
         };
         if actual_w > entry.w + 2 {
             // Convert back to layout pixels by subtracting border insets.
-            let (inset_l, _, inset_r, _) = invisible_border_insets(entry.hwnd);
+            let (inset_l, _, inset_r, _) = if high_contrast {
+                (0, 0, 0, 0)
+            } else {
+                invisible_border_insets(entry.hwnd)
+            };
             let layout_min = actual_w - inset_l - inset_r;
             tracing::debug!(
                 "Width violation: {:?} requested {}px, actual {}px (layout min {}px)",
@@ -552,6 +571,15 @@ type InsetMap = HashMap<WindowId, (i32, i32, i32, i32)>;
 /// Ensures windows returning from off-screen get correct insets even without
 /// a per-worker PlacementCache.
 static GLOBAL_INSET_CACHE: Mutex<Option<InsetMap>> = Mutex::new(None);
+
+/// Clear the global inset cache. Must be called when system theme or DWM
+/// metrics change (e.g., high contrast toggle, display change) so that stale
+/// invisible-border values don't cause incorrect window sizing.
+pub fn clear_inset_cache() {
+    if let Ok(mut global) = GLOBAL_INSET_CACHE.lock() {
+        *global = None;
+    }
+}
 
 /// Look up border insets for a window, using a sticky cache to protect against
 /// stale DWM data for windows that were parked off-screen.

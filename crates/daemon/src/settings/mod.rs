@@ -39,6 +39,7 @@ impl SettingsWindowHandle {
         config: Config,
         event_tx: mpsc::Sender<SettingsEvent>,
         initial_section: Option<&str>,
+        high_contrast: bool,
     ) -> Option<Self> {
         if SETTINGS_OPEN
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -53,7 +54,7 @@ impl SettingsWindowHandle {
             .name("settings-window".into())
             .spawn(move || {
                 if let Err(e) =
-                    win32::run_settings_window(config, event_tx, section.as_deref())
+                    win32::run_settings_window(config, event_tx, section.as_deref(), high_contrast)
                 {
                     warn!("Settings window error: {}", e);
                 }

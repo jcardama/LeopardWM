@@ -16,6 +16,7 @@ pub struct StartupInfo {
     pub safe_mode: bool,
     pub no_hotkeys: bool,
     pub reduce_motion: bool,
+    pub high_contrast: bool,
 }
 
 /// Format the startup banner into a string (testable without capturing stderr).
@@ -59,6 +60,9 @@ pub fn format_startup_banner(info: &StartupInfo) -> String {
     writeln!(out, "  Logs:     {}", info.log_path).unwrap();
     if info.reduce_motion {
         writeln!(out, "  Motion:   reduced (animations disabled)").unwrap();
+    }
+    if info.high_contrast {
+        writeln!(out, "  Display:  high contrast").unwrap();
     }
     if info.safe_mode {
         writeln!(out, "  Mode:     SAFE MODE (hotkeys disabled)").unwrap();

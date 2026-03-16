@@ -60,6 +60,9 @@ impl AppState {
 
         self.config = config;
 
+        // Re-check high contrast mode on config reload
+        self.refresh_high_contrast();
+
         // Handle border transitions with new config values
         if let Some(hwnd) = self.previous_focused_hwnd {
             if self.config.appearance.active_border {
@@ -385,6 +388,53 @@ impl AppState {
     pub(crate) fn reconcile_monitors(&mut self, new_monitors: Vec<MonitorInfo>) {
         let new_ids: HashSet<MonitorId> = new_monitors.iter().map(|m| m.id).collect();
         let old_ids: HashSet<MonitorId> = self.monitors.keys().copied().collect();
+
+        // Detect HMONITOR handle changes without physical topology change
+        // (e.g., contrast theme switch). Match old→new by device_name and
+        // re-key workspace data instead of destroying and recreating it.
+        if new_ids != old_ids && new_monitors.len() == self.monitors.len() {
+            let old_by_name: HashMap<&str, MonitorId> = self
+                .monitors
+                .values()
+                .map(|m| (m.device_name.as_str(), m.id))
+                .collect();
+            let new_by_name: HashMap<&str, MonitorId> = new_monitors
+                .iter()
+                .map(|m| (m.device_name.as_str(), m.id))
+                .collect();
+
+            // If every device_name from the old set has a match in the new set,
+            // this is a handle change, not a topology change.
+            let remap: HashMap<MonitorId, MonitorId> = old_by_name
+                .iter()
+                .filter_map(|(name, &old_id)| {
+                    new_by_name.get(name).map(|&new_id| (old_id, new_id))
+                })
+                .collect();
+
+            if remap.len() == self.monitors.len() {
+                info!(
+                    "Monitor handles changed without topology change — re-keying {} workspace(s)",
+                    remap.len()
+                );
+                for (&old_id, &new_id) in &remap {
+                    if old_id != new_id {
+                        if let Some(ws) = self.workspaces.remove(&old_id) {
+                            self.workspaces.insert(new_id, ws);
+                        }
+                        if let Some(idx) = self.active_workspace.remove(&old_id) {
+                            self.active_workspace.insert(new_id, idx);
+                        }
+                        if self.focused_monitor == old_id {
+                            self.focused_monitor = new_id;
+                        }
+                    }
+                }
+                // Update monitor info and return — no migration needed
+                self.monitors = new_monitors.into_iter().map(|m| (m.id, m)).collect();
+                return;
+            }
+        }
 
         // Find primary monitor in new config (or first available)
         let primary_id = new_monitors
@@ -1001,12 +1051,37 @@ impl AppState {
     }
 
     /// Convert the config border color (hex RGB string) to BGR u32 for Win32.
+    /// When high contrast mode is active, returns the system highlight color instead.
+    /// Checks the live system setting so toggling high contrast takes effect
+    /// immediately without a config reload.
     pub(crate) fn border_color_bgr(&self) -> Option<u32> {
+        if leopardwm_platform_win32::is_high_contrast_enabled() {
+            return Some(leopardwm_platform_win32::get_system_highlight_color_bgr());
+        }
         let color = u32::from_str_radix(&self.config.appearance.active_border_color, 16).ok()?;
         let r = (color >> 16) & 0xFF;
         let g = (color >> 8) & 0xFF;
         let b = color & 0xFF;
         Some((b << 16) | (g << 8) | r)
+    }
+
+    /// Refresh the cached `high_contrast` flag from the live system setting.
+    /// Returns `true` if the value changed.
+    pub(crate) fn refresh_high_contrast(&mut self) -> bool {
+        let now = leopardwm_platform_win32::is_high_contrast_enabled();
+        if now != self.high_contrast {
+            self.high_contrast = now;
+            // Theme change invalidates DWM invisible border metrics
+            leopardwm_platform_win32::clear_inset_cache();
+            if now {
+                info!("High contrast mode: border color overridden with system highlight color");
+            } else {
+                info!("High contrast mode disabled: using config border color");
+            }
+            true
+        } else {
+            false
+        }
     }
 
     /// Convert the config border position string to the platform enum.

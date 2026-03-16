@@ -4,10 +4,27 @@ All notable changes to LeopardWM will be documented in this file.
 
 ## 0.1.4
 
+### Features
+
+- Windows High Contrast mode support — detects contrast themes and overrides the active border color with the system highlight color (`COLOR_HIGHLIGHT`), matching native Windows behavior
+- Settings UI high contrast notice — InfoBar in Appearance tab indicates when border color is overridden; color picker is disabled. Live detection via `forced-colors` media query
+- Settings UI forced-colors CSS — full high contrast stylesheet using system colors (Canvas, CanvasText, Highlight, etc.) for sidebar, cards, inputs, and comboboxes
+- Startup banner shows high contrast status when active
+
 ### Improvements
 
 - Expanded built-in skip classes — WSLg `RAIL_WINDOW`, DWM `Ghost` hung-window placeholders, `#32770` standard dialogs, and `Chrome_RenderWidgetHostHWND` internal Electron render widgets are now ignored at the platform layer
 - Additional built-in ignore executables — `CredentialUIBroker.exe` (Windows credential prompts) and `SnippingTool.exe` (screen capture overlay) are now ignored by default
+- WM_DISPLAYCHANGE debounce — contrast theme switches fire multiple display change messages with intermediate work areas; a 500ms debounce timer now waits for changes to settle before reconciling monitors
+- Reusable InfoBar component — WinUI 3 Fluent Design info bar with four severity variants (informational, success, warning, error) for use across the settings UI
+
+### Bug Fixes
+
+- Fix cumulative column shrinking on display/theme changes — `apply_min_width_constraints` no longer proportionally shrinks flexible columns; constrained columns are widened while others keep their width, preventing the irreversible narrowing cycle
+- Fix layout gaps disappearing in high contrast mode — DWM paints visible borders in the normally-invisible frame area; border inset expansion is now skipped in high contrast to prevent adjacent windows from overlapping into gap space
+- Fix tiling layout reset on contrast theme switch — HMONITOR handles change during theme transitions even when physical monitors don't; workspaces are now re-keyed by device name instead of being destroyed and recreated
+- Fix MovedOrResized snap-backs during theme transitions — events are suppressed while display change is pending to prevent stale border metrics from causing incorrect window positions
+- Invalidate animation worker placement cache on display change — prevents stale inset-expanded positions from surviving as cache hits after theme toggles
 
 ## 0.1.3
 

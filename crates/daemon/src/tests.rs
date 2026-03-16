@@ -1143,6 +1143,7 @@ fn make_banner_info() -> StartupInfo {
         safe_mode: false,
         no_hotkeys: false,
         reduce_motion: false,
+        high_contrast: false,
     }
 }
 
@@ -1222,6 +1223,21 @@ fn test_startup_banner_hotkey_full_registration() {
     let banner = format_startup_banner(&info);
     assert!(banner.contains("Hotkeys:  10 registered"));
     assert!(!banner.contains("failed"));
+}
+
+#[test]
+fn test_startup_banner_high_contrast() {
+    let mut info = make_banner_info();
+    info.high_contrast = true;
+    let banner = format_startup_banner(&info);
+    assert!(banner.contains("Display:  high contrast"));
+}
+
+#[test]
+fn test_startup_banner_no_high_contrast() {
+    let info = make_banner_info();
+    let banner = format_startup_banner(&info);
+    assert!(!banner.contains("high contrast"));
 }
 
 // =========================================================================

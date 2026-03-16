@@ -21,6 +21,42 @@ pub fn are_animations_enabled() -> bool {
     }
     enabled != 0
 }
+
+/// Check if Windows High Contrast mode is enabled.
+/// Returns `true` when the user has activated a high contrast theme
+/// (Settings > Accessibility > Contrast themes).
+pub fn is_high_contrast_enabled() -> bool {
+    use windows::Win32::UI::Accessibility::{HIGHCONTRASTW, HIGHCONTRASTW_FLAGS, HCF_HIGHCONTRASTON};
+    use windows::Win32::UI::WindowsAndMessaging::{SystemParametersInfoW, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS};
+
+    // SPI_GETHIGHCONTRAST = 0x0042
+    const SPI_GETHIGHCONTRAST: u32 = 0x0042;
+
+    let mut hc = HIGHCONTRASTW {
+        cbSize: std::mem::size_of::<HIGHCONTRASTW>() as u32,
+        ..Default::default()
+    };
+    unsafe {
+        let _ = SystemParametersInfoW(
+            windows::Win32::UI::WindowsAndMessaging::SYSTEM_PARAMETERS_INFO_ACTION(SPI_GETHIGHCONTRAST),
+            hc.cbSize,
+            Some(&mut hc as *mut HIGHCONTRASTW as *mut std::ffi::c_void),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        );
+    }
+    (hc.dwFlags & HCF_HIGHCONTRASTON) != HIGHCONTRASTW_FLAGS(0)
+}
+
+/// Get the system highlight color as a BGR COLORREF value.
+/// Used in high contrast mode to override the border color with the
+/// system-defined highlight color, matching native Windows behavior.
+pub fn get_system_highlight_color_bgr() -> u32 {
+    use windows::Win32::Graphics::Gdi::GetSysColor;
+
+    // COLOR_HIGHLIGHT = 13
+    unsafe { GetSysColor(windows::Win32::Graphics::Gdi::SYS_COLOR_INDEX(13)) }
+}
+
 use crate::placement::apply_placements;
 use crate::types::{PlatformConfig, Win32Error};
 use crate::{combine_operation_failures, is_benign_side_effect_error, window_id_to_hwnd};

@@ -874,6 +874,7 @@ async fn main() -> Result<()> {
             safe_mode: args.safe_mode,
             no_hotkeys: args.skip_hotkeys(),
             reduce_motion: state.reduce_motion,
+            high_contrast: state.high_contrast,
         });
     }
 
@@ -900,6 +901,12 @@ async fn main() -> Result<()> {
 
     // Focus-follows-mouse timer handle - debounces rapid mouse movements
     let mut focus_follows_mouse_timer: Option<tokio::task::JoinHandle<()>> = None;
+
+    // Display change debounce timer — contrast theme switches fire multiple
+    // WM_DISPLAYCHANGE messages with intermediate work areas. We delay
+    // processing until the changes settle to avoid sizing windows to a
+    // transient work area.
+    let mut display_change_timer: Option<tokio::task::JoinHandle<()>> = None;
 
     // Main event loop
     loop {
@@ -1010,6 +1017,28 @@ async fn main() -> Result<()> {
                 }
             }
             DaemonEvent::WindowEvent(win_event) => {
+                // Debounce DisplayChange — contrast theme switches fire multiple
+                // WM_DISPLAYCHANGE messages with intermediate work areas.
+                if matches!(win_event, WindowEvent::DisplayChange) {
+                    // Immediately clear inset cache and refresh high contrast state
+                    // (cheap operations that should happen right away).
+                    leopardwm_platform_win32::clear_inset_cache();
+                    {
+                        let mut state = state.lock().await;
+                        state.refresh_high_contrast();
+                        state.display_change_pending = true;
+                    }
+                    // Cancel pending timer and restart — only process after 500ms of quiet
+                    if let Some(handle) = display_change_timer.take() {
+                        handle.abort();
+                    }
+                    let dc_tx = event_tx.clone();
+                    display_change_timer = Some(tokio::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                        let _ = dc_tx.send(DaemonEvent::DisplayChangeSettled).await;
+                    }));
+                    continue;
+                }
                 // Handle MouseEnterWindow specially for focus-follows-mouse debouncing
                 if let WindowEvent::MouseEnterWindow(hwnd) = win_event {
                     let (enabled, delay_ms) = {
@@ -1287,26 +1316,30 @@ async fn main() -> Result<()> {
                     }
                     tray::TrayEvent::OpenConfig => {
                         info!("Tray: Settings requested");
-                        let config_snapshot = {
-                            let st = state.lock().await;
-                            st.config.clone()
+                        let (config_snapshot, hc) = {
+                            let mut st = state.lock().await;
+                            st.refresh_high_contrast();
+                            (st.config.clone(), st.high_contrast)
                         };
                         _settings_handle = settings::SettingsWindowHandle::open(
                             config_snapshot,
                             settings_sync_tx.clone(),
                             None,
+                            hc,
                         );
                     }
                     tray::TrayEvent::OpenAbout => {
                         info!("Tray: About requested");
-                        let config_snapshot = {
-                            let st = state.lock().await;
-                            st.config.clone()
+                        let (config_snapshot, hc) = {
+                            let mut st = state.lock().await;
+                            st.refresh_high_contrast();
+                            (st.config.clone(), st.high_contrast)
                         };
                         _settings_handle = settings::SettingsWindowHandle::open(
                             config_snapshot,
                             settings_sync_tx.clone(),
                             Some("about"),
+                            hc,
                         );
                     }
                     tray::TrayEvent::EditConfig => {
@@ -1586,6 +1619,32 @@ async fn main() -> Result<()> {
                     }
                 }
             }
+            DaemonEvent::DisplayChangeSettled => {
+                // Debounced display change — process the final monitor state after
+                // WM_DISPLAYCHANGE messages have stopped (theme/DPI transitions settled).
+                // Clear inset cache again — MovedOrResized events during the transition
+                // may have re-populated it with stale border metrics.
+                leopardwm_platform_win32::clear_inset_cache();
+                animation_worker.clear_cache();
+                let mut state = state.lock().await;
+                state.display_change_pending = false;
+                // Clear stale min-width constraints — they were computed with old
+                // border metrics and cause cumulative column shrinking on theme changes.
+                for ws_vec in state.workspaces.values_mut() {
+                    for ws in ws_vec.iter_mut() {
+                        ws.clear_all_min_widths();
+                    }
+                }
+                state.handle_window_event(WindowEvent::DisplayChange);
+
+                if state.is_animating() && !animation_active {
+                    state.tick_animations(0);
+                    if let Ok(true) = state.send_animation_frame(&animation_worker) {
+                        animation_active = true;
+                        last_frame_instant = Some(std::time::Instant::now());
+                    }
+                }
+            }
             DaemonEvent::Shutdown => {
                 info!("Shutdown signal received");
                 run_shutdown_cleanup(&state, ShutdownMode::Graceful).await;
@@ -1602,6 +1661,9 @@ async fn main() -> Result<()> {
         handle.abort();
     }
     if let Some(handle) = focus_follows_mouse_timer {
+        handle.abort();
+    }
+    if let Some(handle) = display_change_timer {
         handle.abort();
     }
 

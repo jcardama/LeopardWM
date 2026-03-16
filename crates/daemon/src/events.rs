@@ -29,6 +29,8 @@ pub(crate) enum DaemonEvent {
     HideSnapHint,
     /// Apply focus-follows-mouse focus after delay.
     FocusFollowsMouse { window_id: u64 },
+    /// Debounced display change — fires after WM_DISPLAYCHANGE settles.
+    DisplayChangeSettled,
     /// Shutdown signal.
     Shutdown,
 }

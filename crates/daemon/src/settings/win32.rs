@@ -76,6 +76,7 @@ pub fn run_settings_window(
     config: Config,
     event_tx: mpsc::Sender<SettingsEvent>,
     initial_section: Option<&str>,
+    high_contrast: bool,
 ) -> Result<()> {
     unsafe {
         let hinstance = GetModuleHandleW(None)?;
@@ -153,8 +154,13 @@ pub fn run_settings_window(
 
         // Create the WebView2 instance via wry
         let win_handle = Win32Handle(hwnd.0 as isize);
-        let config_json =
-            serde_json::to_string(&config).unwrap_or_else(|_| "{}".to_string());
+        let config_json = {
+            let mut val = serde_json::to_value(&config).unwrap_or(serde_json::Value::Object(Default::default()));
+            if let serde_json::Value::Object(ref mut map) = val {
+                map.insert("high_contrast".to_string(), serde_json::Value::Bool(high_contrast));
+            }
+            serde_json::to_string(&val).unwrap_or_else(|_| "{}".to_string())
+        };
 
         let webview = wry::WebViewBuilder::new_with_web_context(&mut web_context)
             .with_html(SETTINGS_HTML)

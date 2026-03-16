@@ -165,6 +165,9 @@ pub(crate) struct AppState {
     pub(crate) paused: bool,
     /// Guard flag to suppress MovedOrResized events during apply_layout().
     pub(crate) applying_layout: bool,
+    /// Suppress MovedOrResized snap-backs while a display change is being debounced.
+    /// Set on WM_DISPLAYCHANGE, cleared after the debounced handler runs.
+    pub(crate) display_change_pending: bool,
     /// Active drag state: tracks the window being dragged, source position, and drop target.
     pub(crate) drag_state: Option<DragState>,
     /// HWND being actively resized via border drag (not title bar move).
@@ -207,6 +210,8 @@ pub(crate) struct AppState {
     pub(crate) window_managed_at: HashMap<u64, std::time::Instant>,
     /// Skip animations and snap instantly (Windows "Show animations" is off).
     pub(crate) reduce_motion: bool,
+    /// Windows High Contrast mode is active — override border color with system highlight.
+    pub(crate) high_contrast: bool,
     /// Active layout transition animation (window position interpolation).
     pub(crate) layout_transition: Option<LayoutTransition>,
     /// Injected window info for testing. When set, `lookup_window_info()` returns
@@ -304,6 +309,7 @@ impl AppState {
             border_frame: leopardwm_platform_win32::border::BorderFrame::new().ok(),
             paused: false,
             applying_layout: false,
+            display_change_pending: false,
             drag_state: None,
             resize_hwnd: None,
             last_resize_hint_update: None,
@@ -322,6 +328,7 @@ impl AppState {
             recently_hidden_hwnds: HashMap::new(),
             window_managed_at: HashMap::new(),
             reduce_motion: !leopardwm_platform_win32::are_animations_enabled(),
+            high_contrast: leopardwm_platform_win32::is_high_contrast_enabled(),
             layout_transition: None,
             #[cfg(test)]
             injected_window_info: HashMap::new(),

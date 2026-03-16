@@ -675,7 +675,13 @@ impl AppState {
             }
             WindowEvent::MovedOrResized(hwnd) => {
                 // Skip events triggered by our own apply_layout() to avoid feedback loop.
-                if self.applying_layout || self.should_suppress_moved_or_resized(hwnd) {
+                // Also suppress during display change debounce — Windows resizes windows
+                // during contrast theme transitions and the stale border metrics would
+                // cause incorrect snap-back sizes.
+                if self.applying_layout
+                    || self.display_change_pending
+                    || self.should_suppress_moved_or_resized(hwnd)
+                {
                     return;
                 }
                 // During active border resize: show ghost preview of the snap target
@@ -761,7 +767,10 @@ impl AppState {
                 }
             }
             WindowEvent::DisplayChange => {
-                // Display configuration changed (monitors added/removed/rearranged)
+                // Display configuration changed (monitors added/removed/rearranged).
+                // Note: inset cache clearing and high contrast refresh happen
+                // immediately on WM_DISPLAYCHANGE receipt (before debounce) in the
+                // event loop. This handler runs after the debounce settles.
                 info!("Display configuration changed - reconciling monitors");
 
                 // Re-enumerate monitors

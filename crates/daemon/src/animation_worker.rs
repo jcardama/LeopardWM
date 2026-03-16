@@ -36,6 +36,9 @@ pub struct FrameResult {
 enum WorkerCommand {
     /// Apply a frame of animation.
     Frame(FrameRequest),
+    /// Invalidate the placement cache (e.g., after a theme/display change
+    /// so stale inset-expanded positions don't survive as cache hits).
+    ClearCache,
     /// Shut down the worker thread.
     Shutdown,
 }
@@ -76,6 +79,12 @@ impl AnimationWorkerHandle {
             .send(WorkerCommand::Frame(request))
             .map_err(|_| "Animation worker thread has exited".to_string())
     }
+
+    /// Invalidate the worker's placement cache. Call after theme/display changes
+    /// so that stale inset-expanded positions don't survive as cache hits.
+    pub fn clear_cache(&self) {
+        let _ = self.command_tx.send(WorkerCommand::ClearCache);
+    }
 }
 
 impl Drop for AnimationWorkerHandle {
@@ -113,6 +122,12 @@ fn worker_loop(
             WorkerCommand::Shutdown => {
                 debug!("Animation worker: shutdown requested");
                 break;
+            }
+            WorkerCommand::ClearCache => {
+                placement_cache.clear();
+                placement_cache.clear_insets();
+                debug!("Animation worker: placement cache cleared");
+                continue;
             }
             WorkerCommand::Frame(request) => {
                 let frame_start = Instant::now();

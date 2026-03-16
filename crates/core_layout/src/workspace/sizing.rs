@@ -19,6 +19,12 @@ impl Workspace {
         self.window_min_widths.remove(&window_id);
     }
 
+    /// Clear all minimum-width constraints. Called on display/theme changes
+    /// because the border metrics used to compute them are no longer valid.
+    pub fn clear_all_min_widths(&mut self) {
+        self.window_min_widths.clear();
+    }
+
     /// Get the effective minimum width for a column, considering all
     /// non-minimized windows in it that have known min-width constraints.
     pub(crate) fn column_effective_min_width(&self, column: &Column) -> i32 {
@@ -31,59 +37,28 @@ impl Workspace {
     }
 
     /// Adjust stored column widths to respect known min-width constraints.
-    /// Columns containing min-width windows are widened; other active columns
-    /// are shrunk proportionally so the total strip width stays the same.
+    /// Columns containing min-width windows are widened to their minimum.
+    /// Flexible columns keep their original widths — the total strip may grow,
+    /// which is correct for a scroll-first tiling WM.  (Earlier versions
+    /// shrunk flexible columns proportionally, but that caused cumulative
+    /// narrowing on display/theme changes.)
     /// Returns `true` if any column was resized.
     pub fn apply_min_width_constraints(&mut self) -> bool {
         if self.window_min_widths.is_empty() {
             return false;
         }
-        let mut excess = 0i32;
-        let mut flexible_total = 0i32;
-        let mut constrained = Vec::new();
-
-        for (col_idx, column) in self.columns.iter().enumerate() {
-            if !self.is_column_active(column) {
+        let mut changed = false;
+        for col_idx in 0..self.columns.len() {
+            if !self.is_column_active(&self.columns[col_idx]) {
                 continue;
             }
-            let min_w = self.column_effective_min_width(column);
-            if min_w > column.width {
-                excess += min_w - column.width;
-                constrained.push((col_idx, min_w));
-            } else {
-                flexible_total += column.width;
+            let min_w = self.column_effective_min_width(&self.columns[col_idx]);
+            if min_w > self.columns[col_idx].width {
+                self.columns[col_idx].width = min_w;
+                changed = true;
             }
         }
-        if excess == 0 {
-            return false;
-        }
-
-        // Widen constrained columns
-        for &(col_idx, min_w) in &constrained {
-            self.columns[col_idx].width = min_w;
-        }
-
-        // Shrink flexible columns proportionally
-        if flexible_total > 0 {
-            let mut remaining = excess;
-            let minimized = &self.minimized_windows;
-            for (col_idx, column) in self.columns.iter_mut().enumerate() {
-                if constrained.iter().any(|&(ci, _)| ci == col_idx) {
-                    continue;
-                }
-                let is_active = column.windows().iter().any(|w| !minimized.contains(w));
-                if !is_active {
-                    continue;
-                }
-                let share = ((column.width as f64 / flexible_total as f64) * excess as f64)
-                    .round() as i32;
-                let shrink = share.min(remaining).min(column.width - MIN_COLUMN_WIDTH).max(0);
-                column.width -= shrink;
-                remaining -= shrink;
-            }
-        }
-
-        true
+        changed
     }
 
     // ========================================================================

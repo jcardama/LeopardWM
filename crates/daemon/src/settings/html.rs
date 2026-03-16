@@ -54,6 +54,15 @@ pub const SETTINGS_HTML: &str = r##"<!DOCTYPE html>
   --accent-text: #ffffff;
   --danger: #c42b1c;
 
+  --info-bg: rgba(0, 120, 212, 0.06);
+  --info-stroke: #0078d4;
+  --success-bg: rgba(16, 124, 16, 0.06);
+  --success-stroke: #107c10;
+  --warning-bg: rgba(255, 152, 0, 0.06);
+  --warning-stroke: #ff9800;
+  --error-bg: rgba(200, 43, 28, 0.06);
+  --error-stroke: var(--danger);
+
   --toggle-off-stroke: rgba(0,0,0,0.45);
   --toggle-off-thumb: rgba(0,0,0,0.61);
   --toggle-on-thumb: #ffffff;
@@ -95,12 +104,80 @@ pub const SETTINGS_HTML: &str = r##"<!DOCTYPE html>
     --accent-text: #003046;
     --danger: #ff99a4;
 
+    --info-bg: rgba(118, 185, 237, 0.10);
+    --success-bg: rgba(109, 202, 70, 0.10);
+    --warning-bg: rgba(255, 185, 0, 0.10);
+    --error-bg: rgba(255, 153, 164, 0.08);
+
     --toggle-off-stroke: rgba(255,255,255,0.54);
     --toggle-off-thumb: rgba(255,255,255,0.77);
     --toggle-on-thumb: #1a1a1a;
 
     --scrollbar-thumb: rgba(255,255,255,0.37);
     --shadow: 0 2px 8px rgba(0,0,0,0.36), 0 0 1px rgba(0,0,0,0.24);
+  }
+}
+
+/* ── High Contrast / Forced Colors ─────────────────────────────────── */
+@media (forced-colors: active) {
+  html, body {
+    background: Canvas !important;
+    color: CanvasText !important;
+  }
+  .sidebar {
+    background: Canvas !important;
+    border-color: CanvasText !important;
+  }
+  .nav-item {
+    color: CanvasText !important;
+    background: transparent !important;
+    forced-color-adjust: none;
+  }
+  .nav-item:hover, .nav-item.active {
+    background: Highlight !important;
+    color: HighlightText !important;
+  }
+  .nav-item.active::before {
+    background: HighlightText !important;
+  }
+  .nav-item .nav-icon {
+    stroke: currentColor !important;
+  }
+  .section-title {
+    color: CanvasText !important;
+  }
+  .card {
+    background: Canvas !important;
+    border-color: CanvasText !important;
+  }
+  .field + .field {
+    border-color: GrayText !important;
+  }
+  .field-label, .field-desc {
+    color: CanvasText !important;
+  }
+  input, select, button, .combobox-trigger {
+    background: ButtonFace !important;
+    color: ButtonText !important;
+    border-color: ButtonBorder !important;
+  }
+  .info-bar {
+    background: Canvas !important;
+    border-color: Highlight !important;
+  }
+  .info-bar-icon { fill: CanvasText !important; }
+  .info-bar-title, .info-bar-message { color: CanvasText !important; }
+  .combobox-popup {
+    background: Canvas !important;
+    border-color: CanvasText !important;
+  }
+  .combobox-option {
+    color: CanvasText !important;
+    background: transparent !important;
+  }
+  .combobox-option:hover, .combobox-option.selected {
+    background: Highlight !important;
+    color: HighlightText !important;
   }
 }
 
@@ -625,6 +702,31 @@ input[type="range"]::-webkit-slider-thumb {
   padding: 1px 4px;
   border-radius: 3px;
 }
+
+/* ── InfoBar (WinUI 3 Fluent) ──────────────────────────────────────── */
+.info-bar {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 16px;
+  border-radius: var(--ctrl-radius);
+  border: 1px solid var(--divider-stroke);
+  border-left: 3px solid var(--info-stroke);
+  background: var(--info-bg);
+  margin: 8px 0;
+}
+.info-bar-icon { flex-shrink: 0; width: 16px; height: 16px; margin-top: 2px; fill: var(--info-stroke); }
+.info-bar-content { flex: 1; min-width: 0; }
+.info-bar-title { font-size: 14px; line-height: 20px; font-weight: 600; color: var(--text-primary); }
+.info-bar-message { font-size: 12px; line-height: 16px; color: var(--text-secondary); margin-top: 2px; }
+.info-bar[hidden] { display: none; }
+.info-bar.success { border-left-color: var(--success-stroke); background: var(--success-bg); }
+.info-bar.success .info-bar-icon { fill: var(--success-stroke); }
+.info-bar.warning { border-left-color: var(--warning-stroke); background: var(--warning-bg); }
+.info-bar.warning .info-bar-icon { fill: var(--warning-stroke); }
+.info-bar.error  { border-left-color: var(--error-stroke); background: var(--error-bg); }
+.info-bar.error .info-bar-icon { fill: var(--error-stroke); }
+
 </style>
 </head>
 <body>
@@ -727,6 +829,15 @@ input[type="range"]::-webkit-slider-thumb {
       <div id="sec-appearance" class="section">
         <h2 class="section-title">Appearance</h2>
         <div class="card">
+          <div class="info-bar" id="hc-info-bar" hidden>
+            <svg class="info-bar-icon" viewBox="0 0 16 16">
+              <path d="M8 1a7 7 0 100 14A7 7 0 008 1zm-.75 3.5a.75.75 0 011.5 0v4a.75.75 0 01-1.5 0v-4zm.75 7a.75.75 0 110-1.5.75.75 0 010 1.5z"/>
+            </svg>
+            <div class="info-bar-content">
+              <div class="info-bar-title">High contrast mode</div>
+              <div class="info-bar-message">Border color is overridden by the system highlight color.</div>
+            </div>
+          </div>
           <div class="field">
             <div class="field-info"><div class="field-label">Active border</div><div class="field-desc">Highlight the focused window border</div></div>
             <label class="toggle"><input type="checkbox" id="appearance-active_border"><span class="track"></span><span class="thumb"></span></label>
@@ -958,6 +1069,16 @@ document.addEventListener('click', function() {
   document.querySelectorAll('.combobox.open').forEach(function(cb) { cb.classList.remove('open'); });
 });
 
+/* ── High Contrast live detection ─────────────────────────────────── */
+if (window.matchMedia) {
+  window.matchMedia('(forced-colors: active)').addEventListener('change', function(e) {
+    var bar = document.getElementById('hc-info-bar');
+    var picker = document.getElementById('appearance-active_border_color');
+    if (bar) bar.hidden = !e.matches;
+    if (picker) picker.disabled = e.matches;
+  });
+}
+
 /* ── Helpers ─────────────────────────────────────────────────────────── */
 function val(id) { return document.getElementById(id).value; }
 function num(id) { return parseInt(document.getElementById(id).value, 10) || 0; }
@@ -1020,6 +1141,11 @@ function init(cfg) {
   setVal('appearance-active_border_color', hexToInput(cfg.appearance.active_border_color));
   setVal('appearance-active_border_width', cfg.appearance.active_border_width);
   setCb('cb-appearance-active_border_position', cfg.appearance.active_border_position);
+
+  if (cfg.high_contrast) {
+    document.getElementById('hc-info-bar').hidden = false;
+    document.getElementById('appearance-active_border_color').disabled = true;
+  }
 
   setChecked('behavior-focus_new_windows', cfg.behavior.focus_new_windows);
   setChecked('behavior-track_focus_changes', cfg.behavior.track_focus_changes);
