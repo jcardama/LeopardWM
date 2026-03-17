@@ -172,6 +172,8 @@ enum Commands {
         #[arg(short, long, value_parser = parse_set_width_fraction)]
         fraction: f64,
     },
+    /// Center the focused column in the viewport
+    CenterColumn,
     /// Equalize all column widths
     EqualizeWidths,
     /// Cycle focused column width up through presets
@@ -371,6 +373,7 @@ fn to_ipc_command(cmd: &Commands) -> IpcCommand {
         Commands::SetWidth { fraction } => IpcCommand::SetColumnWidth {
             fraction: *fraction,
         },
+        Commands::CenterColumn => IpcCommand::CenterColumn,
         Commands::EqualizeWidths => IpcCommand::EqualizeColumnWidths,
         Commands::CycleWidthUp => IpcCommand::CycleWidthUp,
         Commands::CycleWidthDown => IpcCommand::CycleWidthDown,

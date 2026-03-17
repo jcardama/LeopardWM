@@ -48,6 +48,8 @@ pub struct FloatingWindow {
 /// 3. **Valid column widths:** All column widths are >= `MIN_COLUMN_WIDTH` (100px).
 /// 4. **Valid scroll range:** `0.0 <= scroll_offset <= max_scroll` where
 ///    `max_scroll = (total_width() - viewport_width).max(0)`.
+///    Exception: when `center_past_edges` is true, `scroll_offset` may be
+///    negative (centering first column) or exceed `max_scroll` (last column).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Workspace {
     /// Columns in the workspace, ordered left to right.
@@ -102,6 +104,9 @@ pub struct Workspace {
     /// Snap scroll instantly instead of animating (Windows "Show animations" off).
     #[serde(skip)]
     pub(crate) reduce_motion: bool,
+    /// Whether center-column can scroll past content edges.
+    #[serde(skip)]
+    pub(crate) center_past_edges: bool,
 }
 
 impl Default for Workspace {
@@ -125,6 +130,7 @@ impl Default for Workspace {
             window_min_widths: HashMap::new(),
             float_origin_column: HashMap::new(),
             reduce_motion: false,
+            center_past_edges: false,
         }
     }
 }
@@ -376,6 +382,11 @@ impl Workspace {
     /// Set whether to skip scroll animations (snap instantly).
     pub fn set_reduce_motion(&mut self, reduce: bool) {
         self.reduce_motion = reduce;
+    }
+
+    /// Set whether center-column can scroll past content edges.
+    pub fn set_center_past_edges(&mut self, allow: bool) {
+        self.center_past_edges = allow;
     }
 
     /// Calculate the x-coordinate of a column's left edge on the strip.

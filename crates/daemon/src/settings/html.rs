@@ -804,6 +804,10 @@ input[type="range"]::-webkit-slider-thumb {
               </div>
             </div>
           </div>
+          <div class="field">
+            <div class="field-info"><div class="field-label">Center past edges</div><div class="field-desc">Allow centering to scroll past content boundaries</div></div>
+            <label class="toggle"><input type="checkbox" id="layout-center_past_edges"><span class="track"></span><span class="thumb"></span></label>
+          </div>
         </div>
         <h3 class="section-subtitle">Width presets</h3>
         <p class="section-desc">Column width presets as viewport fractions. The first preset is the default width for new columns.</p>
@@ -1144,6 +1148,7 @@ function init(cfg) {
   document.getElementById('height-presets-body').innerHTML = '';
   (cfg.layout.height_presets || [0.333,0.5,0.667]).forEach(function(v) { addPresetRow('height', v); });
   setCb('cb-layout-centering_mode', cfg.layout.centering_mode);
+  setChecked('layout-center_past_edges', cfg.layout.center_past_edges);
 
   setChecked('appearance-active_border', cfg.appearance.active_border);
   setVal('appearance-active_border_color', hexToInput(cfg.appearance.active_border_color));
@@ -1202,7 +1207,7 @@ var CMD_LABELS = {
   expel_to_left: 'Expel to left', expel_to_right: 'Expel to right',
   move_window_up: 'Move window up', move_window_down: 'Move window down',
   cycle_width_down: 'Cycle width down', cycle_width_up: 'Cycle width up',
-  equalize_widths: 'Equalize widths',
+  equalize_widths: 'Equalize widths', center_column: 'Center column',
   cycle_height_down: 'Cycle height down', cycle_height_up: 'Cycle height up',
   equalize_heights: 'Equalize heights',
   focus_monitor_left: 'Focus monitor left', focus_monitor_right: 'Focus monitor right',
@@ -1234,6 +1239,7 @@ var CMD_ORDER = [
   'cycle_height_down', 'cycle_height_up', 'equalize_heights',
   'focus_monitor_left', 'focus_monitor_right',
   'move_to_monitor_left', 'move_to_monitor_right',
+  'center_column',
   'close_window', 'toggle_floating', 'toggle_fullscreen',
   'toggle_pause', 'refresh', 'reload',
   'panic_revert',
@@ -1258,6 +1264,7 @@ var DEFAULT_HOTKEYS = {
   "Ctrl+Alt+Shift+0": "equalize_heights",
   "Ctrl+Alt+Win+Comma": "focus_monitor_left", "Ctrl+Alt+Win+Period": "focus_monitor_right",
   "Ctrl+Alt+Win+Shift+Comma": "move_to_monitor_left", "Ctrl+Alt+Win+Shift+Period": "move_to_monitor_right",
+  "Ctrl+Alt+C": "center_column",
   "Ctrl+Alt+W": "close_window", "Ctrl+Alt+F": "toggle_floating",
   "Ctrl+Alt+Shift+F": "toggle_fullscreen", "Ctrl+Alt+P": "toggle_pause",
   "Ctrl+Alt+R": "refresh", "Ctrl+Alt+Shift+R": "reload",
@@ -1400,7 +1407,8 @@ function readConfig() {
       outer_gap_bottom: num('layout-outer_gap_bottom'),
       width_presets: readPresets('width'),
       height_presets: readPresets('height'),
-      centering_mode: cbVal('cb-layout-centering_mode')
+      centering_mode: cbVal('cb-layout-centering_mode'),
+      center_past_edges: checked('layout-center_past_edges')
     },
     appearance: {
       active_border: checked('appearance-active_border'),

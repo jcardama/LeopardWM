@@ -276,6 +276,7 @@ impl AppState {
             let vw = monitor.work_area.width;
             workspace.set_default_column_width(config.layout.default_column_width_px(vw));
             workspace.set_centering_mode(config.layout.centering_mode.into());
+            workspace.set_center_past_edges(config.layout.center_past_edges);
             workspace.set_reduce_motion(!leopardwm_platform_win32::are_animations_enabled());
 
             if monitor.is_primary {
@@ -379,6 +380,7 @@ impl AppState {
                 .unwrap_or(FALLBACK_VIEWPORT_WIDTH);
             ws.set_default_column_width(config.layout.default_column_width_px(vw));
             ws.set_centering_mode(config.layout.centering_mode.into());
+            ws.set_center_past_edges(config.layout.center_past_edges);
             ws.set_reduce_motion(self.reduce_motion);
             ws_vec.push(ws);
         }

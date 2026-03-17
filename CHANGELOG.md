@@ -9,6 +9,9 @@ All notable changes to LeopardWM will be documented in this file.
 - Scroll wheel navigation — hold a configurable modifier (default Ctrl+Alt) and scroll the mouse wheel to cycle focus between windows linearly across columns
 - `focus_next` / `focus_prev` commands — traverse windows top-to-bottom within columns, then left-to-right across columns, wrapping around at boundaries
 - Configurable scroll modifier in the Hotkeys tab, scroll up/down command mapping in the Gestures tab
+- `center_column` command (`Ctrl+Alt+C`) — centers the focused column in the viewport with smooth scroll animation, regardless of centering mode
+- `center_past_edges` layout option — allows center-column to scroll past content boundaries, truly centering first/last columns with empty space on the sides
+- CLI `center-column` subcommand for scripting
 
 ### Bug Fixes
 

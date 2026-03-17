@@ -100,6 +100,7 @@ impl AppState {
                     self.config.layout.default_column_width_px(viewport_width),
                 );
                 workspace.set_centering_mode(self.config.layout.centering_mode.into());
+                workspace.set_center_past_edges(self.config.layout.center_past_edges);
 
                 // Recalculate scroll offset for new gap values so all columns
                 // are positioned correctly (not just the rightmost ones).
@@ -336,6 +337,7 @@ impl AppState {
                             .unwrap_or(FALLBACK_VIEWPORT_WIDTH);
                         ws.set_default_column_width(self.config.layout.default_column_width_px(vw));
                         ws.set_centering_mode(self.config.layout.centering_mode.into());
+                        ws.set_center_past_edges(self.config.layout.center_past_edges);
                         ws.set_reduce_motion(self.reduce_motion);
                         ws_vec.push(ws);
                     }
@@ -462,6 +464,7 @@ impl AppState {
                     self.config.layout.default_column_width_px(vw),
                 );
                 workspace.set_centering_mode(self.config.layout.centering_mode.into());
+                workspace.set_center_past_edges(self.config.layout.center_past_edges);
                 workspace.set_reduce_motion(self.reduce_motion);
                 self.workspaces.insert(monitor.id, vec![workspace]);
                 self.active_workspace.insert(monitor.id, 0);

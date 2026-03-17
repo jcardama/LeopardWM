@@ -455,6 +455,12 @@ impl AppState {
                     info!("Set column width fraction to {:.3}", fraction);
                 })
             }
+            IpcCommand::CenterColumn => {
+                self.execute_workspace_command(false, false, |ws, vw| {
+                    ws.center_focused_column_animated(vw);
+                    info!("Centered focused column");
+                })
+            }
             IpcCommand::EqualizeColumnWidths => {
                 self.execute_workspace_command(true, false, |ws, vw| {
                     ws.equalize_column_widths(vw);

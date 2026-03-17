@@ -225,6 +225,8 @@ pub enum IpcCommand {
         /// Fraction of viewport width (e.g., 0.333, 0.5, 0.667).
         fraction: f64,
     },
+    /// Center the focused column in the viewport.
+    CenterColumn,
     /// Equalize all column widths.
     EqualizeColumnWidths,
     /// Cycle focused column width up through presets.

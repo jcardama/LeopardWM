@@ -74,6 +74,12 @@ pub struct LayoutConfig {
     #[serde(default)]
     pub centering_mode: CenteringModeConfig,
 
+    /// Whether center-column can scroll past content edges.
+    /// When true, the first/last column will be truly centered with empty space.
+    /// When false (default), scroll is clamped to content boundaries.
+    #[serde(default = "default_false")]
+    pub center_past_edges: bool,
+
     /// Width presets for cycling (fractions of usable viewport width).
     /// The first preset is also used as the default width for new columns.
     #[serde(default = "default_width_presets")]
@@ -115,6 +121,7 @@ impl Default for LayoutConfig {
             outer_gap_top: default_outer_gap(),
             outer_gap_bottom: default_outer_gap(),
             centering_mode: CenteringModeConfig::default(),
+            center_past_edges: false,
             width_presets: default_width_presets(),
             height_presets: default_height_presets(),
             outer_gap: None,
@@ -466,6 +473,9 @@ impl Default for HotkeyConfig {
             "move_to_monitor_right".to_string(),
         );
 
+        // Center focused column in viewport
+        bindings.insert("Ctrl+Alt+C".to_string(), "center_column".to_string());
+
         // Window management
         bindings.insert("Ctrl+Alt+W".to_string(), "close_window".to_string());
         bindings.insert("Ctrl+Alt+F".to_string(), "toggle_floating".to_string());
@@ -716,6 +726,7 @@ pub fn parse_command(cmd: &str) -> Option<leopardwm_ipc::IpcCommand> {
         "width_third" => Some(IpcCommand::SetColumnWidth { fraction: 0.333 }),
         "width_half" => Some(IpcCommand::SetColumnWidth { fraction: 0.5 }),
         "width_two_thirds" => Some(IpcCommand::SetColumnWidth { fraction: 0.667 }),
+        "center_column" => Some(IpcCommand::CenterColumn),
         "equalize_widths" => Some(IpcCommand::EqualizeColumnWidths),
         "move_window_left" => Some(IpcCommand::MoveWindowLeft),
         "move_window_right" => Some(IpcCommand::MoveWindowRight),
@@ -1248,7 +1259,7 @@ mod tests {
     #[test]
     fn test_hotkey_config_default() {
         let config = HotkeyConfig::default();
-        assert_eq!(config.bindings.len(), 47);
+        assert_eq!(config.bindings.len(), 48);
         assert_eq!(
             config.bindings.get("Ctrl+Alt+H"),
             Some(&"focus_left".to_string())
