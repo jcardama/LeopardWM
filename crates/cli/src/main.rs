@@ -174,6 +174,8 @@ enum Commands {
     },
     /// Center the focused column in the viewport
     CenterColumn,
+    /// Maximize the focused column to fill the viewport width
+    MaximizeColumn,
     /// Equalize all column widths
     EqualizeWidths,
     /// Cycle focused column width up through presets
@@ -374,6 +376,7 @@ fn to_ipc_command(cmd: &Commands) -> IpcCommand {
             fraction: *fraction,
         },
         Commands::CenterColumn => IpcCommand::CenterColumn,
+        Commands::MaximizeColumn => IpcCommand::MaximizeColumn,
         Commands::EqualizeWidths => IpcCommand::EqualizeColumnWidths,
         Commands::CycleWidthUp => IpcCommand::CycleWidthUp,
         Commands::CycleWidthDown => IpcCommand::CycleWidthDown,

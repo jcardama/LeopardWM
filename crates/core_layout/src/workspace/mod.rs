@@ -107,6 +107,18 @@ pub struct Workspace {
     /// Whether center-column can scroll past content edges.
     #[serde(skip)]
     pub(crate) center_past_edges: bool,
+    /// State for maximized column toggle (fills viewport width).
+    #[serde(skip)]
+    pub(crate) maximized_column: Option<MaximizedColumnState>,
+}
+
+/// State saved when a column is maximized to fill the viewport width.
+#[derive(Debug, Clone)]
+pub struct MaximizedColumnState {
+    /// The original column width before maximizing.
+    pub original_width: i32,
+    /// Sentinel window ID used to relocate the column after index shifts.
+    pub sentinel_window: WindowId,
 }
 
 impl Default for Workspace {
@@ -131,6 +143,7 @@ impl Default for Workspace {
             float_origin_column: HashMap::new(),
             reduce_motion: false,
             center_past_edges: false,
+            maximized_column: None,
         }
     }
 }

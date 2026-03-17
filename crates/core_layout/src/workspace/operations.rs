@@ -92,6 +92,7 @@ impl Workspace {
 
     /// Resize the focused column by a delta amount.
     pub fn resize_focused_column(&mut self, delta: i32) {
+        self.maximized_column = None;
         if let Some(column) = self.columns.get_mut(self.focused_column) {
             let new_width = column.width.saturating_add(delta).max(MIN_COLUMN_WIDTH);
             column.width = new_width;

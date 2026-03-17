@@ -65,10 +65,58 @@ impl Workspace {
     // Column Width Presets
     // ========================================================================
 
+    /// Toggle maximize on the focused column.
+    ///
+    /// If currently maximized (and the sentinel window is still in the same column),
+    /// restores the original width and returns `false`.
+    /// Otherwise, saves the current width and expands the column to fill the
+    /// visible viewport width, returning `true`.
+    ///
+    /// Exits fullscreen first if active (same as toggle_floating).
+    pub fn toggle_maximize_column(&mut self, viewport_width: i32) -> bool {
+        // Exit fullscreen first
+        if self.fullscreen_window.is_some() {
+            self.fullscreen_window = None;
+        }
+
+        let vis_w = self.visible_width(viewport_width);
+
+        // If already maximized, try to restore
+        if let Some(state) = self.maximized_column.take() {
+            // Find the column containing the sentinel window
+            if let Some((col_idx, _)) = self.find_window_location(state.sentinel_window) {
+                if let Some(column) = self.columns.get_mut(col_idx) {
+                    column.set_width(state.original_width);
+                }
+            }
+            return false;
+        }
+
+        // Maximize the focused column
+        if let Some(column) = self.columns.get(self.focused_column) {
+            let original_width = column.width;
+            let sentinel_window = match column.windows().first() {
+                Some(&wid) => wid,
+                None => return false,
+            };
+            if let Some(column) = self.columns.get_mut(self.focused_column) {
+                column.set_width(vis_w);
+            }
+            self.maximized_column = Some(super::MaximizedColumnState {
+                original_width,
+                sentinel_window,
+            });
+            return true;
+        }
+
+        false
+    }
+
     /// Set the focused column's width as a fraction of the usable viewport width.
     /// The usable width accounts for outer gaps and inter-column gaps.
     /// Fraction should be between 0.1 and 1.0.
     pub fn set_focused_column_width_fraction(&mut self, fraction: f64, viewport_width: i32) {
+        self.maximized_column = None;
         let fraction = fraction.clamp(0.1, 1.0);
         let base = self.width_base(viewport_width);
         let gap = self.gap.max(0);
@@ -83,6 +131,7 @@ impl Workspace {
     /// Uses gap-aware formula so equalized columns perfectly fill the viewport.
     /// Only counts active (non-fully-minimized) columns to match layout calculations.
     pub fn equalize_column_widths(&mut self, viewport_width: i32) {
+        self.maximized_column = None;
         if self.columns.is_empty() {
             return;
         }
@@ -169,6 +218,7 @@ impl Workspace {
 
     /// Cycle the focused column width up through the given presets.
     pub fn cycle_width_up(&mut self, presets: &[f64], viewport_width: i32) {
+        self.maximized_column = None;
         if presets.is_empty() {
             return;
         }
@@ -195,6 +245,7 @@ impl Workspace {
 
     /// Cycle the focused column width down through the given presets.
     pub fn cycle_width_down(&mut self, presets: &[f64], viewport_width: i32) {
+        self.maximized_column = None;
         if presets.is_empty() {
             return;
         }

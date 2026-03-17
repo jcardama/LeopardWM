@@ -6,6 +6,7 @@ All notable changes to LeopardWM will be documented in this file.
 
 ### Features
 
+- `maximize_column` command (`Ctrl+Alt+M`) — toggle the focused column to fill the viewport width; invoke again to restore original width
 - Scroll wheel navigation — hold a configurable modifier (default Ctrl+Alt) and scroll the mouse wheel to cycle focus between windows linearly across columns
 - `focus_next` / `focus_prev` commands — traverse windows top-to-bottom within columns, then left-to-right across columns, wrapping around at boundaries
 - Configurable scroll modifier in the Hotkeys tab, scroll up/down command mapping in the Gestures tab
@@ -15,6 +16,7 @@ All notable changes to LeopardWM will be documented in this file.
 
 ### Bug Fixes
 
+- Fix `toggle_fullscreen` not animating the transition when entering or exiting fullscreen
 - Fix rapid mouse scrolling causing focus border to flicker between windows — physical mouse wheel events are now distinguished from touchpad-injected events via the LLMHF_INJECTED flag
 - Harden EVENT_OBJECT_FOCUS handling — verify the window is actually the foreground window before emitting a Focused event, preventing spurious focus switches during scroll
 

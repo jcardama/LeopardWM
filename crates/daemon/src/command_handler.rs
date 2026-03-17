@@ -441,7 +441,7 @@ impl AppState {
                 IpcResponse::Ok
             }
             IpcCommand::ToggleFullscreen => {
-                self.execute_workspace_command(false, false, |ws, _vw| {
+                self.execute_workspace_command(true, false, |ws, _vw| {
                     let entering = ws.toggle_fullscreen();
                     info!("Fullscreen: {}", if entering { "on" } else { "off" });
                 })
@@ -459,6 +459,13 @@ impl AppState {
                 self.execute_workspace_command(false, false, |ws, vw| {
                     ws.center_focused_column_animated(vw);
                     info!("Centered focused column");
+                })
+            }
+            IpcCommand::MaximizeColumn => {
+                self.execute_workspace_command(true, false, |ws, vw| {
+                    let entering = ws.toggle_maximize_column(vw);
+                    ws.center_focused_column_animated(vw);
+                    info!("Maximize column: {}", if entering { "on" } else { "off" });
                 })
             }
             IpcCommand::EqualizeColumnWidths => {

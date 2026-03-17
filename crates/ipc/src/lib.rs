@@ -227,6 +227,8 @@ pub enum IpcCommand {
     },
     /// Center the focused column in the viewport.
     CenterColumn,
+    /// Toggle the focused column to fill the viewport width.
+    MaximizeColumn,
     /// Equalize all column widths.
     EqualizeColumnWidths,
     /// Cycle focused column width up through presets.
@@ -465,6 +467,7 @@ mod tests {
             IpcCommand::EqualizeColumnHeights,
             IpcCommand::QueryStatus,
             IpcCommand::HealthCheck,
+            IpcCommand::MaximizeColumn,
             IpcCommand::SwitchWorkspace { index: 1 },
             IpcCommand::SwitchWorkspace { index: 9 },
             IpcCommand::MoveToWorkspace { index: 1 },

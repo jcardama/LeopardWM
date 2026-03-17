@@ -142,6 +142,13 @@ impl Workspace {
                 if self.fullscreen_window == Some(window_id) {
                     self.fullscreen_window = None;
                 }
+                if self
+                    .maximized_column
+                    .as_ref()
+                    .is_some_and(|m| m.sentinel_window == window_id)
+                {
+                    self.maximized_column = None;
+                }
 
                 // If column is now empty, remove it
                 if column.is_empty() {
