@@ -1143,6 +1143,7 @@ fn make_banner_info() -> StartupInfo {
         safe_mode: false,
         no_hotkeys: false,
         reduce_motion: false,
+        on_battery_or_saver: false,
         high_contrast: false,
     }
 }

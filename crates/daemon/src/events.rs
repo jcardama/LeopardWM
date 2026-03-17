@@ -31,6 +31,8 @@ pub(crate) enum DaemonEvent {
     FocusFollowsMouse { window_id: u64 },
     /// Debounced display change — fires after WM_DISPLAYCHANGE settles.
     DisplayChangeSettled,
+    /// Power state changed (AC/battery or power saver toggled).
+    PowerStateChanged { on_battery_or_saver: bool },
     /// Shutdown signal.
     Shutdown,
 }

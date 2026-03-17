@@ -18,6 +18,12 @@ use windows::Win32::UI::WindowsAndMessaging::{
 /// Window message for display configuration changes.
 const WM_DISPLAYCHANGE: u32 = 0x007E;
 
+/// Window message for power state changes.
+const WM_POWERBROADCAST: u32 = 0x0218;
+
+/// Power setting change notification (wparam for WM_POWERBROADCAST).
+const PBT_POWERSETTINGCHANGE: usize = 0x8013;
+
 /// Unique identifier for a registered hotkey.
 pub type HotkeyId = i32;
 
@@ -110,6 +116,10 @@ static HOTKEY_SENDER: std::sync::Mutex<Option<mpsc::Sender<HotkeyEvent>>> =
 static DISPLAY_CHANGE_SENDER: std::sync::Mutex<Option<mpsc::Sender<WindowEvent>>> =
     std::sync::Mutex::new(None);
 
+/// Global sender for power state change events.
+static POWER_STATE_SENDER: std::sync::Mutex<Option<mpsc::Sender<bool>>> =
+    std::sync::Mutex::new(None);
+
 /// Custom message to signal the hotkey thread to stop.
 const WM_QUIT_HOTKEY_THREAD: u32 = WM_USER + 1;
 
@@ -118,6 +128,11 @@ fn clear_hotkey_globals() {
     *sender = None;
     drop(sender);
     let mut sender = DISPLAY_CHANGE_SENDER
+        .lock()
+        .unwrap_or_else(recover_poisoned_mutex);
+    *sender = None;
+    drop(sender);
+    let mut sender = POWER_STATE_SENDER
         .lock()
         .unwrap_or_else(recover_poisoned_mutex);
     *sender = None;
@@ -228,6 +243,18 @@ pub fn set_display_change_sender(sender: mpsc::Sender<WindowEvent>) -> Result<()
     Ok(())
 }
 
+/// Register a sender for power state change events.
+///
+/// This allows the hotkey window to forward `WM_POWERBROADCAST` notifications
+/// to the daemon event loop. Call this before `register_hotkeys`.
+pub fn set_power_state_sender(sender: mpsc::Sender<bool>) -> Result<(), Win32Error> {
+    let mut guard = POWER_STATE_SENDER.lock().map_err(|_| {
+        Win32Error::HookInstallFailed("Power state sender mutex poisoned".to_string())
+    })?;
+    *guard = Some(sender);
+    Ok(())
+}
+
 /// Register global hotkeys and start listening for them.
 ///
 /// Returns a handle that must be kept alive to receive hotkey events,
@@ -332,6 +359,36 @@ pub fn register_hotkeys(
                         err,
                     );
                 }
+            }
+
+            // Register for power state notifications on this window
+            {
+                use windows::Win32::System::Power::RegisterPowerSettingNotification;
+                use windows::Win32::UI::WindowsAndMessaging::REGISTER_NOTIFICATION_FLAGS;
+
+                // GUID_ACDC_POWER_SOURCE — fires on AC/battery/UPS transitions
+                const GUID_ACDC_POWER_SOURCE: windows::core::GUID =
+                    windows::core::GUID::from_u128(0x5d3e9a59_e9d5_4b00_a6bd_ff34ff516548);
+                // GUID_POWER_SAVING_STATUS — fires when power saver toggles
+                const GUID_POWER_SAVING_STATUS: windows::core::GUID =
+                    windows::core::GUID::from_u128(0xe00958c0_c213_4ace_ac77_fecced2eeea5);
+
+                let handle = windows::Win32::Foundation::HANDLE(hwnd.0);
+                if let Err(e) = RegisterPowerSettingNotification(
+                    handle,
+                    &GUID_ACDC_POWER_SOURCE,
+                    REGISTER_NOTIFICATION_FLAGS(0),
+                ) {
+                    tracing::warn!("Failed to register GUID_ACDC_POWER_SOURCE notification: {}", e);
+                }
+                if let Err(e) = RegisterPowerSettingNotification(
+                    handle,
+                    &GUID_POWER_SAVING_STATUS,
+                    REGISTER_NOTIFICATION_FLAGS(0),
+                ) {
+                    tracing::warn!("Failed to register GUID_POWER_SAVING_STATUS notification: {}", e);
+                }
+                tracing::debug!("Registered power setting notifications");
             }
 
             // Send initialization result (hwnd as isize for Send safety)
@@ -466,6 +523,23 @@ fn hotkey_window_proc_inner(
             }
 
             windows::Win32::Foundation::LRESULT(0)
+        }
+        WM_POWERBROADCAST => {
+            if wparam.0 == PBT_POWERSETTINGCHANGE {
+                let on_battery_or_saver = crate::utils::is_on_battery_or_power_saver();
+                tracing::debug!("Power state changed: on_battery_or_saver={}", on_battery_or_saver);
+
+                let sender_guard = POWER_STATE_SENDER
+                    .lock()
+                    .unwrap_or_else(recover_poisoned_mutex);
+                if let Some(sender) = sender_guard.as_ref() {
+                    let _ = sender.send(on_battery_or_saver);
+                }
+
+                windows::Win32::Foundation::LRESULT(1) // TRUE = processed
+            } else {
+                unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+            }
         }
         _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
     }

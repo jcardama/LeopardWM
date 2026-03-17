@@ -119,6 +119,9 @@ impl AppState {
             }
         }
 
+        // Re-check animation state (accessibility setting + power state)
+        self.refresh_reduce_motion();
+
         info!(
             "Configuration applied to all {} workspaces",
             self.workspaces.len()
@@ -1087,6 +1090,25 @@ impl AppState {
             true
         } else {
             false
+        }
+    }
+
+    /// Recompute `reduce_motion` from the accessibility setting and power state,
+    /// propagating to all workspaces when the value changes.
+    pub(crate) fn refresh_reduce_motion(&mut self) {
+        let should_reduce =
+            !leopardwm_platform_win32::are_animations_enabled() || self.on_battery_or_saver;
+        if should_reduce != self.reduce_motion {
+            self.reduce_motion = should_reduce;
+            for ws_vec in self.workspaces.values_mut() {
+                for ws in ws_vec.iter_mut() {
+                    ws.set_reduce_motion(should_reduce);
+                }
+            }
+            info!(
+                "Animations {}",
+                if should_reduce { "disabled" } else { "enabled" }
+            );
         }
     }
 

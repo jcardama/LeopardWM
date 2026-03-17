@@ -16,6 +16,7 @@ pub struct StartupInfo {
     pub safe_mode: bool,
     pub no_hotkeys: bool,
     pub reduce_motion: bool,
+    pub on_battery_or_saver: bool,
     pub high_contrast: bool,
 }
 
@@ -60,6 +61,9 @@ pub fn format_startup_banner(info: &StartupInfo) -> String {
     writeln!(out, "  Logs:     {}", info.log_path).unwrap();
     if info.reduce_motion {
         writeln!(out, "  Motion:   reduced (animations disabled)").unwrap();
+    }
+    if info.on_battery_or_saver {
+        writeln!(out, "  Power:    battery / power saver (animations disabled)").unwrap();
     }
     if info.high_contrast {
         writeln!(out, "  Display:  high contrast").unwrap();

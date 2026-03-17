@@ -39,7 +39,8 @@ use leopardwm_platform_win32::{
     cascade_windows, enumerate_monitors, enumerate_windows, install_event_hooks,
     install_mouse_hook, overlay::OverlayWindow, parse_hotkey_string, register_gestures,
     register_hotkeys, restore_windows_moved_offscreen, set_display_change_sender,
-    set_dpi_awareness, uncloak_all_visible_windows, GestureEvent, Hotkey, HotkeyId,
+    set_dpi_awareness, set_power_state_sender, uncloak_all_visible_windows,
+    GestureEvent, Hotkey, HotkeyId,
     MonitorId, MonitorInfo, WindowEvent,
 };
 use std::collections::{HashMap, HashSet};
@@ -675,6 +676,26 @@ async fn main() -> Result<()> {
         }
     }
 
+    // Register power state sender for WM_POWERBROADCAST events
+    // Forwards AC/battery and power saver state changes to the daemon event loop
+    {
+        let (power_tx, power_rx) = std::sync::mpsc::channel::<bool>();
+        if let Err(e) = set_power_state_sender(power_tx) {
+            warn!("Failed to register power state sender: {}. Power state changes may not be detected.", e);
+        } else {
+            match spawn_forwarding_thread(
+                "power-fwd",
+                power_rx,
+                event_tx.clone(),
+                |on_battery_or_saver| DaemonEvent::PowerStateChanged { on_battery_or_saver },
+            ) {
+                Ok(handle) => thread_handles.push(handle),
+                Err(e) => warn!("{}", e),
+            }
+            info!("Power state detection enabled");
+        }
+    }
+
     // Register global hotkeys (mutable to support reload)
     let mut hotkey_state = if args.skip_hotkeys() {
         info!("Hotkeys disabled by command-line flag");
@@ -877,6 +898,7 @@ async fn main() -> Result<()> {
             safe_mode: args.safe_mode,
             no_hotkeys: args.skip_hotkeys(),
             reduce_motion: state.reduce_motion,
+            on_battery_or_saver: state.on_battery_or_saver,
             high_contrast: state.high_contrast,
         });
     }
@@ -1624,6 +1646,11 @@ async fn main() -> Result<()> {
                     }
                 }
             }
+            DaemonEvent::PowerStateChanged { on_battery_or_saver } => {
+                let mut state = state.lock().await;
+                state.on_battery_or_saver = on_battery_or_saver;
+                state.refresh_reduce_motion();
+            }
             DaemonEvent::DisplayChangeSettled => {
                 // Debounced display change — process the final monitor state after
                 // WM_DISPLAYCHANGE messages have stopped (theme/DPI transitions settled).
@@ -1641,6 +1668,7 @@ async fn main() -> Result<()> {
                     }
                 }
                 state.handle_window_event(WindowEvent::DisplayChange);
+                state.refresh_reduce_motion();
 
                 if state.is_animating() && !animation_active {
                     state.tick_animations(0);

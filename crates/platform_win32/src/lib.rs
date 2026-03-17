@@ -37,7 +37,7 @@ pub use placement::{
 };
 pub use types::{MonitorId, MonitorInfo, PlatformConfig, Win32Error, WindowInfo};
 pub use utils::{
-    are_animations_enabled, cascade_windows, close_window, get_cursor_pos,
+    are_animations_enabled, cascade_windows, close_window, get_cursor_pos, is_on_battery_or_power_saver,
     get_system_highlight_color_bgr, get_window_visible_rect, is_high_contrast_enabled,
     is_cursor_on_resize_border, is_move_offscreen_sentinel_position,
     is_move_offscreen_sentinel_rect, is_shift_key_pressed, is_valid_window,

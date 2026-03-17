@@ -2,6 +2,25 @@
 
 use crate::enumeration::{collect_all_top_level_window_ids, get_primary_monitor};
 
+/// Check if the system is running on battery power or Windows power saver is active.
+/// Returns `true` when either condition is met, signalling that animations should be disabled.
+pub fn is_on_battery_or_power_saver() -> bool {
+    use windows::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
+
+    let mut status = SYSTEM_POWER_STATUS::default();
+    unsafe {
+        if GetSystemPowerStatus(&mut status).is_ok() {
+            // ACLineStatus: 0 = offline (battery), 1 = online (AC), 255 = unknown
+            let on_battery = status.ACLineStatus == 0;
+            // SystemStatusFlag bit 0: Windows power saver is active
+            let power_saver = (status.SystemStatusFlag & 1) != 0;
+            on_battery || power_saver
+        } else {
+            false // Assume AC if the API fails
+        }
+    }
+}
+
 /// Check if Windows "Show animations" accessibility setting is enabled.
 /// Returns `false` when the user has disabled client-area animations
 /// (Settings > Accessibility > Visual effects > Animation effects).

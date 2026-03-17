@@ -211,7 +211,9 @@ pub(crate) struct AppState {
     /// distinguish transient popups (managed briefly) from real windows
     /// (managed for a long time, e.g., close-to-tray apps).
     pub(crate) window_managed_at: HashMap<u64, std::time::Instant>,
-    /// Skip animations and snap instantly (Windows "Show animations" is off).
+    /// System is on battery power or Windows power saver is active.
+    pub(crate) on_battery_or_saver: bool,
+    /// Skip animations and snap instantly (accessibility setting off or on battery/power saver).
     pub(crate) reduce_motion: bool,
     /// Windows High Contrast mode is active — override border color with system highlight.
     pub(crate) high_contrast: bool,
@@ -277,7 +279,10 @@ impl AppState {
             workspace.set_default_column_width(config.layout.default_column_width_px(vw));
             workspace.set_centering_mode(config.layout.centering_mode.into());
             workspace.set_center_past_edges(config.layout.center_past_edges);
-            workspace.set_reduce_motion(!leopardwm_platform_win32::are_animations_enabled());
+            workspace.set_reduce_motion(
+                !leopardwm_platform_win32::are_animations_enabled()
+                    || leopardwm_platform_win32::is_on_battery_or_power_saver(),
+            );
 
             if monitor.is_primary {
                 focused_monitor = monitor.id;
@@ -332,7 +337,9 @@ impl AppState {
             start_time: std::time::Instant::now(),
             recently_hidden_hwnds: HashMap::new(),
             window_managed_at: HashMap::new(),
-            reduce_motion: !leopardwm_platform_win32::are_animations_enabled(),
+            on_battery_or_saver: leopardwm_platform_win32::is_on_battery_or_power_saver(),
+            reduce_motion: !leopardwm_platform_win32::are_animations_enabled()
+                || leopardwm_platform_win32::is_on_battery_or_power_saver(),
             high_contrast: leopardwm_platform_win32::is_high_contrast_enabled(),
             layout_transition: None,
             #[cfg(test)]
