@@ -491,7 +491,7 @@ async fn main() -> Result<()> {
             info!("Detected {} monitor(s):", monitors.len());
             for m in &monitors {
                 info!(
-                    "  Monitor {}: {}x{} (work area: {}x{} at {},{}){} \"{}\"",
+                    "  Monitor {}: {}x{} (work area: {}x{} at {},{}) DPI {:.0}%{} \"{}\"",
                     m.id,
                     m.rect.width,
                     m.rect.height,
@@ -499,6 +499,7 @@ async fn main() -> Result<()> {
                     m.work_area.height,
                     m.work_area.x,
                     m.work_area.y,
+                    m.scale_factor * 100.0,
                     if m.is_primary { " [PRIMARY]" } else { "" },
                     m.device_name
                 );
@@ -516,6 +517,7 @@ async fn main() -> Result<()> {
                 work_area: Rect::new(0, 0, FALLBACK_VIEWPORT_WIDTH, FALLBACK_WORK_AREA_HEIGHT),
                 is_primary: true,
                 device_name: "Fallback".to_string(),
+                scale_factor: 1.0,
             }]
         }
     };
@@ -867,10 +869,14 @@ async fn main() -> Result<()> {
     // Print startup banner for immediate user feedback
     {
         let state = state.lock().await;
-        let monitor_names: Vec<String> = state
-            .monitors
-            .values()
+        let monitors_ordered: Vec<_> = state.monitors.values().collect();
+        let monitor_names: Vec<String> = monitors_ordered
+            .iter()
             .map(|m| m.device_name.clone())
+            .collect();
+        let monitor_dpi: Vec<f64> = monitors_ordered
+            .iter()
+            .map(|m| m.scale_factor)
             .collect();
         let window_count: usize = state.workspaces.values()
             .flat_map(|ws_vec| ws_vec.iter())
@@ -886,6 +892,7 @@ async fn main() -> Result<()> {
         print_startup_banner(&StartupInfo {
             version: env!("CARGO_PKG_VERSION").to_string(),
             monitor_names,
+            monitor_dpi,
             window_count,
             hotkeys_registered: hotkey_state.registered_count,
             hotkeys_requested: hotkey_state.requested_count,

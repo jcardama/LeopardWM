@@ -2,6 +2,14 @@
 
 use crate::enumeration::{collect_all_top_level_window_ids, get_primary_monitor};
 
+/// Scale a pixel value by the given DPI scale factor.
+///
+/// Config values are in logical pixels (96 DPI). This function converts them
+/// to physical pixels for a specific monitor's DPI.
+pub fn scale_px(value: i32, scale_factor: f64) -> i32 {
+    (value as f64 * scale_factor).round() as i32
+}
+
 /// Check if the system is running on battery power or Windows power saver is active.
 /// Returns `true` when either condition is met, signalling that animations should be disabled.
 pub fn is_on_battery_or_power_saver() -> bool {
@@ -755,6 +763,32 @@ pub fn set_dpi_awareness() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_scale_px_identity_at_100_percent() {
+        assert_eq!(scale_px(10, 1.0), 10);
+        assert_eq!(scale_px(0, 1.0), 0);
+        assert_eq!(scale_px(-5, 1.0), -5);
+    }
+
+    #[test]
+    fn test_scale_px_200_percent() {
+        assert_eq!(scale_px(10, 2.0), 20);
+        assert_eq!(scale_px(3, 2.0), 6);
+    }
+
+    #[test]
+    fn test_scale_px_150_percent_rounds() {
+        assert_eq!(scale_px(3, 1.5), 5); // 4.5 rounds to 5
+        assert_eq!(scale_px(10, 1.5), 15);
+        assert_eq!(scale_px(1, 1.5), 2); // 1.5 rounds to 2
+    }
+
+    #[test]
+    fn test_scale_px_125_percent() {
+        assert_eq!(scale_px(10, 1.25), 13); // 12.5 rounds to 13
+        assert_eq!(scale_px(8, 1.25), 10);
+    }
 
     #[test]
     fn test_is_benign_side_effect_error_only_for_nonzero_not_found() {

@@ -7,6 +7,8 @@ use tracing::warn;
 pub struct StartupInfo {
     pub version: String,
     pub monitor_names: Vec<String>,
+    /// DPI scale factors per monitor, parallel to `monitor_names`.
+    pub monitor_dpi: Vec<f64>,
     pub window_count: usize,
     pub hotkeys_registered: usize,
     pub hotkeys_requested: usize,
@@ -29,11 +31,19 @@ pub fn format_startup_banner(info: &StartupInfo) -> String {
     if info.monitor_names.is_empty() {
         writeln!(out, "  Monitors: 0 (fallback mode)").unwrap();
     } else {
+        let labels: Vec<String> = info.monitor_names.iter().enumerate().map(|(i, name)| {
+            let dpi = info.monitor_dpi.get(i).copied().unwrap_or(1.0);
+            if (dpi - 1.0).abs() < 0.01 {
+                name.clone()
+            } else {
+                format!("{} ({:.0}%)", name, dpi * 100.0)
+            }
+        }).collect();
         writeln!(
             out,
             "  Monitors: {} ({})",
             info.monitor_names.len(),
-            info.monitor_names.join(", ")
+            labels.join(", ")
         )
         .unwrap();
     }

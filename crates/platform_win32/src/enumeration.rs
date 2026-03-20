@@ -267,6 +267,18 @@ unsafe extern "system" fn enum_monitors_callback(
             .unwrap_or(info.szDevice.len());
         let device_name = String::from_utf16_lossy(&info.szDevice[..device_name_len]);
 
+        // Query per-monitor DPI for scaling gap/border values.
+        // Clamp to [1.0, 8.0] to guard against API failure returning 0 or
+        // non-finite values. Windows supports up to 500% (5.0) scaling.
+        let scale_factor = {
+            use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
+            let mut dpi_x: u32 = 96;
+            let mut dpi_y: u32 = 96;
+            let _ = GetDpiForMonitor(hmonitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y);
+            let raw = dpi_x as f64 / 96.0;
+            if raw.is_finite() && raw > 0.0 { raw.clamp(1.0, 8.0) } else { 1.0 }
+        };
+
         monitors.push(MonitorInfo {
             id: hmonitor.0 as MonitorId,
             rect: Rect::new(
@@ -284,6 +296,7 @@ unsafe extern "system" fn enum_monitors_callback(
             // MONITORINFOF_PRIMARY = 1
             is_primary: info.monitorInfo.dwFlags & 1 != 0,
             device_name,
+            scale_factor,
         });
 
         TRUE
@@ -720,6 +733,7 @@ mod tests {
                 work_area: Rect::new(0, 0, 1920, 1040),
                 is_primary: true,
                 device_name: "DISPLAY1".to_string(),
+                scale_factor: 1.0,
             },
             MonitorInfo {
                 id: 2,
@@ -727,6 +741,7 @@ mod tests {
                 work_area: Rect::new(1920, 0, 1920, 1080),
                 is_primary: false,
                 device_name: "DISPLAY2".to_string(),
+                scale_factor: 1.0,
             },
         ];
 
@@ -750,6 +765,7 @@ mod tests {
                 work_area: Rect::new(1920, 0, 1920, 1080),
                 is_primary: false,
                 device_name: "DISPLAY2".to_string(),
+                scale_factor: 1.0,
             },
             MonitorInfo {
                 id: 1,
@@ -757,6 +773,7 @@ mod tests {
                 work_area: Rect::new(0, 0, 1920, 1040),
                 is_primary: true,
                 device_name: "DISPLAY1".to_string(),
+                scale_factor: 1.0,
             },
         ];
 
@@ -774,6 +791,7 @@ mod tests {
                 work_area: Rect::new(0, 0, 1920, 1040),
                 is_primary: true,
                 device_name: "DISPLAY1".to_string(),
+                scale_factor: 1.0,
             },
             MonitorInfo {
                 id: 2,
@@ -781,6 +799,7 @@ mod tests {
                 work_area: Rect::new(1920, 0, 1920, 1080),
                 is_primary: false,
                 device_name: "DISPLAY2".to_string(),
+                scale_factor: 1.0,
             },
         ];
 

@@ -262,21 +262,27 @@ pub(crate) struct StateSnapshot {
 impl AppState {
     /// Create new state with config and monitors.
     pub(crate) fn new_with_config(config: Config, monitors: Vec<MonitorInfo>) -> Self {
+        use crate::helpers::ScaledLayoutParams;
+
         let mut workspaces = HashMap::new();
         let mut active_workspace_map = HashMap::new();
         let mut monitor_map = HashMap::new();
         let mut focused_monitor = 0;
 
         for monitor in monitors {
-            let mut workspace = Workspace::with_directional_gaps(
-                config.layout.gap,
-                config.layout.outer_gap_left,
-                config.layout.outer_gap_right,
-                config.layout.outer_gap_top,
-                config.layout.outer_gap_bottom,
+            let params = ScaledLayoutParams::from_config(
+                &config.layout,
+                monitor.scale_factor,
+                monitor.work_area.width,
             );
-            let vw = monitor.work_area.width;
-            workspace.set_default_column_width(config.layout.default_column_width_px(vw));
+            let mut workspace = Workspace::with_directional_gaps(
+                params.gap,
+                params.outer_gap_left,
+                params.outer_gap_right,
+                params.outer_gap_top,
+                params.outer_gap_bottom,
+            );
+            workspace.set_default_column_width(params.default_column_width);
             workspace.set_centering_mode(config.layout.centering_mode.into());
             workspace.set_center_past_edges(config.layout.center_past_edges);
             workspace.set_reduce_motion(
@@ -371,21 +377,25 @@ impl AppState {
     /// Ensure workspace index exists for a monitor, creating empty workspaces as needed.
     /// Returns a mutable reference to the workspace at the given index.
     pub(crate) fn ensure_workspace_exists(&mut self, monitor_id: MonitorId, idx: usize) -> Option<&mut Workspace> {
+        use crate::helpers::ScaledLayoutParams;
+
+        let scale = self.monitors.get(&monitor_id).map(|m| m.scale_factor).unwrap_or(1.0);
+        let vw = self.monitors.get(&monitor_id)
+            .map(|m| m.work_area.width)
+            .unwrap_or(FALLBACK_VIEWPORT_WIDTH);
+        let params = ScaledLayoutParams::from_config(&self.config.layout, scale, vw);
+
         let config = &self.config;
-        let monitors = &self.monitors;
         let ws_vec = self.workspaces.get_mut(&monitor_id)?;
         while ws_vec.len() <= idx {
             let mut ws = Workspace::with_directional_gaps(
-                config.layout.gap,
-                config.layout.outer_gap_left,
-                config.layout.outer_gap_right,
-                config.layout.outer_gap_top,
-                config.layout.outer_gap_bottom,
+                params.gap,
+                params.outer_gap_left,
+                params.outer_gap_right,
+                params.outer_gap_top,
+                params.outer_gap_bottom,
             );
-            let vw = monitors.get(&monitor_id)
-                .map(|m| m.work_area.width)
-                .unwrap_or(FALLBACK_VIEWPORT_WIDTH);
-            ws.set_default_column_width(config.layout.default_column_width_px(vw));
+            ws.set_default_column_width(params.default_column_width);
             ws.set_centering_mode(config.layout.centering_mode.into());
             ws.set_center_past_edges(config.layout.center_past_edges);
             ws.set_reduce_motion(self.reduce_motion);

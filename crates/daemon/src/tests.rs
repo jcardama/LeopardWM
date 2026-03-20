@@ -13,6 +13,7 @@ fn test_monitors() -> Vec<MonitorInfo> {
         work_area: Rect::new(0, 0, 1920, 1040),
         is_primary: true,
         device_name: "DISPLAY1".to_string(),
+        scale_factor: 1.0,
     }]
 }
 
@@ -116,7 +117,7 @@ fn test_floating_rect_uses_rule_dimensions() {
     let state = AppState::new_with_config(config, test_monitors());
     let original = Rect::new(100, 100, 640, 480);
     let result =
-        state.get_floating_rect_from_rules("TestClass", "Title", "test.exe", &original);
+        state.get_floating_rect_from_rules("TestClass", "Title", "test.exe", &original, None);
     assert_eq!(result.width, 1024);
     assert_eq!(result.height, 768);
 }
@@ -137,7 +138,7 @@ fn test_floating_rect_preserves_original_if_no_dimensions() {
     let state = AppState::new_with_config(config, test_monitors());
     let original = Rect::new(100, 100, 640, 480);
     let result =
-        state.get_floating_rect_from_rules("TestClass", "Title", "test.exe", &original);
+        state.get_floating_rect_from_rules("TestClass", "Title", "test.exe", &original, None);
     assert_eq!(result.width, 640);
     assert_eq!(result.height, 480);
 }
@@ -574,6 +575,7 @@ fn two_monitors() -> Vec<MonitorInfo> {
             work_area: Rect::new(0, 0, 1920, 1040),
             is_primary: true,
             device_name: "DISPLAY1".to_string(),
+            scale_factor: 1.0,
         },
         MonitorInfo {
             id: 2,
@@ -581,6 +583,7 @@ fn two_monitors() -> Vec<MonitorInfo> {
             work_area: Rect::new(1920, 0, 1920, 1040),
             is_primary: false,
             device_name: "DISPLAY2".to_string(),
+            scale_factor: 1.0,
         },
     ]
 }
@@ -678,6 +681,7 @@ fn test_reconcile_full_monitor_churn() {
             work_area: Rect::new(0, 0, 2560, 1400),
             is_primary: true,
             device_name: "DISPLAY3".to_string(),
+            scale_factor: 1.0,
         },
         MonitorInfo {
             id: 4,
@@ -685,6 +689,7 @@ fn test_reconcile_full_monitor_churn() {
             work_area: Rect::new(2560, 0, 1920, 1040),
             is_primary: false,
             device_name: "DISPLAY4".to_string(),
+            scale_factor: 1.0,
         },
     ];
     state.reconcile_monitors(new_monitors);
@@ -924,6 +929,7 @@ fn test_all_managed_window_ids_multi_monitor() {
             work_area: Rect::new(0, 0, 1920, 1040),
             is_primary: true,
             device_name: "DISPLAY1".to_string(),
+            scale_factor: 1.0,
         },
         MonitorInfo {
             id: 2,
@@ -931,6 +937,7 @@ fn test_all_managed_window_ids_multi_monitor() {
             work_area: Rect::new(1920, 0, 1920, 1040),
             is_primary: false,
             device_name: "DISPLAY2".to_string(),
+            scale_factor: 1.0,
         },
     ];
 
@@ -1132,6 +1139,7 @@ fn make_banner_info() -> StartupInfo {
     StartupInfo {
         version: "0.1.0".to_string(),
         monitor_names: vec!["DISPLAY1".to_string(), "DISPLAY2".to_string()],
+        monitor_dpi: vec![1.0, 1.0],
         window_count: 14,
         hotkeys_registered: 24,
         hotkeys_requested: 24,
@@ -1489,6 +1497,7 @@ fn test_restore_state_returns_restored_monitor_ids() {
             work_area: Rect::new(0, 0, 1920, 1040),
             is_primary: true,
             device_name: "DISPLAY1".to_string(),
+            scale_factor: 1.0,
         },
         MonitorInfo {
             id: 2,
@@ -1496,6 +1505,7 @@ fn test_restore_state_returns_restored_monitor_ids() {
             work_area: Rect::new(1920, 0, 1920, 1040),
             is_primary: false,
             device_name: "DISPLAY2".to_string(),
+            scale_factor: 1.0,
         },
     ];
     let mut state = AppState::new_with_config(test_config(), monitors);
@@ -2211,4 +2221,130 @@ fn test_format_crash_report_contains_version() {
     assert!(result.is_err(), "should have panicked");
     // The format_crash_report function is tested indirectly via the panic hook.
     // Here we just verify it exists and the function signature is correct.
+}
+
+// =========================================================================
+// DPI-aware gap/border scaling tests
+// =========================================================================
+
+fn two_monitors_mixed_dpi() -> Vec<MonitorInfo> {
+    vec![
+        MonitorInfo {
+            id: 1,
+            rect: Rect::new(0, 0, 1920, 1080),
+            work_area: Rect::new(0, 0, 1920, 1040),
+            is_primary: true,
+            device_name: "DISPLAY1".to_string(),
+            scale_factor: 1.0,
+        },
+        MonitorInfo {
+            id: 2,
+            rect: Rect::new(1920, 0, 3840, 2160),
+            work_area: Rect::new(1920, 0, 3840, 2120),
+            is_primary: false,
+            device_name: "DISPLAY2".to_string(),
+            scale_factor: 2.0,
+        },
+    ]
+}
+
+#[test]
+fn test_multi_dpi_workspaces_have_different_gaps() {
+    let mut config = test_config();
+    config.layout.gap = 10;
+    config.layout.outer_gap_left = 5;
+    config.layout.outer_gap_right = 5;
+    let state = AppState::new_with_config(config, two_monitors_mixed_dpi());
+
+    let ws1 = &state.workspaces.get(&1).unwrap()[0];
+    let ws2 = &state.workspaces.get(&2).unwrap()[0];
+
+    // Monitor 1 at 1.0x: gap=10
+    assert_eq!(ws1.gap(), 10);
+    let (ol1, or1, _, _) = ws1.outer_gaps();
+    assert_eq!(ol1, 5);
+    assert_eq!(or1, 5);
+
+    // Monitor 2 at 2.0x: gap=20
+    assert_eq!(ws2.gap(), 20);
+    let (ol2, or2, _, _) = ws2.outer_gaps();
+    assert_eq!(ol2, 10);
+    assert_eq!(or2, 10);
+}
+
+#[test]
+fn test_apply_config_rescales_with_correct_old_values() {
+    let mut config = test_config();
+    config.layout.gap = 10;
+    config.layout.outer_gap_left = 5;
+    config.layout.outer_gap_right = 5;
+    let mut state = AppState::new_with_config(config.clone(), two_monitors_mixed_dpi());
+
+    // Change gap from 10 to 20
+    config.layout.gap = 20;
+    state.apply_config(config);
+
+    let ws1 = &state.workspaces.get(&1).unwrap()[0];
+    let ws2 = &state.workspaces.get(&2).unwrap()[0];
+
+    // Monitor 1 at 1.0x: gap=20
+    assert_eq!(ws1.gap(), 20);
+    // Monitor 2 at 2.0x: gap=40
+    assert_eq!(ws2.gap(), 40);
+}
+
+#[test]
+fn test_scaled_border_width_scales_per_monitor() {
+    let mut config = test_config();
+    config.appearance.active_border_width = 3;
+    let mut state = AppState::new_with_config(config, two_monitors_mixed_dpi());
+
+    // Add windows to each monitor
+    state.workspaces.get_mut(&1).unwrap()[0]
+        .insert_window(100, Some(800))
+        .unwrap();
+    state.workspaces.get_mut(&2).unwrap()[0]
+        .insert_window(200, Some(800))
+        .unwrap();
+
+    // Window on 1x monitor: border=3
+    assert_eq!(state.scaled_border_width(100), 3);
+    // Window on 2x monitor: border=6
+    assert_eq!(state.scaled_border_width(200), 6);
+    // Unknown window: fallback scale 1.0 → border=3
+    assert_eq!(state.scaled_border_width(999), 3);
+}
+
+#[test]
+fn test_reconcile_monitors_new_monitor_gets_scaled_gaps() {
+    let mut config = test_config();
+    config.layout.gap = 8;
+    let mut state = AppState::new_with_config(config, test_monitors());
+    assert_eq!(state.workspaces.len(), 1);
+
+    // Add a high-DPI monitor
+    let new_monitors = vec![
+        MonitorInfo {
+            id: 1,
+            rect: Rect::new(0, 0, 1920, 1080),
+            work_area: Rect::new(0, 0, 1920, 1040),
+            is_primary: true,
+            device_name: "DISPLAY1".to_string(),
+            scale_factor: 1.0,
+        },
+        MonitorInfo {
+            id: 5,
+            rect: Rect::new(1920, 0, 3840, 2160),
+            work_area: Rect::new(1920, 0, 3840, 2120),
+            is_primary: false,
+            device_name: "DISPLAY5".to_string(),
+            scale_factor: 1.5,
+        },
+    ];
+    state.reconcile_monitors(new_monitors);
+
+    assert_eq!(state.workspaces.len(), 2);
+    let ws5 = &state.workspaces.get(&5).unwrap()[0];
+    // gap=8 * 1.5 = 12
+    assert_eq!(ws5.gap(), 12);
 }

@@ -58,6 +58,8 @@ pub struct MonitorInfo {
     pub is_primary: bool,
     /// Device name (e.g., `\\.\DISPLAY1`).
     pub device_name: String,
+    /// DPI scale factor relative to 96 DPI (e.g., 1.0 for 100%, 2.0 for 200%).
+    pub scale_factor: f64,
 }
 
 impl MonitorInfo {
@@ -98,6 +100,7 @@ mod tests {
             work_area: Rect::new(0, 0, 1920, 1040),
             is_primary: true,
             device_name: "DISPLAY1".to_string(),
+            scale_factor: 1.0,
         };
 
         // Point inside monitor
@@ -120,6 +123,7 @@ mod tests {
             work_area: Rect::new(0, 0, 1920, 1040),
             is_primary: true,
             device_name: "DISPLAY1".to_string(),
+            scale_factor: 1.0,
         };
 
         // Window centered in monitor

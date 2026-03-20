@@ -6,13 +6,72 @@ use crate::state::*;
 use anyhow::{anyhow, Result};
 use leopardwm_core_layout::{Rect, Workspace};
 use leopardwm_platform_win32::{
-    enumerate_windows, find_monitor_for_rect, get_process_executable, MonitorId, MonitorInfo,
+    enumerate_windows, find_monitor_for_rect, get_process_executable, scale_px, MonitorId,
+    MonitorInfo,
 };
 #[cfg(not(test))]
 use leopardwm_platform_win32::is_window_alive_and_visible;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::Ordering;
 use tracing::{debug, info, warn};
+
+/// Pre-scaled layout parameters for a specific monitor's DPI.
+///
+/// Config values are in logical pixels (96 DPI). This struct holds the
+/// scaled values for a specific monitor, avoiding repeated scaling in
+/// multiple call sites.
+pub(crate) struct ScaledLayoutParams {
+    pub gap: i32,
+    pub outer_gap_left: i32,
+    pub outer_gap_right: i32,
+    pub outer_gap_top: i32,
+    pub outer_gap_bottom: i32,
+    pub default_column_width: i32,
+}
+
+impl ScaledLayoutParams {
+    /// Compute scaled layout parameters from config + monitor DPI + viewport width.
+    pub fn from_config(
+        layout: &config::LayoutConfig,
+        scale_factor: f64,
+        viewport_width: i32,
+    ) -> Self {
+        let gap = scale_px(layout.gap, scale_factor);
+        let outer_gap_left = scale_px(layout.outer_gap_left, scale_factor);
+        let outer_gap_right = scale_px(layout.outer_gap_right, scale_factor);
+        let outer_gap_top = scale_px(layout.outer_gap_top, scale_factor);
+        let outer_gap_bottom = scale_px(layout.outer_gap_bottom, scale_factor);
+
+        // Compute default column width using scaled gap values (mirrors LayoutConfig::default_column_width_px)
+        let base = viewport_width
+            .saturating_sub(outer_gap_left.max(0))
+            .saturating_sub(outer_gap_right.max(0))
+            .saturating_add(gap.max(0));
+        let frac = layout.width_presets.first().copied().unwrap_or(0.5);
+        let default_column_width = (base as f64 * frac - gap as f64).floor().max(100.0) as i32;
+
+        Self {
+            gap,
+            outer_gap_left,
+            outer_gap_right,
+            outer_gap_top,
+            outer_gap_bottom,
+            default_column_width,
+        }
+    }
+
+    /// Apply scaled gap and width values to a workspace.
+    pub fn apply_to(&self, workspace: &mut Workspace) {
+        workspace.set_gap(self.gap);
+        workspace.set_outer_gaps(
+            self.outer_gap_left,
+            self.outer_gap_right,
+            self.outer_gap_top,
+            self.outer_gap_bottom,
+        );
+        workspace.set_default_column_width(self.default_column_width);
+    }
+}
 
 impl AppState {
     /// Look up window info for a given window handle.
@@ -51,11 +110,7 @@ impl AppState {
 
     /// Apply configuration to all workspaces.
     pub(crate) fn apply_config(&mut self, config: config::Config) {
-        // Save old gap values before swapping config so we can rescale columns
         let old_border_on = self.config.appearance.active_border;
-        let old_gap = self.config.layout.gap;
-        let old_outer_left = self.config.layout.outer_gap_left;
-        let old_outer_right = self.config.layout.outer_gap_right;
         self.compiled_rules = config.compile_window_rules();
 
         self.config = config;
@@ -78,27 +133,23 @@ impl AppState {
         }
 
         for (&monitor_id, ws_vec) in self.workspaces.iter_mut() {
+            let scale = self.monitors.get(&monitor_id).map(|m| m.scale_factor).unwrap_or(1.0);
             let viewport_width = self.monitors.get(&monitor_id)
                 .map(|m| m.work_area.width)
                 .unwrap_or(FALLBACK_VIEWPORT_WIDTH);
+            let params = ScaledLayoutParams::from_config(&self.config.layout, scale, viewport_width);
 
             for workspace in ws_vec.iter_mut() {
-                workspace.set_gap(self.config.layout.gap);
-                workspace.set_outer_gaps(
-                    self.config.layout.outer_gap_left,
-                    self.config.layout.outer_gap_right,
-                    self.config.layout.outer_gap_top,
-                    self.config.layout.outer_gap_bottom,
-                );
+                // Read the previously-applied scaled gap values from the workspace
+                // (not the raw config values) so rescale_column_widths works correctly.
+                let old_gap = workspace.gap();
+                let (old_ol, old_or, _, _) = workspace.outer_gaps();
+
+                params.apply_to(workspace);
 
                 // Rescale column widths to preserve fractions under new gap values
-                workspace.rescale_column_widths(
-                    old_gap, old_outer_left, old_outer_right, viewport_width,
-                );
+                workspace.rescale_column_widths(old_gap, old_ol, old_or, viewport_width);
 
-                workspace.set_default_column_width(
-                    self.config.layout.default_column_width_px(viewport_width),
-                );
                 workspace.set_centering_mode(self.config.layout.centering_mode.into());
                 workspace.set_center_past_edges(self.config.layout.center_past_edges);
 
@@ -159,7 +210,7 @@ impl AppState {
             .filter(|(_, _, _, action, is_floating)| {
                 *action == config::WindowAction::Float && !is_floating
             })
-            .filter_map(|(wid, _monitor_id, _, _, _)| {
+            .filter_map(|(wid, monitor_id, _, _, _)| {
                 let win_info = self.lookup_window_info(*wid)?;
                 let executable =
                     get_process_executable(win_info.process_id).unwrap_or_default();
@@ -168,6 +219,7 @@ impl AppState {
                     &win_info.title,
                     &executable,
                     &win_info.rect,
+                    Some(*monitor_id),
                 );
                 Some((*wid, rect))
             })
@@ -327,18 +379,20 @@ impl AppState {
                 let ws_idx = ws_snapshot.workspace_index;
                 if let Some(ws_vec) = self.workspaces.get_mut(&id) {
                     // Extend the vec with empty workspaces if needed
+                    let scale = self.monitors.get(&id).map(|m| m.scale_factor).unwrap_or(1.0);
+                    let vw = self.monitors.get(&id)
+                        .map(|m| m.work_area.width)
+                        .unwrap_or(FALLBACK_VIEWPORT_WIDTH);
+                    let params = ScaledLayoutParams::from_config(&self.config.layout, scale, vw);
                     while ws_vec.len() <= ws_idx {
                         let mut ws = Workspace::with_directional_gaps(
-                            self.config.layout.gap,
-                            self.config.layout.outer_gap_left,
-                            self.config.layout.outer_gap_right,
-                            self.config.layout.outer_gap_top,
-                            self.config.layout.outer_gap_bottom,
+                            params.gap,
+                            params.outer_gap_left,
+                            params.outer_gap_right,
+                            params.outer_gap_top,
+                            params.outer_gap_bottom,
                         );
-                        let vw = self.monitors.get(&id)
-                            .map(|m| m.work_area.width)
-                            .unwrap_or(FALLBACK_VIEWPORT_WIDTH);
-                        ws.set_default_column_width(self.config.layout.default_column_width_px(vw));
+                        ws.set_default_column_width(params.default_column_width);
                         ws.set_centering_mode(self.config.layout.centering_mode.into());
                         ws.set_center_past_edges(self.config.layout.center_past_edges);
                         ws.set_reduce_motion(self.reduce_motion);
@@ -438,8 +492,22 @@ impl AppState {
                         }
                     }
                 }
-                // Update monitor info and return — no migration needed
+                // Update monitor info — no migration needed
                 self.monitors = new_monitors.into_iter().map(|m| (m.id, m)).collect();
+                // Re-apply scaled gaps in case DPI or work area changed
+                for (&monitor_id, ws_vec) in self.workspaces.iter_mut() {
+                    let scale = self.monitors.get(&monitor_id).map(|m| m.scale_factor).unwrap_or(1.0);
+                    let viewport_width = self.monitors.get(&monitor_id)
+                        .map(|m| m.work_area.width)
+                        .unwrap_or(FALLBACK_VIEWPORT_WIDTH);
+                    let params = ScaledLayoutParams::from_config(&self.config.layout, scale, viewport_width);
+                    for workspace in ws_vec.iter_mut() {
+                        let old_gap = workspace.gap();
+                        let (old_ol, old_or, _, _) = workspace.outer_gaps();
+                        params.apply_to(workspace);
+                        workspace.rescale_column_widths(old_gap, old_ol, old_or, viewport_width);
+                    }
+                }
                 return;
             }
         }
@@ -455,17 +523,19 @@ impl AppState {
         // targets exist even when all old monitors are replaced with new ones.
         for monitor in &new_monitors {
             if !old_ids.contains(&monitor.id) {
+                let params = ScaledLayoutParams::from_config(
+                    &self.config.layout,
+                    monitor.scale_factor,
+                    monitor.work_area.width,
+                );
                 let mut workspace = Workspace::with_directional_gaps(
-                    self.config.layout.gap,
-                    self.config.layout.outer_gap_left,
-                    self.config.layout.outer_gap_right,
-                    self.config.layout.outer_gap_top,
-                    self.config.layout.outer_gap_bottom,
+                    params.gap,
+                    params.outer_gap_left,
+                    params.outer_gap_right,
+                    params.outer_gap_top,
+                    params.outer_gap_bottom,
                 );
-                let vw = monitor.work_area.width;
-                workspace.set_default_column_width(
-                    self.config.layout.default_column_width_px(vw),
-                );
+                workspace.set_default_column_width(params.default_column_width);
                 workspace.set_centering_mode(self.config.layout.centering_mode.into());
                 workspace.set_center_past_edges(self.config.layout.center_past_edges);
                 workspace.set_reduce_motion(self.reduce_motion);
@@ -548,6 +618,24 @@ impl AppState {
 
         // Update monitor info
         self.monitors = new_monitors.into_iter().map(|m| (m.id, m)).collect();
+
+        // Re-apply scaled gaps to ALL existing workspaces — monitor DPI or work
+        // area may have changed even if the monitor ID stayed the same (e.g.,
+        // Windows scaling change, or work area resize from taskbar move).
+        for (&monitor_id, ws_vec) in self.workspaces.iter_mut() {
+            let scale = self.monitors.get(&monitor_id).map(|m| m.scale_factor).unwrap_or(1.0);
+            let viewport_width = self.monitors.get(&monitor_id)
+                .map(|m| m.work_area.width)
+                .unwrap_or(FALLBACK_VIEWPORT_WIDTH);
+            let params = ScaledLayoutParams::from_config(&self.config.layout, scale, viewport_width);
+
+            for workspace in ws_vec.iter_mut() {
+                let old_gap = workspace.gap();
+                let (old_ol, old_or, _, _) = workspace.outer_gaps();
+                params.apply_to(workspace);
+                workspace.rescale_column_widths(old_gap, old_ol, old_or, viewport_width);
+            }
+        }
 
         // Update focused monitor if it was removed
         if !self.monitors.contains_key(&self.focused_monitor) {
@@ -1134,18 +1222,28 @@ impl AppState {
         }
     }
 
+    /// Compute the DPI-scaled border width for a window's monitor.
+    pub(crate) fn scaled_border_width(&self, hwnd: u64) -> u32 {
+        let scale = self.find_window_workspace(hwnd)
+            .and_then(|(mid, _)| self.monitors.get(&mid))
+            .map(|m| m.scale_factor)
+            .unwrap_or(1.0);
+        (self.config.appearance.active_border_width as f64 * scale).round() as u32
+    }
+
     /// Show the border frame on the given window, or hide it if borders are disabled.
     /// During an active tiled drag, the border is hidden so it doesn't follow
     /// the OS-dragged window — the ghost overlay provides visual feedback instead.
     pub(crate) fn show_border(&self, hwnd: u64) {
         if let Some(ref frame) = self.border_frame {
+            let border_width = self.scaled_border_width(hwnd);
             // During resize preview: show border at the preview snap target.
             if let Some(rect) = self.resize_preview_display_rect {
                 if self.config.appearance.active_border {
                     if let Some(bgr) = self.border_color_bgr() {
                         frame.show_at_rect(
                             rect,
-                            self.config.appearance.active_border_width,
+                            border_width,
                             self.border_position(),
                             bgr,
                         );
@@ -1160,7 +1258,7 @@ impl AppState {
                         if let Some(layout_rect) = self.compute_window_layout_rect(hwnd) {
                             frame.show_at_rect(
                                 layout_rect,
-                                self.config.appearance.active_border_width,
+                                border_width,
                                 self.border_position(),
                                 bgr,
                             );
@@ -1175,7 +1273,7 @@ impl AppState {
                 if let Some(bgr) = self.border_color_bgr() {
                     frame.show(
                         hwnd,
-                        self.config.appearance.active_border_width,
+                        border_width,
                         self.border_position(),
                         bgr,
                     );
@@ -1276,6 +1374,7 @@ impl AppState {
                     &win_info.title,
                     &executable,
                     &win_info.rect,
+                    Some(monitor_id),
                 ))
             } else {
                 None
@@ -1368,17 +1467,29 @@ impl AppState {
     }
 
     /// Get the floating rect for a window based on rules.
+    ///
+    /// Rule-defined `width`/`height` are config values (logical pixels) and
+    /// are scaled by the monitor's DPI factor. The `monitor_id` parameter
+    /// is used to look up the scale factor; pass `None` to skip scaling.
     pub(crate) fn get_floating_rect_from_rules(
         &self,
         class_name: &str,
         title: &str,
         executable: &str,
         original_rect: &leopardwm_core_layout::Rect,
+        monitor_id: Option<MonitorId>,
     ) -> leopardwm_core_layout::Rect {
+        let scale = monitor_id
+            .and_then(|id| self.monitors.get(&id))
+            .map(|m| m.scale_factor)
+            .unwrap_or(1.0);
         for rule in &self.compiled_rules {
             if rule.matches(class_name, title, executable) {
-                let width = rule.width.unwrap_or(original_rect.width);
-                let height = rule.height.unwrap_or(original_rect.height);
+                // Only scale rule-provided dimensions (config logical pixels).
+                // If a dimension is not specified, use the original rect value
+                // which is already in physical pixels from the OS.
+                let width = rule.width.map(|w| scale_px(w, scale)).unwrap_or(original_rect.width);
+                let height = rule.height.map(|h| scale_px(h, scale)).unwrap_or(original_rect.height);
                 return leopardwm_core_layout::Rect::new(
                     original_rect.x,
                     original_rect.y,

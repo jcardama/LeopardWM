@@ -103,6 +103,7 @@ impl AppState {
                             &win_info.title,
                             &executable,
                             &win_info.rect,
+                            Some(monitor_id),
                         ))
                     } else {
                         None

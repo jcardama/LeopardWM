@@ -6,6 +6,7 @@ All notable changes to LeopardWM will be documented in this file.
 
 ### Features
 
+- DPI-aware gap and border scaling — gaps, outer gaps, and border widths are now automatically scaled per-monitor based on DPI (e.g., `gap = 10` renders as 20px on a 200% DPI display), so spacing appears physically consistent across mixed-DPI setups
 - `maximize_column` command (`Ctrl+Alt+M`) — toggle the focused column to fill the viewport width; invoke again to restore original width
 - Scroll wheel navigation — hold a configurable modifier (default Ctrl+Alt) and scroll the mouse wheel to cycle focus between windows linearly across columns
 - `focus_next` / `focus_prev` commands — traverse windows top-to-bottom within columns, then left-to-right across columns, wrapping around at boundaries
