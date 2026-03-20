@@ -432,29 +432,20 @@ pub fn register_hotkeys(
     // Reconstruct HWND from raw pointer
     let hwnd = HWND(hwnd_raw as *mut c_void);
 
-    if !hotkeys.is_empty() && registered_ids.len() != hotkeys.len() {
-        tracing::warn!(
-            "Hotkey registration incomplete ({}/{}); aborting and unregistering all to avoid partial shortcut state",
-            registered_ids.len(),
-            hotkeys.len()
-        );
-        let _ = request_hotkey_thread_shutdown(hwnd, thread_id);
-        if thread.is_finished() {
-            let _ = thread.join();
-        }
-        clear_hotkey_globals();
-        return Err(Win32Error::HotkeyRegistrationFailed(format!(
-            "Only {}/{} hotkeys were registered; refusing to run with partial global shortcuts",
-            registered_ids.len(),
-            hotkeys.len()
-        )));
-    }
     if !hotkeys.is_empty() {
-        tracing::info!(
-            "Registered {}/{} hotkeys",
-            registered_ids.len(),
-            hotkeys.len()
-        );
+        if registered_ids.len() == hotkeys.len() {
+            tracing::info!(
+                "Registered {}/{} hotkeys",
+                registered_ids.len(),
+                hotkeys.len()
+            );
+        } else {
+            tracing::warn!(
+                "Hotkey registration partial ({}/{}); some shortcuts are unavailable (claimed by another application)",
+                registered_ids.len(),
+                hotkeys.len()
+            );
+        }
     }
 
     Ok((

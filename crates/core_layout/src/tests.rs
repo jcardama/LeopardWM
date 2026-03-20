@@ -1695,6 +1695,30 @@ mod tests {
     }
 
     #[test]
+    fn test_fullscreen_exit_clears_min_width() {
+        let mut ws = Workspace::new();
+        ws.insert_window(1, Some(400)).unwrap();
+
+        // Enter fullscreen
+        ws.toggle_fullscreen();
+        assert!(ws.is_fullscreen());
+
+        // Simulate a width violation recorded while the window was at
+        // viewport size (e.g. video player resisting resize during animation).
+        ws.set_window_min_width(1, 1920);
+
+        // Exit fullscreen — min-width should be cleared
+        let entered = ws.toggle_fullscreen();
+        assert!(!entered);
+
+        // Column width should remain at the original value, not inflated
+        assert_eq!(ws.columns()[0].width(), 400);
+
+        // apply_min_width_constraints should not widen anything
+        assert!(!ws.apply_min_width_constraints());
+    }
+
+    #[test]
     fn test_toggle_fullscreen_targets_visible_window_when_focus_is_minimized() {
         let mut ws = Workspace::new();
         ws.insert_window(1, Some(400)).unwrap();

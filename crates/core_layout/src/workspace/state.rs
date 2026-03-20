@@ -21,6 +21,7 @@ impl Workspace {
         if is_tiled || is_floating {
             if self.fullscreen_window == Some(window_id) {
                 self.fullscreen_window = None;
+                self.window_min_widths.remove(&window_id);
             }
             // Cancel active animation — its target is now stale after minimize
             if is_tiled {
@@ -72,6 +73,7 @@ impl Workspace {
     pub fn clear_fullscreen_if_window(&mut self, window_id: WindowId) -> bool {
         if self.fullscreen_window == Some(window_id) {
             self.fullscreen_window = None;
+            self.window_min_widths.remove(&window_id);
             true
         } else {
             false
@@ -82,6 +84,12 @@ impl Workspace {
     /// Returns true if entering fullscreen, false if exiting.
     pub fn toggle_fullscreen(&mut self) -> bool {
         if let Some(fs_wid) = self.fullscreen_window {
+            // Clear min-width recorded while the window was at viewport size —
+            // it reflects the inflated fullscreen rect, not the window's real
+            // minimum. A genuine constraint will be re-detected on the next
+            // placement cycle.
+            self.window_min_widths.remove(&fs_wid);
+
             // If fullscreen points at a removed/minimized window, clear stale state
             // and treat this invocation as a fresh toggle attempt.
             if !self.contains_window(fs_wid) || self.minimized_windows.contains(&fs_wid) {

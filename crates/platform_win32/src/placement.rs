@@ -13,7 +13,8 @@ use windows::Win32::Graphics::Dwm::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     BeginDeferWindowPos, DeferWindowPos, EndDeferWindowPos, GetWindowRect, IsIconic, IsWindow,
-    SetWindowPos, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
+    IsZoomed, SetWindowPos, ShowWindow, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOSIZE,
+    SWP_NOZORDER, SW_RESTORE,
 };
 
 /// Undocumented but well-known DWM attribute for cloaking windows.
@@ -220,6 +221,16 @@ pub fn apply_placements(
         unsafe {
             if !IsWindow(Some(hwnd)).as_bool() || IsIconic(hwnd).as_bool() {
                 continue;
+            }
+            // Restore maximized tiled windows before positioning — WS_MAXIMIZE
+            // causes some windows to ignore SetWindowPos size changes.
+            // Only for tiled windows (column_index != MAX); floating windows
+            // may be intentionally maximized by the user.
+            if placement.visibility == Visibility::Visible
+                && placement.column_index != usize::MAX
+                && IsZoomed(hwnd).as_bool()
+            {
+                let _ = ShowWindow(hwnd, SW_RESTORE);
             }
         }
 

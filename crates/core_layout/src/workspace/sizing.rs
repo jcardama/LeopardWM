@@ -75,8 +75,8 @@ impl Workspace {
     /// Exits fullscreen first if active (same as toggle_floating).
     pub fn toggle_maximize_column(&mut self, viewport_width: i32) -> bool {
         // Exit fullscreen first
-        if self.fullscreen_window.is_some() {
-            self.fullscreen_window = None;
+        if let Some(fs_wid) = self.fullscreen_window.take() {
+            self.window_min_widths.remove(&fs_wid);
         }
 
         let vis_w = self.visible_width(viewport_width);

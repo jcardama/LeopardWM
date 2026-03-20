@@ -1541,6 +1541,19 @@ async fn main() -> Result<()> {
                     // allocate correct column widths on subsequent frames.
                     if !frame_result.width_violations.is_empty() {
                         for violation in &frame_result.width_violations {
+                            // Skip violations where min_width >= viewport width —
+                            // the window is temporarily fullscreen/maximized by
+                            // the app, not enforcing a genuine minimum.
+                            let vw = state.find_window_workspace(violation.window_id)
+                                .map(|(mid, _)| state.viewport_width_for(mid))
+                                .unwrap_or(i32::MAX);
+                            if violation.min_width >= vw {
+                                debug!(
+                                    "Ignoring viewport-sized width violation for window {} ({}px >= {}px viewport)",
+                                    violation.window_id, violation.min_width, vw
+                                );
+                                continue;
+                            }
                             for ws_vec in state.workspaces.values_mut() {
                                 for ws in ws_vec.iter_mut() {
                                     if ws.contains_window(violation.window_id) {

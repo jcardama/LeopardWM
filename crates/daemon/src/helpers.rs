@@ -1006,9 +1006,22 @@ impl AppState {
                 if result.is_err() {
                     self.moved_or_resized_suppression.clear();
                 }
-                // Feed width violations back to the layout engine
+                // Feed width violations back to the layout engine.
+                // Skip violations where the min_width >= viewport width — the
+                // window is temporarily fullscreen/maximized by the app itself,
+                // not genuinely enforcing a minimum that large.
                 if result.is_ok() && !violations.is_empty() {
                     for v in &violations {
+                        let vw = self.find_window_workspace(v.window_id)
+                            .map(|(mid, _)| self.viewport_width_for(mid))
+                            .unwrap_or(i32::MAX);
+                        if v.min_width >= vw {
+                            debug!(
+                                "Ignoring viewport-sized width violation for window {} ({}px >= {}px viewport)",
+                                v.window_id, v.min_width, vw
+                            );
+                            continue;
+                        }
                         for ws_vec in self.workspaces.values_mut() {
                             for ws in ws_vec.iter_mut() {
                                 if ws.contains_window(v.window_id) {

@@ -17,6 +17,8 @@ All notable changes to LeopardWM will be documented in this file.
 
 ### Bug Fixes
 
+- Fix window stuck at full viewport width after app fullscreen — viewport-sized width violations (from video players or apps entering their own fullscreen) are now ignored, and maximized tiled windows are restored before placement to prevent SetWindowPos from being silently ignored
+- Fix hotkey registration failure cascading to all hotkeys — partial registration now succeeds with warnings instead of the all-or-nothing policy that disabled all shortcuts when any single hotkey was claimed by another app
 - Fix `toggle_fullscreen` not animating the transition when entering or exiting fullscreen
 - Fix rapid mouse scrolling causing focus border to flicker between windows — physical mouse wheel events are now distinguished from touchpad-injected events via the LLMHF_INJECTED flag
 - Harden EVENT_OBJECT_FOCUS handling — verify the window is actually the foreground window before emitting a Focused event, preventing spurious focus switches during scroll
