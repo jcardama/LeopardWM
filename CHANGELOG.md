@@ -6,6 +6,8 @@ All notable changes to LeopardWM will be documented in this file.
 
 ### Features
 
+- Disable Windows 11 Snap Layouts for tiled windows — removes `WS_MAXIMIZEBOX` from managed tiled windows to prevent edge-drag snapping and the snap layout flyout; style is restored when windows float, leave management, or the daemon exits. Enabled by default (`disable_snap_layouts = true`), opt-out via config or Settings UI
+- Allow maximize on tiled windows — clicking the maximize button on a tiled window now lets it maximize normally instead of being snapped back; the next layout operation (e.g., window create/destroy) restores it to tiled position
 - DPI-aware gap and border scaling — gaps, outer gaps, and border widths are now automatically scaled per-monitor based on DPI (e.g., `gap = 10` renders as 20px on a 200% DPI display), so spacing appears physically consistent across mixed-DPI setups
 - `maximize_column` command (`Ctrl+Alt+M`) — toggle the focused column to fill the viewport width; invoke again to restore original width
 - Scroll wheel navigation — hold a configurable modifier (default Ctrl+Alt) and scroll the mouse wheel to cycle focus between windows linearly across columns

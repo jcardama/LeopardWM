@@ -173,6 +173,15 @@ impl AppState {
         // Re-check animation state (accessibility setting + power state)
         self.refresh_reduce_motion();
 
+        // Handle snap layout config change (skip when paused — pause already restored all)
+        if !self.paused {
+            if self.config.behavior.disable_snap_layouts {
+                self.disable_snap_for_all_tiled_windows();
+            } else {
+                self.restore_snap_for_all_windows();
+            }
+        }
+
         info!(
             "Configuration applied to all {} workspaces",
             self.workspaces.len()
@@ -228,7 +237,8 @@ impl AppState {
         for (wid, monitor_id, ws_idx, action, is_floating) in transitions {
             match action {
                 config::WindowAction::Float if !is_floating => {
-                    // Currently tiled, should be floating
+                    // Currently tiled, should be floating — restore snap before moving
+                    self.restore_snap_for_window(wid);
                     let viewport = self
                         .monitors
                         .get(&monitor_id)
@@ -254,11 +264,13 @@ impl AppState {
                     // Currently floating, should be tiled
                     if let Some(workspace) = self.workspaces.get_mut(&monitor_id).and_then(|v| v.get_mut(ws_idx)) {
                         workspace.unfloat_window(wid);
+                        self.disable_snap_for_window(wid);
                         info!("Rule change: moved window {} to tiled", wid);
                     }
                 }
                 config::WindowAction::Ignore => {
-                    // Should no longer be managed — remove from workspace
+                    // Should no longer be managed — restore snap and remove from workspace
+                    self.restore_snap_for_window(wid);
                     if let Some(workspace) = self.workspaces.get_mut(&monitor_id).and_then(|v| v.get_mut(ws_idx)) {
                         if is_floating {
                             workspace.remove_floating(wid);
@@ -684,6 +696,7 @@ impl AppState {
                     if !was_floating {
                         let _ = workspace.remove_window(*wid);
                     }
+                    self.restore_snap_for_window(*wid);
                     self.window_managed_at.remove(wid);
                     info!("Pruned stale window {} from monitor {}", wid, monitor_id);
                 }
@@ -1428,6 +1441,7 @@ impl AppState {
                         match workspace.insert_window(win_info.hwnd, None) {
                             Ok(()) => {
                                 self.window_managed_at.insert(win_info.hwnd, std::time::Instant::now());
+                                self.disable_snap_for_window(win_info.hwnd);
                                 info!(
                                     "Added tiled window: {} ({}) to monitor {} - {}x{}",
                                     win_info.title,
@@ -1633,6 +1647,75 @@ impl AppState {
             .map(|p| p.rect)
     }
 
+    // =========================================================================
+    // Snap layout suppression helpers
+    // =========================================================================
+
+    /// Remove WS_MAXIMIZEBOX from a tiled window to disable Snap Layouts.
+    /// Only acts if `disable_snap_layouts` is enabled and the window isn't already tracked.
+    pub(crate) fn disable_snap_for_window(&mut self, hwnd: u64) {
+        if !self.config.behavior.disable_snap_layouts {
+            return;
+        }
+        if self.snap_disabled_hwnds.contains(&hwnd) {
+            return;
+        }
+        match leopardwm_platform_win32::remove_maximizebox(hwnd) {
+            Ok(true) => {
+                self.snap_disabled_hwnds.insert(hwnd);
+                debug!("Removed WS_MAXIMIZEBOX from window {}", hwnd);
+            }
+            Ok(false) => {
+                debug!("Window {} already lacks WS_MAXIMIZEBOX, skipping", hwnd);
+            }
+            Err(e) => {
+                warn!("Failed to remove WS_MAXIMIZEBOX for window {}: {}", hwnd, e);
+            }
+        }
+    }
+
+    /// Restore WS_MAXIMIZEBOX on a window when it leaves tiled management.
+    pub(crate) fn restore_snap_for_window(&mut self, hwnd: u64) {
+        if !self.snap_disabled_hwnds.remove(&hwnd) {
+            return;
+        }
+        match leopardwm_platform_win32::restore_maximizebox(hwnd) {
+            Ok(_) => {}
+            Err(e) => {
+                debug!("Failed to restore WS_MAXIMIZEBOX for window {}: {}", hwnd, e);
+            }
+        }
+    }
+
+    /// Restore WS_MAXIMIZEBOX on all tracked windows (bulk).
+    pub(crate) fn restore_snap_for_all_windows(&mut self) {
+        let hwnds: Vec<u64> = self.snap_disabled_hwnds.drain().collect();
+        if !hwnds.is_empty() {
+            leopardwm_platform_win32::restore_maximizebox_all(&hwnds);
+            info!("Restored WS_MAXIMIZEBOX for {} window(s)", hwnds.len());
+        }
+    }
+
+    /// Apply snap layout suppression to all currently tiled (non-floating) windows.
+    pub(crate) fn disable_snap_for_all_tiled_windows(&mut self) {
+        if !self.config.behavior.disable_snap_layouts {
+            return;
+        }
+        let mut tiled_ids = Vec::new();
+        for ws_vec in self.workspaces.values() {
+            for workspace in ws_vec {
+                for col in workspace.columns() {
+                    for &wid in col.windows() {
+                        tiled_ids.push(wid);
+                    }
+                }
+            }
+        }
+        for hwnd in tiled_ids {
+            self.disable_snap_for_window(hwnd);
+        }
+    }
+
     /// Toggle paused state for tiling operations.
     ///
     /// When resuming, this immediately reapplies layout so windows snap back
@@ -1646,7 +1729,10 @@ impl AppState {
             if self.paused { "paused" } else { "resumed" },
             source
         );
-        if !self.paused {
+        if self.paused {
+            // Restore WS_MAXIMIZEBOX so windows behave normally while paused
+            self.restore_snap_for_all_windows();
+        } else {
             if let Err(err) = self.apply_layout() {
                 self.paused = was_paused;
                 warn!(
@@ -1655,6 +1741,8 @@ impl AppState {
                 );
                 return Err(err);
             }
+            // Re-apply snap suppression after resuming
+            self.disable_snap_for_all_tiled_windows();
         }
         Ok(())
     }

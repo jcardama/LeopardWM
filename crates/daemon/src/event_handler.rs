@@ -171,6 +171,10 @@ impl AppState {
                             if let Some(snapshot) = snapshot {
                                 self.start_layout_transition(snapshot);
                             }
+                            // Disable snap layouts for tiled windows (after workspace borrow)
+                            if matches!(action, config::WindowAction::Tile) {
+                                self.disable_snap_for_window(hwnd);
+                            }
                             if let Err(e) = self.apply_layout() {
                                 warn!("Failed to apply layout after window create: {}", e);
                             }
@@ -257,6 +261,8 @@ impl AppState {
                             workspace.ensure_focused_visible_animated(viewport_width);
                         }
                     }
+                    // Restore WS_MAXIMIZEBOX (no-op if not tracked)
+                    self.restore_snap_for_window(hwnd);
 
                     if was_tiled {
                         self.start_layout_transition(snapshot);
@@ -792,6 +798,9 @@ impl AppState {
                         if self.previous_focused_hwnd == Some(hwnd) {
                             self.show_border(hwnd);
                         }
+                    } else if leopardwm_platform_win32::is_window_maximized(hwnd) {
+                        // User maximized a tiled window — let it stay maximized.
+                        debug!("Tiled window {} maximized — allowing", hwnd);
                     } else {
                         debug!("Managed window {} moved/resized — snapping back", hwnd);
                         if let Err(e) = self.apply_layout() {

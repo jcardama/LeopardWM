@@ -2348,3 +2348,125 @@ fn test_reconcile_monitors_new_monitor_gets_scaled_gaps() {
     // gap=8 * 1.5 = 12
     assert_eq!(ws5.gap(), 12);
 }
+
+// =============================================================================
+// Snap layout suppression tests
+// =============================================================================
+
+#[test]
+fn test_snap_disable_on_tile() {
+    let mut config = test_config();
+    config.behavior.disable_snap_layouts = true;
+    let mut state = AppState::new_with_config(config, test_monitors());
+
+    // Manually insert a tiled window and call disable_snap_for_window
+    let hwnd = 42u64;
+    if let Some(ws) = state.focused_workspace_mut() {
+        ws.insert_window(hwnd, None).unwrap();
+    }
+    state.disable_snap_for_window(hwnd);
+
+    // Daemon-side tracking set should contain the window
+    // (Win32 call fails for synthetic HWND, so the set won't be populated
+    //  since remove_maximizebox returns an error for invalid handles)
+    // But we can verify the method doesn't panic
+    assert!(!state.snap_disabled_hwnds.contains(&hwnd));
+}
+
+#[test]
+fn test_snap_restore_on_float() {
+    let mut config = test_config();
+    config.behavior.disable_snap_layouts = true;
+    let mut state = AppState::new_with_config(config, test_monitors());
+
+    let hwnd = 43u64;
+    // Manually add to tracking set (simulating a successful remove_maximizebox)
+    state.snap_disabled_hwnds.insert(hwnd);
+
+    // Restore should remove from tracking set
+    state.restore_snap_for_window(hwnd);
+    assert!(!state.snap_disabled_hwnds.contains(&hwnd));
+}
+
+#[test]
+fn test_snap_restore_on_destroy() {
+    let mut config = test_config();
+    config.behavior.disable_snap_layouts = true;
+    let mut state = AppState::new_with_config(config, test_monitors());
+
+    let hwnd = 44u64;
+    state.snap_disabled_hwnds.insert(hwnd);
+
+    // Restoring a tracked window should clear it
+    state.restore_snap_for_window(hwnd);
+    assert!(!state.snap_disabled_hwnds.contains(&hwnd));
+}
+
+#[test]
+fn test_snap_restore_all_on_pause() {
+    let mut config = test_config();
+    config.behavior.disable_snap_layouts = true;
+    let mut state = AppState::new_with_config(config, test_monitors());
+
+    state.snap_disabled_hwnds.insert(100);
+    state.snap_disabled_hwnds.insert(200);
+    state.snap_disabled_hwnds.insert(300);
+
+    state.restore_snap_for_all_windows();
+    assert!(state.snap_disabled_hwnds.is_empty());
+}
+
+#[test]
+fn test_snap_config_toggle_off() {
+    let mut config = test_config();
+    config.behavior.disable_snap_layouts = true;
+    let mut state = AppState::new_with_config(config, test_monitors());
+
+    state.snap_disabled_hwnds.insert(50);
+    state.snap_disabled_hwnds.insert(51);
+
+    // Reload with disable_snap_layouts = false should restore all
+    let mut new_config = test_config();
+    new_config.behavior.disable_snap_layouts = false;
+    state.apply_config(new_config);
+    assert!(state.snap_disabled_hwnds.is_empty());
+}
+
+#[test]
+fn test_snap_config_toggle_on() {
+    let mut config = test_config();
+    config.behavior.disable_snap_layouts = false;
+    let mut state = AppState::new_with_config(config, test_monitors());
+
+    // No windows tiled, so no snap_disabled_hwnds after enabling
+    let mut new_config = test_config();
+    new_config.behavior.disable_snap_layouts = true;
+    state.apply_config(new_config);
+    // No tiled windows → nothing to disable
+    assert!(state.snap_disabled_hwnds.is_empty());
+}
+
+#[test]
+fn test_snap_restore_for_window_not_tracked_is_noop() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    // Should not panic or change anything
+    state.restore_snap_for_window(999);
+    assert!(state.snap_disabled_hwnds.is_empty());
+}
+
+#[test]
+fn test_snap_disable_when_config_disabled() {
+    let mut config = test_config();
+    config.behavior.disable_snap_layouts = false;
+    let mut state = AppState::new_with_config(config, test_monitors());
+
+    // disable_snap_for_window should be a no-op when config is off
+    state.disable_snap_for_window(42);
+    assert!(!state.snap_disabled_hwnds.contains(&42));
+}
+
+#[test]
+fn test_snap_default_config_is_enabled() {
+    let config = test_config();
+    assert!(config.behavior.disable_snap_layouts);
+}

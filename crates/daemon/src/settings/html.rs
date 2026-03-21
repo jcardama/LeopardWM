@@ -888,6 +888,10 @@ input[type="range"]::-webkit-slider-thumb {
             <input type="number" id="behavior-focus_follows_mouse_delay_ms" min="50" max="2000">
           </div>
           <div class="field">
+            <div class="field-info"><div class="field-label">Disable snap layouts</div><div class="field-desc">Prevent Windows 11 edge-drag snapping for tiled windows</div></div>
+            <label class="toggle"><input type="checkbox" id="behavior-disable_snap_layouts"><span class="track"></span><span class="thumb"></span></label>
+          </div>
+          <div class="field">
             <div class="field-info"><div class="field-label">Log level</div><div class="field-desc">Daemon logging verbosity</div></div>
             <div class="combobox" id="cb-behavior-log_level">
               <button class="combobox-trigger" type="button"><span class="combobox-text">Info</span><svg class="combobox-chevron" viewBox="0 0 12 12"><path d="M2.15 4.65a.5.5 0 01.7 0L6 7.79l3.15-3.14a.5.5 0 11.7.7l-3.5 3.5a.5.5 0 01-.7 0l-3.5-3.5a.5.5 0 010-.7z"/></svg></button>
@@ -1164,6 +1168,7 @@ function init(cfg) {
   setChecked('behavior-track_focus_changes', cfg.behavior.track_focus_changes);
   setChecked('behavior-focus_follows_mouse', cfg.behavior.focus_follows_mouse);
   setVal('behavior-focus_follows_mouse_delay_ms', cfg.behavior.focus_follows_mouse_delay_ms);
+  setChecked('behavior-disable_snap_layouts', cfg.behavior.disable_snap_layouts !== false);
   setCb('cb-behavior-log_level', cfg.behavior.log_level);
 
   if (cfg.hotkeys) {
@@ -1422,6 +1427,7 @@ function readConfig() {
       track_focus_changes: checked('behavior-track_focus_changes'),
       focus_follows_mouse: checked('behavior-focus_follows_mouse'),
       focus_follows_mouse_delay_ms: num('behavior-focus_follows_mouse_delay_ms'),
+      disable_snap_layouts: checked('behavior-disable_snap_layouts'),
       log_level: cbVal('cb-behavior-log_level')
     },
     hotkeys: Object.assign(readHotkeys(), {

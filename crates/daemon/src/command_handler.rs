@@ -428,9 +428,11 @@ impl AppState {
                     if foreground_is_floating {
                         let hwnd = prev_hwnd.unwrap();
                         if workspace.unfloat_window(hwnd) {
+                            self.disable_snap_for_window(hwnd);
                             info!("Unfloated window {} back to tiling", hwnd);
                         }
                     } else if let Some(wid) = workspace.toggle_floating(viewport) {
+                        self.restore_snap_for_window(wid);
                         info!("Toggled window {} to floating", wid);
                     }
                 }

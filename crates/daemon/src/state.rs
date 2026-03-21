@@ -4,7 +4,7 @@ use crate::config::{self, Config};
 use leopardwm_core_layout::{Rect, Workspace};
 use leopardwm_platform_win32::{MonitorId, MonitorInfo, PlatformConfig};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 #[cfg(test)]
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicBool, AtomicU64};
@@ -211,6 +211,10 @@ pub(crate) struct AppState {
     /// distinguish transient popups (managed briefly) from real windows
     /// (managed for a long time, e.g., close-to-tray apps).
     pub(crate) window_managed_at: HashMap<u64, std::time::Instant>,
+    /// HWNDs whose WS_MAXIMIZEBOX was removed to suppress Snap Layouts.
+    /// Lightweight daemon-side mirror — the platform-layer global static is
+    /// the authoritative recovery set.
+    pub(crate) snap_disabled_hwnds: HashSet<u64>,
     /// System is on battery power or Windows power saver is active.
     pub(crate) on_battery_or_saver: bool,
     /// Skip animations and snap instantly (accessibility setting off or on battery/power saver).
@@ -343,6 +347,7 @@ impl AppState {
             start_time: std::time::Instant::now(),
             recently_hidden_hwnds: HashMap::new(),
             window_managed_at: HashMap::new(),
+            snap_disabled_hwnds: HashSet::new(),
             on_battery_or_saver: leopardwm_platform_win32::is_on_battery_or_power_saver(),
             reduce_motion: !leopardwm_platform_win32::are_animations_enabled()
                 || leopardwm_platform_win32::is_on_battery_or_power_saver(),

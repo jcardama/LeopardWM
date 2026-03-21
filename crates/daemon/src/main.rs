@@ -248,6 +248,8 @@ async fn run_shutdown_cleanup(state: &Arc<Mutex<AppState>>, mode: ShutdownMode) 
 
     let (managed_window_ids, pending_apply_workers, apply_timeout) = {
         let mut state = state.lock().await;
+        // Restore WS_MAXIMIZEBOX before visibility recovery so Windows allows resize
+        state.restore_snap_for_all_windows();
         let pending_apply_workers = state.begin_shutdown_or_revert();
         if mode.should_save_state() {
             if let Err(e) = state.save_state() {
@@ -414,6 +416,7 @@ async fn main() -> Result<()> {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         eprintln!("[leopardwm] PANIC detected — emergency uncloaking all windows");
+        leopardwm_platform_win32::restore_maximizebox_panic_recovery();
         uncloak_all_visible_windows();
         match enumerate_windows() {
             Ok(windows) => {

@@ -246,6 +246,12 @@ pub struct BehaviorConfig {
     /// Only applies when focus_follows_mouse is true.
     #[serde(default = "default_focus_delay")]
     pub focus_follows_mouse_delay_ms: u32,
+
+    /// Whether to disable Windows 11 Snap Layouts for tiled windows.
+    /// Removes WS_MAXIMIZEBOX from managed tiled windows to prevent edge-drag
+    /// snapping and the snap layout flyout. Restored when windows leave tiling.
+    #[serde(default = "default_true")]
+    pub disable_snap_layouts: bool,
 }
 
 impl Default for BehaviorConfig {
@@ -256,6 +262,7 @@ impl Default for BehaviorConfig {
             log_level: default_log_level(),
             focus_follows_mouse: false,
             focus_follows_mouse_delay_ms: default_focus_delay(),
+            disable_snap_layouts: true,
         }
     }
 }
@@ -1115,6 +1122,9 @@ log_level = "info"
 
 # Focus follows mouse (hover to focus)
 focus_follows_mouse = false
+
+# Disable Windows 11 Snap Layouts for tiled windows (also disables maximize button)
+# disable_snap_layouts = false
 
 [hotkeys]
 # Navigation (focus) — Ctrl+Alt + HJKL

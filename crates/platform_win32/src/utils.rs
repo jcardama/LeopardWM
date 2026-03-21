@@ -89,7 +89,9 @@ use crate::types::{PlatformConfig, Win32Error};
 use crate::{combine_operation_failures, is_benign_side_effect_error, window_id_to_hwnd};
 use crate::MOVE_OFFSCREEN_SENTINEL_COORD;
 use leopardwm_core_layout::{Rect, Visibility, WindowId, WindowPlacement};
+use std::collections::HashSet;
 use std::ffi::c_void;
+use std::sync::Mutex;
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Dwm::{
     DwmGetWindowAttribute, DwmSetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS,
@@ -101,6 +103,20 @@ use windows::Win32::UI::WindowsAndMessaging::{
     IsWindowVisible, PostMessageW, SetForegroundWindow, SetWindowPos, ShowWindow,
     SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SW_RESTORE,
 };
+
+/// Check if a window is in the maximized (zoomed) state.
+pub fn is_window_maximized(hwnd: WindowId) -> bool {
+    if hwnd == 0 {
+        return false;
+    }
+    unsafe {
+        let hwnd = HWND(hwnd as *mut c_void);
+        IsWindow(Some(hwnd)).as_bool() && !IsIconic(hwnd).as_bool() && {
+            use windows::Win32::UI::WindowsAndMessaging::IsZoomed;
+            IsZoomed(hwnd).as_bool()
+        }
+    }
+}
 
 /// Check if a window handle is still valid.
 ///
@@ -747,6 +763,170 @@ pub fn cascade_windows(window_ids: &[WindowId]) {
     let _ = apply_placements(&placements, &PlatformConfig::default(), None);
 }
 
+// ============================================================================
+// Snap layout suppression (WS_MAXIMIZEBOX removal)
+// ============================================================================
+
+/// Global set of window IDs whose WS_MAXIMIZEBOX style has been removed.
+/// Used for panic recovery when AppState may be poisoned/unavailable.
+static SNAP_DISABLED_HWNDS: Mutex<Option<HashSet<WindowId>>> = Mutex::new(None);
+
+fn lock_snap_disabled() -> std::sync::MutexGuard<'static, Option<HashSet<WindowId>>> {
+    SNAP_DISABLED_HWNDS
+        .lock()
+        .unwrap_or_else(crate::recover_poisoned_mutex)
+}
+
+/// Remove `WS_MAXIMIZEBOX` from a window to disable Windows 11 Snap Layouts.
+///
+/// Returns `Ok(true)` if the style was changed, `Ok(false)` if already absent.
+/// Registers the window in the global tracking set for panic recovery.
+///
+/// Uses `GetWindowLongW`/`SetWindowLongW` (32-bit) intentionally: on 64-bit
+/// Windows this disables the DWM snap layout flyout while preserving the
+/// maximize button and its click-to-maximize behavior.
+pub fn remove_maximizebox(window_id: WindowId) -> Result<bool, Win32Error> {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongW, SetWindowLongW, SetWindowPos,
+        GWL_STYLE, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_NOACTIVATE,
+    };
+
+    let hwnd = window_id_to_hwnd(window_id)?;
+    unsafe {
+        if !IsWindow(Some(hwnd)).as_bool() {
+            return Err(Win32Error::WindowNotFound(window_id));
+        }
+
+        let style = GetWindowLongW(hwnd, GWL_STYLE);
+        const WS_MAXIMIZEBOX: i32 = 0x0001_0000;
+        if (style & WS_MAXIMIZEBOX) == 0 {
+            return Ok(false); // Already absent
+        }
+
+        let new_style = style & !WS_MAXIMIZEBOX;
+        SetWindowLongW(hwnd, GWL_STYLE, new_style);
+
+        // Notify the window frame has changed
+        let _ = SetWindowPos(
+            hwnd, None, 0, 0, 0, 0,
+            SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+        );
+
+        // Register in global tracking set
+        let mut guard = lock_snap_disabled();
+        guard.get_or_insert_with(HashSet::new).insert(window_id);
+    }
+    Ok(true)
+}
+
+/// Restore `WS_MAXIMIZEBOX` on a window, re-enabling Windows 11 Snap Layouts.
+///
+/// Returns `Ok(true)` if the style was restored, `Ok(false)` if already present.
+/// Removes the window from the global tracking set.
+pub fn restore_maximizebox(window_id: WindowId) -> Result<bool, Win32Error> {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongW, SetWindowLongW, SetWindowPos,
+        GWL_STYLE, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_NOACTIVATE,
+    };
+
+    // Always remove from tracking set, even if the Win32 call fails
+    {
+        let mut guard = lock_snap_disabled();
+        if let Some(ref mut set) = *guard {
+            set.remove(&window_id);
+        }
+    }
+
+    let hwnd = window_id_to_hwnd(window_id)?;
+    unsafe {
+        if !IsWindow(Some(hwnd)).as_bool() {
+            return Err(Win32Error::WindowNotFound(window_id));
+        }
+
+        let style = GetWindowLongW(hwnd, GWL_STYLE);
+        const WS_MAXIMIZEBOX: i32 = 0x0001_0000;
+        if (style & WS_MAXIMIZEBOX) != 0 {
+            return Ok(false); // Already present
+        }
+
+        let new_style = style | WS_MAXIMIZEBOX;
+        SetWindowLongW(hwnd, GWL_STYLE, new_style);
+
+        let _ = SetWindowPos(
+            hwnd, None, 0, 0, 0, 0,
+            SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+        );
+    }
+    Ok(true)
+}
+
+/// Best-effort bulk restore of `WS_MAXIMIZEBOX` for multiple windows.
+/// Never panics — logs failures and continues.
+pub fn restore_maximizebox_all(window_ids: &[WindowId]) {
+    for &wid in window_ids {
+        match restore_maximizebox(wid) {
+            Ok(_) => {}
+            Err(Win32Error::WindowNotFound(_)) => {
+                // Window already destroyed — tracking set already cleaned up
+            }
+            Err(e) => {
+                tracing::warn!("Failed to restore WS_MAXIMIZEBOX for window {}: {}", wid, e);
+            }
+        }
+    }
+}
+
+/// Emergency restore of `WS_MAXIMIZEBOX` for all tracked windows.
+/// Drains the global tracking set and restores styles best-effort.
+/// Safe to call from panic hooks (no AppState needed).
+pub fn restore_maximizebox_panic_recovery() {
+    let window_ids: Vec<WindowId> = {
+        let mut guard = lock_snap_disabled();
+        guard
+            .as_mut()
+            .map(|set| set.drain().collect())
+            .unwrap_or_default()
+    };
+
+    if window_ids.is_empty() {
+        return;
+    }
+
+    eprintln!(
+        "[leopardwm] Restoring WS_MAXIMIZEBOX for {} window(s) in panic recovery",
+        window_ids.len()
+    );
+
+    for wid in &window_ids {
+        // Direct Win32 call — don't use restore_maximizebox since tracking set is already drained
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetWindowLongW, SetWindowLongW, SetWindowPos,
+            GWL_STYLE, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_NOACTIVATE,
+        };
+        let Ok(hwnd) = window_id_to_hwnd(*wid) else { continue };
+        unsafe {
+            if !IsWindow(Some(hwnd)).as_bool() {
+                continue;
+            }
+            let style = GetWindowLongW(hwnd, GWL_STYLE);
+            const WS_MAXIMIZEBOX_VAL: i32 = 0x0001_0000;
+            if (style & WS_MAXIMIZEBOX_VAL) == 0 {
+                let new_style = style | WS_MAXIMIZEBOX_VAL;
+                SetWindowLongW(hwnd, GWL_STYLE, new_style);
+                let _ = SetWindowPos(
+                    hwnd, None, 0, 0, 0, 0,
+                    SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                );
+            }
+        }
+    }
+
+    eprintln!(
+        "[leopardwm] WS_MAXIMIZEBOX panic recovery complete ({} windows processed)",
+        window_ids.len()
+    );
+}
+
 /// Set the process DPI awareness to Per-Monitor Aware V2.
 ///
 /// This must be called as early as possible in `main()`, before any
@@ -998,5 +1178,50 @@ mod tests {
     fn test_set_dpi_awareness_no_panic() {
         // On CI/test environments this may return false (already set), but must not panic
         let _result = set_dpi_awareness();
+    }
+
+    #[test]
+    fn test_remove_maximizebox_zero_fails() {
+        let result = remove_maximizebox(0);
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), Win32Error::WindowNotFound(0)));
+    }
+
+    #[test]
+    fn test_remove_maximizebox_invalid_hwnd_fails() {
+        let result = remove_maximizebox(u64::MAX);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            Win32Error::WindowNotFound(u64::MAX)
+        ));
+    }
+
+    #[test]
+    fn test_restore_maximizebox_zero_fails() {
+        let result = restore_maximizebox(0);
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), Win32Error::WindowNotFound(0)));
+    }
+
+    #[test]
+    fn test_restore_maximizebox_invalid_hwnd_fails() {
+        let result = restore_maximizebox(u64::MAX);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            Win32Error::WindowNotFound(u64::MAX)
+        ));
+    }
+
+    #[test]
+    fn test_restore_maximizebox_all_empty_is_noop() {
+        restore_maximizebox_all(&[]);
+    }
+
+    #[test]
+    fn test_restore_maximizebox_panic_recovery_no_panic() {
+        // Should not panic even with empty tracking set
+        restore_maximizebox_panic_recovery();
     }
 }
