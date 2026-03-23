@@ -57,7 +57,7 @@ toml = "1.0"
 directories = "6"
 
 # WebView
-wry = "0.54"
+wry = "0.55"
 raw-window-handle = { version = "0.6", features = ["std"] }
 
 [profile.release]
