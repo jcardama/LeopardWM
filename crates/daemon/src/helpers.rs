@@ -701,6 +701,15 @@ impl AppState {
                     info!("Pruned stale window {} from monitor {}", wid, monitor_id);
                 }
             }
+
+            // Evict orphaned entries from window_managed_at whose HWNDs are
+            // no longer managed in any workspace (catches all removal paths).
+            if !self.window_managed_at.is_empty() {
+                let managed: std::collections::HashSet<u64> = self.workspaces.values()
+                    .flat_map(|ws_vec| ws_vec.iter().flat_map(|ws| ws.all_window_ids()))
+                    .collect();
+                self.window_managed_at.retain(|hwnd, _| managed.contains(hwnd));
+            }
         }
     }
 
