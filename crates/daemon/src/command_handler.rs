@@ -12,6 +12,21 @@ use std::collections::HashMap;
 use tracing::info;
 
 impl AppState {
+    /// Snapshot a workspace's current animated placements as `(window_id, rect)` pairs.
+    fn workspace_placements(&self, monitor: leopardwm_platform_win32::MonitorId, ws_idx: usize) -> Vec<(u64, Rect)> {
+        self.workspaces
+            .get(&monitor)
+            .and_then(|v| v.get(ws_idx))
+            .and_then(|ws| self.monitors.get(&monitor).map(|m| (ws, m)))
+            .map(|(ws, mon)| {
+                ws.compute_placements_animated(mon.work_area)
+                    .into_iter()
+                    .map(|p| (p.window_id, p.rect))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// Execute a command on the focused workspace, handling snapshot/transition
     /// and layout application boilerplate.
     ///
@@ -572,17 +587,7 @@ impl AppState {
                 let y_offset = if idx > current_idx { slide_height } else { -slide_height };
 
                 // Snapshot old workspace's current positions (start for exiting windows).
-                let old_placements: Vec<(u64, leopardwm_core_layout::Rect)> =
-                    self.workspaces.get(&monitor)
-                        .and_then(|v| v.get(current_idx))
-                        .and_then(|ws| self.monitors.get(&monitor).map(|m| (ws, m)))
-                        .map(|(ws, mon)| {
-                            ws.compute_placements_animated(mon.work_area)
-                                .into_iter()
-                                .map(|p| (p.window_id, p.rect))
-                                .collect()
-                        })
-                        .unwrap_or_default();
+                let old_placements = self.workspace_placements(monitor, current_idx);
 
                 // Ensure target workspace exists (lazy creation)
                 self.ensure_workspace_exists(monitor, idx);
@@ -591,17 +596,7 @@ impl AppState {
                 self.active_workspace.insert(monitor, idx);
 
                 // Compute new workspace's final placements.
-                let new_placements: Vec<(u64, leopardwm_core_layout::Rect)> =
-                    self.workspaces.get(&monitor)
-                        .and_then(|v| v.get(idx))
-                        .and_then(|ws| self.monitors.get(&monitor).map(|m| (ws, m)))
-                        .map(|(ws, mon)| {
-                            ws.compute_placements_animated(mon.work_area)
-                                .into_iter()
-                                .map(|p| (p.window_id, p.rect))
-                                .collect()
-                        })
-                        .unwrap_or_default();
+                let new_placements = self.workspace_placements(monitor, idx);
 
                 // Build animation rects:
                 // - Entering windows: start offscreen, end at final position

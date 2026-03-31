@@ -2,6 +2,12 @@
 
 All notable changes to LeopardWM will be documented in this file.
 
+## 0.1.6
+
+### Improvements
+
+- Extract `workspace_placements()` helper in command handler — deduplicate two identical 11-line blocks in workspace-switch animation code into a single reusable method
+
 ## 0.1.5
 
 ### Features
