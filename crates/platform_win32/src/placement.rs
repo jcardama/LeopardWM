@@ -13,8 +13,8 @@ use windows::Win32::Graphics::Dwm::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     BeginDeferWindowPos, DeferWindowPos, EndDeferWindowPos, GetWindowRect, IsIconic, IsWindow,
-    IsZoomed, SetWindowPos, ShowWindow, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOSIZE,
-    SWP_NOZORDER, SW_RESTORE,
+    IsZoomed, SetWindowPos, ShowWindow, SET_WINDOW_POS_FLAGS, SWP_ASYNCWINDOWPOS,
+    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SW_RESTORE,
 };
 
 /// Undocumented but well-known DWM attribute for cloaking windows.
@@ -180,6 +180,15 @@ pub fn apply_placements(
         return Ok(empty_result);
     }
 
+    // Animation frames (cache present) use async positioning so hung windows
+    // don't stall the vsync-driven animation loop. Landing passes (no cache)
+    // stay synchronous for precise final placement.
+    let async_flag = if cache.is_some() {
+        SWP_ASYNCWINDOWPOS
+    } else {
+        SET_WINDOW_POS_FLAGS(0)
+    };
+
     let mut applied = 0u32;
     let mut skipped = 0u32;
 
@@ -243,7 +252,7 @@ pub fn apply_placements(
         let frame_h = placement.rect.height + inset_t + inset_b;
 
         if placement.visibility == Visibility::Visible {
-            let mut flags = SWP_NOZORDER | SWP_NOACTIVATE;
+            let mut flags = SWP_NOZORDER | SWP_NOACTIVATE | async_flag;
             // Only send SWP_FRAMECHANGED (expensive WM_NCCALCSIZE) on first
             // frame or landing pass — not every animation frame.
             let needs_frame_changed = if let Some(ref cache) = cache {
@@ -277,7 +286,7 @@ pub fn apply_placements(
                 w: frame_w,
                 h: 0,
                 visibility: placement.visibility,
-                flags: SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                flags: SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | async_flag,
                 column_index: placement.column_index,
             });
         }
@@ -380,6 +389,10 @@ pub fn apply_placements(
     // Fix-up pass: some windows enforce minimum sizes and Windows silently
     // resizes them, causing overlaps in stacked columns. Detect violations
     // and re-layout affected columns.
+    //
+    // This runs even during async frames — responsive windows process the
+    // position change quickly, and the fixup corrects visual overlaps without
+    // feeding back to the layout engine.
     {
         use std::collections::HashMap;
         // Group visible entries by column (only multi-window columns matter).
@@ -464,7 +477,7 @@ pub fn apply_placements(
                         let _ = SetWindowPos(
                             entry.hwnd, None,
                             entry.x, new_y, entry.w, new_h,
-                            SWP_NOZORDER | SWP_NOACTIVATE,
+                            SWP_NOZORDER | SWP_NOACTIVATE | async_flag,
                         );
                     }
                 }
@@ -475,7 +488,13 @@ pub fn apply_placements(
 
     // Detect width violations: windows wider than requested (min-width enforcement).
     // Report them so the layout engine can account for them on subsequent frames.
+    //
+    // Skipped during async animation frames — GetWindowRect returns stale
+    // (pre-resize) widths which would create false min-width constraints
+    // that prevent columns from shrinking. The synchronous landing pass
+    // detects real violations authoritatively.
     let mut width_violations = Vec::new();
+    if async_flag == SET_WINDOW_POS_FLAGS(0) {
     for entry in &entries {
         if entry.column_index == usize::MAX
             || entry.visibility != Visibility::Visible
@@ -509,6 +528,7 @@ pub fn apply_placements(
             });
         }
     }
+    } // end: skip width violation detection during async frames
 
     // Update cache: remove stale entries (windows no longer in placements),
     // update positioned entries, and keep skipped-unchanged entries intact.

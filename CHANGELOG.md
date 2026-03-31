@@ -9,6 +9,7 @@ All notable changes to LeopardWM will be documented in this file.
 - Extract `workspace_placements()` helper in command handler — deduplicate two identical 11-line blocks in workspace-switch animation code into a single reusable method
 - Extract `clear_drag_placeholder()` helper in drag module — deduplicate two identical global placeholder cleanup loops into a single method
 - Prune orphaned `window_managed_at` entries — evict tracking entries for windows no longer managed in any workspace, preventing unbounded map growth over long daemon sessions
+- Async window positioning during animation — add `SWP_ASYNCWINDOWPOS` to animation frames so hung/unresponsive windows don't stall the vsync-driven animation loop; landing passes remain synchronous for precise final placement. Width violation detection is deferred to the landing pass to prevent false min-width constraints from stale `GetWindowRect` data
 
 ## 0.1.5
 
