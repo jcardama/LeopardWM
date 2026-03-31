@@ -7,6 +7,7 @@ All notable changes to LeopardWM will be documented in this file.
 ### Improvements
 
 - Extract `workspace_placements()` helper in command handler — deduplicate two identical 11-line blocks in workspace-switch animation code into a single reusable method
+- Extract `clear_drag_placeholder()` helper in drag module — deduplicate two identical global placeholder cleanup loops into a single method
 
 ## 0.1.5
 

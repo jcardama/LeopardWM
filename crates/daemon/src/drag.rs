@@ -11,6 +11,15 @@ use leopardwm_platform_win32::{
 use tracing::{debug, info, warn};
 
 impl AppState {
+    /// Remove the drag placeholder window from all workspaces on all monitors.
+    fn clear_drag_placeholder(&mut self) {
+        for (_, ws_vec) in self.workspaces.iter_mut() {
+            for ws in ws_vec.iter_mut() {
+                let _ = ws.remove_window(DRAG_PLACEHOLDER_HWND);
+            }
+        }
+    }
+
     /// Compute and show a drag hint overlay.
     /// Default drag = move window between columns (merge mode).
     /// Shift+drag = move entire column (reorder mode).
@@ -141,11 +150,7 @@ impl AppState {
             };
 
             // Remove any existing placeholder before recomputing bounds.
-            for (_, ws_vec) in self.workspaces.iter_mut() {
-                for ws in ws_vec.iter_mut() {
-                    let _ = ws.remove_window(DRAG_PLACEHOLDER_HWND);
-                }
-            }
+            self.clear_drag_placeholder();
 
             let ws_idx = self.active_workspace_idx(target_monitor_id);
             let Some(workspace) = self.workspaces.get(&target_monitor_id).and_then(|v| v.get(ws_idx)) else {
@@ -578,11 +583,7 @@ impl AppState {
             self.sync_foreground_window();
         } else {
             // No placeholder found — fall back to full merge (cross-monitor or edge case).
-            for (_, ws_vec) in self.workspaces.iter_mut() {
-                for ws in ws_vec.iter_mut() {
-                    let _ = ws.remove_window(DRAG_PLACEHOLDER_HWND);
-                }
-            }
+            self.clear_drag_placeholder();
             self.execute_window_merge(hwnd, drag, target_monitor, win_rect);
         }
     }
