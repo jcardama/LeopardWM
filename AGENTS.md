@@ -17,3 +17,4 @@ cargo test --all
 - Prefer minimal, scoped changes; avoid unrelated refactors.
 - Do not edit generated files or vendor folders unless explicitly asked.
 - Check `git status` before destructive operations.
+- See `agent_docs/release.md` for the release process, changelog format, and pre-release checklist.
