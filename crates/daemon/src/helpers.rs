@@ -1402,6 +1402,12 @@ impl AppState {
                 None
             };
 
+            // Skip windows already managed on any workspace (including inactive ones)
+            // to prevent duplicates during config reload re-enumeration.
+            if self.find_window_workspace(win_info.hwnd).is_some() {
+                continue;
+            }
+
             let active_idx = self.active_workspace_idx(monitor_id);
             if let Some(workspace) = self.workspaces.get_mut(&monitor_id).and_then(|v| v.get_mut(active_idx)) {
                 match action {

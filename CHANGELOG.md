@@ -2,6 +2,12 @@
 
 All notable changes to LeopardWM will be documented in this file.
 
+## 0.1.7
+
+### Bug Fixes
+
+- Fix window duplication across workspaces on config reload — `enumerate_and_add_windows` now checks all workspaces (including inactive ones) before inserting, preventing windows on non-active workspaces from being duplicated onto the active workspace
+
 ## 0.1.6
 
 ### Improvements
