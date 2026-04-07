@@ -2,6 +2,15 @@
 
 All notable changes to LeopardWM will be documented in this file.
 
+## 0.1.8
+
+### Bug Fixes
+
+- Fix Slack/Spotify (and other Electron-style apps) overflowing their column boundaries — width-violation detection in the placement layer was using the global border-inset cache, which goes stale when an app changes how it renders its client frame at runtime. The frame-vs-frame math `actual_w > requested + cached_insets` then silently cancelled out, the violation was never reported, and the column was never widened. Detection now compares `DwmGetWindowAttribute(EXTENDED_FRAME_BOUNDS)` (the actual visible content rect) directly against the layout engine's requested rect, immune to cache staleness, and evicts the stale insets on any mismatch so the next `SetWindowPos` re-queries DWM
+- Add symmetric height-violation detection — windows that enforce a minimum height (e.g. Spotify, large media players) are now detected and propagated to the layout engine via a new `window_min_heights` map; the layout engine pins min-height windows to their minimum and distributes the remainder among flexible windows by weight, with the last window honoring its own minimum even when rounding eats pixels. Replaces the per-frame "Min-size fixup" band-aid that ran for ≥2-window columns and never informed the layout engine
+- Apply size-violation corrections on the same frame — after detection propagates min-width/min-height constraints, `apply_layout` now triggers a single guarded re-apply (via `reapplying_after_violation`) so the corrected layout lands on the current frame instead of waiting for the next user-triggered event. Inner re-apply errors propagate to the caller so daemon-paused states from a timed-out worker can't hide behind a successful outer apply
+- Display-change handler now also clears `min_heights` alongside `min_widths` — height constraints learned under one DPI/theme metric set could otherwise survive into the next state and distort intra-column distribution
+
 ## 0.1.7
 
 ### Bug Fixes

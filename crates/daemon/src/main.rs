@@ -1605,6 +1605,37 @@ async fn main() -> Result<()> {
                             }
                         }
                     }
+                    // Feed height violations back to the layout engine so it
+                    // can allocate correct intra-column heights on subsequent
+                    // frames.
+                    if !frame_result.height_violations.is_empty() {
+                        for violation in &frame_result.height_violations {
+                            // Skip violations where min_height >= viewport
+                            // height — the window is temporarily fullscreen
+                            // /maximized by the app, not enforcing a genuine
+                            // minimum that large.
+                            let vh = state.find_window_workspace(violation.window_id)
+                                .and_then(|(mid, _)| state.monitors.get(&mid).map(|m| m.work_area.height))
+                                .unwrap_or(i32::MAX);
+                            if violation.min_height >= vh {
+                                debug!(
+                                    "Ignoring viewport-sized height violation for window {} ({}px >= {}px viewport)",
+                                    violation.window_id, violation.min_height, vh
+                                );
+                                continue;
+                            }
+                            for ws_vec in state.workspaces.values_mut() {
+                                for ws in ws_vec.iter_mut() {
+                                    if ws.contains_window(violation.window_id) {
+                                        ws.set_window_min_height(
+                                            violation.window_id,
+                                            violation.min_height,
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
                     // Reposition border to follow the focused window during animation.
                     if let Some(hwnd) = state.previous_focused_hwnd {
                         if state.config.appearance.active_border {
@@ -1683,11 +1714,13 @@ async fn main() -> Result<()> {
                 animation_worker.clear_cache();
                 let mut state = state.lock().await;
                 state.display_change_pending = false;
-                // Clear stale min-width constraints — they were computed with old
-                // border metrics and cause cumulative column shrinking on theme changes.
+                // Clear stale min-width and min-height constraints — they were
+                // computed with old border metrics and cause cumulative column
+                // shrinking / wrong intra-column distribution on theme changes.
                 for ws_vec in state.workspaces.values_mut() {
                     for ws in ws_vec.iter_mut() {
                         ws.clear_all_min_widths();
+                        ws.clear_all_min_heights();
                     }
                 }
                 state.handle_window_event(WindowEvent::DisplayChange);

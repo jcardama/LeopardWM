@@ -136,9 +136,10 @@ impl Workspace {
     pub fn remove_window(&mut self, window_id: WindowId) -> Result<(), LayoutError> {
         for (col_idx, column) in self.columns.iter_mut().enumerate() {
             if let Some(removed_idx) = column.remove_window(window_id) {
-                // Also clear from minimized and min-width sets
+                // Also clear from minimized, min-width, and min-height sets
                 self.minimized_windows.remove(&window_id);
                 self.window_min_widths.remove(&window_id);
+                self.window_min_heights.remove(&window_id);
                 if self.fullscreen_window == Some(window_id) {
                     self.fullscreen_window = None;
                 }

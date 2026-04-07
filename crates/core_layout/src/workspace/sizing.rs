@@ -36,6 +36,29 @@ impl Workspace {
             .unwrap_or(0)
     }
 
+    // ========================================================================
+    // Minimum Height Methods
+    // ========================================================================
+
+    /// Record that a window enforces a minimum height (in layout pixels).
+    /// The layout engine will grant at least this much intra-column space
+    /// to the window when computing placements.
+    pub fn set_window_min_height(&mut self, window_id: WindowId, min_height: i32) {
+        self.window_min_heights.insert(window_id, min_height);
+    }
+
+    /// Remove a minimum-height constraint (e.g. when a window is removed
+    /// or a layout operation invalidates prior measurements).
+    pub fn clear_window_min_height(&mut self, window_id: WindowId) {
+        self.window_min_heights.remove(&window_id);
+    }
+
+    /// Clear all minimum-height constraints. Called on display/theme changes
+    /// because the metrics used to compute them are no longer valid.
+    pub fn clear_all_min_heights(&mut self) {
+        self.window_min_heights.clear();
+    }
+
     /// Adjust stored column widths to respect known min-width constraints.
     /// Columns containing min-width windows are widened to their minimum.
     /// Flexible columns keep their original widths — the total strip may grow,
@@ -77,6 +100,7 @@ impl Workspace {
         // Exit fullscreen first
         if let Some(fs_wid) = self.fullscreen_window.take() {
             self.window_min_widths.remove(&fs_wid);
+            self.window_min_heights.remove(&fs_wid);
         }
 
         let vis_w = self.visible_width(viewport_width);
@@ -135,9 +159,11 @@ impl Workspace {
         if self.columns.is_empty() {
             return;
         }
-        // Clear cached min-widths — equalize resets all widths, so constraints
-        // will be re-detected from actual window sizes on the next apply cycle.
+        // Clear cached min-widths and min-heights — equalize resets all widths,
+        // so constraints will be re-detected from actual window sizes on the
+        // next apply cycle.
         self.window_min_widths.clear();
+        self.window_min_heights.clear();
 
         // Identify which columns are active (have at least one non-minimized window)
         let active_flags: Vec<bool> = self.columns.iter()
@@ -329,10 +355,11 @@ impl Workspace {
             if let Some(column) = self.columns.get_mut(col_idx) {
                 column.set_width(new_w);
             }
-            // Clear cached min-widths so constraints are re-detected
+            // Clear cached min-widths and min-heights so constraints are re-detected
             if let Some(column) = self.columns.get(col_idx) {
                 for wid in column.windows() {
                     self.window_min_widths.remove(wid);
+                    self.window_min_heights.remove(wid);
                 }
             }
         }

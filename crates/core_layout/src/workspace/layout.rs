@@ -130,26 +130,63 @@ impl Workspace {
             };
             let available_height = (usable_height - window_gaps).max(0);
 
-            // Compute per-window heights using weights
+            // Compute per-window heights respecting known min-heights. Each
+            // window with a recorded minimum is pinned to at least that
+            // minimum; the remaining space is distributed among the flexible
+            // (no-min) windows using their height weights. The last window
+            // absorbs rounding remainder so the column stays flush with the
+            // viewport — this also means if there are no flexible windows,
+            // any leftover space simply flows into the last pinned window.
             let visible_weights: Vec<f64> = if column.height_weights.len() == column.windows().len() {
                 visible_windows.iter().map(|(i, _)| column.height_weights[*i]).collect()
             } else {
                 vec![1.0; visible_windows.len()]
             };
-            let weight_sum: f64 = visible_weights.iter().sum();
-            let normalized: Vec<f64> = if weight_sum > 0.0 {
-                visible_weights.iter().map(|w| w / weight_sum).collect()
-            } else {
-                vec![1.0 / visible_windows.len().max(1) as f64; visible_windows.len()]
-            };
+
+            let min_heights: Vec<i32> = visible_windows.iter()
+                .map(|(_, wid)| self.window_min_heights.get(wid).copied().unwrap_or(0))
+                .collect();
+            let total_min: i32 = min_heights.iter().sum();
+            let flex_height = (available_height - total_min).max(0);
+
+            // Sum of weights over windows that don't have a pinned minimum.
+            let flex_weight_sum: f64 = visible_weights
+                .iter()
+                .zip(min_heights.iter())
+                .filter(|(_, m)| **m == 0)
+                .map(|(w, _)| *w)
+                .sum();
+            // If any flexible window exists, pinned windows get exactly their
+            // minimum and flexible windows share flex_height. If every window
+            // is pinned, pinned windows still get exactly their minimum and
+            // the last-window remainder rule absorbs any leftover space.
+            let has_flex = flex_weight_sum > 0.0;
 
             let mut current_y = viewport.y + outer_top;
 
             for (win_idx, &(_, window_id)) in visible_windows.iter().enumerate() {
-                let height = if win_idx == visible_windows.len() - 1 {
-                    (viewport.y + viewport.height - outer_bottom - current_y).max(0)
+                let is_last = win_idx == visible_windows.len() - 1;
+                let height = if is_last {
+                    // Last window absorbs the rounding remainder so the column
+                    // stays flush with the viewport, but we honor its minimum
+                    // even if doing so causes the column to overflow downward
+                    // (the alternative — silently violating its minimum — is
+                    // what Slack/Spotify did before this fix and the whole
+                    // point of the contract is to never let that happen).
+                    let remainder =
+                        (viewport.y + viewport.height - outer_bottom - current_y).max(0);
+                    remainder.max(min_heights[win_idx])
+                } else if min_heights[win_idx] > 0 {
+                    // Pinned non-last window: exactly its minimum.
+                    min_heights[win_idx]
+                } else if has_flex {
+                    // Flexible window: share of flex_height by weight.
+                    let share = visible_weights[win_idx] / flex_weight_sum;
+                    (flex_height as f64 * share).round() as i32
                 } else {
-                    (available_height as f64 * normalized[win_idx]).round() as i32
+                    // No flex windows, and this one isn't pinned — give it an
+                    // even split of available_height as a last resort.
+                    available_height / visible_windows.len().max(1) as i32
                 };
 
                 placements.push(WindowPlacement {

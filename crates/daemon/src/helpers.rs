@@ -1044,7 +1044,11 @@ impl AppState {
         #[cfg(test)]
         let late_worker_recovery_count = self.late_worker_recovery_count.clone();
 
-        let (tx, rx) = std::sync::mpsc::channel::<(Result<()>, Vec<leopardwm_platform_win32::WidthViolation>)>();
+        let (tx, rx) = std::sync::mpsc::channel::<(
+            Result<()>,
+            Vec<leopardwm_platform_win32::WidthViolation>,
+            Vec<leopardwm_platform_win32::HeightViolation>,
+        )>();
         let spawn_result = std::thread::Builder::new()
             .name("leopardwm-apply-layout".to_string())
             .spawn(move || {
@@ -1053,7 +1057,7 @@ impl AppState {
                         || apply_epoch_ref.load(Ordering::SeqCst) != apply_epoch
                 };
                 if should_cancel() {
-                    let _ = tx.send((Ok(()), Vec::new()));
+                    let _ = tx.send((Ok(()), Vec::new(), Vec::new()));
                     return;
                 }
 
@@ -1076,30 +1080,30 @@ impl AppState {
                         );
                         #[cfg(test)]
                         late_worker_recovery_count.fetch_add(1, Ordering::SeqCst);
-                        let _ = tx.send((Ok(()), Vec::new()));
+                        let _ = tx.send((Ok(()), Vec::new(), Vec::new()));
                         return;
                     }
-                    let _ = tx.send((result, Vec::new()));
+                    let _ = tx.send((result, Vec::new(), Vec::new()));
                     return;
                 }
 
                 if should_cancel() {
-                    let _ = tx.send((Ok(()), Vec::new()));
+                    let _ = tx.send((Ok(()), Vec::new(), Vec::new()));
                     return;
                 }
-                let (result, violations) =
+                let (result, width_violations, height_violations) =
                     match leopardwm_platform_win32::apply_placements(&all_placements, &platform_config, None) {
-                        Ok(r) => (Ok(()), r.width_violations),
-                        Err(e) => (Err(anyhow!(e.to_string())), Vec::new()),
+                        Ok(r) => (Ok(()), r.width_violations, r.height_violations),
+                        Err(e) => (Err(anyhow!(e.to_string())), Vec::new(), Vec::new()),
                     };
                 if should_cancel() {
                     run_visibility_recovery_pass(&apply_window_ids, "apply-cancelled-late-worker");
                     #[cfg(test)]
                     late_worker_recovery_count.fetch_add(1, Ordering::SeqCst);
-                    let _ = tx.send((Ok(()), Vec::new()));
+                    let _ = tx.send((Ok(()), Vec::new(), Vec::new()));
                     return;
                 }
-                let _ = tx.send((result, violations));
+                let _ = tx.send((result, width_violations, height_violations));
             });
 
         let worker_handle = match spawn_result {
@@ -1111,17 +1115,18 @@ impl AppState {
         };
 
         let result = match rx.recv_timeout(timeout) {
-            Ok((result, violations)) => {
+            Ok((result, width_violations, height_violations)) => {
                 let _ = worker_handle.join();
                 if result.is_err() {
                     self.moved_or_resized_suppression.clear();
                 }
-                // Feed width violations back to the layout engine.
-                // Skip violations where the min_width >= viewport width — the
-                // window is temporarily fullscreen/maximized by the app itself,
-                // not genuinely enforcing a minimum that large.
-                if result.is_ok() && !violations.is_empty() {
-                    for v in &violations {
+                // Feed width/height violations back to the layout engine.
+                // Skip violations where min_width/min_height >= viewport size —
+                // the window is temporarily fullscreen/maximized by the app
+                // itself, not genuinely enforcing a minimum that large.
+                let mut constraints_changed = false;
+                if result.is_ok() && !width_violations.is_empty() {
+                    for v in &width_violations {
                         let vw = self.find_window_workspace(v.window_id)
                             .map(|(mid, _)| self.viewport_width_for(mid))
                             .unwrap_or(i32::MAX);
@@ -1136,17 +1141,65 @@ impl AppState {
                             for ws in ws_vec.iter_mut() {
                                 if ws.contains_window(v.window_id) {
                                     ws.set_window_min_width(v.window_id, v.min_width);
+                                    constraints_changed = true;
                                 }
                             }
                         }
                     }
                     for ws_vec in self.workspaces.values_mut() {
                         for ws in ws_vec.iter_mut() {
-                            ws.apply_min_width_constraints();
+                            if ws.apply_min_width_constraints() {
+                                constraints_changed = true;
+                            }
                         }
                     }
                 }
-                result
+                if result.is_ok() && !height_violations.is_empty() {
+                    for v in &height_violations {
+                        let vh = self.find_window_workspace(v.window_id)
+                            .and_then(|(mid, _)| self.monitors.get(&mid).map(|m| m.work_area.height))
+                            .unwrap_or(i32::MAX);
+                        if v.min_height >= vh {
+                            debug!(
+                                "Ignoring viewport-sized height violation for window {} ({}px >= {}px viewport)",
+                                v.window_id, v.min_height, vh
+                            );
+                            continue;
+                        }
+                        for ws_vec in self.workspaces.values_mut() {
+                            for ws in ws_vec.iter_mut() {
+                                if ws.contains_window(v.window_id) {
+                                    ws.set_window_min_height(v.window_id, v.min_height);
+                                    constraints_changed = true;
+                                }
+                            }
+                        }
+                    }
+                }
+                // If any constraint was added, run a single guarded re-apply
+                // so the corrected layout lands on the current frame instead
+                // of waiting for the next user-triggered event. The inner
+                // apply_layout manages its own applying_layout state; we just
+                // need to release our own first so the guard at the top of
+                // the recursive call can re-enter cleanly. If the inner call
+                // fails (e.g. its worker times out and pauses the daemon), we
+                // surface that error in place of the outer Ok — the outer
+                // placements may have already landed, but the daemon state
+                // needs to reflect that the corrective pass didn't complete.
+                if constraints_changed && !self.reapplying_after_violation {
+                    self.reapplying_after_violation = true;
+                    self.applying_layout = false;
+                    let reapply = self.apply_layout();
+                    self.reapplying_after_violation = false;
+                    if let Err(e) = reapply {
+                        warn!("Re-apply after size-violation propagation failed: {}", e);
+                        Err(e)
+                    } else {
+                        result
+                    }
+                } else {
+                    result
+                }
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 self.paused = true;

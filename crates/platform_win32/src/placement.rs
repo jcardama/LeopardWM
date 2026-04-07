@@ -140,20 +140,31 @@ impl PlacementCache {
     }
 }
 
-/// A window whose actual width exceeds the requested placement width,
+/// A window whose actual visible width exceeds the requested placement width,
 /// indicating it enforces a minimum size. The `min_width` is in layout
-/// pixels (excludes invisible border insets).
+/// pixels (matches what the layout engine would allocate).
 #[derive(Debug, Clone)]
 pub struct WidthViolation {
     pub window_id: WindowId,
-    /// Minimum width in layout coordinates (border insets subtracted).
+    /// Minimum width in layout coordinates.
     pub min_width: i32,
 }
 
-/// Result of apply_placements, including any detected width violations.
+/// A window whose actual visible height exceeds the requested placement height.
+/// Symmetric to `WidthViolation`. The `min_height` is in layout pixels.
+#[derive(Debug, Clone)]
+pub struct HeightViolation {
+    pub window_id: WindowId,
+    /// Minimum height in layout coordinates.
+    pub min_height: i32,
+}
+
+/// Result of apply_placements, including any detected size violations.
 pub struct ApplyPlacementsResult {
     /// Width violations detected after positioning (windows wider than requested).
     pub width_violations: Vec<WidthViolation>,
+    /// Height violations detected after positioning (windows taller than requested).
+    pub height_violations: Vec<HeightViolation>,
 }
 
 /// Apply window placements from the layout engine.
@@ -169,7 +180,10 @@ pub fn apply_placements(
     _config: &PlatformConfig,
     mut cache: Option<&mut PlacementCache>,
 ) -> Result<ApplyPlacementsResult, Win32Error> {
-    let empty_result = ApplyPlacementsResult { width_violations: Vec::new() };
+    let empty_result = ApplyPlacementsResult {
+        width_violations: Vec::new(),
+        height_violations: Vec::new(),
+    };
     if placements.is_empty() {
         if let Some(cache) = cache {
             cache.clear();
@@ -202,6 +216,12 @@ pub fn apply_placements(
         y: i32,
         w: i32,
         h: i32,
+        /// Layout-coordinate width requested by the layout engine (pre-insets).
+        /// Used for size-violation detection, which compares DWM visible bounds
+        /// directly and is immune to stale cached border insets.
+        layout_w: i32,
+        /// Layout-coordinate height requested by the layout engine (pre-insets).
+        layout_h: i32,
         visibility: Visibility,
         flags: windows::Win32::UI::WindowsAndMessaging::SET_WINDOW_POS_FLAGS,
         column_index: usize,
@@ -270,6 +290,8 @@ pub fn apply_placements(
                 y: placement.rect.y - inset_t,
                 w: frame_w,
                 h: frame_h,
+                layout_w: placement.rect.width,
+                layout_h: placement.rect.height,
                 visibility: placement.visibility,
                 flags,
                 column_index: placement.column_index,
@@ -285,6 +307,8 @@ pub fn apply_placements(
                 y: placement.rect.y - inset_t,
                 w: frame_w,
                 h: 0,
+                layout_w: placement.rect.width,
+                layout_h: placement.rect.height,
                 visibility: placement.visibility,
                 flags: SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | async_flag,
                 column_index: placement.column_index,
@@ -386,149 +410,88 @@ pub fn apply_placements(
         }
     }
 
-    // Fix-up pass: some windows enforce minimum sizes and Windows silently
-    // resizes them, causing overlaps in stacked columns. Detect violations
-    // and re-layout affected columns.
+    // Detect size violations by comparing the DWM extended frame bounds
+    // (the window's actual visible content area) against the layout rect the
+    // layout engine asked for. This deliberately bypasses the cached-inset
+    // math used for SetWindowPos: if the cached insets go stale (e.g. apps
+    // like Slack/Spotify toggle custom client frames at runtime) the frame-
+    // vs-frame comparison silently cancels out and violations are missed.
     //
-    // This runs even during async frames — responsive windows process the
-    // position change quickly, and the fixup corrects visual overlaps without
-    // feeding back to the layout engine.
-    {
-        use std::collections::HashMap;
-        // Group visible entries by column (only multi-window columns matter).
-        let mut col_indices: HashMap<usize, Vec<usize>> = HashMap::new();
-        for (i, entry) in entries.iter().enumerate() {
-            if entry.column_index != usize::MAX
-                && entry.visibility == Visibility::Visible
-                && !failed_window_ids.contains(&entry.window_id)
-            {
-                col_indices.entry(entry.column_index).or_default().push(i);
-            }
-        }
-        for indices in col_indices.values() {
-            if indices.len() < 2 {
-                continue;
-            }
-            // Sort by y position (top to bottom).
-            let mut sorted: Vec<usize> = indices.clone();
-            sorted.sort_by_key(|&i| entries[i].y);
-
-            // Check each window's actual height against requested.
-            let mut needs_fixup = false;
-            for &idx in &sorted {
-                let entry = &entries[idx];
-                let actual_h = unsafe {
-                    let mut r = RECT::default();
-                    if GetWindowRect(entry.hwnd, &mut r).is_ok() {
-                        r.bottom - r.top
-                    } else {
-                        entry.h
-                    }
-                };
-                if actual_h > entry.h + 2 {
-                    needs_fixup = true;
-                    break;
-                }
-            }
-            if !needs_fixup {
-                continue;
-            }
-
-            // Compute column bottom boundary from the last entry's original position.
-            let last = &entries[*sorted.last().unwrap()];
-            let column_bottom = last.y + last.h;
-
-            // Re-layout: walk top-to-bottom, query actual heights, push
-            // subsequent windows down. Last window absorbs remaining space.
-            let mut current_y = entries[sorted[0]].y;
-            for (pos, &idx) in sorted.iter().enumerate() {
-                let entry = &entries[idx];
-                let actual_h = unsafe {
-                    let mut r = RECT::default();
-                    if GetWindowRect(entry.hwnd, &mut r).is_ok() {
-                        r.bottom - r.top
-                    } else {
-                        entry.h
-                    }
-                };
-                let gap = if pos > 0 {
-                    // Infer gap from original layout spacing.
-                    let prev = &entries[sorted[pos - 1]];
-                    (entry.y - (prev.y + prev.h)).max(0)
-                } else {
-                    0
-                };
-                let new_y = current_y + gap;
-                let new_h = if pos == sorted.len() - 1 {
-                    // Last window: fill remaining space.
-                    (column_bottom - new_y).max(1)
-                } else if actual_h > entry.h + 2 {
-                    // This window enforces a minimum — use its actual height.
-                    actual_h
-                } else {
-                    entry.h
-                };
-                if new_y != entry.y || new_h != entry.h {
-                    tracing::debug!(
-                        "Min-size fixup: {:?} y {} → {}, h {} → {}",
-                        entry.hwnd, entry.y, new_y, entry.h, new_h,
-                    );
-                    unsafe {
-                        let _ = SetWindowPos(
-                            entry.hwnd, None,
-                            entry.x, new_y, entry.w, new_h,
-                            SWP_NOZORDER | SWP_NOACTIVATE | async_flag,
-                        );
-                    }
-                }
-                current_y = new_y + new_h;
-            }
-        }
-    }
-
-    // Detect width violations: windows wider than requested (min-width enforcement).
-    // Report them so the layout engine can account for them on subsequent frames.
+    // Visible-bounds-vs-layout-rect is the honest comparison: the layout
+    // engine allocates `placement.rect.width × placement.rect.height` of
+    // visible real estate, and we check whether the window actually fits.
     //
-    // Skipped during async animation frames — GetWindowRect returns stale
-    // (pre-resize) widths which would create false min-width constraints
-    // that prevent columns from shrinking. The synchronous landing pass
-    // detects real violations authoritatively.
+    // Skipped during async animation frames — DWM returns stale (pre-resize)
+    // bounds which would create false constraints that prevent columns from
+    // shrinking. The synchronous landing pass detects real violations
+    // authoritatively.
     let mut width_violations = Vec::new();
+    let mut height_violations = Vec::new();
     if async_flag == SET_WINDOW_POS_FLAGS(0) {
-    for entry in &entries {
-        if entry.column_index == usize::MAX
-            || entry.visibility != Visibility::Visible
-            || failed_window_ids.contains(&entry.window_id)
-        {
-            continue;
-        }
-        let actual_w = unsafe {
-            let mut r = RECT::default();
-            if GetWindowRect(entry.hwnd, &mut r).is_ok() {
-                r.right - r.left
-            } else {
+        for entry in &entries {
+            if entry.column_index == usize::MAX
+                || entry.visibility != Visibility::Visible
+                || failed_window_ids.contains(&entry.window_id)
+            {
                 continue;
             }
-        };
-        if actual_w > entry.w + 2 {
-            // Convert back to layout pixels by subtracting border insets.
-            let (inset_l, _, inset_r, _) = if high_contrast {
-                (0, 0, 0, 0)
-            } else {
-                invisible_border_insets(entry.hwnd)
+            // Query DWM for the current visible bounds. This ignores any
+            // invisible-border metrics and reports what the user actually sees.
+            let (visible_w, visible_h) = unsafe {
+                let mut ext = RECT::default();
+                if DwmGetWindowAttribute(
+                    entry.hwnd,
+                    DWMWA_EXTENDED_FRAME_BOUNDS,
+                    &mut ext as *mut RECT as *mut _,
+                    std::mem::size_of::<RECT>() as u32,
+                )
+                .is_err()
+                {
+                    continue;
+                }
+                (ext.right - ext.left, ext.bottom - ext.top)
             };
-            let layout_min = actual_w - inset_l - inset_r;
-            tracing::debug!(
-                "Width violation: {:?} requested {}px, actual {}px (layout min {}px)",
-                entry.hwnd, entry.w, actual_w, layout_min,
-            );
-            width_violations.push(WidthViolation {
-                window_id: entry.window_id,
-                min_width: layout_min,
-            });
+
+            let mut mismatched = false;
+            if visible_w > entry.layout_w + 2 {
+                tracing::debug!(
+                    "Width violation: {:?} requested {}px, visible {}px",
+                    entry.hwnd, entry.layout_w, visible_w,
+                );
+                width_violations.push(WidthViolation {
+                    window_id: entry.window_id,
+                    min_width: visible_w,
+                });
+                mismatched = true;
+            }
+            if visible_h > entry.layout_h + 2 {
+                tracing::debug!(
+                    "Height violation: {:?} requested {}px, visible {}px",
+                    entry.hwnd, entry.layout_h, visible_h,
+                );
+                height_violations.push(HeightViolation {
+                    window_id: entry.window_id,
+                    min_height: visible_h,
+                });
+                mismatched = true;
+            }
+
+            // On any mismatch, invalidate the cached border insets for this
+            // window. Stale insets are the most likely reason a prior frame
+            // sized the frame incorrectly, and the next SetWindowPos should
+            // re-query DWM for fresh values.
+            if mismatched {
+                if let Some(ref mut cache) = cache {
+                    cache.insets.remove(&entry.window_id);
+                }
+                if let Ok(mut global) = GLOBAL_INSET_CACHE.lock() {
+                    if let Some(ref mut m) = *global {
+                        m.remove(&entry.window_id);
+                    }
+                }
+            }
         }
-    }
-    } // end: skip width violation detection during async frames
+    } // end: skip size violation detection during async frames
 
     // Update cache: remove stale entries (windows no longer in placements),
     // update positioned entries, and keep skipped-unchanged entries intact.
@@ -593,7 +556,10 @@ pub fn apply_placements(
         offscreen_count,
     );
 
-    Ok(ApplyPlacementsResult { width_violations })
+    Ok(ApplyPlacementsResult {
+        width_violations,
+        height_violations,
+    })
 }
 
 type InsetMap = HashMap<WindowId, (i32, i32, i32, i32)>;

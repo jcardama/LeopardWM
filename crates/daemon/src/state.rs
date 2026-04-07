@@ -168,6 +168,13 @@ pub(crate) struct AppState {
     pub(crate) paused: bool,
     /// Guard flag to suppress MovedOrResized events during apply_layout().
     pub(crate) applying_layout: bool,
+    /// Guard flag: prevents recursive re-apply after a size-violation
+    /// propagation. The first apply_layout call may detect fresh min-width
+    /// /min-height constraints and widen columns or shift distribution; we
+    /// trigger a single immediate re-apply so the current frame reflects the
+    /// correction. This flag ensures the recursive call cannot itself trigger
+    /// another recursive call.
+    pub(crate) reapplying_after_violation: bool,
     /// Suppress MovedOrResized snap-backs while a display change is being debounced.
     /// Set on WM_DISPLAYCHANGE, cleared after the debounced handler runs.
     pub(crate) display_change_pending: bool,
@@ -329,6 +336,7 @@ impl AppState {
             border_frame: leopardwm_platform_win32::border::BorderFrame::new().ok(),
             paused: false,
             applying_layout: false,
+            reapplying_after_violation: false,
             display_change_pending: false,
             drag_state: None,
             resize_hwnd: None,

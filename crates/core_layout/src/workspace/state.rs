@@ -22,6 +22,7 @@ impl Workspace {
             if self.fullscreen_window == Some(window_id) {
                 self.fullscreen_window = None;
                 self.window_min_widths.remove(&window_id);
+                self.window_min_heights.remove(&window_id);
             }
             // Cancel active animation — its target is now stale after minimize
             if is_tiled {
@@ -37,9 +38,11 @@ impl Workspace {
     ///
     /// Returns `true` if the window was previously marked minimized.
     pub fn mark_restored(&mut self, window_id: WindowId) -> bool {
-        // Clear cached min-width — the window's size constraints may have
-        // changed while minimized. It will be re-detected if still enforced.
+        // Clear cached min-width/min-height — the window's size constraints
+        // may have changed while minimized. They will be re-detected if still
+        // enforced.
         self.window_min_widths.remove(&window_id);
+        self.window_min_heights.remove(&window_id);
         self.minimized_windows.remove(&window_id)
     }
 
@@ -74,6 +77,7 @@ impl Workspace {
         if self.fullscreen_window == Some(window_id) {
             self.fullscreen_window = None;
             self.window_min_widths.remove(&window_id);
+            self.window_min_heights.remove(&window_id);
             true
         } else {
             false
@@ -84,11 +88,12 @@ impl Workspace {
     /// Returns true if entering fullscreen, false if exiting.
     pub fn toggle_fullscreen(&mut self) -> bool {
         if let Some(fs_wid) = self.fullscreen_window {
-            // Clear min-width recorded while the window was at viewport size —
-            // it reflects the inflated fullscreen rect, not the window's real
-            // minimum. A genuine constraint will be re-detected on the next
-            // placement cycle.
+            // Clear min-width/min-height recorded while the window was at
+            // viewport size — they reflect the inflated fullscreen rect, not
+            // the window's real minimum. Genuine constraints will be
+            // re-detected on the next placement cycle.
             self.window_min_widths.remove(&fs_wid);
+            self.window_min_heights.remove(&fs_wid);
 
             // If fullscreen points at a removed/minimized window, clear stale state
             // and treat this invocation as a fresh toggle attempt.

@@ -95,6 +95,11 @@ pub struct Workspace {
     /// can allocate correct column widths from the start.
     #[serde(skip)]
     pub(crate) window_min_widths: HashMap<WindowId, i32>,
+    /// Known minimum heights for windows that enforce a minimum size.
+    /// Detected by the platform layer and fed back so the layout engine
+    /// can allocate correct intra-column heights from the start.
+    #[serde(skip)]
+    pub(crate) window_min_heights: HashMap<WindowId, i32>,
     /// Origin info for windows floated via toggle_floating.
     /// Stores (left_neighbor, fallback_index) to restore position when unfloating.
     /// Left neighbor is used to find the right neighborhood even after column changes;
@@ -140,6 +145,7 @@ impl Default for Workspace {
             fullscreen_window: None,
             minimized_windows: HashSet::new(),
             window_min_widths: HashMap::new(),
+            window_min_heights: HashMap::new(),
             float_origin_column: HashMap::new(),
             reduce_motion: false,
             center_past_edges: false,
@@ -237,6 +243,7 @@ impl Workspace {
         if let Some(pos) = self.floating_windows.iter().position(|f| f.id == window_id) {
             self.floating_windows.remove(pos);
             self.window_min_widths.remove(&window_id);
+            self.window_min_heights.remove(&window_id);
             self.float_origin_column.remove(&window_id);
             if self.fullscreen_window == Some(window_id) {
                 self.fullscreen_window = None;

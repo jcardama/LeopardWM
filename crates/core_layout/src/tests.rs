@@ -1719,6 +1719,130 @@ mod tests {
     }
 
     #[test]
+    fn test_min_height_pins_first_window_in_stacked_column() {
+        // A column with two windows: the first enforces a minimum height,
+        // the second is flexible. The layout must grant at least min_height
+        // to the pinned window and give the remainder to the second.
+        let mut ws = Workspace::new();
+        ws.insert_window(1, Some(400)).unwrap();
+        ws.insert_window_in_column(2, 0).unwrap();
+
+        // Pin window 1 to at least 800 pixels tall.
+        ws.set_window_min_height(1, 800);
+
+        // Viewport 1000 tall with outer gaps of 10 and one inter-window gap
+        // of 10 means available_height = 1000 - 20 - 10 = 970.
+        let viewport = Rect::new(0, 0, 800, 1000);
+        let placements = ws.compute_placements(viewport);
+        let visible: Vec<_> = placements
+            .iter()
+            .filter(|p| p.visibility == Visibility::Visible)
+            .collect();
+
+        assert_eq!(visible.len(), 2);
+        let pinned = visible.iter().find(|p| p.window_id == 1).unwrap();
+        let flexible = visible.iter().find(|p| p.window_id == 2).unwrap();
+
+        // Pinned window must be at least its minimum height.
+        assert!(
+            pinned.rect.height >= 800,
+            "pinned window should get at least 800px, got {}",
+            pinned.rect.height
+        );
+        // Flexible window absorbs the remainder (last-window rule) and
+        // should be non-negative.
+        assert!(flexible.rect.height >= 0);
+        // The two windows plus the inter-window gap should fill the usable
+        // viewport column (last window absorbs rounding remainder).
+        let bottom = flexible.rect.y + flexible.rect.height;
+        assert_eq!(bottom, viewport.y + viewport.height - 10);
+    }
+
+    #[test]
+    fn test_min_height_pins_last_window_in_stacked_column() {
+        // Codex review found that the previous version's "last window absorbs
+        // remainder" rule short-circuited the pinning check, leaving the last
+        // window below its declared minimum when rounding ate a few pixels.
+        // The fix: last window's height = max(remainder, min_heights[last]).
+        let mut ws = Workspace::new();
+        ws.insert_window(1, Some(400)).unwrap();
+        ws.insert_window_in_column(2, 0).unwrap();
+        ws.insert_window_in_column(3, 0).unwrap();
+
+        // Pin the LAST window to a minimum that the equal-split rounding
+        // would otherwise undershoot.
+        ws.set_window_min_height(3, 200);
+
+        let viewport = Rect::new(0, 0, 800, 1000);
+        let placements = ws.compute_placements(viewport);
+        let last = placements.iter().find(|p| p.window_id == 3).unwrap();
+        assert!(
+            last.rect.height >= 200,
+            "last window should honor its 200px minimum, got {}",
+            last.rect.height
+        );
+    }
+
+    #[test]
+    fn test_min_height_oversubscribed_column_overflows_gracefully() {
+        // When sum(min_heights) > available_height, the pinning contract
+        // still has to grant each pinned window its minimum. The column
+        // overflows downward (acceptable: nothing else we can do), but no
+        // window goes below its declared minimum.
+        let mut ws = Workspace::new();
+        ws.insert_window(1, Some(400)).unwrap();
+        ws.insert_window_in_column(2, 0).unwrap();
+
+        // Each window wants 700, available_height ~= 580 (600 viewport - 20
+        // outer gaps - 0 inter-window gap initially; with default gap=10
+        // it's 580 - 10 = 570).
+        ws.set_window_min_height(1, 700);
+        ws.set_window_min_height(2, 700);
+
+        let viewport = Rect::new(0, 0, 800, 600);
+        let placements = ws.compute_placements(viewport);
+        let w1 = placements.iter().find(|p| p.window_id == 1).unwrap();
+        let w2 = placements.iter().find(|p| p.window_id == 2).unwrap();
+
+        assert!(
+            w1.rect.height >= 700,
+            "window 1 should get its 700px minimum, got {}",
+            w1.rect.height
+        );
+        assert!(
+            w2.rect.height >= 700,
+            "window 2 should get its 700px minimum, got {}",
+            w2.rect.height
+        );
+    }
+
+    #[test]
+    fn test_min_height_cleared_on_fullscreen_exit() {
+        // Mirrors test_fullscreen_exit_clears_min_width — fullscreen exit
+        // must also forget min_height measured while the window was at
+        // viewport size (it wasn't a real constraint).
+        let mut ws = Workspace::new();
+        ws.insert_window(1, Some(400)).unwrap();
+
+        ws.toggle_fullscreen();
+        assert!(ws.is_fullscreen());
+
+        ws.set_window_min_height(1, 1080);
+
+        // Exit fullscreen
+        let entered = ws.toggle_fullscreen();
+        assert!(!entered);
+
+        // min_height should have been cleared
+        let viewport = Rect::new(0, 0, 800, 600);
+        let placements = ws.compute_placements(viewport);
+        let p = placements.iter().find(|p| p.window_id == 1).unwrap();
+        // The window should NOT be pinned to 1080 anymore — it should fit
+        // the normal viewport height.
+        assert!(p.rect.height < 1080);
+    }
+
+    #[test]
     fn test_toggle_fullscreen_targets_visible_window_when_focus_is_minimized() {
         let mut ws = Workspace::new();
         ws.insert_window(1, Some(400)).unwrap();

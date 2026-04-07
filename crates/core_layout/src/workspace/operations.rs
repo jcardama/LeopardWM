@@ -96,10 +96,11 @@ impl Workspace {
         if let Some(column) = self.columns.get_mut(self.focused_column) {
             let new_width = column.width.saturating_add(delta).max(MIN_COLUMN_WIDTH);
             column.width = new_width;
-            // Clear cached min-widths so the constraint will be re-detected
-            // from the actual window size on the next apply cycle.
+            // Clear cached min-widths and min-heights so constraints will be
+            // re-detected from the actual window size on the next apply cycle.
             for wid in column.windows() {
                 self.window_min_widths.remove(wid);
+                self.window_min_heights.remove(wid);
             }
         }
     }

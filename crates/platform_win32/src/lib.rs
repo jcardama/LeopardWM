@@ -33,7 +33,7 @@ pub use enumeration::{
 pub use event_hooks::{install_event_hooks, EventHookHandle, WindowEvent};
 pub use placement::{
     apply_placements, clear_inset_cache, dwm_uncloak_all, dwm_uncloak_window,
-    is_placement_cloaked, ApplyPlacementsResult, PlacementCache, WidthViolation,
+    is_placement_cloaked, ApplyPlacementsResult, HeightViolation, PlacementCache, WidthViolation,
 };
 pub use types::{MonitorId, MonitorInfo, PlatformConfig, Win32Error, WindowInfo};
 pub use utils::{
