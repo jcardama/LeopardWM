@@ -4,6 +4,10 @@ All notable changes to LeopardWM will be documented in this file.
 
 ## 0.1.8
 
+### Improvements
+
+- Hide focus border in fullscreen mode — the active window highlight border is now automatically hidden when a window is fullscreened (Ctrl+Alt+Shift+F) and restored when exiting fullscreen
+
 ### Bug Fixes
 
 - Fix Slack/Spotify (and other Electron-style apps) overflowing their column boundaries — width-violation detection in the placement layer was using the global border-inset cache, which goes stale when an app changes how it renders its client frame at runtime. The frame-vs-frame math `actual_w > requested + cached_insets` then silently cancelled out, the violation was never reported, and the column was never widened. Detection now compares `DwmGetWindowAttribute(EXTENDED_FRAME_BOUNDS)` (the actual visible content rect) directly against the layout engine's requested rect, immune to cache staleness, and evicts the stale insets on any mismatch so the next `SetWindowPos` re-queries DWM

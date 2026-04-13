@@ -1311,6 +1311,11 @@ impl AppState {
     /// the OS-dragged window — the ghost overlay provides visual feedback instead.
     pub(crate) fn show_border(&self, hwnd: u64) {
         if let Some(ref frame) = self.border_frame {
+            // No border in fullscreen — the window covers the entire viewport.
+            if self.focused_workspace().is_some_and(|ws| ws.is_fullscreen()) {
+                frame.hide();
+                return;
+            }
             let border_width = self.scaled_border_width(hwnd);
             // During resize preview: show border at the preview snap target.
             if let Some(rect) = self.resize_preview_display_rect {

@@ -458,10 +458,16 @@ impl AppState {
                 IpcResponse::Ok
             }
             IpcCommand::ToggleFullscreen => {
-                self.execute_workspace_command(true, false, |ws, _vw| {
+                let resp = self.execute_workspace_command(true, false, |ws, _vw| {
                     let entering = ws.toggle_fullscreen();
                     info!("Fullscreen: {}", if entering { "on" } else { "off" });
-                })
+                });
+                if self.focused_workspace().is_some_and(|ws| ws.is_fullscreen()) {
+                    self.hide_border();
+                } else {
+                    self.sync_foreground_window();
+                }
+                resp
             }
             IpcCommand::SetColumnWidth { fraction } => {
                 if let Err(message) = validate_set_width_fraction(fraction) {
