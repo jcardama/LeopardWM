@@ -1316,6 +1316,11 @@ impl AppState {
                 frame.hide();
                 return;
             }
+            // No border on unmanaged/ignored windows.
+            if self.find_window_workspace(hwnd).is_none() {
+                frame.hide();
+                return;
+            }
             let border_width = self.scaled_border_width(hwnd);
             // During resize preview: show border at the preview snap target.
             if let Some(rect) = self.resize_preview_display_rect {
