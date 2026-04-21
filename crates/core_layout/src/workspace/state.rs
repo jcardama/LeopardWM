@@ -21,11 +21,25 @@ impl Workspace {
         if is_tiled || is_floating {
             if self.fullscreen_window == Some(window_id) {
                 self.fullscreen_window = None;
-                self.window_min_widths.remove(&window_id);
-                self.window_min_heights.remove(&window_id);
             }
-            // Cancel active animation — its target is now stale after minimize
+            // Clear stale min-size constraints for the minimized window and
+            // its column siblings — the column geometry is about to change, so
+            // constraints learned under the old composition are invalid. They
+            // will be re-detected on the next placement cycle if still enforced.
+            self.window_min_widths.remove(&window_id);
+            self.window_min_heights.remove(&window_id);
             if is_tiled {
+                if let Some((col_idx, _)) = self.find_window_location(window_id) {
+                    if let Some(col) = self.columns.get(col_idx) {
+                        for &sibling in col.windows() {
+                            if sibling != window_id {
+                                self.window_min_widths.remove(&sibling);
+                                self.window_min_heights.remove(&sibling);
+                            }
+                        }
+                    }
+                }
+                // Cancel active animation — its target is now stale after minimize
                 self.active_animation = None;
             }
             self.minimized_windows.insert(window_id)

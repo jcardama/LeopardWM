@@ -1311,8 +1311,8 @@ impl AppState {
     /// the OS-dragged window — the ghost overlay provides visual feedback instead.
     pub(crate) fn show_border(&self, hwnd: u64) {
         if let Some(ref frame) = self.border_frame {
-            // No border in fullscreen — the window covers the entire viewport.
-            if self.focused_workspace().is_some_and(|ws| ws.is_fullscreen()) {
+            // No border while paused or in fullscreen.
+            if self.paused || self.focused_workspace().is_some_and(|ws| ws.is_fullscreen()) {
                 frame.hide();
                 return;
             }
@@ -1810,6 +1810,9 @@ impl AppState {
         if self.paused {
             // Restore WS_MAXIMIZEBOX so windows behave normally while paused
             self.restore_snap_for_all_windows();
+            self.hide_border();
+            // Hide any visible drag ghost overlay
+            self.pending_drag_hint = Some(crate::state::DragHintAction::Hide);
         } else {
             if let Err(err) = self.apply_layout() {
                 self.paused = was_paused;
@@ -1821,6 +1824,7 @@ impl AppState {
             }
             // Re-apply snap suppression after resuming
             self.disable_snap_for_all_tiled_windows();
+            self.sync_foreground_window();
         }
         Ok(())
     }

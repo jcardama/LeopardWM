@@ -24,6 +24,10 @@ impl AppState {
     /// Default drag = move window between columns (merge mode).
     /// Shift+drag = move entire column (reorder mode).
     pub(crate) fn update_drag_hint(&mut self, hwnd: u64) {
+        // No drag ghost while tiling is paused.
+        if self.paused {
+            return;
+        }
         let Some(win_info) = self.lookup_window_info(hwnd) else {
             return;
         };
@@ -308,16 +312,31 @@ impl AppState {
                 if let Some(ghost_col_rect) =
                     compute_column_rect(workspace, viewport, ghost_col)
                 {
-                    let ghost_n = workspace
+                    // Count only visible (non-minimized) windows and convert
+                    // the raw slot index to a visible-window index so the ghost
+                    // position is correct when minimized windows precede it.
+                    let (ghost_n, visible_slot) = workspace
                         .column(ghost_col)
-                        .map(|c| c.len())
-                        .unwrap_or(1);
+                        .map(|c| {
+                            let mut vis_count = 0usize;
+                            let mut vis_slot = 0usize;
+                            for (i, w) in c.windows().iter().enumerate() {
+                                if !workspace.is_minimized(*w) {
+                                    if i < ghost_slot {
+                                        vis_slot += 1;
+                                    }
+                                    vis_count += 1;
+                                }
+                            }
+                            (vis_count, vis_slot)
+                        })
+                        .unwrap_or((1, 0));
                     let gap = workspace.gap();
                     let total_gaps = (ghost_n as i32 - 1) * gap;
                     let usable_height = ghost_col_rect.height - total_gaps;
                     let slot_height = usable_height / ghost_n as i32;
                     let slot_y =
-                        ghost_col_rect.y + ghost_slot as i32 * (slot_height + gap);
+                        ghost_col_rect.y + visible_slot as i32 * (slot_height + gap);
                     let ghost = Rect::new(
                         ghost_col_rect.x,
                         slot_y,

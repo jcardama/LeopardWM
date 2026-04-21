@@ -1677,6 +1677,14 @@ async fn main() -> Result<()> {
                         if let Err(e) = state.apply_layout() {
                             warn!("Final landing layout failed: {}", e);
                         }
+                        // Re-sync OS foreground to match the workspace's focus.
+                        // During animation, SetWindowPos can trigger spurious
+                        // EVENT_SYSTEM_FOREGROUND events that override
+                        // focused_column. This re-asserts the correct focus
+                        // after the animation has settled.
+                        if !state.paused {
+                            state.sync_foreground_window();
+                        }
                     }
                     debug!("All animations complete");
                 }
