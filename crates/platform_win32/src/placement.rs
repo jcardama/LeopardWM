@@ -8,12 +8,12 @@ use std::sync::Mutex;
 use windows::core::BOOL;
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Dwm::{
-    DwmGetWindowAttribute, DwmSetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS,
+    DwmFlush, DwmGetWindowAttribute, DwmSetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS,
     DWMWINDOWATTRIBUTE,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    BeginDeferWindowPos, DeferWindowPos, EndDeferWindowPos, GetWindowRect, IsIconic, IsWindow,
-    IsZoomed, SetWindowPos, ShowWindow, SET_WINDOW_POS_FLAGS, SWP_ASYNCWINDOWPOS,
+    BeginDeferWindowPos, DeferWindowPos, EndDeferWindowPos, GetClassNameW, GetWindowRect, IsIconic,
+    IsWindow, IsZoomed, SetWindowPos, ShowWindow, SET_WINDOW_POS_FLAGS, SWP_ASYNCWINDOWPOS,
     SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SW_RESTORE,
 };
 
@@ -428,6 +428,21 @@ pub fn apply_placements(
     let mut width_violations = Vec::new();
     let mut height_violations = Vec::new();
     if async_flag == SET_WINDOW_POS_FLAGS(0) {
+        // Wait for the compositor to composite a frame before reading DWM
+        // bounds. Sync SetWindowPos only guarantees the target thread received
+        // WM_WINDOWPOSCHANGED — it does NOT wait for the target to process and
+        // re-render. Under CPU pressure (e.g. a background `cargo test` build),
+        // the target thread can lag behind: we'd read PRE-shrink bounds,
+        // interpret the oversized rect as a min-size violation, and record a
+        // bogus constraint that breaks subsequent layouts (e.g. a 50/50 column
+        // turning into 75/50 because one window's min_height got inflated).
+        //
+        // DwmFlush blocks for ~one vsync (~16ms) until the compositor has
+        // presented a frame incorporating our just-applied positions. Cheap
+        // on the landing pass (runs once per settle, not per frame).
+        unsafe {
+            let _ = DwmFlush();
+        }
         for entry in &entries {
             if entry.column_index == usize::MAX
                 || entry.visibility != Visibility::Visible
@@ -452,8 +467,22 @@ pub fn apply_placements(
                 (ext.right - ext.left, ext.bottom - ext.top)
             };
 
+            // Sanity cap — a genuine min-size violation has the window just
+            // barely larger than requested (tens of pixels at most). If DWM
+            // reports bounds >1.5x the requested size, the target thread is
+            // almost certainly lagging behind our just-applied resize under
+            // CPU pressure (despite the DwmFlush above this can still happen
+            // for extremely unresponsive apps). Recording these as real
+            // constraints would permanently inflate future layouts. Skip them
+            // and let the next landing pass re-measure authoritatively.
+            const STALE_BOUNDS_RATIO: i32 = 3; // visible > requested * 3/2 → skip
+            let looks_stale_w = entry.layout_w > 0
+                && visible_w * 2 > entry.layout_w * STALE_BOUNDS_RATIO;
+            let looks_stale_h = entry.layout_h > 0
+                && visible_h * 2 > entry.layout_h * STALE_BOUNDS_RATIO;
+
             let mut mismatched = false;
-            if visible_w > entry.layout_w + 2 {
+            if visible_w > entry.layout_w + 2 && !looks_stale_w {
                 tracing::debug!(
                     "Width violation: {:?} requested {}px, visible {}px",
                     entry.hwnd, entry.layout_w, visible_w,
@@ -463,8 +492,17 @@ pub fn apply_placements(
                     min_width: visible_w,
                 });
                 mismatched = true;
+            } else if visible_w > entry.layout_w + 2 && looks_stale_w {
+                tracing::warn!(
+                    "Skipping suspect width violation (stale DWM bounds?): {:?} \
+                     requested {}px, visible {}px ({}x reported)",
+                    entry.hwnd,
+                    entry.layout_w,
+                    visible_w,
+                    visible_w as f32 / entry.layout_w.max(1) as f32,
+                );
             }
-            if visible_h > entry.layout_h + 2 {
+            if visible_h > entry.layout_h + 2 && !looks_stale_h {
                 tracing::debug!(
                     "Height violation: {:?} requested {}px, visible {}px",
                     entry.hwnd, entry.layout_h, visible_h,
@@ -474,6 +512,15 @@ pub fn apply_placements(
                     min_height: visible_h,
                 });
                 mismatched = true;
+            } else if visible_h > entry.layout_h + 2 && looks_stale_h {
+                tracing::warn!(
+                    "Skipping suspect height violation (stale DWM bounds?): {:?} \
+                     requested {}px, visible {}px ({}x reported)",
+                    entry.hwnd,
+                    entry.layout_h,
+                    visible_h,
+                    visible_h as f32 / entry.layout_h.max(1) as f32,
+                );
             }
 
             // On any mismatch, invalidate the cached border insets for this
@@ -549,6 +596,35 @@ pub fn apply_placements(
         }
     }
 
+    // DirectComposition swap-chain repair.
+    //
+    // On the synchronous landing pass, nudge windows whose compositor rebuilds
+    // its swap chain only on observed size deltas. During rapid scroll the
+    // intermediate async frames coalesce on the app's UI thread, leaving the
+    // internal render target stuck at an interim size; the landing SetWindowPos
+    // arrives with the same rect as the last async frame, so the compositor
+    // sees "no size change" and never rebuilds. A brief (w-1 -> w) resize pair
+    // forces a real delta through. Scoped to known-affected classes to avoid a
+    // universal flicker tax.
+    if async_flag == SET_WINDOW_POS_FLAGS(0) {
+        let nudge_targets: Vec<NudgeTarget> = entries
+            .iter()
+            .filter(|e| {
+                e.visibility == Visibility::Visible
+                    && e.w > 1
+                    && !failed_window_ids.contains(&e.window_id)
+            })
+            .map(|e| NudgeTarget {
+                hwnd: e.hwnd,
+                x: e.x,
+                y: e.y,
+                w: e.w,
+                h: e.h,
+            })
+            .collect();
+        nudge_sticky_compositor_windows(&nudge_targets);
+    }
+
     tracing::debug!(
         "Applied {} placements ({} skipped unchanged), {} off-screen total",
         applied,
@@ -560,6 +636,88 @@ pub fn apply_placements(
         width_violations,
         height_violations,
     })
+}
+
+/// Window classes whose compositor (DirectComposition / swap-chain based)
+/// fails to rebuild after rapid async SetWindowPos during animation. A real
+/// size delta must reach the window for the render target to re-sync.
+const STICKY_COMPOSITOR_CLASSES: &[&str] = &[
+    "Chrome_WidgetWin_1",           // Electron / Chromium (Slack, Beeper, Spotify, TradingView)
+    "MozillaWindowClass",           // Firefox / Zen
+    "CASCADIA_HOSTING_WINDOW_CLASS", // Windows Terminal
+];
+
+/// Read the class name of a window. Returns empty string on failure.
+fn window_class_name(hwnd: HWND) -> String {
+    let mut buf: [u16; 256] = [0; 256];
+    let len = unsafe { GetClassNameW(hwnd, &mut buf) };
+    if len > 0 {
+        String::from_utf16_lossy(&buf[..len as usize])
+    } else {
+        String::new()
+    }
+}
+
+/// Position data passed to the nudge helper.
+struct NudgeTarget {
+    hwnd: HWND,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+}
+
+/// Send a (w-1 -> w) synchronous SetWindowPos pair to each entry whose window
+/// class matches a known sticky-compositor class. The 1px shrink forces a real
+/// size delta through the message pump; the immediate restore returns the rect
+/// to the layout-requested size. The compositor sees two size-changes and
+/// rebuilds the swap chain, resolving the stuck-interim-size bug.
+fn nudge_sticky_compositor_windows(targets: &[NudgeTarget]) {
+    for t in targets {
+        unsafe {
+            if !IsWindow(Some(t.hwnd)).as_bool() {
+                continue;
+            }
+        }
+        let class = window_class_name(t.hwnd);
+        if !STICKY_COMPOSITOR_CLASSES.iter().any(|c| *c == class) {
+            continue;
+        }
+        let flags = SWP_NOZORDER | SWP_NOACTIVATE;
+        unsafe {
+            if SetWindowPos(t.hwnd, None, t.x, t.y, t.w - 1, t.h, flags).is_err() {
+                continue;
+            }
+            // Re-validate the HWND between the pair: the first SetWindowPos
+            // pumps messages on the target thread and can cause the window to
+            // be destroyed; the handle could be recycled for an unrelated
+            // window before the restore call lands. Re-checking both the
+            // handle validity and the class name catches recycling. If either
+            // fails the target is left at w-1 rather than risk resizing the
+            // wrong window — next apply pass will correct it.
+            if !IsWindow(Some(t.hwnd)).as_bool() {
+                continue;
+            }
+            if window_class_name(t.hwnd) != class {
+                continue;
+            }
+            if let Err(e) = SetWindowPos(t.hwnd, None, t.x, t.y, t.w, t.h, flags) {
+                // Restore failed — window is stranded at w-1 (1px narrower)
+                // until the next apply_layout re-places it. Log so the state
+                // is diagnosable; the next apply will correct geometry.
+                tracing::warn!(
+                    "Nudge restore SetWindowPos failed for hwnd={:?} class={} — window left at w-1 until next apply: {:?}",
+                    t.hwnd, class, e
+                );
+                continue;
+            }
+        }
+        tracing::debug!(
+            "Nudged sticky-compositor window (class={}, hwnd={:?})",
+            class,
+            t.hwnd
+        );
+    }
 }
 
 type InsetMap = HashMap<WindowId, (i32, i32, i32, i32)>;

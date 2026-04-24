@@ -42,7 +42,7 @@ pub use utils::{
     restore_maximizebox_panic_recovery, scale_px,
     get_system_highlight_color_bgr, get_window_visible_rect, is_high_contrast_enabled,
     is_cursor_on_resize_border, is_move_offscreen_sentinel_position, is_window_maximized,
-    is_move_offscreen_sentinel_rect, is_shift_key_pressed, is_valid_window,
+    is_move_offscreen_sentinel_rect, is_shift_key_pressed, is_valid_window, is_window_shell_cloaked,
     is_window_alive_and_visible, is_window_visible, move_window_offscreen,
     reset_window_border_color, restore_all_windows_moved_offscreen_best_effort,
     restore_window_moved_offscreen, restore_windows_moved_offscreen, set_dpi_awareness,

@@ -95,6 +95,14 @@ impl Workspace {
             ));
         }
 
+        // Schedule min-size constraint clear for existing windows — the column
+        // composition is changing so constraints learned under the old window
+        // count are invalid. Deferred to apply-time so a timed-out / paused
+        // layout can't strand the column with cleared constraints.
+        for &wid in self.columns[column_index].windows() {
+            self.pending_min_size_clears.insert(wid);
+        }
+
         self.columns[column_index].add_window(window_id);
         Ok(())
     }
@@ -118,6 +126,14 @@ impl Workspace {
             ));
         }
 
+        // Schedule min-size constraint clear for existing windows — the column
+        // composition is changing so constraints learned under the old window
+        // count are invalid. Deferred to apply-time so a timed-out / paused
+        // layout can't strand the column with cleared constraints.
+        for &wid in self.columns[column_index].windows() {
+            self.pending_min_size_clears.insert(wid);
+        }
+
         let clamped = window_index.min(self.columns[column_index].len());
         self.columns[column_index].insert_at(clamped, window_id);
         Ok(())
@@ -136,10 +152,13 @@ impl Workspace {
     pub fn remove_window(&mut self, window_id: WindowId) -> Result<(), LayoutError> {
         for (col_idx, column) in self.columns.iter_mut().enumerate() {
             if let Some(removed_idx) = column.remove_window(window_id) {
-                // Also clear from minimized, min-width, and min-height sets
+                // Also clear from minimized, min-width, and min-height sets,
+                // and drop any deferred clear scheduled for this window so
+                // the pending set can't retain references to removed windows.
                 self.minimized_windows.remove(&window_id);
                 self.window_min_widths.remove(&window_id);
                 self.window_min_heights.remove(&window_id);
+                self.pending_min_size_clears.remove(&window_id);
                 if self.fullscreen_window == Some(window_id) {
                     self.fullscreen_window = None;
                 }
@@ -149,6 +168,17 @@ impl Workspace {
                     .is_some_and(|m| m.sentinel_window == window_id)
                 {
                     self.maximized_column = None;
+                }
+
+                // Schedule min-size constraint clear for remaining siblings —
+                // the column composition changed so constraints learned under
+                // the old window count are invalid. Deferred to apply-time so
+                // a timed-out / paused layout can't strand the column with
+                // cleared constraints.
+                if !column.is_empty() {
+                    for &sibling in column.windows() {
+                        self.pending_min_size_clears.insert(sibling);
+                    }
                 }
 
                 // If column is now empty, remove it

@@ -146,6 +146,16 @@ pub fn is_window_visible(hwnd: WindowId) -> bool {
     }
 }
 
+/// Check if a window is shell-cloaked (hidden by DWM, e.g. on another virtual desktop
+/// or a suspended UWP app frame).
+pub fn is_window_shell_cloaked(hwnd: WindowId) -> bool {
+    if hwnd == 0 {
+        return false;
+    }
+    let hwnd = HWND(hwnd as *mut c_void);
+    crate::enumeration::is_window_cloaked(hwnd)
+}
+
 /// Check if the Shift key is currently held down.
 ///
 /// Uses `GetKeyState` to poll the keyboard state. Returns `true`
@@ -1149,12 +1159,19 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Calls real Win32 APIs against literal HWND values (999_999, 1_234_567) \
+                that may collide with a live window on a running daemon and move it if \
+                parked at MoveOffScreen sentinel coords. Run with: cargo test -- --ignored"]
     fn test_uncloak_all_managed_with_invalid_ids() {
         // Should not panic even with invalid window IDs (best-effort)
         uncloak_all_managed_windows(&[0, 999_999, 1_234_567]);
     }
 
     #[test]
+    #[ignore = "Enumerates all system windows and moves any parked at MoveOffScreen sentinel \
+                coords back to the primary monitor work area. Safe to run in isolation but \
+                disrupts a concurrently-running daemon (mass retile + Chromium swap-chain \
+                desync). Run with: cargo test -- --ignored"]
     fn test_uncloak_all_visible_windows_no_panic() {
         // EnumWindows should succeed; uncloaking random windows is best-effort
         uncloak_all_visible_windows();

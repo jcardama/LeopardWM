@@ -910,6 +910,15 @@ impl AppState {
         if self.paused {
             return Ok(false);
         }
+        // Commit deferred min-size clears before the frame reads constraints,
+        // matching the invariant maintained by apply_layout. Without this, a
+        // composition change occurring during an active animation would leave
+        // stale per-sibling constraints in effect for the remaining frames.
+        for ws_vec in self.workspaces.values_mut() {
+            for ws in ws_vec.iter_mut() {
+                ws.commit_pending_min_size_clears();
+            }
+        }
         let mut all_placements = Vec::new();
         for (monitor_id, ws_vec) in &self.workspaces {
             let idx = self.active_workspace_idx(*monitor_id);
@@ -982,6 +991,17 @@ impl AppState {
             ));
         }
         self.applying_layout = true;
+
+        // Commit any deferred min-size constraint clears scheduled by
+        // composition changes (add_window / insert_at / remove_window). Done
+        // here rather than eagerly at the mutation site so that a timed-out /
+        // paused apply path cannot leave constraints cleared indefinitely.
+        for ws_vec in self.workspaces.values_mut() {
+            for ws in ws_vec.iter_mut() {
+                ws.commit_pending_min_size_clears();
+            }
+        }
+
         let mut all_placements = Vec::new();
 
         for (monitor_id, ws_vec) in &self.workspaces {
@@ -1032,6 +1052,19 @@ impl AppState {
         }
 
         self.arm_moved_or_resized_suppression(all_placements.iter().map(|p| p.window_id));
+
+        // Record the layout rect the engine chose for each window so the
+        // MovedOrResized handler can short-circuit false-positive snap-backs
+        // when Windows fires EVENT_OBJECT_LOCATIONCHANGE without an actual
+        // position change. Visibility::Visible placements only — off-screen
+        // parked windows aren't at their "layout" rect by design.
+        for p in &all_placements {
+            if matches!(p.visibility, leopardwm_core_layout::Visibility::Visible) {
+                self.last_placed_layout_rects.insert(p.window_id, p.rect);
+            } else {
+                self.last_placed_layout_rects.remove(&p.window_id);
+            }
+        }
 
         let timeout = self.layout_apply_timeout;
         let platform_config = self.platform_config.clone();

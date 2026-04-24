@@ -69,8 +69,24 @@ pub(crate) const MAX_SET_WIDTH_FRACTION: f64 = 1.0;
 pub(crate) const DRAG_PLACEHOLDER_HWND: u64 = u64::MAX;
 
 /// Max time allowed for a single Win32 placement apply call.
-pub(crate) const APPLY_LAYOUT_TIMEOUT: Duration = Duration::from_millis(1500);
-/// Suppress MovedOrResized events briefly after placements are applied.
+/// Maximum time to wait for the layout-apply worker before giving up and
+/// pausing the daemon. Raised from 1500ms to 5000ms so that transient CPU
+/// pressure (e.g. a `cargo build` or other all-cores workload running in the
+/// background) cannot trip the timeout and force a daemon pause + recovery.
+/// Genuinely hung windows hit Windows' own ~5s hung-app timeout anyway, so
+/// this doesn't materially weaken responsiveness guarantees.
+pub(crate) const APPLY_LAYOUT_TIMEOUT: Duration = Duration::from_millis(5000);
+/// Suppress MovedOrResized events after placements are applied, so the
+/// target window's own WM_SIZE-driven EVENT_OBJECT_LOCATIONCHANGE (which is
+/// our own feedback) is not re-interpreted as a user-initiated move.
+///
+/// Kept at 250ms so drag-hint and resize-preview updates stay snappy — they
+/// route through the same MovedOrResized handler and a larger suppression
+/// window would delay the ghost/highlight feedback on drag start by that
+/// much. The real defense against false-positive snap-back cascades under
+/// CPU pressure is the position-based filter in `WindowEvent::MovedOrResized`
+/// (it compares actual-vs-expected rect and short-circuits when they match
+/// within a small epsilon), which operates independently of this suppression.
 pub(crate) const MOVED_OR_RESIZED_SUPPRESSION_WINDOW: Duration = Duration::from_millis(250);
 /// Windows managed for less than this duration before hiding are considered
 /// transient (e.g., Electron notification popups) and suppressed on re-creation.
@@ -200,6 +216,16 @@ pub(crate) struct AppState {
     pub(crate) pending_drag_hint: Option<DragHintAction>,
     /// Per-window suppression deadline for MovedOrResized events after apply_layout().
     pub(crate) moved_or_resized_suppression: HashMap<u64, std::time::Instant>,
+    /// Last-placed layout rect per managed window (in layout coordinates, the
+    /// rect the layout engine asked for — not the OS-level window rect with
+    /// invisible borders). Updated on every successful apply_layout. Used by
+    /// the MovedOrResized handler to short-circuit false-positive snap-backs
+    /// when Windows fires EVENT_OBJECT_LOCATIONCHANGE for reasons that aren't
+    /// actual position changes (Z-order, DWM composition, focus shuffle, DPI,
+    /// etc.). If the window's current visible bounds match the last-placed
+    /// rect within a few pixels, the layout is already correct and we skip
+    /// the expensive full-retile snap-back.
+    pub(crate) last_placed_layout_rects: HashMap<u64, leopardwm_core_layout::Rect>,
     /// Cooperative cancellation flag for placement workers during shutdown/revert.
     pub(crate) apply_worker_cancelled: Arc<AtomicBool>,
     /// Monotonic token to invalidate stale workers when shutdown starts.
@@ -348,6 +374,7 @@ impl AppState {
             resize_animation_active: Arc::new(AtomicBool::new(false)),
             pending_drag_hint: None,
             moved_or_resized_suppression: HashMap::new(),
+            last_placed_layout_rects: HashMap::new(),
             apply_worker_cancelled: Arc::new(AtomicBool::new(false)),
             apply_epoch: Arc::new(AtomicU64::new(0)),
             pending_apply_workers: Vec::new(),
@@ -470,7 +497,6 @@ pub(crate) fn merged_cleanup_window_ids(
 pub(crate) fn run_visibility_recovery_pass(managed_window_ids: &[u64], context_label: &str) {
     use leopardwm_platform_win32::{
         enumerate_windows, restore_windows_moved_offscreen, uncloak_all_managed_windows,
-        uncloak_all_visible_windows,
     };
     use tracing::warn;
 
@@ -498,8 +524,11 @@ pub(crate) fn run_visibility_recovery_pass(managed_window_ids: &[u64], context_l
         Err(e) => warn!("MoveOffScreen recovery failed: {}", e),
     }
 
-    // Keep managed-window uncloak behavior.
+    // Uncloak only managed windows. The panic-grade `uncloak_all_visible_windows()`
+    // sweep — which yanks every top-level sentinel-parked window on the desktop
+    // back onto the primary monitor — is deliberately NOT called here. Transient
+    // apply timeouts (e.g. from CPU pressure during a heavy rebuild) should not
+    // drag off-workspace windows onto the active one. Panic hooks still call
+    // `uncloak_all_visible_windows()` directly for real crash recovery.
     uncloak_all_managed_windows(managed_window_ids);
-    // Safety net: also uncloak all visible windows on the desktop.
-    uncloak_all_visible_windows();
 }

@@ -100,6 +100,13 @@ pub struct Workspace {
     /// can allocate correct intra-column heights from the start.
     #[serde(skip)]
     pub(crate) window_min_heights: HashMap<WindowId, i32>,
+    /// Windows whose min-size constraints are scheduled for clearing on the
+    /// next apply_layout pass. Populated when column composition changes so
+    /// stale per-sibling constraints learned under the old window count can't
+    /// over-allocate; the actual removal is deferred so a timed-out / paused
+    /// apply path cannot strand the column with cleared constraints.
+    #[serde(skip)]
+    pub(crate) pending_min_size_clears: HashSet<WindowId>,
     /// Origin info for windows floated via toggle_floating.
     /// Stores (left_neighbor, fallback_index) to restore position when unfloating.
     /// Left neighbor is used to find the right neighborhood even after column changes;
@@ -146,6 +153,7 @@ impl Default for Workspace {
             minimized_windows: HashSet::new(),
             window_min_widths: HashMap::new(),
             window_min_heights: HashMap::new(),
+            pending_min_size_clears: HashSet::new(),
             float_origin_column: HashMap::new(),
             reduce_motion: false,
             center_past_edges: false,
@@ -244,6 +252,7 @@ impl Workspace {
             self.floating_windows.remove(pos);
             self.window_min_widths.remove(&window_id);
             self.window_min_heights.remove(&window_id);
+            self.pending_min_size_clears.remove(&window_id);
             self.float_origin_column.remove(&window_id);
             if self.fullscreen_window == Some(window_id) {
                 self.fullscreen_window = None;

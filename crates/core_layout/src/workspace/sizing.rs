@@ -59,6 +59,24 @@ impl Workspace {
         self.window_min_heights.clear();
     }
 
+    /// Drain the pending_min_size_clears queue and remove corresponding entries
+    /// from window_min_widths / window_min_heights. Called at the start of a
+    /// layout apply pass so column-composition changes only take effect when a
+    /// placement cycle is actually about to run — otherwise a timed-out /
+    /// paused apply cannot strand a column with cleared constraints.
+    ///
+    /// Returns `true` if any constraints were cleared.
+    pub fn commit_pending_min_size_clears(&mut self) -> bool {
+        if self.pending_min_size_clears.is_empty() {
+            return false;
+        }
+        for wid in self.pending_min_size_clears.drain() {
+            self.window_min_widths.remove(&wid);
+            self.window_min_heights.remove(&wid);
+        }
+        true
+    }
+
     /// Adjust stored column widths to respect known min-width constraints.
     /// Columns containing min-width windows are widened to their minimum.
     /// Flexible columns keep their original widths — the total strip may grow,

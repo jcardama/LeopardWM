@@ -70,6 +70,18 @@ impl AppState {
 
                 // Try to get window info for filtering and monitor assignment
                 if let Some(win_info) = self.lookup_window_info(hwnd) {
+                    // Skip shell-cloaked windows (suspended UWP frames, windows
+                    // on other virtual desktops). These are valid HWNDs with
+                    // WS_VISIBLE but no rendered content.
+                    #[cfg(not(test))]
+                    if leopardwm_platform_win32::is_window_shell_cloaked(hwnd) {
+                        debug!(
+                            "Ignoring shell-cloaked window: {} ({})",
+                            win_info.title, win_info.class_name
+                        );
+                        return;
+                    }
+
                     // Get executable name for rule matching
                     let executable =
                         get_process_executable(win_info.process_id).unwrap_or_default();
@@ -206,6 +218,10 @@ impl AppState {
                     );
                     return;
                 }
+
+                // Drop the recorded layout rect so the map doesn't retain
+                // entries for windows that no longer exist.
+                self.last_placed_layout_rects.remove(&hwnd);
 
                 // Only mark as transient (suppress future re-creation) if the
                 // window was managed briefly. Long-lived windows (e.g., close-to-tray
@@ -518,7 +534,18 @@ impl AppState {
                         // mark_minimized only handles tiled windows; floating windows
                         // are not in the minimized set. Handle both paths.
                         if workspace.mark_minimized(hwnd) || cleared_fullscreen || is_floating {
-                            info!("Window {} minimized", hwnd);
+                            let col_loc = workspace.find_window_location(hwnd);
+                            let col_info = col_loc.map(|(ci, _)| {
+                                let col = &workspace.columns()[ci];
+                                let visible = col.windows().iter()
+                                    .filter(|w| !workspace.is_minimized(**w))
+                                    .count();
+                                (ci, col.len(), visible)
+                            });
+                            info!(
+                                "Window {} minimized (col={:?}, minimized_total={})",
+                                hwnd, col_info, workspace.minimized_count()
+                            );
 
                             // If the minimized window was the focused window, move focus
                             if workspace.focused_window() == Some(hwnd) {
@@ -536,6 +563,18 @@ impl AppState {
                                 }
                             }
                             workspace.ensure_focused_visible_animated(viewport_width);
+
+                            // Log expected post-minimize placements for debugging
+                            if let Some(monitor) = self.monitors.get(&monitor_id) {
+                                let post_placements = workspace.compute_placements(monitor.work_area);
+                                for p in &post_placements {
+                                    info!(
+                                        "  post-minimize placement: hwnd={} rect=({},{} {}x{})",
+                                        p.window_id, p.rect.x, p.rect.y,
+                                        p.rect.width, p.rect.height,
+                                    );
+                                }
+                            }
 
                             self.start_layout_transition(snapshot);
                             if let Err(e) = self.apply_layout() {
@@ -802,9 +841,53 @@ impl AppState {
                         // User maximized a tiled window — let it stay maximized.
                         debug!("Tiled window {} maximized — allowing", hwnd);
                     } else {
-                        debug!("Managed window {} moved/resized — snapping back", hwnd);
-                        if let Err(e) = self.apply_layout() {
-                            warn!("Failed to snap back layout after move/resize: {}", e);
+                        // Position-based false-positive filter: EVENT_OBJECT_LOCATIONCHANGE
+                        // fires for many reasons besides actual movement (Z-order,
+                        // DWM composition, focus shuffles, DPI nudges, app-internal
+                        // size adjustments). Under CPU pressure these spurious
+                        // events trigger cascading full retiles. If the window's
+                        // current visible bounds are close to the last-placed
+                        // layout rect, skip the snap-back.
+                        //
+                        // Epsilon is generous (20px) because some apps report
+                        // their own content rect rather than the requested frame
+                        // rect — DPI rounding, custom chrome, internal min-sizes
+                        // all create small legitimate deltas we don't want to
+                        // chase. Real user drags are typically tens to hundreds
+                        // of pixels off, so 20px comfortably separates them.
+                        const POSITION_EPSILON_PX: i32 = 20;
+                        let expected = self.last_placed_layout_rects.get(&hwnd).copied();
+                        let actual = leopardwm_platform_win32::get_window_visible_rect(hwnd);
+                        let at_expected_position = match (expected, actual) {
+                            (Some(expected), Some(actual)) => {
+                                let dx = (actual.x - expected.x).abs();
+                                let dy = (actual.y - expected.y).abs();
+                                let dw = (actual.width - expected.width).abs();
+                                let dh = (actual.height - expected.height).abs();
+                                let within = dx <= POSITION_EPSILON_PX
+                                    && dy <= POSITION_EPSILON_PX
+                                    && dw <= POSITION_EPSILON_PX
+                                    && dh <= POSITION_EPSILON_PX;
+                                if !within {
+                                    debug!(
+                                        "Window {} off expected position: dx={} dy={} dw={} dh={} (expected {:?} actual {:?})",
+                                        hwnd, dx, dy, dw, dh, expected, actual
+                                    );
+                                }
+                                within
+                            }
+                            _ => false,
+                        };
+                        if at_expected_position {
+                            debug!(
+                                "Ignoring spurious MovedOrResized for {} — already at expected layout position",
+                                hwnd
+                            );
+                        } else {
+                            debug!("Managed window {} moved/resized — snapping back", hwnd);
+                            if let Err(e) = self.apply_layout() {
+                                warn!("Failed to snap back layout after move/resize: {}", e);
+                            }
                         }
                     }
                 }

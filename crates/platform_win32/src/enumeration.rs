@@ -574,7 +574,7 @@ pub(crate) fn should_skip_window_by_title(title: &str) -> bool {
 /// Only treats shell-cloaked windows (on other virtual desktops) as cloaked.
 /// App-cloaked windows (UWP transitioning) are allowed through so that
 /// ApplicationFrameWindow hosts like Settings are not filtered out.
-pub(crate) fn is_window_cloaked(hwnd: HWND) -> bool {
+pub fn is_window_cloaked(hwnd: HWND) -> bool {
     const DWM_CLOAKED_SHELL: u32 = 0x2;
     unsafe {
         let mut cloaked: u32 = 0;
