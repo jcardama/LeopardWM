@@ -13,5 +13,6 @@ windows = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
+winreg = "0.56"
 
 [dev-dependencies]

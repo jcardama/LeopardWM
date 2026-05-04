@@ -124,10 +124,13 @@ struct HotkeyState {
 /// Sync tray quick-toggle check marks with the current config.
 fn sync_tray_toggles(tray_manager: &Option<tray::TrayManager>, config: &Config) {
     if let Some(ref mgr) = tray_manager {
+        let auto_start =
+            leopardwm_platform_win32::autostart::get_autostart().unwrap_or(false);
         mgr.update_quick_toggles(
             config.appearance.active_border,
             config.behavior.focus_new_windows,
             config.behavior.focus_follows_mouse,
+            auto_start,
             match config.layout.centering_mode {
                 config::CenteringModeConfig::Center => tray::CENTERING_CENTER,
                 config::CenteringModeConfig::JustInView => tray::CENTERING_JUST_IN_VIEW,
@@ -820,6 +823,7 @@ async fn main() -> Result<()> {
             active_border: config.appearance.active_border,
             focus_new_windows: config.behavior.focus_new_windows,
             focus_follows_mouse: config.behavior.focus_follows_mouse,
+            auto_start: leopardwm_platform_win32::autostart::get_autostart().unwrap_or(false),
             centering_mode: match config.layout.centering_mode {
                 config::CenteringModeConfig::Center => tray::CENTERING_CENTER,
                 config::CenteringModeConfig::JustInView => tray::CENTERING_JUST_IN_VIEW,
@@ -1473,6 +1477,42 @@ async fn main() -> Result<()> {
                         );
                         let _ = state.config.save();
                     }
+                    tray::TrayEvent::ToggleAutoStart => {
+                        use leopardwm_platform_win32::autostart;
+                        let current = autostart::get_autostart().unwrap_or(false);
+                        let target = !current;
+                        let result = if target {
+                            std::env::current_exe()
+                                .map_err(anyhow::Error::from)
+                                .and_then(|exe| autostart::enable_autostart(&exe))
+                        } else {
+                            autostart::disable_autostart()
+                        };
+                        match result {
+                            Ok(()) => info!(
+                                "Tray: Auto-start {}",
+                                if target { "enabled" } else { "disabled" }
+                            ),
+                            Err(e) => warn!("Tray: failed to update auto-start: {}", e),
+                        }
+                        let actual = autostart::get_autostart().unwrap_or(current);
+                        let state_guard = state.lock().await;
+                        if let Some(ref mgr) = tray_manager {
+                            let centering = match state_guard.config.layout.centering_mode {
+                                config::CenteringModeConfig::Center => tray::CENTERING_CENTER,
+                                config::CenteringModeConfig::JustInView => {
+                                    tray::CENTERING_JUST_IN_VIEW
+                                }
+                            };
+                            mgr.update_quick_toggles(
+                                state_guard.config.appearance.active_border,
+                                state_guard.config.behavior.focus_new_windows,
+                                state_guard.config.behavior.focus_follows_mouse,
+                                actual,
+                                centering,
+                            );
+                        }
+                    }
                     tray::TrayEvent::SetCenteringCenter => {
                         let mut state = state.lock().await;
                         if state.config.layout.centering_mode
@@ -1489,10 +1529,14 @@ async fn main() -> Result<()> {
                             let _ = state.config.save();
                         }
                         if let Some(ref mgr) = tray_manager {
+                            let auto_start =
+                                leopardwm_platform_win32::autostart::get_autostart()
+                                    .unwrap_or(false);
                             mgr.update_quick_toggles(
                                 state.config.appearance.active_border,
                                 state.config.behavior.focus_new_windows,
                                 state.config.behavior.focus_follows_mouse,
+                                auto_start,
                                 tray::CENTERING_CENTER,
                             );
                         }
@@ -1513,10 +1557,14 @@ async fn main() -> Result<()> {
                             let _ = state.config.save();
                         }
                         if let Some(ref mgr) = tray_manager {
+                            let auto_start =
+                                leopardwm_platform_win32::autostart::get_autostart()
+                                    .unwrap_or(false);
                             mgr.update_quick_toggles(
                                 state.config.appearance.active_border,
                                 state.config.behavior.focus_new_windows,
                                 state.config.behavior.focus_follows_mouse,
+                                auto_start,
                                 tray::CENTERING_JUST_IN_VIEW,
                             );
                         }

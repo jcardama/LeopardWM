@@ -8,6 +8,7 @@
 //! - WinEvent hooks for window lifecycle events
 //! - Visual overlay for snap hints
 
+pub mod autostart;
 pub mod border;
 pub mod gestures;
 pub mod hotkeys;

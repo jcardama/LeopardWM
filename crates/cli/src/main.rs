@@ -1179,6 +1179,9 @@ fn print_response(response: &IpcResponse) {
             // Health command removed; display as generic success if received
             println!("OK");
         }
+        IpcResponse::AutoStartState { enabled } => {
+            println!("Auto-start: {}", if *enabled { "enabled" } else { "disabled" });
+        }
         IpcResponse::Unknown => {
             println!("Daemon returned an unknown response status (client/daemon version mismatch)");
         }
@@ -1590,39 +1593,23 @@ async fn handle_doctor() -> Result<()> {
 
 /// Handle the autostart command (enable/disable Registry run key).
 fn handle_autostart(action: AutostartAction) -> Result<()> {
-    use winreg::enums::*;
-    use winreg::RegKey;
-
-    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let run_key = hkcu
-        .open_subkey_with_flags(
-            r"Software\Microsoft\Windows\CurrentVersion\Run",
-            KEY_READ | KEY_WRITE,
-        )
-        .context("Failed to open Registry Run key")?;
-
-    const REG_VALUE: &str = "LeopardWM";
+    use leopardwm_platform_win32::autostart;
 
     match action {
         AutostartAction::Enable => {
             let daemon_path = ensure_daemon_binary()?;
-            let path_str = daemon_path.to_string_lossy().to_string();
-            let quoted = format!("\"{}\"", path_str);
-            run_key
-                .set_value(REG_VALUE, &quoted)
-                .context("Failed to set Registry value")?;
-            println!("Auto-start enabled: {}", quoted);
+            autostart::enable_autostart(&daemon_path)?;
+            println!("Auto-start enabled: \"{}\"", daemon_path.display());
         }
-        AutostartAction::Disable => match run_key.delete_value(REG_VALUE) {
-            Ok(()) => println!("Auto-start disabled."),
-            Err(e) => {
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    println!("Auto-start was not enabled.");
-                } else {
-                    return Err(e).context("Failed to remove Registry value");
-                }
+        AutostartAction::Disable => {
+            let was_enabled = autostart::get_autostart().unwrap_or(false);
+            autostart::disable_autostart()?;
+            if was_enabled {
+                println!("Auto-start disabled.");
+            } else {
+                println!("Auto-start was not enabled.");
             }
-        },
+        }
     }
 
     Ok(())

@@ -765,6 +765,34 @@ impl AppState {
                     paused: self.paused,
                 }
             }
+            IpcCommand::GetAutoStart => {
+                match leopardwm_platform_win32::autostart::get_autostart() {
+                    Ok(enabled) => IpcResponse::AutoStartState { enabled },
+                    Err(e) => IpcResponse::error(format!("Failed to read auto-start state: {}", e)),
+                }
+            }
+            IpcCommand::SetAutoStart { enabled } => {
+                use leopardwm_platform_win32::autostart;
+                let result = if enabled {
+                    match std::env::current_exe() {
+                        Ok(exe) => autostart::enable_autostart(&exe).map(|()| exe),
+                        Err(e) => Err(anyhow::anyhow!("resolve daemon executable: {}", e)),
+                    }
+                } else {
+                    autostart::disable_autostart().map(|()| std::path::PathBuf::new())
+                };
+                match result {
+                    Ok(exe) => {
+                        if enabled {
+                            info!("Auto-start enabled (path: {})", exe.display());
+                        } else {
+                            info!("Auto-start disabled");
+                        }
+                        IpcResponse::Ok
+                    }
+                    Err(e) => IpcResponse::error(format!("Failed to update auto-start: {}", e)),
+                }
+            }
         }
     }
 }

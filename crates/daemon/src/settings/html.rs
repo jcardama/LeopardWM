@@ -872,6 +872,10 @@ input[type="range"]::-webkit-slider-thumb {
         <h2 class="section-title">Behavior</h2>
         <div class="card">
           <div class="field">
+            <div class="field-info"><div class="field-label">Start with Windows</div><div class="field-desc">Automatically launch LeopardWM when you sign in to Windows</div></div>
+            <label class="toggle"><input type="checkbox" id="startup-auto_start" data-no-config><span class="track"></span><span class="thumb"></span></label>
+          </div>
+          <div class="field">
             <div class="field-info"><div class="field-label">Focus new windows</div><div class="field-desc">Automatically focus newly opened windows</div></div>
             <label class="toggle"><input type="checkbox" id="behavior-focus_new_windows"><span class="track"></span><span class="thumb"></span></label>
           </div>
@@ -1164,6 +1168,7 @@ function init(cfg) {
     document.getElementById('appearance-active_border_color').disabled = true;
   }
 
+  setChecked('startup-auto_start', !!cfg.auto_start);
   setChecked('behavior-focus_new_windows', cfg.behavior.focus_new_windows);
   setChecked('behavior-track_focus_changes', cfg.behavior.track_focus_changes);
   setChecked('behavior-focus_follows_mouse', cfg.behavior.focus_follows_mouse);
@@ -1505,8 +1510,18 @@ function autoSave(delay) {
 
 /* Immediate: toggles, color pickers, comboboxes, sliders */
 document.querySelectorAll('input[type="checkbox"], input[type="color"], input[type="range"]').forEach(function(el) {
+  if (el.hasAttribute('data-no-config')) return;
   el.addEventListener('input', function() { autoSave(0); });
 });
+
+/* Auto-start toggle — registry-backed, separate from config save */
+(function() {
+  var el = document.getElementById('startup-auto_start');
+  if (!el) return;
+  el.addEventListener('change', function() {
+    window.ipc.postMessage(JSON.stringify({ action: 'set_auto_start', enabled: el.checked }));
+  });
+})();
 
 /* Debounced: text and number inputs */
 document.querySelectorAll('input[type="text"], input[type="number"]').forEach(function(el) {

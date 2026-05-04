@@ -86,6 +86,7 @@ mod menu_ids {
     pub const TOGGLE_ACTIVE_BORDER: &str = "toggle_active_border";
     pub const TOGGLE_FOCUS_NEW_WINDOWS: &str = "toggle_focus_new_windows";
     pub const TOGGLE_FOCUS_FOLLOWS_MOUSE: &str = "toggle_focus_follows_mouse";
+    pub const TOGGLE_AUTO_START: &str = "toggle_auto_start";
     pub const CENTERING_CENTER: &str = "centering_center";
     pub const CENTERING_JUST_IN_VIEW: &str = "centering_just_in_view";
 }
@@ -117,6 +118,8 @@ pub enum TrayEvent {
     ToggleFocusNewWindows,
     /// User toggled "Focus Follows Mouse" check item.
     ToggleFocusFollowsMouse,
+    /// User toggled "Start with Windows" check item.
+    ToggleAutoStart,
     /// User selected "Center" centering mode.
     SetCenteringCenter,
     /// User selected "Just in View" centering mode.
@@ -138,6 +141,7 @@ struct SharedState {
     active_border: AtomicBool,
     focus_new_windows: AtomicBool,
     focus_follows_mouse: AtomicBool,
+    auto_start: AtomicBool,
     centering_mode: AtomicU8,
 }
 
@@ -147,6 +151,7 @@ struct TrayItems {
     active_border_item: CheckMenuItem,
     focus_new_windows_item: CheckMenuItem,
     focus_follows_mouse_item: CheckMenuItem,
+    auto_start_item: CheckMenuItem,
     centering_center_item: CheckMenuItem,
     centering_just_in_view_item: CheckMenuItem,
 }
@@ -156,6 +161,7 @@ pub struct QuickToggleState {
     pub active_border: bool,
     pub focus_new_windows: bool,
     pub focus_follows_mouse: bool,
+    pub auto_start: bool,
     /// 0 = Center, 1 = JustInView
     pub centering_mode: u8,
 }
@@ -191,6 +197,7 @@ impl TrayManager {
             active_border: AtomicBool::new(initial.active_border),
             focus_new_windows: AtomicBool::new(initial.focus_new_windows),
             focus_follows_mouse: AtomicBool::new(initial.focus_follows_mouse),
+            auto_start: AtomicBool::new(initial.auto_start),
             centering_mode: AtomicU8::new(initial.centering_mode),
         });
         let shared_for_thread = shared.clone();
@@ -253,6 +260,7 @@ impl TrayManager {
         active_border: bool,
         focus_new_windows: bool,
         focus_follows_mouse: bool,
+        auto_start: bool,
         centering_mode: u8,
     ) {
         self.shared
@@ -264,6 +272,9 @@ impl TrayManager {
         self.shared
             .focus_follows_mouse
             .store(focus_follows_mouse, Ordering::Relaxed);
+        self.shared
+            .auto_start
+            .store(auto_start, Ordering::Relaxed);
         self.shared
             .centering_mode
             .store(centering_mode, Ordering::Relaxed);
@@ -442,6 +453,9 @@ fn run_tray_thread(
                         items
                             .focus_follows_mouse_item
                             .set_checked(shared.focus_follows_mouse.load(Ordering::Relaxed));
+                        items
+                            .auto_start_item
+                            .set_checked(shared.auto_start.load(Ordering::Relaxed));
                         let cm = shared.centering_mode.load(Ordering::Relaxed);
                         items
                             .centering_center_item
@@ -520,6 +534,15 @@ fn build_tray(
         None,
     );
     append(&focus_follows_mouse_item)?;
+
+    let auto_start_item = CheckMenuItem::with_id(
+        menu_ids::TOGGLE_AUTO_START,
+        "Start with Windows",
+        true,
+        initial.auto_start,
+        None,
+    );
+    append(&auto_start_item)?;
 
     // Centering Mode submenu
     let centering_sub = Submenu::new("Centering Mode", true);
@@ -614,6 +637,7 @@ fn build_tray(
         active_border_item,
         focus_new_windows_item,
         focus_follows_mouse_item,
+        auto_start_item,
         centering_center_item,
         centering_just_in_view_item,
     };
@@ -635,6 +659,7 @@ fn map_menu_id_to_event(menu_id: &str) -> Option<TrayEvent> {
         menu_ids::TOGGLE_ACTIVE_BORDER => Some(TrayEvent::ToggleActiveBorder),
         menu_ids::TOGGLE_FOCUS_NEW_WINDOWS => Some(TrayEvent::ToggleFocusNewWindows),
         menu_ids::TOGGLE_FOCUS_FOLLOWS_MOUSE => Some(TrayEvent::ToggleFocusFollowsMouse),
+        menu_ids::TOGGLE_AUTO_START => Some(TrayEvent::ToggleAutoStart),
         menu_ids::CENTERING_CENTER => Some(TrayEvent::SetCenteringCenter),
         menu_ids::CENTERING_JUST_IN_VIEW => Some(TrayEvent::SetCenteringJustInView),
         _ => None,

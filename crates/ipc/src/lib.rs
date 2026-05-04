@@ -256,6 +256,14 @@ pub enum IpcCommand {
         /// Workspace number (1-9).
         index: u8,
     },
+
+    /// Query whether the daemon is configured to auto-start with Windows.
+    GetAutoStart,
+    /// Enable or disable auto-start with Windows (writes the HKCU Run key).
+    SetAutoStart {
+        /// Whether auto-start should be enabled.
+        enabled: bool,
+    },
 }
 
 /// Responses from the daemon to the CLI.
@@ -319,6 +327,11 @@ pub enum IpcResponse {
         total_windows: usize,
         /// Daemon uptime in seconds.
         uptime_seconds: u64,
+    },
+    /// Auto-start state response.
+    AutoStartState {
+        /// Whether auto-start is currently enabled.
+        enabled: bool,
     },
     /// Health check response.
     HealthInfo {

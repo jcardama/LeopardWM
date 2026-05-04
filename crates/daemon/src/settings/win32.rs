@@ -154,10 +154,12 @@ pub fn run_settings_window(
 
         // Create the WebView2 instance via wry
         let win_handle = Win32Handle(hwnd.0 as isize);
+        let auto_start = leopardwm_platform_win32::autostart::get_autostart().unwrap_or(false);
         let config_json = {
             let mut val = serde_json::to_value(&config).unwrap_or(serde_json::Value::Object(Default::default()));
             if let serde_json::Value::Object(ref mut map) = val {
                 map.insert("high_contrast".to_string(), serde_json::Value::Bool(high_contrast));
+                map.insert("auto_start".to_string(), serde_json::Value::Bool(auto_start));
             }
             serde_json::to_string(&val).unwrap_or_else(|_| "{}".to_string())
         };
@@ -226,6 +228,29 @@ fn handle_ipc(body: &str, event_tx: &mpsc::Sender<SettingsEvent>, _hwnd: HWND) {
         "save" => {
             if let Some(cfg_val) = msg.get("config") {
                 do_save(cfg_val, event_tx);
+            }
+        }
+        "set_auto_start" => {
+            let Some(enabled) = msg.get("enabled").and_then(|v| v.as_bool()) else {
+                warn!("Settings IPC: set_auto_start missing or non-bool 'enabled' field; ignoring");
+                return;
+            };
+            use leopardwm_platform_win32::autostart;
+            let result = if enabled {
+                match std::env::current_exe() {
+                    Ok(exe) => autostart::enable_autostart(&exe).map(|()| Some(exe)),
+                    Err(e) => Err(anyhow::anyhow!("resolve daemon executable: {}", e)),
+                }
+            } else {
+                autostart::disable_autostart().map(|()| None)
+            };
+            match result {
+                Ok(Some(exe)) => info!(
+                    "Auto-start enabled via Settings (path: {})",
+                    exe.display()
+                ),
+                Ok(None) => info!("Auto-start disabled via Settings"),
+                Err(e) => warn!("Settings: failed to update auto-start: {}", e),
             }
         }
         "open_url" => {

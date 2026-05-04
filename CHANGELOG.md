@@ -2,6 +2,12 @@
 
 All notable changes to LeopardWM will be documented in this file.
 
+## 0.1.9
+
+### Improvements
+
+- Add "Start with Windows" toggle in Settings (Behavior section) and tray menu — surfaces the previously CLI-only `leopardwm-cli autostart enable|disable` as a one-click option backed by `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. Registry-backed (single source of truth, shared with the CLI command); the daemon resolves its own path via `current_exe()` so the value points at the binary that wrote it. Refuses to enable when the resolved binary lives under `%TEMP%` to prevent persisting paths that vanish across reboots. New IPC commands `GetAutoStart` / `SetAutoStart` and `IpcResponse::AutoStartState` for external clients
+
 ## 0.1.8
 
 ### Improvements
