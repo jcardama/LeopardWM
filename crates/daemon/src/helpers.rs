@@ -1051,6 +1051,41 @@ impl AppState {
             }
         }
 
+        // Fast path: if every placement matches the last applied rect (and
+        // the visible-set is unchanged), there is nothing to do. Spawning
+        // the worker thread, the BeginDeferWindowPos batch, the DwmFlush,
+        // size-violation queries, and the sticky-compositor nudge each take
+        // tens of milliseconds; under rapid focus presses within the
+        // already-visible range no scroll animation starts (so the caller
+        // does not get to bypass us via `is_animating()`) and these calls
+        // serialize on the daemon mutex, leaving focus events draining for
+        // seconds after the user stops pressing. Returning early lets the
+        // event loop catch up at near-memory speed.
+        let placements_unchanged = all_placements.iter().all(|p| {
+            let expected = self.last_placed_layout_rects.get(&p.window_id);
+            match p.visibility {
+                leopardwm_core_layout::Visibility::Visible => expected == Some(&p.rect),
+                _ => expected.is_none(),
+            }
+        }) && {
+            let current_ids: std::collections::HashSet<u64> =
+                all_placements.iter().map(|p| p.window_id).collect();
+            !self
+                .last_placed_layout_rects
+                .keys()
+                .any(|id| !current_ids.contains(id))
+        };
+        // Tests that inject worker behavior need the worker to actually
+        // run, so they opt out of the fast path.
+        #[cfg(test)]
+        let bypass_fast_path = self.injected_apply_placements_behavior.is_some();
+        #[cfg(not(test))]
+        let bypass_fast_path = false;
+        if placements_unchanged && !bypass_fast_path {
+            self.applying_layout = false;
+            return Ok(());
+        }
+
         self.arm_moved_or_resized_suppression(all_placements.iter().map(|p| p.window_id));
 
         // Record the layout rect the engine chose for each window so the

@@ -2,6 +2,12 @@
 
 All notable changes to LeopardWM will be documented in this file.
 
+## Unreleased
+
+### Bug Fixes
+
+- Fix focus events draining for seconds after rapid Ctrl+Alt+Right/Left presses stop — every hotkey ran a synchronous `apply_layout` on the daemon mutex, and that ~100–200 ms cost (sync `SetWindowPos` over every placement, the `DwmFlush` round-trip, size-violation queries against DWM, plus the sticky-compositor `(w-1 → w)` nudge per Chromium/Firefox/Cascadia window) serialized every queued event behind the previous one. Two complementary changes: `execute_workspace_command` now skips `apply_layout` when an animation is already in flight (the animation worker is driving positioning anyway, so the sync apply was just being overwritten by the next frame), and `apply_layout` itself now fast-paths when every placement matches `last_placed_layout_rects` (covers focus shifts within the already-visible range where no scroll animation starts). Hotkey events drain at near-memory speed; the lag tail when you stop pressing keys is gone
+
 ## 0.1.9
 
 ### Improvements
