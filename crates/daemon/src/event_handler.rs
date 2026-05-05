@@ -442,14 +442,30 @@ impl AppState {
 
                     let viewport_width = self.viewport_width_for(monitor_id);
 
+                    // Distinguish user-initiated focus changes (clicks /
+                    // hotkeys / Alt-Tab) from spurious foreground events
+                    // fired by background apps. Without recent user input
+                    // we still update internal focus tracking but skip the
+                    // auto-scroll that would yank the viewport to a window
+                    // the user did not actually request — the classic
+                    // "I was on Terminal and Zen suddenly stole focus and
+                    // scrolled the layout" symptom.
+                    const FOCUS_INPUT_RECENT_MS: u32 = 500;
+                    let user_initiated = leopardwm_platform_win32::ms_since_last_user_input()
+                        .is_some_and(|ms| ms <= FOCUS_INPUT_RECENT_MS);
                     if let Some(workspace) = self.workspaces.get_mut(&monitor_id).and_then(|v| v.get_mut(ws_idx)) {
                         if let Err(e) = workspace.focus_window(hwnd) {
                             // Floating windows are not in the tiled column list,
                             // so focus_window fails for them — that's expected.
                             debug!("Failed to focus window {}: {}", hwnd, e);
                         } else {
-                            debug!("Focus changed to window {} on monitor {}", hwnd, monitor_id);
-                            workspace.ensure_focused_visible_animated(viewport_width);
+                            debug!(
+                                "Focus changed to window {} on monitor {} (user_initiated={})",
+                                hwnd, monitor_id, user_initiated
+                            );
+                            if user_initiated {
+                                workspace.ensure_focused_visible_animated(viewport_width);
+                            }
                         }
                     }
                     // Always apply layout — even if focus_window failed (floating windows),
@@ -625,7 +641,17 @@ impl AppState {
                         self.sync_foreground_window();
                     }
                 } else {
-                    debug!("Window {} restored (unmanaged)", hwnd);
+                    // The daemon's startup enumeration skips IsIconic windows, so
+                    // tray apps that boot in a minimized state (Raw Accel, Discord
+                    // close-to-tray, Spotify minimized) never enter the managed set
+                    // until they are restored. Treating an unmanaged restore as a
+                    // Created event lets the standard rule/tile pipeline pick them
+                    // up the first time the user actually brings them on screen.
+                    debug!(
+                        "Window {} restored (unmanaged) — re-dispatching as Created",
+                        hwnd
+                    );
+                    self.handle_window_event(WindowEvent::Created(hwnd));
                 }
             }
             WindowEvent::MoveSizeStart(hwnd) => {
@@ -674,6 +700,16 @@ impl AppState {
             }
             WindowEvent::MoveSizeEnd(hwnd) => {
                 debug!("User finished dragging/resizing window {}", hwnd);
+
+                // The dragged/resized window has physically drifted from its
+                // layout slot. Evict its last_placed entry so apply_layout's
+                // fast-path can't short-circuit on no-layout-change drop
+                // paths (small in-column drag → snap_back_tiled, single-
+                // window same-column merge, resize that lands within the
+                // existing preset bucket). Without this the window is left
+                // wherever the user released it until something else
+                // triggers a real layout change.
+                self.last_placed_layout_rects.remove(&hwnd);
 
                 // Handle resize completion (border drag) — snap to nearest preset.
                 if self.resize_hwnd.take() == Some(hwnd) {
@@ -856,27 +892,64 @@ impl AppState {
                         // chase. Real user drags are typically tens to hundreds
                         // of pixels off, so 20px comfortably separates them.
                         const POSITION_EPSILON_PX: i32 = 20;
+                        // The chrome (GetWindowRect) rect includes invisible
+                        // borders — typically up to ~15 px on Win10/11 — so
+                        // the cross-check has to tolerate that offset on
+                        // POSITION only. Size cannot use this slack because a
+                        // real edge resize commonly produces 5-30 px deltas
+                        // and the cross-check would otherwise mask them and
+                        // skip the snap-back the user expects.
+                        const CHROME_POSITION_EPSILON_PX: i32 = 30;
                         let expected = self.last_placed_layout_rects.get(&hwnd).copied();
-                        let actual = leopardwm_platform_win32::get_window_visible_rect(hwnd);
-                        let at_expected_position = match (expected, actual) {
-                            (Some(expected), Some(actual)) => {
-                                let dx = (actual.x - expected.x).abs();
-                                let dy = (actual.y - expected.y).abs();
-                                let dw = (actual.width - expected.width).abs();
-                                let dh = (actual.height - expected.height).abs();
-                                let within = dx <= POSITION_EPSILON_PX
-                                    && dy <= POSITION_EPSILON_PX
-                                    && dw <= POSITION_EPSILON_PX
-                                    && dh <= POSITION_EPSILON_PX;
-                                if !within {
+                        let dwm_actual = leopardwm_platform_win32::get_window_visible_rect(hwnd);
+                        // Cross-check with GetWindowRect — for Chromium /
+                        // Firefox / Cascadia under the swap-chain-stale bug,
+                        // EXTENDED_FRAME_BOUNDS reports the visual content
+                        // position (where DWM is compositing) rather than the
+                        // actual chrome HWND position, which can read tens to
+                        // thousands of pixels off after a rapid burst even
+                        // though the window has not moved. GetWindowRect is
+                        // the OS's authoritative position and stays correct.
+                        let chrome_actual = leopardwm_platform_win32::get_window_chrome_rect(hwnd);
+                        let within_all = |a: Rect, e: Rect, eps: i32| -> bool {
+                            (a.x - e.x).abs() <= eps
+                                && (a.y - e.y).abs() <= eps
+                                && (a.width - e.width).abs() <= eps
+                                && (a.height - e.height).abs() <= eps
+                        };
+                        let at_expected_position = match expected {
+                            Some(expected) => {
+                                // Honest comparison — DWM bounds match
+                                // expected layout in both position and size.
+                                let dwm_ok = dwm_actual
+                                    .is_some_and(|a| within_all(a, expected, POSITION_EPSILON_PX));
+                                // Swap-chain bug guard — chrome HWND is at
+                                // the expected position (DWM may be lying).
+                                // Position only: the chrome rect's size is
+                                // inflated by invisible borders, so a size
+                                // comparison would always pass and would
+                                // mask real edge resizes.
+                                let chrome_position_ok = chrome_actual.is_some_and(|a| {
+                                    (a.x - expected.x).abs() <= CHROME_POSITION_EPSILON_PX
+                                        && (a.y - expected.y).abs()
+                                            <= CHROME_POSITION_EPSILON_PX
+                                });
+                                let dwm_position_displaced = dwm_actual.is_some_and(|a| {
+                                    (a.x - expected.x).abs() > POSITION_EPSILON_PX
+                                        || (a.y - expected.y).abs() > POSITION_EPSILON_PX
+                                });
+                                let swap_chain_bug =
+                                    chrome_position_ok && dwm_position_displaced;
+                                let result = dwm_ok || swap_chain_bug;
+                                if !result {
                                     debug!(
-                                        "Window {} off expected position: dx={} dy={} dw={} dh={} (expected {:?} actual {:?})",
-                                        hwnd, dx, dy, dw, dh, expected, actual
+                                        "Window {} off expected position: expected {:?} dwm {:?} chrome {:?}",
+                                        hwnd, expected, dwm_actual, chrome_actual
                                     );
                                 }
-                                within
+                                result
                             }
-                            _ => false,
+                            None => false,
                         };
                         if at_expected_position {
                             debug!(
@@ -885,6 +958,12 @@ impl AppState {
                             );
                         } else {
                             debug!("Managed window {} moved/resized — snapping back", hwnd);
+                            // Evict the displaced hwnd's last-applied entry so
+                            // apply_layout's fast-path can't short-circuit when
+                            // the layout itself hasn't changed but the window's
+                            // visible rect has drifted away from it. Without
+                            // this the window stays where the user dragged it.
+                            self.last_placed_layout_rects.remove(&hwnd);
                             if let Err(e) = self.apply_layout() {
                                 warn!("Failed to snap back layout after move/resize: {}", e);
                             }
@@ -1106,6 +1185,12 @@ impl AppState {
             }
         }
 
+        // Evict the resized hwnd from last_placed_layout_rects: when the
+        // user's resize falls inside the current preset bucket the snap is
+        // a no-op, so apply_layout's fast-path would see placements
+        // unchanged and skip repositioning, leaving the window at the
+        // user-resized size instead of the column's preset width.
+        self.last_placed_layout_rects.remove(&hwnd);
         if let Err(e) = self.apply_layout() {
             warn!("Failed to apply layout after resize snap: {}", e);
         }
@@ -1124,6 +1209,10 @@ impl AppState {
                 if workspace.is_floating(hwnd) {
                     // Floating windows are managed but not represented in tiled columns.
                     self.previous_focused_hwnd = Some(hwnd);
+                    // Skip the real Win32 call in tests — placeholder hwnds collide
+                    // with real running windows and lag the user's mouse / steal
+                    // focus via AttachThreadInput.
+                    #[cfg(not(test))]
                     let _ = leopardwm_platform_win32::set_foreground_window(hwnd);
                     debug!(
                         "Focus-follows-mouse: focused floating window {} on monitor {}",

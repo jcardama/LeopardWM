@@ -51,20 +51,8 @@ impl AppState {
         if let Some(snapshot) = snapshot {
             self.start_layout_transition(snapshot);
         }
-        // Skip the synchronous apply_layout when an animation will drive
-        // positioning anyway. apply_layout costs ~100-200ms per call (the
-        // landing-pass nudge does sync SetWindowPos pairs on every sticky-
-        // compositor window) and its placements are overwritten by the very
-        // next animation frame, so calling it during a running animation
-        // just back-pressures the event loop. Under rapid input that
-        // pressure manifests as focus events draining for several seconds
-        // after the user stops pressing keys. The animation worker takes
-        // over via the main loop's `is_animating && !animation_active`
-        // dispatch.
-        if !self.is_animating() {
-            if let Err(e) = self.apply_layout() {
-                return IpcResponse::error(format!("Failed to apply layout: {}", e));
-            }
+        if let Err(e) = self.apply_layout() {
+            return IpcResponse::error(format!("Failed to apply layout: {}", e));
         }
         if sync_focus {
             self.sync_foreground_window();

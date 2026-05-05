@@ -179,6 +179,7 @@ pub fn apply_placements(
     placements: &[WindowPlacement],
     _config: &PlatformConfig,
     mut cache: Option<&mut PlacementCache>,
+    nudge_sticky_compositors: bool,
 ) -> Result<ApplyPlacementsResult, Win32Error> {
     let empty_result = ApplyPlacementsResult {
         width_violations: Vec::new(),
@@ -230,8 +231,8 @@ pub fn apply_placements(
 
     // Prepare all window entries — visible and off-screen alike.
     // All windows get full position + size with border inset adjustment.
-    // Off-screen windows are later clamped to just outside the visible area
-    // to prevent DWM from releasing composition surfaces.
+    // Off-screen windows are kept at their layout-flow position; DWM cloaking
+    // makes them invisible.
     let offscreen_count = placements.iter().filter(|p| p.visibility != Visibility::Visible).count();
 
     // In high contrast mode, DWM paints a visible border in the normally-invisible
@@ -606,7 +607,7 @@ pub fn apply_placements(
     // sees "no size change" and never rebuilds. A brief (w-1 -> w) resize pair
     // forces a real delta through. Scoped to known-affected classes to avoid a
     // universal flicker tax.
-    if async_flag == SET_WINDOW_POS_FLAGS(0) {
+    if async_flag == SET_WINDOW_POS_FLAGS(0) && nudge_sticky_compositors {
         let nudge_targets: Vec<NudgeTarget> = entries
             .iter()
             .filter(|e| {
@@ -821,7 +822,7 @@ mod tests {
     fn test_apply_placements_empty() {
         // Verify empty placements succeed without error
         let config = PlatformConfig::default();
-        let result = apply_placements(&[], &config, None);
+        let result = apply_placements(&[], &config, None, false);
         assert!(result.is_ok());
     }
 
@@ -836,7 +837,7 @@ mod tests {
         }];
 
         // Invalid windows (hwnd 0) are silently skipped in the deferred batch
-        let result = apply_placements(&placements, &config, None);
+        let result = apply_placements(&placements, &config, None, false);
         assert!(result.is_ok());
     }
 }

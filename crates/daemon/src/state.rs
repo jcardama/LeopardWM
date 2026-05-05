@@ -256,6 +256,14 @@ pub(crate) struct AppState {
     pub(crate) high_contrast: bool,
     /// Active layout transition animation (window position interpolation).
     pub(crate) layout_transition: Option<LayoutTransition>,
+    /// True when the next sync `apply_layout` is the landing pass after an
+    /// animation (scroll or layout transition) and therefore needs the
+    /// `(w-1 → w)` nudge to repair sticky-compositor swap-chain desyncs.
+    /// Routine `apply_layout` calls (focus shifts in the already-visible
+    /// range, event-handler refreshes, drag finalizations) do not run after
+    /// an async-frame burst, so nudging them just produces a visible 1 px
+    /// resize on every Chromium / Firefox / Cascadia window with no benefit.
+    pub(crate) post_animation_nudge_pending: bool,
     /// Injected window info for testing. When set, `lookup_window_info()` returns
     /// entries from this map instead of calling `enumerate_windows()`.
     #[cfg(test)]
@@ -388,6 +396,7 @@ impl AppState {
                 || leopardwm_platform_win32::is_on_battery_or_power_saver(),
             high_contrast: leopardwm_platform_win32::is_high_contrast_enabled(),
             layout_transition: None,
+            post_animation_nudge_pending: false,
             #[cfg(test)]
             injected_window_info: HashMap::new(),
             #[cfg(test)]

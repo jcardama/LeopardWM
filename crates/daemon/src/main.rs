@@ -1684,12 +1684,6 @@ async fn main() -> Result<()> {
                             }
                         }
                     }
-                    // Reposition border to follow the focused window during animation.
-                    if let Some(hwnd) = state.previous_focused_hwnd {
-                        if state.config.appearance.active_border {
-                            state.show_border(hwnd);
-                        }
-                    }
                 }
                 if let Err(ref e) = frame_result.apply_result {
                     warn!("Animation frame failed: {}", e);
@@ -1703,6 +1697,21 @@ async fn main() -> Result<()> {
                 let still_animating = {
                     let mut state = state.lock().await;
                     let running = state.tick_animations(delta_ms);
+                    // Reposition the border AFTER the tick so it reflects the
+                    // SAME interpolated state the next animation frame will
+                    // position windows at. The border SetWindowPos and the
+                    // worker's window SetWindowPos calls below both commit
+                    // before the next DwmFlush vsync, so the border arrives
+                    // on screen in the same frame as the windows. Doing
+                    // show_border BEFORE tick (the previous order) lagged the
+                    // border by one vsync — windows updated at vsync N,
+                    // border at vsync N+1 — which is what the user noticed
+                    // as "border scrolling at a different framerate".
+                    if let Some(hwnd) = state.previous_focused_hwnd {
+                        if state.config.appearance.active_border {
+                            state.show_border(hwnd);
+                        }
+                    }
                     if running || state.is_animating() {
                         matches!(
                             state.send_animation_frame(&animation_worker),
@@ -1722,6 +1731,14 @@ async fn main() -> Result<()> {
                     // bypasses the worker cache to reposition every window.
                     {
                         let mut state = state.lock().await;
+                        // Only this landing pass follows an async frame burst,
+                        // so it is the only `apply_layout` that needs to fire
+                        // the sticky-compositor `(w-1 → w)` nudge. Routine
+                        // applies (focus shifts within view, event refreshes,
+                        // drag finalizations) skip the nudge to avoid a
+                        // visible 1 px wobble on every Chromium / Firefox
+                        // window every time the layout is re-applied.
+                        state.post_animation_nudge_pending = true;
                         if let Err(e) = state.apply_layout() {
                             warn!("Final landing layout failed: {}", e);
                         }

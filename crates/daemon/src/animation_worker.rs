@@ -134,12 +134,16 @@ fn worker_loop(
             WorkerCommand::Frame(request) => {
                 let frame_start = Instant::now();
 
-                // Apply window placements, skipping unchanged windows via cache
+                // Apply window placements, skipping unchanged windows via cache.
+                // Animation frames are SWP_ASYNCWINDOWPOS so the sticky-compositor
+                // nudge inside `apply_placements` is a no-op; pass `false` to keep
+                // the call signature explicit.
                 let (apply_result, width_violations, height_violations) =
                     match leopardwm_platform_win32::apply_placements(
                         &request.placements,
                         &request.platform_config,
                         Some(&mut placement_cache),
+                        false,
                     ) {
                         Ok(r) => (Ok(()), r.width_violations, r.height_violations),
                         Err(e) => (Err(e.to_string()), Vec::new(), Vec::new()),

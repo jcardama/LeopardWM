@@ -1107,6 +1107,12 @@ impl AppState {
         let apply_epoch_ref = self.apply_epoch.clone();
         let apply_epoch = apply_epoch_ref.fetch_add(1, Ordering::SeqCst) + 1;
         let apply_window_ids: Vec<u64> = all_placements.iter().map(|p| p.window_id).collect();
+        // Drain the post-animation nudge flag so only the landing pass after
+        // an actual scroll / transition fires the (w-1 → w) sticky-compositor
+        // nudge. Routine applies skip it, which kills the visible Zen / Slack
+        // / Cascadia 1 px wobble that used to fire on every focus shift,
+        // drag, or window event.
+        let post_animation_nudge = std::mem::take(&mut self.post_animation_nudge_pending);
         #[cfg(test)]
         let injected_behavior = self.injected_apply_placements_behavior;
         #[cfg(test)]
@@ -1160,7 +1166,12 @@ impl AppState {
                     return;
                 }
                 let (result, width_violations, height_violations) =
-                    match leopardwm_platform_win32::apply_placements(&all_placements, &platform_config, None) {
+                    match leopardwm_platform_win32::apply_placements(
+                        &all_placements,
+                        &platform_config,
+                        None,
+                        post_animation_nudge,
+                    ) {
                         Ok(r) => (Ok(()), r.width_violations, r.height_violations),
                         Err(e) => (Err(anyhow!(e.to_string())), Vec::new(), Vec::new()),
                     };
@@ -1422,6 +1433,42 @@ impl AppState {
                     return;
                 }
             }
+            // For managed tiled windows the layout rect is authoritative —
+            // the window is either at that rect or animating toward it.
+            // Querying DWM bounds via `frame.show(hwnd)` lags SetWindowPos by
+            // 1-2 frames, which produces a visible border drift after drag
+            // snap-back / resize / scroll landing (the SetWindowPos commits
+            // but DWM still reports the old rect when the immediately-
+            // following show_border fires). Use the layout rect directly so
+            // the border is always at the slot the workspace says it should
+            // be — same rect the layout engine is steering the window
+            // toward, no DWM lag.
+            //
+            // Floating windows fall through to the chrome-tracking
+            // `frame.show(hwnd)` path because their position is whatever
+            // the user last set, not a layout slot.
+            if self.config.appearance.active_border {
+                if let Some((monitor_id, ws_idx)) = self.find_window_workspace(hwnd) {
+                    let is_floating = self
+                        .workspaces
+                        .get(&monitor_id)
+                        .and_then(|v| v.get(ws_idx))
+                        .is_some_and(|ws| ws.is_floating(hwnd));
+                    if !is_floating {
+                        if let Some(layout_rect) = self.compute_window_layout_rect(hwnd) {
+                            if let Some(bgr) = self.border_color_bgr() {
+                                frame.show_at_rect(
+                                    layout_rect,
+                                    border_width,
+                                    self.border_position(),
+                                    bgr,
+                                );
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
             if self.config.appearance.active_border {
                 if let Some(bgr) = self.border_color_bgr() {
                     frame.show(
@@ -1481,6 +1528,10 @@ impl AppState {
             // Set foreground window — track it regardless of OS result since
             // this is our intended focus. The call can fail if the window
             // vanished between layout and here, which is a transient condition.
+            // Skipped under #[cfg(test)] so placeholder hwnds (100, 200, …)
+            // can't collide with a real running HWND and lag the user's mouse
+            // via AttachThreadInput.
+            #[cfg(not(test))]
             let _ = leopardwm_platform_win32::set_foreground_window(hwnd);
             self.previous_focused_hwnd = Some(hwnd);
         } else {

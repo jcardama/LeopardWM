@@ -596,6 +596,12 @@ impl AppState {
 
             // Clear any in-progress transition so windows stay at their current positions.
             self.layout_transition = None;
+            // Evict the dragged hwnd from last_placed_layout_rects: when the
+            // user drops it back in its original column, the layout is
+            // unchanged and apply_layout's fast-path would skip repositioning,
+            // leaving the window where the user dropped it instead of
+            // snapping it back to its layout slot.
+            self.last_placed_layout_rects.remove(&hwnd);
             if let Err(e) = self.apply_layout() {
                 warn!("Failed to apply layout after drag merge: {}", e);
             }

@@ -216,6 +216,32 @@ pub fn get_window_visible_rect(hwnd: WindowId) -> Option<Rect> {
     }
 }
 
+/// Get the chrome (GetWindowRect) rect of a window in screen coordinates.
+///
+/// Unlike `get_window_visible_rect`, this returns the OS-tracked frame rect
+/// (the rect set by SetWindowPos), not the DWM compositor's visible content
+/// rect. Use this when you need an authoritative position that is immune to
+/// DirectComposition swap-chain desync — e.g. Chromium-family apps can have
+/// their visible content composited at a stale position after a rapid burst
+/// of async SetWindowPos calls, but `GetWindowRect` always reports where the
+/// chrome window actually lives.
+pub fn get_window_chrome_rect(hwnd: WindowId) -> Option<Rect> {
+    let hwnd_win = HWND(hwnd as *mut c_void);
+    unsafe {
+        let mut win_rect = RECT::default();
+        if GetWindowRect(hwnd_win, &mut win_rect).is_ok() {
+            Some(Rect::new(
+                win_rect.left,
+                win_rect.top,
+                win_rect.right - win_rect.left,
+                win_rect.bottom - win_rect.top,
+            ))
+        } else {
+            None
+        }
+    }
+}
+
 /// Check if the cursor is on a window's resize border (not the title bar/interior).
 ///
 /// Returns `true` if the cursor position at `MoveSizeStart` time suggests a resize
@@ -376,6 +402,26 @@ fn restore_window_if_offscreen_to_work_area(
 // ============================================================================
 // Focus and window operations
 // ============================================================================
+
+/// Milliseconds since the user last produced a real input event
+/// (keyboard or mouse). Used to distinguish user-initiated focus changes
+/// from spurious `EVENT_SYSTEM_FOREGROUND` events fired by background
+/// apps that steal focus on their own (notifications, app-internal focus
+/// shuffles, etc.). Returns `None` if the API call fails.
+pub fn ms_since_last_user_input() -> Option<u32> {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
+    use windows::Win32::System::SystemInformation::GetTickCount;
+    unsafe {
+        let mut lii = LASTINPUTINFO {
+            cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32,
+            dwTime: 0,
+        };
+        if !GetLastInputInfo(&mut lii).as_bool() {
+            return None;
+        }
+        Some(GetTickCount().wrapping_sub(lii.dwTime))
+    }
+}
 
 /// Set the foreground window using Win32 SetForegroundWindow.
 ///
@@ -770,7 +816,7 @@ pub fn cascade_windows(window_ids: &[WindowId]) {
         }
     }
 
-    let _ = apply_placements(&placements, &PlatformConfig::default(), None);
+    let _ = apply_placements(&placements, &PlatformConfig::default(), None, false);
 }
 
 // ============================================================================
