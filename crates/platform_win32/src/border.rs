@@ -167,17 +167,31 @@ impl BorderFrame {
         }
 
         let bw = width as i32;
-        let tw = rect.width;
-        let th = rect.height;
+        // For outside borders, the layout rect (which matches the DWM-
+        // reported visible bounds for a managed window) includes a 1 px
+        // transparent resize border on every side. Shrink by 1 px so the
+        // visible border sits flush with the actual window content
+        // edge. Mirrors the same compensation in `reposition()`. Without
+        // this the border has a 1 px gap from the window content (the
+        // exact width of the transparent resize border).
+        let (rx, ry, tw, th) = match position {
+            BorderPosition::Outside => (
+                rect.x + 1,
+                rect.y + 1,
+                (rect.width - 2).max(0),
+                (rect.height - 2).max(0),
+            ),
+            BorderPosition::Inside => (rect.x, rect.y, rect.width, rect.height),
+        };
 
         let (x, y, w, h) = match position {
             BorderPosition::Outside => (
-                rect.x - bw,
-                rect.y - bw,
+                rx - bw,
+                ry - bw,
                 tw + 2 * bw,
                 th + 2 * bw,
             ),
-            BorderPosition::Inside => (rect.x, rect.y, tw, th),
+            BorderPosition::Inside => (rx, ry, tw, th),
         };
 
         let needs_render = {
