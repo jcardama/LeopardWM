@@ -960,6 +960,19 @@ impl AppState {
             self.applying_layout = false;
             return Err(anyhow::anyhow!(e));
         }
+        // Reposition the border immediately — both the worker's
+        // SetWindowPos calls below and this border SetWindowPos commit
+        // before the next DwmFlush vsync, so the border arrives on screen
+        // in the same frame as the windows. Without this the FIRST
+        // animation frame paints with the stale border position, since
+        // the post-frame `tick + show_border` reorder in `main.rs` only
+        // fires for frames 2+ (frame 1's `AnimationFrameApplied` arrives
+        // AFTER frame 1 has already been presented).
+        if let Some(hwnd) = self.previous_focused_hwnd {
+            if self.config.appearance.active_border {
+                self.show_border(hwnd);
+            }
+        }
         Ok(true)
     }
 
@@ -1455,14 +1468,28 @@ impl AppState {
                         .and_then(|v| v.get(ws_idx))
                         .is_some_and(|ws| ws.is_floating(hwnd));
                     if !is_floating {
-                        if let Some(layout_rect) = self.compute_window_layout_rect(hwnd) {
-                            if let Some(bgr) = self.border_color_bgr() {
-                                frame.show_at_rect(
-                                    layout_rect,
-                                    border_width,
-                                    self.border_position(),
-                                    bgr,
-                                );
+                        match self.compute_window_layout_rect(hwnd) {
+                            Some(layout_rect) => {
+                                if let Some(bgr) = self.border_color_bgr() {
+                                    frame.show_at_rect(
+                                        layout_rect,
+                                        border_width,
+                                        self.border_position(),
+                                        bgr,
+                                    );
+                                    return;
+                                }
+                            }
+                            None => {
+                                // Managed tiled window with no current
+                                // placement — minimized, or in a transient
+                                // mid-removal state. Hide the border
+                                // rather than falling through to
+                                // `frame.show(hwnd)`, which would track the
+                                // stale DWM bounds and leave a colored
+                                // frame floating where the window used to
+                                // be.
+                                frame.hide();
                                 return;
                             }
                         }

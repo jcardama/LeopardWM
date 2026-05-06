@@ -91,7 +91,7 @@ impl Workspace {
             // strip_x → screen_x = strip_x - scroll_offset + viewport.x + outer_left
             // Must use regular arithmetic (not saturating) to allow negative screen
             // positions for columns partially scrolled off the left edge.
-            let col_screen_x = col_strip_x - viewport_left + viewport.x + outer_left;
+            let natural_screen_x = col_strip_x - viewport_left + viewport.x + outer_left;
 
             // Determine visibility against the visible strip area
             let visibility = if col_strip_right <= viewport_left {
@@ -100,6 +100,31 @@ impl Workspace {
                 Visibility::OffScreenRight
             } else {
                 Visibility::Visible
+            };
+
+            // Push off-screen columns past the viewport edge so they cannot
+            // peek through the outer-gap area when DWM cloaking is slow or
+            // ineffective. The natural strip-flow position for an
+            // `OffScreenRight` column at the boundary is
+            // `viewport.x + viewport.width - outer_right` — i.e. INSIDE
+            // the viewport by `outer_right` pixels — so the leftmost
+            // off-screen-right column's first `outer_right` pixels would
+            // otherwise be visible if anything fails to cloak it.
+            // Symmetric clamp for `OffScreenLeft`.
+            //
+            // The clamp/no-clamp boundary aligns with the cloak/uncloak
+            // boundary in `apply_placements`: a column transitions from
+            // OffScreen to Visible in the same `apply` call where the
+            // window is uncloaked, so the position jump is invisible to
+            // the user. Animation frames continue to use this placement
+            // logic so the position transitions atomically with the
+            // visibility flip.
+            let col_screen_x = match visibility {
+                Visibility::OffScreenRight => natural_screen_x
+                    .max(viewport.x.saturating_add(viewport.width)),
+                Visibility::OffScreenLeft => natural_screen_x
+                    .min(viewport.x.saturating_sub(eff_width)),
+                Visibility::Visible => natural_screen_x,
             };
 
             // Filter out minimized windows, collecting (original_index, window_id) pairs

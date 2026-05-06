@@ -86,6 +86,32 @@ impl AppState {
                     let executable =
                         get_process_executable(win_info.process_id).unwrap_or_default();
 
+                    // Skip transient script-runner windows whose title is just
+                    // the executable path. PowerShell, cmd, and similar console
+                    // hosts briefly show this title before they finish setting
+                    // a real one — but a scheduled-task spawn (like the Windows
+                    // PowerShell that fires every 5 minutes) is destroyed
+                    // within ~200 ms before it ever gets a real title. Tiling
+                    // those caused a layout reflow on Created and another on
+                    // Hidden, which the user perceived as "windows randomly
+                    // resizing while idle". A persistent interactive console
+                    // sets a real title (e.g. "Administrator: Windows
+                    // PowerShell") almost immediately, so this filter does not
+                    // affect normal terminal usage.
+                    let title_lower = win_info.title.to_ascii_lowercase();
+                    let title_looks_like_exe_path = title_lower.ends_with(".exe")
+                        || (!executable.is_empty()
+                            && title_lower == executable.to_ascii_lowercase());
+                    if title_looks_like_exe_path
+                        && win_info.class_name == "ConsoleWindowClass"
+                    {
+                        debug!(
+                            "Skipping transient console-host window with exe-path title: {} ({})",
+                            win_info.title, win_info.class_name
+                        );
+                        return;
+                    }
+
                     // Check window rules
                     let action = self.evaluate_window_rules(
                         &win_info.class_name,
@@ -450,9 +476,23 @@ impl AppState {
                     // the user did not actually request — the classic
                     // "I was on Terminal and Zen suddenly stole focus and
                     // scrolled the layout" symptom.
-                    const FOCUS_INPUT_RECENT_MS: u32 = 500;
+                    //
+                    // Threshold is generous (1.5 s) because a Focused event
+                    // delivered through WinEventProc -> our hook -> tokio
+                    // mpsc -> daemon mutex can lag well past 500 ms when the
+                    // daemon is busy or DWM is loaded. Spurious events from
+                    // notification toasts and tray apps fire from timers
+                    // unrelated to user input, so even at 1.5 s the false-
+                    // positive rate stays low. Fail CLOSED on
+                    // `GetLastInputInfo` failure — if the API ever returns
+                    // None we cannot prove user intent, so we don't auto-
+                    // scroll. The user can still hotkey the focus shift,
+                    // which goes through `command_handler` and bypasses
+                    // this gate entirely.
+                    const FOCUS_INPUT_RECENT_MS: u32 = 1500;
                     let user_initiated = leopardwm_platform_win32::ms_since_last_user_input()
-                        .is_some_and(|ms| ms <= FOCUS_INPUT_RECENT_MS);
+                        .map(|ms| ms <= FOCUS_INPUT_RECENT_MS)
+                        .unwrap_or(false);
                     if let Some(workspace) = self.workspaces.get_mut(&monitor_id).and_then(|v| v.get_mut(ws_idx)) {
                         if let Err(e) = workspace.focus_window(hwnd) {
                             // Floating windows are not in the tiled column list,
@@ -519,6 +559,47 @@ impl AppState {
                                 self.previous_focused_hwnd = Some(hwnd);
                                 self.show_border(hwnd);
                                 return;
+                            }
+                        }
+                    }
+
+                    // Recovery path for the transient-console-host filter:
+                    // a real interactive PowerShell or cmd window may have
+                    // hit the filter at Created time if its title was still
+                    // the exe path. By the time the user actually focuses
+                    // it the title has been set (e.g. "Administrator:
+                    // Windows PowerShell"), so re-check and re-add. A user
+                    // focusing the window proves it is not a transient
+                    // scheduled-task spawn.
+                    if let Some(win_info) = self.lookup_window_info(hwnd) {
+                        if win_info.class_name == "ConsoleWindowClass" {
+                            let executable = get_process_executable(win_info.process_id)
+                                .unwrap_or_default();
+                            let title_lower = win_info.title.to_ascii_lowercase();
+                            let title_still_exe_path = title_lower.ends_with(".exe")
+                                || (!executable.is_empty()
+                                    && title_lower == executable.to_ascii_lowercase());
+                            if !title_still_exe_path {
+                                let action = self.evaluate_window_rules(
+                                    &win_info.class_name,
+                                    &win_info.title,
+                                    &executable,
+                                );
+                                if action != config::WindowAction::Ignore {
+                                    info!(
+                                        "Recovering console-host window with real title: {} ({}) - user focused it",
+                                        win_info.title, win_info.class_name
+                                    );
+                                    self.handle_window_event(WindowEvent::Created(hwnd));
+                                    if let Some((mid, widx)) = self.find_window_workspace(hwnd) {
+                                        if let Some(ws) = self.workspaces.get_mut(&mid).and_then(|v| v.get_mut(widx)) {
+                                            let _ = ws.focus_window(hwnd);
+                                        }
+                                    }
+                                    self.previous_focused_hwnd = Some(hwnd);
+                                    self.show_border(hwnd);
+                                    return;
+                                }
                             }
                         }
                     }
