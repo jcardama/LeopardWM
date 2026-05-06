@@ -777,6 +777,16 @@ fn cached_border_insets(
     fresh
 }
 
+/// Public wrapper over `invisible_border_insets` that takes a `WindowId`.
+/// Returns `(left, top, right, bottom)` insets, or `(0, 0, 0, 0)` if the
+/// window has no DWM bounds available. Used by callers that need to
+/// translate between chrome (`GetWindowRect`) coordinates and visible-
+/// content (layout) coordinates without reaching into placement internals.
+pub fn get_window_invisible_insets(window_id: WindowId) -> (i32, i32, i32, i32) {
+    let Ok(hwnd) = window_id_to_hwnd(window_id) else { return (0, 0, 0, 0) };
+    invisible_border_insets(hwnd)
+}
+
 /// Compute invisible border insets for a window.
 ///
 /// Windows 10/11 windows have invisible borders (typically ~7px on left, right,

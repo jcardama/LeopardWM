@@ -1106,6 +1106,18 @@ impl AppState {
         // when Windows fires EVENT_OBJECT_LOCATIONCHANGE without an actual
         // position change. Visibility::Visible placements only — off-screen
         // parked windows aren't at their "layout" rect by design.
+        //
+        // Drain stale entries for windows that are no longer in the active
+        // layout (workspace-switch leaves their hwnds alive but they stop
+        // appearing in `all_placements`, which `apply_layout` builds from
+        // active workspaces only). Without this drain the fast-path's
+        // "no extra entries" guard fails forever after the first
+        // Ctrl+Alt+1-9 — silently nullifying the rapid-Ctrl+Alt+Right/Left
+        // perf fix for every multi-workspace user.
+        let active_ids: std::collections::HashSet<u64> =
+            all_placements.iter().map(|p| p.window_id).collect();
+        self.last_placed_layout_rects
+            .retain(|id, _| active_ids.contains(id));
         for p in &all_placements {
             if matches!(p.visibility, leopardwm_core_layout::Visibility::Visible) {
                 self.last_placed_layout_rects.insert(p.window_id, p.rect);
@@ -1512,11 +1524,20 @@ impl AppState {
     }
 
     /// Compute the layout rect for a window from the workspace placements.
+    /// Applies the active layout transition's interpolation so the border
+    /// follows the windows' interpolated mid-flight rect — without this the
+    /// border jumps to the FINAL post-transition rect on frame 1 of a
+    /// workspace switch / move-to-column / expel / drag merge while the
+    /// windows are still sliding to it (border leads windows by the entire
+    /// transition duration).
     fn compute_window_layout_rect(&self, hwnd: u64) -> Option<leopardwm_core_layout::Rect> {
         let (monitor_id, ws_idx) = self.find_window_workspace(hwnd)?;
         let viewport = self.monitors.get(&monitor_id)?.work_area;
         let workspace = self.workspaces.get(&monitor_id)?.get(ws_idx)?;
-        let placements = workspace.compute_placements_animated(viewport);
+        let mut placements = workspace.compute_placements_animated(viewport);
+        if let Some(ref transition) = self.layout_transition {
+            Self::apply_transition_interpolation(transition, &mut placements);
+        }
         placements
             .iter()
             .find(|p| p.window_id == hwnd)

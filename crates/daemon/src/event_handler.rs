@@ -973,14 +973,6 @@ impl AppState {
                         // chase. Real user drags are typically tens to hundreds
                         // of pixels off, so 20px comfortably separates them.
                         const POSITION_EPSILON_PX: i32 = 20;
-                        // The chrome (GetWindowRect) rect includes invisible
-                        // borders — typically up to ~15 px on Win10/11 — so
-                        // the cross-check has to tolerate that offset on
-                        // POSITION only. Size cannot use this slack because a
-                        // real edge resize commonly produces 5-30 px deltas
-                        // and the cross-check would otherwise mask them and
-                        // skip the snap-back the user expects.
-                        const CHROME_POSITION_EPSILON_PX: i32 = 30;
                         let expected = self.last_placed_layout_rects.get(&hwnd).copied();
                         let dwm_actual = leopardwm_platform_win32::get_window_visible_rect(hwnd);
                         // Cross-check with GetWindowRect — for Chromium /
@@ -991,7 +983,22 @@ impl AppState {
                         // thousands of pixels off after a rapid burst even
                         // though the window has not moved. GetWindowRect is
                         // the OS's authoritative position and stays correct.
+                        //
+                        // The chrome rect is offset from the layout rect by
+                        // the invisible-border insets (apply_placements does
+                        // SetWindowPos at `rect.x - inset_l`), so we subtract
+                        // the insets before comparing. That makes the chrome
+                        // comparison apples-to-apples against the layout rect
+                        // and lets us use the same tight POSITION_EPSILON_PX.
+                        // Without this, real displacements in the
+                        // 21..(20+inset_l*2) px band were misclassified as
+                        // swap-chain artifacts and the snap-back was skipped.
                         let chrome_actual = leopardwm_platform_win32::get_window_chrome_rect(hwnd);
+                        let chrome_visible = chrome_actual.map(|c| {
+                            let (il, it, _, _) =
+                                leopardwm_platform_win32::get_window_invisible_insets(hwnd);
+                            Rect::new(c.x + il, c.y + it, c.width, c.height)
+                        });
                         let within_all = |a: Rect, e: Rect, eps: i32| -> bool {
                             (a.x - e.x).abs() <= eps
                                 && (a.y - e.y).abs() <= eps
@@ -1004,16 +1011,17 @@ impl AppState {
                                 // expected layout in both position and size.
                                 let dwm_ok = dwm_actual
                                     .is_some_and(|a| within_all(a, expected, POSITION_EPSILON_PX));
-                                // Swap-chain bug guard — chrome HWND is at
-                                // the expected position (DWM may be lying).
-                                // Position only: the chrome rect's size is
-                                // inflated by invisible borders, so a size
-                                // comparison would always pass and would
-                                // mask real edge resizes.
-                                let chrome_position_ok = chrome_actual.is_some_and(|a| {
-                                    (a.x - expected.x).abs() <= CHROME_POSITION_EPSILON_PX
-                                        && (a.y - expected.y).abs()
-                                            <= CHROME_POSITION_EPSILON_PX
+                                // Swap-chain bug guard — chrome HWND
+                                // (visible-area-corrected) is at the
+                                // expected position even though DWM is
+                                // lying. Position only: the chrome rect's
+                                // size is inflated by invisible borders
+                                // and we don't trivially correct that, so
+                                // a size comparison would mask real edge
+                                // resizes.
+                                let chrome_position_ok = chrome_visible.is_some_and(|a| {
+                                    (a.x - expected.x).abs() <= POSITION_EPSILON_PX
+                                        && (a.y - expected.y).abs() <= POSITION_EPSILON_PX
                                 });
                                 let dwm_position_displaced = dwm_actual.is_some_and(|a| {
                                     (a.x - expected.x).abs() > POSITION_EPSILON_PX
@@ -1024,8 +1032,8 @@ impl AppState {
                                 let result = dwm_ok || swap_chain_bug;
                                 if !result {
                                     debug!(
-                                        "Window {} off expected position: expected {:?} dwm {:?} chrome {:?}",
-                                        hwnd, expected, dwm_actual, chrome_actual
+                                        "Window {} off expected position: expected {:?} dwm {:?} chrome_visible {:?}",
+                                        hwnd, expected, dwm_actual, chrome_visible
                                     );
                                 }
                                 result
