@@ -732,6 +732,11 @@ fn test_cmd_refresh() {
 #[test]
 fn test_cmd_reload() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
+    // Pause to short-circuit `apply_layout` — Reload spawns the placement
+    // worker, which times out under heavy `cargo test --all` parallel load
+    // even on an empty workspace. This test only asserts that the config
+    // was reloaded, not the side effects.
+    state.paused = true;
     let resp = state.handle_command(IpcCommand::Reload);
     assert_eq!(resp, IpcResponse::Ok);
     // Config was reloaded (default since no config file in test env)
