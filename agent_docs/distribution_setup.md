@@ -24,6 +24,8 @@ The `publish-winget` job in `.github/workflows/release.yml` uses the `vedantmgoy
 
 The next tagged release that includes the MSI will trigger the action and open a PR to `microsoft/winget-pkgs` automatically.
 
+**One-time bootstrap caveat:** `winget-releaser` only updates *existing* packages. Before the first time it runs, the package identifier (`jcardama.LeopardWM`) must already exist somewhere in `microsoft/winget-pkgs`. v0.1.11's first manual submission was done via `komac` to seed the package; from v0.1.12 onward the action picks up automatically.
+
 **Verifying it worked:** after pushing the next `v*` tag, check the `publish-winget` job in the run at https://github.com/jcardama/LeopardWM/actions. On success it logs the PR URL.
 
 ---

@@ -46,11 +46,27 @@ Most Windows tilers use tree or BSP layouts. LeopardWM is **scroll-first**: wind
 
 ## Installation
 
-Download the latest release from [GitHub Releases](https://github.com/jcardama/LeopardWM/releases):
+### Via package manager (recommended)
 
-1. Extract `LeopardWM-x.y.z-x86_64-windows.zip` to a permanent location
-2. Run `leopardwm.exe`
-3. (Optional) Enable autostart: `lwm autostart enable` (or `leopardwm-cli autostart enable`)
+```powershell
+winget install jcardama.LeopardWM         # Windows Package Manager
+scoop install extras/leopardwm            # Scoop (after `scoop bucket add extras`)
+```
+
+Both fetch the signed MSI installer and put `leopardwm`, `leopardwm-cli`, and `lwm` on your PATH. `winget upgrade` / `scoop update` keep you on the latest release.
+
+### Via MSI installer
+
+Download `LeopardWM-x.y.z-x86_64.msi` from [GitHub Releases](https://github.com/jcardama/LeopardWM/releases) and run it. Re-running a newer MSI upgrades in place — no manual uninstall needed.
+
+### Via standalone zip
+
+For users who prefer not to install:
+
+1. Download `LeopardWM-x.y.z-x86_64-windows.zip` from [GitHub Releases](https://github.com/jcardama/LeopardWM/releases)
+2. Extract to a permanent location
+3. Run `leopardwm.exe`
+4. (Optional) Enable autostart: `lwm autostart enable`
 
 Releases are signed via the [SignPath Foundation](https://signpath.org/) program.
 
