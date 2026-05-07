@@ -57,6 +57,7 @@ jobs:
           sha256sum target/wix/*.msi >> checksums.txt
           cat checksums.txt
       - uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2
+        id: gh_release
         with:
           files: |
             LeopardWM-*.zip
@@ -64,3 +65,18 @@ jobs:
             checksums.txt
           body: ${{ steps.changelog.outputs.body }}
           generate_release_notes: ${{ steps.changelog.outputs.body == '' }}
+
+  publish-winget:
+    needs: build
+    runs-on: windows-latest
+    # Only publish to winget when the WINGET_TOKEN secret is configured.
+    # Provide a fine-grained PAT with `public_repo` scope on the user's
+    # fork of microsoft/winget-pkgs (auto-created on first run).
+    if: ${{ !github.event.repository.fork }}
+    steps:
+      - uses: vedantmgoyal9/winget-releaser@main
+        with:
+          identifier: jcardama.LeopardWM
+          installers-regex: '\.msi$'
+          token: ${{ secrets.WINGET_TOKEN }}
+        continue-on-error: true
