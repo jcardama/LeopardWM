@@ -109,6 +109,9 @@ impl OverlayWindow {
     /// Returns [`Win32Error::HookInstallFailed`](crate::Win32Error::HookInstallFailed)
     /// if the overlay window or thread cannot be created.
     pub fn new() -> Result<Self, Win32Error> {
+        #[cfg(test)]
+        panic!("OverlayWindow::new spawns a layered DWM window; gate the call behind cfg(test)");
+        #[allow(unreachable_code)]
         if OVERLAY_ACTIVE.swap(true, Ordering::SeqCst) {
             return Err(Win32Error::HookInstallFailed(
                 "Overlay window already active".to_string(),
