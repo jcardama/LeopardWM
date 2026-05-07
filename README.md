@@ -30,7 +30,7 @@ Most Windows tilers use tree or BSP layouts. LeopardWM is **scroll-first**: wind
 - System tray with pause, reload, settings, and diagnostics
 - WebView-based settings GUI
 - Safe mode for troubleshooting (`--safe-mode`)
-- Built-in diagnostics (`leopardwm-cli doctor`)
+- Built-in diagnostics (`lwm doctor`)
 - Workspace persistence and session recovery
 - Autostart via Registry
 
@@ -40,7 +40,7 @@ Download the latest release from [GitHub Releases](https://github.com/jcardama/L
 
 1. Extract `LeopardWM-x.y.z-x86_64-windows.zip` to a permanent location
 2. Run `leopardwm.exe`
-3. (Optional) Enable autostart: `leopardwm-cli autostart enable`
+3. (Optional) Enable autostart: `lwm autostart enable` (or `leopardwm-cli autostart enable`)
 
 Releases are signed via the [SignPath Foundation](https://signpath.org/) program.
 
@@ -87,12 +87,66 @@ All hotkeys use `Ctrl+Alt` as the base modifier. Layered pattern: base = focus, 
 | `Ctrl+Alt+Shift+R` | Reload config |
 | `Win+Ctrl+Escape` | Emergency restore + panic-revert |
 
-## Autostart
+## CLI
+
+LeopardWM ships two interchangeable CLI binaries — both invoke the same code:
+
+| Binary | When to use |
+|---|---|
+| `leopardwm-cli` | Canonical name. Use in docs, scripts, and shared examples. |
+| `lwm` | Short alias for daily typing. |
+
+Examples below use whichever is shorter for the line.
+
+### Daemon lifecycle
 
 ```bash
-leopardwm-cli autostart enable   # writes HKCU\...\Run entry
-leopardwm-cli autostart disable  # removes it
+lwm run                # start the daemon (idempotent — no-op if already running)
+lwm stop               # stop the daemon
+lwm status             # show version, monitor count, window count, uptime
 ```
+
+### Query state
+
+```bash
+lwm query workspace    # current workspace placements as JSON
+lwm query focused      # focused window info
+lwm query all-windows  # every managed window across all workspaces
+```
+
+### Layout commands
+
+Most users drive the layout via hotkeys, but every hotkey has a CLI equivalent — useful for scripting or AutoHotkey integration.
+
+```bash
+lwm focus left | right | up | down
+lwm move left | right                  # move focused column
+lwm move-window up | down              # reorder within a column
+lwm workspace 3                        # switch to workspace 3
+lwm toggle-floating
+lwm toggle-fullscreen
+```
+
+### Autostart (boot with Windows)
+
+```bash
+lwm autostart enable   # writes HKCU\Software\Microsoft\Windows\CurrentVersion\Run
+lwm autostart disable  # removes it
+```
+
+This is also exposed as a Settings UI toggle and a tray menu item.
+
+### Troubleshooting
+
+```bash
+lwm doctor             # diagnostic checks (config valid, daemon reachable, hotkey conflicts, etc.)
+lwm collect-logs       # bundles logs + crash reports into a zip for bug reports
+lwm reload             # reload config from disk without restarting
+lwm refresh            # re-enumerate windows after weird state
+lwm panic-revert       # emergency: uncloak everything, drop daemon out of management
+```
+
+Run `lwm help` (or `lwm <subcommand> --help`) for the full surface — there are ~40 subcommands.
 
 ## Config & Runtime Paths
 
@@ -115,7 +169,7 @@ LeopardWM is a Rust workspace with five crates:
 | `leopardwm-platform-win32` | Win32 integration, window operations, DwmFlush animation engine |
 | `leopardwm-ipc` | Named-pipe command/response protocol |
 | `leopardwm-daemon` | Runtime event loop, state management, dedicated message-pump threads |
-| `leopardwm-cli` | User-facing CLI |
+| `leopardwm-cli` | User-facing CLI (also installed as `lwm` for shorter typing) |
 
 ## Platform Constraints
 
