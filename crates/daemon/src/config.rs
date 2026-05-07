@@ -355,6 +355,10 @@ pub struct WindowRule {
     /// Fixed height for floating windows (optional).
     #[serde(default)]
     pub height: Option<i32>,
+
+    /// `None` = auto-detect from DWM corner preference.
+    #[serde(default)]
+    pub corner_style: Option<CornerStyle>,
 }
 
 /// Action to take for a matching window.
@@ -368,6 +372,32 @@ pub enum WindowAction {
     Float,
     /// Ignore the window (don't manage it at all).
     Ignore,
+}
+
+/// Border corner style override. Auto-detection (the default) reads each
+/// window's actual `DWMWA_WINDOW_CORNER_PREFERENCE` so the border tracks
+/// what Windows itself draws. Use this to force a specific style for an app
+/// that misreports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CornerStyle {
+    /// Square corners (radius = 0 px).
+    Square,
+    /// Standard Win11 rounded corners (radius = 8 px).
+    Rounded,
+    /// Smaller Win11 rounding (radius = 4 px).
+    SmallRounded,
+}
+
+impl CornerStyle {
+    /// Convert to a pixel radius.
+    pub fn radius_px(self) -> f32 {
+        match self {
+            CornerStyle::Square => 0.0,
+            CornerStyle::Rounded => 8.0,
+            CornerStyle::SmallRounded => 4.0,
+        }
+    }
 }
 
 impl WindowRule {
@@ -677,6 +707,8 @@ pub struct CompiledWindowRule {
     pub width: Option<i32>,
     /// Fixed height for floating windows (optional).
     pub height: Option<i32>,
+    /// Optional corner-style override for the focus border.
+    pub corner_style: Option<CornerStyle>,
 }
 
 impl CompiledWindowRule {
@@ -992,6 +1024,7 @@ impl Config {
                 action: rule.action,
                 width: rule.width,
                 height: rule.height,
+                corner_style: rule.corner_style,
             });
         }
 
@@ -1004,6 +1037,7 @@ impl Config {
                 action: WindowAction::Ignore,
                 width: None,
                 height: None,
+                corner_style: None,
             });
         }
 
@@ -1207,6 +1241,10 @@ opacity = 128
 # match_class = "Chrome_WidgetWin_1"
 # match_title = ".*DevTools.*"
 # action = "float"
+
+# [[window_rules]]
+# match_executable = ".*\\\\code\\.exe$"
+# corner_style = "rounded"  # "square" | "rounded" | "small_rounded"
 "#
     .to_string()
 }
@@ -1471,6 +1509,7 @@ mod tests {
             action: WindowAction::Float,
             width: None,
             height: None,
+            corner_style: None,
         };
 
         assert!(rule.matches("Notepad", "Untitled - Notepad", "notepad.exe"));
@@ -1486,6 +1525,7 @@ mod tests {
             action: WindowAction::Float,
             width: Some(800),
             height: Some(600),
+            corner_style: None,
         };
 
         assert!(rule.matches(
@@ -1506,6 +1546,7 @@ mod tests {
             action: WindowAction::Float,
             width: None,
             height: None,
+            corner_style: None,
         };
 
         assert!(rule.matches("SpotifyClass", "Spotify - Song Title", "spotify.exe"));
@@ -1522,6 +1563,7 @@ mod tests {
             action: WindowAction::Tile,
             width: None,
             height: None,
+            corner_style: None,
         };
 
         // Both patterns must match
@@ -1544,6 +1586,7 @@ mod tests {
             action: WindowAction::Ignore,
             width: None,
             height: None,
+            corner_style: None,
         };
 
         assert!(!rule.matches("AnyClass", "Any Title", "any.exe"));
@@ -1652,6 +1695,7 @@ mod tests {
                 action: WindowAction::Float,
                 width: Some(800),
                 height: Some(600),
+                corner_style: None,
             },
             WindowRule {
                 match_class: Some("Notepad".to_string()),
@@ -1660,6 +1704,7 @@ mod tests {
                 action: WindowAction::Ignore, // Different action
                 width: None,
                 height: None,
+                corner_style: None,
             },
         ];
 
@@ -1684,6 +1729,7 @@ mod tests {
             action: WindowAction::Ignore,
             width: None,
             height: None,
+            corner_style: None,
         };
 
         assert!(rule.matches("AnyClass", "[DEBUG] Application started", "app.exe"));
@@ -1700,6 +1746,7 @@ mod tests {
             action: WindowAction::Float,
             width: None,
             height: None,
+            corner_style: None,
         };
 
         assert!(rule.matches("AnyClass", "Error Dialog", "app.exe"));
@@ -1716,6 +1763,7 @@ mod tests {
             action: WindowAction::Float,
             width: None,
             height: None,
+            corner_style: None,
         };
 
         assert!(rule.matches("AnyClass", "Error Dialog", "app.exe"));
@@ -1733,6 +1781,7 @@ mod tests {
             action: WindowAction::Tile,
             width: None,
             height: None,
+            corner_style: None,
         };
 
         assert!(rule.matches("MyClass", "Any Title", "any.exe"));
@@ -1750,6 +1799,7 @@ mod tests {
             action: WindowAction::Float,
             width: None,
             height: None,
+            corner_style: None,
         };
 
         assert!(rule.matches("AnyClass", "App Settings", "any.exe"));
@@ -1767,6 +1817,7 @@ mod tests {
             action: WindowAction::Tile,
             width: None,
             height: None,
+            corner_style: None,
         };
 
         assert!(rule.matches("AnyClass", "Any Title", "notepad.exe"));
@@ -1784,6 +1835,7 @@ mod tests {
             action: WindowAction::Float,
             width: None,
             height: None,
+            corner_style: None,
         };
 
         // Should return false because regex is invalid
@@ -1800,6 +1852,7 @@ mod tests {
             action: WindowAction::Float,
             width: None,
             height: None,
+            corner_style: None,
         };
 
         assert!(rule.matches("", "Title", "app.exe")); // Empty class matches .*
@@ -1934,6 +1987,7 @@ mod tests {
                     action: WindowAction::Float,
                     width: Some(1024),
                     height: Some(768),
+                    corner_style: None,
                 },
                 WindowRule {
                     match_class: None,
@@ -1942,6 +1996,7 @@ mod tests {
                     action: WindowAction::Tile,
                     width: None,
                     height: None,
+                    corner_style: None,
                 },
             ],
             ..Default::default()
@@ -1979,6 +2034,7 @@ mod tests {
                     action: WindowAction::Float,
                     width: None,
                     height: None,
+                    corner_style: None,
                 },
                 WindowRule {
                     match_class: Some("ValidClass".to_string()),
@@ -1987,6 +2043,7 @@ mod tests {
                     action: WindowAction::Tile,
                     width: None,
                     height: None,
+                    corner_style: None,
                 },
             ],
             ..Default::default()

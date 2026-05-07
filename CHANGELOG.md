@@ -2,6 +2,12 @@
 
 All notable changes to LeopardWM will be documented in this file.
 
+## Unreleased
+
+### Improvements
+
+- Auto-detect each window's actual rendered corner radius for the focus border. The border now queries `DWMWA_WINDOW_CORNER_PREFERENCE` per window and matches Windows' own preference (`DWMWCP_DEFAULT` / `DWMWCP_ROUND` → 8 px, `DWMWCP_DONOTROUND` → 0 px / square, `DWMWCP_ROUNDSMALL` → 4 px), so picture-in-picture players, custom-Chrome apps, and legacy Win32 windows that explicitly opt out of rounded corners now get a border that hugs their actual edge instead of the wrong-radius arc that sat 1-2 px inside their corner. Add a per-rule `corner_style = "square" | "rounded" | "small_rounded"` override in `[[window_rules]]` for windows that misreport (or for users who want a uniform shape regardless of the app)
+
 ## 0.1.11
 
 ### Improvements

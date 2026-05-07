@@ -104,6 +104,53 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SW_RESTORE,
 };
 
+/// Query DWM for the window's corner-rounding preference and map to a pixel
+/// radius matching what Windows itself draws.
+///
+/// Returns `Some(radius_px)` when the call succeeds (Win11 with the
+/// `DWMWA_WINDOW_CORNER_PREFERENCE` attribute available, attribute value
+/// is one of the documented constants), or `None` on Win10 / failure /
+/// unmanaged windows. Callers should treat `None` as "no rounding" — Win10
+/// doesn't round window corners at the OS level.
+///
+/// Mapping (per
+/// <https://learn.microsoft.com/windows/win32/api/dwmapi/ne-dwmapi-dwm_window_corner_preference>):
+/// - `DWMWCP_DEFAULT` (0) and `DWMWCP_ROUND` (2) → 8 px (Win11 default)
+/// - `DWMWCP_DONOTROUND` (1) → 0 px
+/// - `DWMWCP_ROUNDSMALL` (3) → 4 px
+pub fn get_window_corner_radius(hwnd: WindowId) -> Option<f32> {
+    if hwnd == 0 {
+        return None;
+    }
+    const DWMWA_WINDOW_CORNER_PREFERENCE: i32 = 33;
+    const DWMWCP_DEFAULT: u32 = 0;
+    const DWMWCP_DONOTROUND: u32 = 1;
+    const DWMWCP_ROUND: u32 = 2;
+    const DWMWCP_ROUNDSMALL: u32 = 3;
+    unsafe {
+        let target = HWND(hwnd as *mut c_void);
+        if !IsWindow(Some(target)).as_bool() {
+            return None;
+        }
+        let mut pref: u32 = 0;
+        let result = DwmGetWindowAttribute(
+            target,
+            windows::Win32::Graphics::Dwm::DWMWINDOWATTRIBUTE(DWMWA_WINDOW_CORNER_PREFERENCE),
+            &mut pref as *mut u32 as *mut c_void,
+            std::mem::size_of::<u32>() as u32,
+        );
+        if result.is_err() {
+            return None;
+        }
+        match pref {
+            DWMWCP_DEFAULT | DWMWCP_ROUND => Some(8.0),
+            DWMWCP_DONOTROUND => Some(0.0),
+            DWMWCP_ROUNDSMALL => Some(4.0),
+            _ => None,
+        }
+    }
+}
+
 /// Check if a window is in the maximized (zoomed) state.
 pub fn is_window_maximized(hwnd: WindowId) -> bool {
     if hwnd == 0 {

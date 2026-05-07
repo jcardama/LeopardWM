@@ -22,8 +22,9 @@ pub enum BorderPosition {
     Inside,
 }
 
-/// Windows 11 corner radius (pixels).
-const WIN11_CORNER_RADIUS: f32 = 8.0;
+/// Default corner radius (pixels) when the caller doesn't pass a per-window
+/// radius. Matches Windows 11's `DWMWCP_ROUND` default.
+pub const DEFAULT_CORNER_RADIUS: f32 = 8.0;
 
 /// Signed distance field for a rounded rectangle.
 ///
@@ -49,20 +50,24 @@ fn clamp(v: f32, lo: f32, hi: f32) -> f32 {
 /// Cached rendering state to avoid re-rendering when only position changes.
 struct BorderState {
     color_bgr: u32,
+    corner_radius: f32,
     cached_w: i32,
     cached_h: i32,
     cached_width: u32,
     cached_position: BorderPosition,
     cached_color: u32,
+    cached_corner_radius: f32,
 }
 
 static BORDER_STATE: Mutex<BorderState> = Mutex::new(BorderState {
     color_bgr: 0x00F48542,
+    corner_radius: DEFAULT_CORNER_RADIUS,
     cached_w: 0,
     cached_h: 0,
     cached_width: 0,
     cached_position: BorderPosition::Outside,
     cached_color: 0,
+    cached_corner_radius: -1.0,
 });
 
 /// Manages a transparent overlay window that draws a colored border frame
@@ -149,9 +154,17 @@ impl BorderFrame {
     }
 
     /// Show the border frame around the target window.
-    pub fn show(&self, target_hwnd: u64, width: u32, position: BorderPosition, color_bgr: u32) {
+    pub fn show(
+        &self,
+        target_hwnd: u64,
+        width: u32,
+        position: BorderPosition,
+        color_bgr: u32,
+        corner_radius: f32,
+    ) {
         if let Ok(mut state) = BORDER_STATE.lock() {
             state.color_bgr = color_bgr;
+            state.corner_radius = corner_radius;
         }
         self.reposition(target_hwnd, width, position);
     }
@@ -164,9 +177,11 @@ impl BorderFrame {
         width: u32,
         position: BorderPosition,
         color_bgr: u32,
+        corner_radius: f32,
     ) {
         if let Ok(mut state) = BORDER_STATE.lock() {
             state.color_bgr = color_bgr;
+            state.corner_radius = corner_radius;
         }
 
         let bw = width as i32;
@@ -204,6 +219,7 @@ impl BorderFrame {
                 || width != state.cached_width
                 || position != state.cached_position
                 || state.color_bgr != state.cached_color
+                || (state.corner_radius - state.cached_corner_radius).abs() > f32::EPSILON
         };
 
         if needs_render {
@@ -326,14 +342,15 @@ impl BorderFrame {
     ) {
         let bw = width as f32;
 
-        let color_bgr = {
+        let (color_bgr, base_radius) = {
             let mut state = BORDER_STATE.lock().unwrap();
             state.cached_w = w;
             state.cached_h = h;
             state.cached_width = width;
             state.cached_position = position;
             state.cached_color = state.color_bgr;
-            state.color_bgr
+            state.cached_corner_radius = state.corner_radius;
+            (state.color_bgr, state.corner_radius)
         };
 
         // Extract color components (BGR → individual channels)
@@ -341,19 +358,19 @@ impl BorderFrame {
         let cg = ((color_bgr >> 8) & 0xFF) as u8;
         let cr = (color_bgr & 0xFF) as u8;
 
-        // Compute corner radii.
+        // Compute corner radii from the per-window base radius (set by the
+        // caller from `get_window_corner_radius`, with a per-rule override).
         let (outer_r, inner_r) = match position {
             BorderPosition::Outside => {
-                // Rect was shrunk by 1px, so visual radius is WIN11_CORNER_RADIUS - 1.
-                let visual_r = (WIN11_CORNER_RADIUS - 1.0).max(0.0);
+                // Rect was shrunk by 1px, so visual radius is base - 1.
+                let visual_r = (base_radius - 1.0).max(0.0);
                 let outer = visual_r + bw;
                 let inner = visual_r;
                 (outer, inner)
             }
             BorderPosition::Inside => {
-                // No rect shrink, use full corner radius.
-                let outer = WIN11_CORNER_RADIUS;
-                let inner = (WIN11_CORNER_RADIUS - bw).max(0.0);
+                let outer = base_radius;
+                let inner = (base_radius - bw).max(0.0);
                 (outer, inner)
             }
         };

@@ -63,6 +63,7 @@ fn test_window_rule_matching_class() {
             action: config::WindowAction::Float,
             width: Some(800),
             height: Some(600),
+            corner_style: None,
         }],
         ..Default::default()
     };
@@ -81,6 +82,7 @@ fn test_window_rule_matching_title() {
             action: config::WindowAction::Float,
             width: None,
             height: None,
+            corner_style: None,
         }],
         ..Default::default()
     };
@@ -99,6 +101,7 @@ fn test_window_rule_matching_executable() {
             action: config::WindowAction::Ignore,
             width: None,
             height: None,
+            corner_style: None,
         }],
         ..Default::default()
     };
@@ -124,6 +127,7 @@ fn test_floating_rect_uses_rule_dimensions() {
             action: config::WindowAction::Float,
             width: Some(1024),
             height: Some(768),
+            corner_style: None,
         }],
         ..Default::default()
     };
@@ -145,6 +149,7 @@ fn test_floating_rect_preserves_original_if_no_dimensions() {
             action: config::WindowAction::Float,
             width: None,
             height: None,
+            corner_style: None,
         }],
         ..Default::default()
     };

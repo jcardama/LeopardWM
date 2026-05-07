@@ -1426,6 +1426,7 @@ impl AppState {
                 return;
             }
             let border_width = self.scaled_border_width(hwnd);
+            let corner_radius = self.corner_radius_for_window(hwnd);
             // During resize preview: show border at the preview snap target.
             if let Some(rect) = self.resize_preview_display_rect {
                 if self.config.appearance.active_border {
@@ -1435,6 +1436,7 @@ impl AppState {
                             border_width,
                             self.border_position(),
                             bgr,
+                            corner_radius,
                         );
                         return;
                     }
@@ -1450,6 +1452,7 @@ impl AppState {
                                 border_width,
                                 self.border_position(),
                                 bgr,
+                                corner_radius,
                             );
                             return;
                         }
@@ -1488,6 +1491,7 @@ impl AppState {
                                         border_width,
                                         self.border_position(),
                                         bgr,
+                                        corner_radius,
                                     );
                                     return;
                                 }
@@ -1515,12 +1519,36 @@ impl AppState {
                         border_width,
                         self.border_position(),
                         bgr,
+                        corner_radius,
                     );
                     return;
                 }
             }
             frame.hide();
         }
+    }
+
+    fn corner_radius_for_window(&self, hwnd: u64) -> f32 {
+        // Skip the get_window_info lookup unless at least one rule overrides
+        // corner_style — otherwise the DWM auto-detect path is enough.
+        let any_corner_overrides = self
+            .compiled_rules
+            .iter()
+            .any(|r| r.corner_style.is_some());
+        if any_corner_overrides {
+            if let Some(info) = leopardwm_platform_win32::get_window_info(hwnd) {
+                let exe = get_process_executable(info.process_id).unwrap_or_default();
+                for rule in &self.compiled_rules {
+                    if rule.matches(&info.class_name, &info.title, &exe) {
+                        if let Some(style) = rule.corner_style {
+                            return style.radius_px();
+                        }
+                    }
+                }
+            }
+        }
+        leopardwm_platform_win32::get_window_corner_radius(hwnd)
+            .unwrap_or(leopardwm_platform_win32::border::DEFAULT_CORNER_RADIUS)
     }
 
     /// Compute the layout rect for a window from the workspace placements.
