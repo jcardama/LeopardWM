@@ -6,6 +6,7 @@ All notable changes to LeopardWM will be documented in this file.
 
 ### Internal
 
+- Skip `BorderFrame::new()` under `#[cfg(test)]` so daemon test setup no longer creates a real `WS_EX_LAYERED` DWM-composited window + message-pump thread per `AppState`. With ~150 daemon tests running in parallel, the live composited surfaces (cursor included) all serialized through DWM, visibly lagging the user's mouse for the 10 s test run. Removing the per-test border window dropped the daemon suite from 9.65 s to 0.73 s — a 13× speedup — and the cursor stays smooth throughout `cargo test --all`
 - Default `AppState` to `paused = true` under `#[cfg(test)]` so the placement worker no longer calls `apply_placements` with placeholder hwnds (100, 200, 300, 800, …) during `cargo test`. Those values can collide with real running window handles, and the resulting `IsWindow` / `SetWindowPos` / `DwmGetWindowAttribute` calls block on the user's live DWM compositor — visibly lagging the mouse for the duration of the test run. Tests that exercise the apply_layout pipeline (toggle-pause flows, injected-behavior worker tests, snap-config reload) opt back in with `state.paused = false`. Side-effect: removes the `test_cmd_reload` parallel-contention flake — the worker is no longer spawned at all, so the 5000 ms timeout race goes away
 
 ### Bug Fixes

@@ -367,7 +367,12 @@ impl AppState {
             previous_focused_hwnd: None,
             last_focus_change_at: None,
             last_prune_at: None,
-            border_frame: leopardwm_platform_win32::border::BorderFrame::new().ok(),
+            // Skipped under cfg(test): the layered DWM window would lag the mouse.
+            border_frame: if cfg!(test) {
+                None
+            } else {
+                leopardwm_platform_win32::border::BorderFrame::new().ok()
+            },
             // Paused under cfg(test): placeholder hwnds collide with real
             // HWNDs and lag the mouse via DWM. Tests opt out as needed.
             paused: cfg!(test),
