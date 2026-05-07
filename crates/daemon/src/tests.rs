@@ -388,6 +388,7 @@ fn test_cmd_panic_revert() {
 #[test]
 fn test_cmd_toggle_pause() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = false;
     assert!(!state.paused);
 
     let resp = state.handle_command(IpcCommand::TogglePause);
@@ -402,6 +403,7 @@ fn test_cmd_toggle_pause() {
 #[test]
 fn test_toggle_pause_resume_reports_apply_failure() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = false;
     assert_eq!(
         state.handle_command(IpcCommand::TogglePause),
         IpcResponse::Ok
@@ -732,11 +734,6 @@ fn test_cmd_refresh() {
 #[test]
 fn test_cmd_reload() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
-    // Pause to short-circuit `apply_layout` — Reload spawns the placement
-    // worker, which times out under heavy `cargo test --all` parallel load
-    // even on an empty workspace. This test only asserts that the config
-    // was reloaded, not the side effects.
-    state.paused = true;
     let resp = state.handle_command(IpcCommand::Reload);
     assert_eq!(resp, IpcResponse::Ok);
     // Config was reloaded (default since no config file in test env)
@@ -1828,6 +1825,7 @@ fn test_applying_layout_flag_cleared_after_layout_with_windows() {
 #[test]
 fn test_apply_layout_timeout_auto_pauses_tiling() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = false;
     state.layout_apply_timeout = Duration::from_millis(10);
     state
         .moved_or_resized_suppression
@@ -1860,6 +1858,7 @@ fn test_apply_layout_timeout_auto_pauses_tiling() {
 #[test]
 fn test_apply_layout_injected_failure_does_not_auto_pause() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = false;
     state.layout_apply_timeout = Duration::from_millis(50);
     state
         .moved_or_resized_suppression
@@ -1891,6 +1890,7 @@ fn test_apply_layout_injected_failure_does_not_auto_pause() {
 #[test]
 fn test_apply_layout_timeout_worker_is_joined_during_shutdown_begin() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = false;
     state.layout_apply_timeout = Duration::from_millis(10);
     state.injected_apply_placements_behavior = Some(
         TestApplyPlacementsBehavior::SleepAndSucceed(Duration::from_millis(60)),
@@ -1923,6 +1923,7 @@ fn test_apply_layout_timeout_worker_is_joined_during_shutdown_begin() {
 #[test]
 fn test_apply_layout_rejects_overlap_while_timed_out_worker_is_running() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = false;
     state.layout_apply_timeout = Duration::from_millis(10);
     state.injected_apply_placements_behavior = Some(
         TestApplyPlacementsBehavior::SleepAndSucceed(Duration::from_millis(500)),
@@ -1952,6 +1953,7 @@ fn test_apply_layout_rejects_overlap_while_timed_out_worker_is_running() {
 #[test]
 fn test_apply_layout_timeout_late_worker_triggers_recovery_pass() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = false;
     state.layout_apply_timeout = Duration::from_millis(10);
     state.injected_apply_placements_behavior = Some(
         TestApplyPlacementsBehavior::SleepAndSucceed(Duration::from_millis(50)),
@@ -2185,6 +2187,7 @@ fn test_check_already_running_with_isolated_pipe() {
 #[test]
 fn test_cmd_health_check() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = false;
     let resp = state.handle_command(IpcCommand::HealthCheck);
     match resp {
         IpcResponse::HealthInfo {
@@ -2426,6 +2429,7 @@ fn test_snap_config_toggle_off() {
     let mut config = test_config();
     config.behavior.disable_snap_layouts = true;
     let mut state = AppState::new_with_config(config, test_monitors());
+    state.paused = false;
 
     state.snap_disabled_hwnds.insert(50);
     state.snap_disabled_hwnds.insert(51);

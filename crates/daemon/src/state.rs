@@ -368,7 +368,9 @@ impl AppState {
             last_focus_change_at: None,
             last_prune_at: None,
             border_frame: leopardwm_platform_win32::border::BorderFrame::new().ok(),
-            paused: false,
+            // Paused under cfg(test): placeholder hwnds collide with real
+            // HWNDs and lag the mouse via DWM. Tests opt out as needed.
+            paused: cfg!(test),
             applying_layout: false,
             reapplying_after_violation: false,
             display_change_pending: false,

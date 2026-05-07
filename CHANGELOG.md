@@ -4,6 +4,10 @@ All notable changes to LeopardWM will be documented in this file.
 
 ## 0.1.10
 
+### Internal
+
+- Default `AppState` to `paused = true` under `#[cfg(test)]` so the placement worker no longer calls `apply_placements` with placeholder hwnds (100, 200, 300, 800, …) during `cargo test`. Those values can collide with real running window handles, and the resulting `IsWindow` / `SetWindowPos` / `DwmGetWindowAttribute` calls block on the user's live DWM compositor — visibly lagging the mouse for the duration of the test run. Tests that exercise the apply_layout pipeline (toggle-pause flows, injected-behavior worker tests, snap-config reload) opt back in with `state.paused = false`. Side-effect: removes the `test_cmd_reload` parallel-contention flake — the worker is no longer spawned at all, so the 5000 ms timeout race goes away
+
 ### Bug Fixes
 
 - Fix the focus border racing ahead of windows during workspace switches, move-to-column, expel, and drag-merge animations — `compute_window_layout_rect` returned the post-transition (final) rect for managed tiled windows even mid-transition, so the border snapped to the destination on frame 1 while the windows themselves interpolated frame-by-frame, yielding a visible "border-leads-windows" lag. The function now applies `apply_transition_interpolation` against the active `layout_transition` (if any) before returning, so the border tracks the same eased interpolated rect the worker is sending each frame
