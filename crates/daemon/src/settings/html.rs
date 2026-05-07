@@ -928,7 +928,7 @@ input[type="range"]::-webkit-slider-thumb {
         <h2 class="section-title">Window rules</h2>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Class</th><th>Title</th><th>Executable</th><th>Action</th><th style="width:36px"></th></tr></thead>
+            <thead><tr><th>Class</th><th>Title</th><th>Executable</th><th>Action</th><th>Corners</th><th style="width:36px"></th></tr></thead>
             <tbody id="rules-body"></tbody>
           </table>
         </div>
@@ -1386,24 +1386,33 @@ function addRuleRow(r) {
   var tr = document.createElement('tr');
   var action = r.action || 'tile';
   var actionLabel = action.charAt(0).toUpperCase() + action.slice(1);
+  var corner = r.corner_style || 'auto';
+  var cornerLabels = { auto: 'Auto', square: 'Square', rounded: 'Rounded', small_rounded: 'Small rounded' };
   var chevron = '<svg class="combobox-chevron" viewBox="0 0 12 12"><path d="M2.15 4.65a.5.5 0 01.7 0L6 7.79l3.15-3.14a.5.5 0 11.7.7l-3.5 3.5a.5.5 0 01-.7 0l-3.5-3.5a.5.5 0 010-.7z"/></svg>';
-  var options = ['tile','float','ignore'].map(function(a) {
+  var actionOpts = ['tile','float','ignore'].map(function(a) {
     var label = a.charAt(0).toUpperCase() + a.slice(1);
     return '<div class="combobox-option' + (a === action ? ' selected' : '') + '" data-value="' + a + '">' + label + '</div>';
+  }).join('');
+  var cornerOpts = ['auto','square','rounded','small_rounded'].map(function(c) {
+    return '<div class="combobox-option' + (c === corner ? ' selected' : '') + '" data-value="' + c + '">' + cornerLabels[c] + '</div>';
   }).join('');
   tr.innerHTML =
     '<td><input type="text" class="rule-class" value="' + escAttr(r.match_class||'') + '" placeholder="regex"></td>' +
     '<td><input type="text" class="rule-title" value="' + escAttr(r.match_title||'') + '" placeholder="regex"></td>' +
     '<td><input type="text" class="rule-exe" value="' + escAttr(r.match_executable||'') + '" placeholder="app.exe"></td>' +
-    '<td><div class="combobox" data-value="' + action + '">' +
+    '<td><div class="combobox rule-action" data-value="' + action + '">' +
       '<button class="combobox-trigger" type="button"><span class="combobox-text">' + actionLabel + '</span>' + chevron + '</button>' +
-      '<div class="combobox-popup">' + options + '</div>' +
+      '<div class="combobox-popup">' + actionOpts + '</div>' +
+    '</div></td>' +
+    '<td><div class="combobox rule-corner" data-value="' + corner + '">' +
+      '<button class="combobox-trigger" type="button"><span class="combobox-text">' + cornerLabels[corner] + '</span>' + chevron + '</button>' +
+      '<div class="combobox-popup">' + cornerOpts + '</div>' +
     '</div></td>' +
     '<td><button class="row-delete" onclick="this.closest(\'tr\').remove();autoSave(0)">' + deleteIcon + '</button></td>';
   tbody.appendChild(tr);
   wrapAllInputs(tr);
   tr.querySelectorAll('input').forEach(function(el) { el.addEventListener('input', function() { autoSave(500); }); });
-  initCombobox(tr.querySelector('.combobox'));
+  tr.querySelectorAll('.combobox').forEach(function(cb) { initCombobox(cb); });
 }
 
 function escAttr(s) { return (s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
@@ -1476,11 +1485,14 @@ function readRules() {
     var cls = tr.querySelector('.rule-class').value.trim();
     var title = tr.querySelector('.rule-title').value.trim();
     var exe = tr.querySelector('.rule-exe').value.trim();
-    var cb = tr.querySelector('.combobox');
-    r.action = cb ? (cb.dataset.value || 'tile') : 'tile';
+    var actionCb = tr.querySelector('.rule-action');
+    var cornerCb = tr.querySelector('.rule-corner');
+    r.action = actionCb ? (actionCb.dataset.value || 'tile') : 'tile';
+    var corner = cornerCb ? (cornerCb.dataset.value || 'auto') : 'auto';
     if (cls) r.match_class = cls;
     if (title) r.match_title = title;
     if (exe) r.match_executable = exe;
+    if (corner !== 'auto') r.corner_style = corner;
     if (cls || title || exe) rules.push(r);
   });
   return rules;

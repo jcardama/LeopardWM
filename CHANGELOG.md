@@ -6,7 +6,8 @@ All notable changes to LeopardWM will be documented in this file.
 
 ### Improvements
 
-- Auto-detect each window's actual rendered corner radius for the focus border. The border now queries `DWMWA_WINDOW_CORNER_PREFERENCE` per window and matches Windows' own preference (`DWMWCP_DEFAULT` / `DWMWCP_ROUND` → 8 px, `DWMWCP_DONOTROUND` → 0 px / square, `DWMWCP_ROUNDSMALL` → 4 px), so picture-in-picture players, custom-Chrome apps, and legacy Win32 windows that explicitly opt out of rounded corners now get a border that hugs their actual edge instead of the wrong-radius arc that sat 1-2 px inside their corner. Add a per-rule `corner_style = "square" | "rounded" | "small_rounded"` override in `[[window_rules]]` for windows that misreport (or for users who want a uniform shape regardless of the app)
+- Per-window focus-border corner radius. Trusts `DWMWA_WINDOW_CORNER_PREFERENCE` only when the app has *explicitly* opted into a non-default value: `DWMWCP_DONOTROUND` → 0 px / square, `DWMWCP_ROUNDSMALL` → 4 px, `DWMWCP_ROUND` → 8 px. Apps that report `DWMWCP_DEFAULT` (the value every app gets unless it overrides) fall back to the 8 px Win11 default — but apps like Firefox / Zen Picture-in-Picture report DEFAULT while drawing their own non-DWM-composited square frame, so a per-rule `corner_style = "square" | "rounded" | "small_rounded"` override is the escape hatch. The default config now ships with `[[window_rules]] match_class = "MozillaDialogClass", corner_style = "square"` as a working example users can edit or remove
+- Surface `corner_style` in the Settings WebView. The Window Rules table now has a **Corners** column with `Auto` / `Square` / `Rounded` / `Small rounded` values, round-tripping through save/load alongside the existing class/title/executable/action fields. `Auto` (the default) is omitted from the saved TOML so existing rules without `corner_style` round-trip unchanged
 
 ## 0.1.11
 

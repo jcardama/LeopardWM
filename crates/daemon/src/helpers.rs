@@ -1529,14 +1529,15 @@ impl AppState {
     }
 
     fn corner_radius_for_window(&self, hwnd: u64) -> f32 {
-        // Skip the get_window_info lookup unless at least one rule overrides
-        // corner_style — otherwise the DWM auto-detect path is enough.
-        let any_corner_overrides = self
-            .compiled_rules
-            .iter()
-            .any(|r| r.corner_style.is_some());
-        if any_corner_overrides {
-            if let Some(info) = leopardwm_platform_win32::get_window_info(hwnd) {
+        let info = leopardwm_platform_win32::get_window_info(hwnd);
+
+        // 1. User-rule override always wins.
+        if let Some(ref info) = info {
+            let any_corner_overrides = self
+                .compiled_rules
+                .iter()
+                .any(|r| r.corner_style.is_some());
+            if any_corner_overrides {
                 let exe = get_process_executable(info.process_id).unwrap_or_default();
                 for rule in &self.compiled_rules {
                     if rule.matches(&info.class_name, &info.title, &exe) {
@@ -1547,6 +1548,8 @@ impl AppState {
                 }
             }
         }
+
+        // 2. Trust only explicit non-DEFAULT DWM signals; otherwise default.
         leopardwm_platform_win32::get_window_corner_radius(hwnd)
             .unwrap_or(leopardwm_platform_win32::border::DEFAULT_CORNER_RADIUS)
     }

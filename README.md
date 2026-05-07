@@ -238,6 +238,20 @@ These processes are ignored via built-in window rules (action = `ignore`):
 | `CredentialUIBroker.exe` | Windows credential/login prompt |
 | `SnippingTool.exe` | Screen capture overlay |
 
+## Focus Border Corners
+
+The focus border tries to match each window's actual corner radius. Apps that explicitly set `DWMWA_WINDOW_CORNER_PREFERENCE` are honored (`DONOTROUND` → 0 px, `ROUNDSMALL` → 4 px, `ROUND` → 8 px); everything else falls back to the 8 px Win11 default.
+
+Some apps draw their own non-DWM-composited frame with square corners while still reporting the OS default — Firefox / Zen **Picture-in-Picture** popups are the most common example. Override the corner style per window rule:
+
+```toml
+[[window_rules]]
+match_class = "MozillaDialogClass"
+corner_style = "square"  # also: "rounded" | "small_rounded"
+```
+
+The `MozillaDialogClass` → `square` rule ships in the default config as a working example. Open **Settings → Window rules** and use the **Corners** column (`Auto` / `Square` / `Rounded` / `Small rounded`) to edit, remove, or add new rules for other apps.
+
 ## Support
 
 If you find LeopardWM useful, consider supporting development:

@@ -1237,14 +1237,17 @@ enabled = true
 duration_ms = 200
 opacity = 128
 
+# Built-in example: Firefox / Zen Picture-in-Picture popups draw their own
+# square frame, so we override the focus-border corner style to match. Edit
+# or remove freely — corner_style accepts "square" | "rounded" | "small_rounded".
+[[window_rules]]
+match_class = "MozillaDialogClass"
+corner_style = "square"
+
 # [[window_rules]]
 # match_class = "Chrome_WidgetWin_1"
 # match_title = ".*DevTools.*"
 # action = "float"
-
-# [[window_rules]]
-# match_executable = ".*\\\\code\\.exe$"
-# corner_style = "rounded"  # "square" | "rounded" | "small_rounded"
 "#
     .to_string()
 }
