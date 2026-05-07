@@ -2,6 +2,12 @@
 
 All notable changes to LeopardWM will be documented in this file.
 
+## Unreleased
+
+### Distribution
+
+- Add MSI installer built via `cargo wix` from `wix/main.wxs`. Installs to `C:\Program Files\LeopardWM\bin\` and adds the bin folder to system PATH so `leopardwm-cli` is callable from any terminal. Re-running a newer MSI upgrades in place (WiX `MajorUpgrade` with `Schedule='afterInstallInitialize'`); same-version reinstall is also allowed (`AllowSameVersionUpgrades='yes'`). The fixed `UpgradeCode` GUID is constant forever — changing it would break upgrade behavior. Release workflow now publishes both the existing `LeopardWM-X.Y.Z-x86_64-windows.zip` and `LeopardWM-X.Y.Z-x86_64.msi`, plus a `checksums.txt` with SHA256 sums (used downstream by winget/Scoop manifests)
+
 ## 0.1.10
 
 ### Internal

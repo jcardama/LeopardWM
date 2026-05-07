@@ -11,9 +11,11 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
+      - name: Install cargo-wix
+        run: cargo install cargo-wix --version ^0.3
       - run: cargo build --release
       - run: cargo test --all
-      - name: Package
+      - name: Package zip
         shell: bash
         run: |
           VERSION=${GITHUB_REF_NAME#v}
@@ -23,6 +25,15 @@ jobs:
           cp target/x86_64-pc-windows-msvc/release/leopardwm-cli.exe "$DIR/"
           cp README.md LICENSE "$DIR/"
           7z a "${DIR}.zip" "$DIR"
+      - name: Build MSI installer
+        shell: bash
+        run: |
+          # WiX 3.14 is pre-installed at this path on windows-latest runners.
+          cargo wix -p leopardwm-daemon -I wix/main.wxs \
+            --target x86_64-pc-windows-msvc \
+            --no-build --nocapture \
+            --bin-path "C:\Program Files (x86)\WiX Toolset v3.14\bin"
+          ls target/wix/*.msi
       - name: Extract changelog
         id: changelog
         shell: bash
@@ -39,8 +50,17 @@ jobs:
             echo "$NOTES" >> $GITHUB_OUTPUT
             echo "$EOF" >> $GITHUB_OUTPUT
           fi
+      - name: Generate SHA256 checksums
+        shell: bash
+        run: |
+          sha256sum LeopardWM-*.zip > checksums.txt
+          sha256sum target/wix/*.msi >> checksums.txt
+          cat checksums.txt
       - uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2
         with:
-          files: LeopardWM-*.zip
+          files: |
+            LeopardWM-*.zip
+            target/wix/*.msi
+            checksums.txt
           body: ${{ steps.changelog.outputs.body }}
           generate_release_notes: ${{ steps.changelog.outputs.body == '' }}

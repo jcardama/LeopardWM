@@ -36,3 +36,7 @@ png = "0.18"
 winresource = "0.1"
 
 [dev-dependencies]
+
+[package.metadata.wix]
+name = "LeopardWM"
+product-name = "LeopardWM"

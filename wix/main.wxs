@@ -1,0 +1,125 @@
+<?xml version='1.0' encoding='windows-1252'?>
+<!--
+  WiX installer source for LeopardWM.
+
+  The UpgradeCode below MUST stay constant across all releases — changing it
+  breaks in-place upgrade. The ProductCode (Product/@Id) is set to '*' so a
+  fresh GUID is generated per build, which combined with MajorUpgrade gives
+  re-run-newest-MSI = upgrade-in-place behavior.
+-->
+
+<?if $(sys.BUILDARCH) = x64 or $(sys.BUILDARCH) = arm64 ?>
+    <?define PlatformProgramFilesFolder = "ProgramFiles64Folder" ?>
+<?else ?>
+    <?define PlatformProgramFilesFolder = "ProgramFilesFolder" ?>
+<?endif ?>
+
+<Wix xmlns='http://schemas.microsoft.com/wix/2006/wi'>
+
+    <Product
+        Id='*'
+        Name='LeopardWM'
+        UpgradeCode='EE10F2D5-DA80-43EA-B4D4-A0D37C69DE83'
+        Manufacturer='jcardama'
+        Language='1033'
+        Codepage='1252'
+        Version='$(var.Version)'>
+
+        <Package Id='*'
+            Keywords='Installer'
+            Description='LeopardWM scrolling tiling window manager for Windows'
+            Manufacturer='jcardama'
+            InstallerVersion='450'
+            Languages='1033'
+            Compressed='yes'
+            InstallScope='perMachine'
+            SummaryCodepage='1252'
+            />
+
+        <MajorUpgrade
+            Schedule='afterInstallInitialize'
+            AllowSameVersionUpgrades='yes'
+            DowngradeErrorMessage='A newer version of [ProductName] is already installed. Setup will now exit.'/>
+
+        <Media Id='1' Cabinet='media1.cab' EmbedCab='yes' DiskPrompt='CD-ROM #1'/>
+        <Property Id='DiskPrompt' Value='LeopardWM Installation'/>
+
+        <Directory Id='TARGETDIR' Name='SourceDir'>
+            <Directory Id='$(var.PlatformProgramFilesFolder)' Name='PFiles'>
+                <Directory Id='APPLICATIONFOLDER' Name='LeopardWM'>
+                    <Component Id='License' Guid='*'>
+                        <File Id='LicenseFile'
+                            DiskId='1'
+                            Source='wix\License.rtf'
+                            KeyPath='yes'/>
+                    </Component>
+
+                    <Directory Id='Bin' Name='bin'>
+                        <Component Id='Path' Guid='003A20A9-3BFF-4267-9ACD-1F4F3DB5A06A' KeyPath='yes'>
+                            <Environment
+                                Id='PATH'
+                                Name='PATH'
+                                Value='[Bin]'
+                                Permanent='no'
+                                Part='last'
+                                Action='set'
+                                System='yes'/>
+                        </Component>
+                        <Component Id='DaemonExe' Guid='*'>
+                            <File
+                                Id='exeDaemon'
+                                Name='leopardwm.exe'
+                                DiskId='1'
+                                Source='$(var.CargoTargetBinDir)\leopardwm.exe'
+                                KeyPath='yes'/>
+                        </Component>
+                        <Component Id='CliExe' Guid='*'>
+                            <File
+                                Id='exeCli'
+                                Name='leopardwm-cli.exe'
+                                DiskId='1'
+                                Source='$(var.CargoTargetBinDir)\leopardwm-cli.exe'
+                                KeyPath='yes'/>
+                        </Component>
+                    </Directory>
+                </Directory>
+            </Directory>
+        </Directory>
+
+        <Feature
+            Id='Binaries'
+            Title='Application'
+            Description='Installs the LeopardWM daemon, CLI, and license.'
+            Level='1'
+            ConfigurableDirectory='APPLICATIONFOLDER'
+            AllowAdvertise='no'
+            Display='expand'
+            Absent='disallow'>
+            <ComponentRef Id='License'/>
+            <ComponentRef Id='DaemonExe'/>
+            <ComponentRef Id='CliExe'/>
+
+            <Feature
+                Id='Environment'
+                Title='PATH Environment Variable'
+                Description='Add the LeopardWM bin folder to the PATH so leopardwm-cli is callable from any terminal.'
+                Level='1'
+                Absent='allow'>
+                <ComponentRef Id='Path'/>
+            </Feature>
+        </Feature>
+
+        <SetProperty Id='ARPINSTALLLOCATION' Value='[APPLICATIONFOLDER]' After='CostFinalize'/>
+
+        <Property Id='ARPHELPLINK' Value='https://github.com/jcardama/LeopardWM'/>
+        <Property Id='ARPURLINFOABOUT' Value='https://github.com/jcardama/LeopardWM'/>
+
+        <UI>
+            <UIRef Id='WixUI_FeatureTree'/>
+        </UI>
+
+        <WixVariable Id='WixUILicenseRtf' Value='wix\License.rtf'/>
+
+    </Product>
+
+</Wix>
