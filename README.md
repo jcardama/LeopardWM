@@ -22,6 +22,14 @@ Most Windows tilers use tree or BSP layouts. LeopardWM is **scroll-first**: wind
 - **WebView2 settings GUI** with Mica backdrop and live theme switching — not just a config file
 - **GPL-3.0** — commercial use without a paid license, written in safe Rust
 
+## Design Philosophy
+
+A few deliberate **non-features**, so you know what you're getting:
+
+- **Scroll-first, not multi-layout.** No BSP, no DWindle, no Equal/Stair/UltrawideVerticalStack — and we won't add them. niri (Wayland) and PaperWM (GNOME) stay scrolling-only by choice; the horizontal strip *is* the identity. If you want 9 layout variants, [komorebi](https://github.com/LGUG2Z/komorebi) is the right tool.
+- **No Virtual Desktop bridging.** Per-monitor workspaces don't map cleanly to Windows' global Virtual Desktops, and the only library that bridges them (`winvd`) breaks every 3-6 months on Windows feature updates. Instead, `Win+Ctrl+Arrow` is intercepted and routed to LeopardWM's workspace prev/next so the native muscle memory still works.
+- **Named-pipe IPC, not WebSocket.** Lower latency, no port allocation, no firewall prompts. If browser-based bar integration becomes a real ask, we'll add a thin bridge rather than make the daemon serve sockets directly.
+
 ## Features
 
 - Multi-monitor workspaces with monitor-aware focus and move (9 workspaces per monitor)
