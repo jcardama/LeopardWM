@@ -75,6 +75,9 @@ pub struct BorderFrame {
 impl BorderFrame {
     /// Create the border frame overlay on a background thread.
     pub fn new() -> Result<Self, Win32Error> {
+        #[cfg(test)]
+        panic!("BorderFrame::new spawns a layered DWM window; gate the call behind cfg(test)");
+        #[allow(unreachable_code)]
         let (tx, rx) = mpsc::channel::<Result<isize, Win32Error>>();
 
         let thread = std::thread::Builder::new()

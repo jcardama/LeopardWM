@@ -25,6 +25,19 @@ fn test_app_state_new() {
 }
 
 #[test]
+fn test_app_state_skips_border_frame_under_cfg_test() {
+    let state = AppState::new_with_config(test_config(), test_monitors());
+    assert!(
+        state.border_frame.is_none(),
+        "BorderFrame must stay None under cfg(test) — a real layered DWM window lags the user's mouse during cargo test"
+    );
+    assert!(
+        state.paused,
+        "AppState must default to paused under cfg(test) — placeholder hwnds otherwise hit real DWM"
+    );
+}
+
+#[test]
 fn test_app_state_focused_viewport() {
     let state = AppState::new_with_config(test_config(), test_monitors());
     let viewport = state.focused_viewport();
