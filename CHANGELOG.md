@@ -4,6 +4,10 @@ All notable changes to LeopardWM will be documented in this file.
 
 ## Unreleased
 
+### Improvements
+
+- Add an in-app update notifier. The daemon polls the GitHub Releases API once on startup (after a 30-second delay) and once per day, comparing the latest tag against `CARGO_PKG_VERSION` via semver. When a newer release is observed, the tray's "Check for Updates" menu item relabels to `Update available: vX.Y.Z`; clicking opens `https://github.com/jcardama/LeopardWM/releases` in the browser. No auto-download, no telemetry beyond the single anonymous HTTPS GET to `api.github.com`. Opt out via `behavior.check_for_updates = false` in `config.toml`. Useful for users on standalone-MSI installs; users on winget/Scoop continue to get updates natively via `winget upgrade` / `scoop update`
+
 ### Distribution
 
 - Add MSI installer built via `cargo wix` from `wix/main.wxs`. Installs to `C:\Program Files\LeopardWM\bin\` and adds the bin folder to system PATH so `leopardwm-cli` is callable from any terminal. Re-running a newer MSI upgrades in place (WiX `MajorUpgrade` with `Schedule='afterInstallInitialize'`); same-version reinstall is also allowed (`AllowSameVersionUpgrades='yes'`). The fixed `UpgradeCode` GUID is constant forever — changing it would break upgrade behavior. Release workflow now publishes both the existing `LeopardWM-X.Y.Z-x86_64-windows.zip` and `LeopardWM-X.Y.Z-x86_64.msi`, plus a `checksums.txt` with SHA256 sums (used downstream by winget/Scoop manifests)

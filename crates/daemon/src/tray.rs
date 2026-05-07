@@ -55,6 +55,8 @@ mod win32_msg {
     pub const WM_APP_UPDATE_PAUSE: u32 = 0x8001; // WM_APP + 1
     /// Application-private message: signal the thread to sync quick-toggle check marks.
     pub const WM_APP_UPDATE_TOGGLES: u32 = 0x8002; // WM_APP + 2
+    /// Application-private message: signal the thread to refresh the update-status item.
+    pub const WM_APP_UPDATE_RELEASE_INFO: u32 = 0x8003; // WM_APP + 3
 
     extern "system" {
         pub fn GetCurrentThreadId() -> u32;
@@ -89,6 +91,7 @@ mod menu_ids {
     pub const TOGGLE_AUTO_START: &str = "toggle_auto_start";
     pub const CENTERING_CENTER: &str = "centering_center";
     pub const CENTERING_JUST_IN_VIEW: &str = "centering_just_in_view";
+    pub const CHECK_UPDATES: &str = "check_updates";
 }
 
 /// Events emitted by the tray icon.
@@ -124,6 +127,8 @@ pub enum TrayEvent {
     SetCenteringCenter,
     /// User selected "Just in View" centering mode.
     SetCenteringJustInView,
+    /// User clicked "Check for Updates" / "Update available" menu item.
+    OpenReleasesPage,
 }
 
 /// Centering mode values for atomic storage.
@@ -143,6 +148,8 @@ struct SharedState {
     focus_follows_mouse: AtomicBool,
     auto_start: AtomicBool,
     centering_mode: AtomicU8,
+    /// `Some(tag)` when a newer release has been observed; `None` otherwise.
+    available_update: Mutex<Option<String>>,
 }
 
 /// Items returned by `build_tray` that the message-loop thread needs to update.
@@ -154,6 +161,7 @@ struct TrayItems {
     auto_start_item: CheckMenuItem,
     centering_center_item: CheckMenuItem,
     centering_just_in_view_item: CheckMenuItem,
+    update_item: MenuItem,
 }
 
 /// Initial state for quick-toggle menu items.
@@ -199,6 +207,7 @@ impl TrayManager {
             focus_follows_mouse: AtomicBool::new(initial.focus_follows_mouse),
             auto_start: AtomicBool::new(initial.auto_start),
             centering_mode: AtomicU8::new(initial.centering_mode),
+            available_update: Mutex::new(None),
         });
         let shared_for_thread = shared.clone();
         let (init_tx, init_rx) = mpsc::channel::<InitResult>();
@@ -315,6 +324,23 @@ impl TrayManager {
             win32_msg::PostThreadMessageW(
                 self.msg_thread_id,
                 win32_msg::WM_APP_UPDATE_TOOLTIP,
+                0,
+                0,
+            );
+        }
+    }
+
+    /// Record the latest available release tag (e.g. `v0.1.11`) and refresh
+    /// the tray's update menu item label. Pass `None` to reset to the default
+    /// "Check for Updates" label.
+    pub fn set_available_update(&self, tag: Option<String>) {
+        if let Ok(mut g) = self.shared.available_update.lock() {
+            *g = tag;
+        }
+        unsafe {
+            win32_msg::PostThreadMessageW(
+                self.msg_thread_id,
+                win32_msg::WM_APP_UPDATE_RELEASE_INFO,
                 0,
                 0,
             );
@@ -465,6 +491,17 @@ fn run_tray_thread(
                             .set_checked(cm == CENTERING_JUST_IN_VIEW);
                         continue;
                     }
+                    win32_msg::WM_APP_UPDATE_RELEASE_INFO => {
+                        let label = match shared.available_update.lock() {
+                            Ok(g) => match g.as_ref() {
+                                Some(tag) => format!("Update available: {tag}"),
+                                None => "Check for Updates".to_string(),
+                            },
+                            Err(_) => "Check for Updates".to_string(),
+                        };
+                        items.update_item.set_text(label);
+                        continue;
+                    }
                     _ => {}
                 }
             }
@@ -569,6 +606,16 @@ fn build_tray(
     append(&centering_sub)?;
     append(&PredefinedMenuItem::separator())?;
 
+    // Update checker — relabels itself when a newer release is detected.
+    let update_item = MenuItem::with_id(
+        menu_ids::CHECK_UPDATES,
+        "Check for Updates",
+        true,
+        None,
+    );
+    append(&update_item)?;
+    append(&PredefinedMenuItem::separator())?;
+
     // Configuration group
     append(&MenuItem::with_id(
         menu_ids::OPEN_CONFIG,
@@ -640,6 +687,7 @@ fn build_tray(
         auto_start_item,
         centering_center_item,
         centering_just_in_view_item,
+        update_item,
     };
 
     Ok((tray, items))
@@ -662,6 +710,7 @@ fn map_menu_id_to_event(menu_id: &str) -> Option<TrayEvent> {
         menu_ids::TOGGLE_AUTO_START => Some(TrayEvent::ToggleAutoStart),
         menu_ids::CENTERING_CENTER => Some(TrayEvent::SetCenteringCenter),
         menu_ids::CENTERING_JUST_IN_VIEW => Some(TrayEvent::SetCenteringJustInView),
+        menu_ids::CHECK_UPDATES => Some(TrayEvent::OpenReleasesPage),
         _ => None,
     }
 }

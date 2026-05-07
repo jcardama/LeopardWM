@@ -25,6 +25,7 @@ mod state;
 #[cfg(test)]
 mod tests;
 mod tray;
+mod update_check;
 
 use ipc_server::*;
 use startup::*;
@@ -841,6 +842,17 @@ async fn main() -> Result<()> {
         }
     };
 
+    // Update checker — daily GitHub Releases poll, opt-out via behavior.check_for_updates.
+    let update_check_cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    if config.behavior.check_for_updates {
+        let tx = event_tx.clone();
+        let cancel = update_check_cancel.clone();
+        update_check::spawn_update_checker(cancel, move |tag| {
+            // Best-effort send — if the receiver is gone we're already shutting down.
+            let _ = tx.blocking_send(DaemonEvent::UpdateAvailable(tag));
+        });
+    }
+
     // Settings window forwarding channel + handle
     let (settings_sync_tx, settings_sync_rx) = std::sync::mpsc::channel();
     match spawn_forwarding_thread(
@@ -1541,6 +1553,15 @@ async fn main() -> Result<()> {
                             );
                         }
                     }
+                    tray::TrayEvent::OpenReleasesPage => {
+                        info!("Tray: opening releases page");
+                        if let Err(e) = std::process::Command::new("cmd")
+                            .args(["/C", "start", "", update_check::RELEASES_PAGE_URL])
+                            .spawn()
+                        {
+                            warn!("Failed to open releases page: {}", e);
+                        }
+                    }
                     tray::TrayEvent::SetCenteringJustInView => {
                         let mut state = state.lock().await;
                         if state.config.layout.centering_mode
@@ -1569,6 +1590,11 @@ async fn main() -> Result<()> {
                             );
                         }
                     }
+                }
+            }
+            DaemonEvent::UpdateAvailable(tag) => {
+                if let Some(ref mgr) = tray_manager {
+                    mgr.set_available_update(Some(tag));
                 }
             }
             DaemonEvent::Settings(settings_event) => {
@@ -1814,6 +1840,9 @@ async fn main() -> Result<()> {
             }
         }
     }
+
+    // Stop the update-checker worker so it doesn't hold up shutdown.
+    update_check_cancel.store(true, std::sync::atomic::Ordering::SeqCst);
 
     // Clean up animation worker (Drop sends Shutdown and joins)
     drop(animation_worker);

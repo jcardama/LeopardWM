@@ -26,6 +26,8 @@ thiserror = { workspace = true }
 toml = { workspace = true }
 directories = { workspace = true }
 tray-icon = { version = "0.21", default-features = false }
+ureq = { version = "2", default-features = false, features = ["tls"] }
+semver = "1"
 windows = { workspace = true }
 wry = { workspace = true }
 raw-window-handle = { workspace = true }

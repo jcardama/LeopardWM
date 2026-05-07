@@ -33,6 +33,8 @@ pub(crate) enum DaemonEvent {
     DisplayChangeSettled,
     /// Power state changed (AC/battery or power saver toggled).
     PowerStateChanged { on_battery_or_saver: bool },
+    /// Update checker observed a newer release tag (e.g. `v0.1.11`).
+    UpdateAvailable(String),
     /// Shutdown signal.
     Shutdown,
 }

@@ -252,6 +252,11 @@ pub struct BehaviorConfig {
     /// snapping and the snap layout flyout. Restored when windows leave tiling.
     #[serde(default = "default_true")]
     pub disable_snap_layouts: bool,
+
+    /// Whether to check GitHub Releases once a day for a newer version.
+    /// Single anonymous HTTPS GET to api.github.com; no other telemetry.
+    #[serde(default = "default_true")]
+    pub check_for_updates: bool,
 }
 
 impl Default for BehaviorConfig {
@@ -263,6 +268,7 @@ impl Default for BehaviorConfig {
             focus_follows_mouse: false,
             focus_follows_mouse_delay_ms: default_focus_delay(),
             disable_snap_layouts: true,
+            check_for_updates: true,
         }
     }
 }
@@ -1125,6 +1131,10 @@ focus_follows_mouse = false
 
 # Disable Windows 11 Snap Layouts for tiled windows (also disables maximize button)
 # disable_snap_layouts = false
+
+# Check GitHub Releases once a day for a newer version. One anonymous HTTPS GET to
+# api.github.com on startup + every 24h. Disable to skip entirely.
+# check_for_updates = false
 
 [hotkeys]
 # Navigation (focus) — Ctrl+Alt + HJKL
