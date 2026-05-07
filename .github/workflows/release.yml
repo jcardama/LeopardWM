@@ -23,6 +23,7 @@ jobs:
           mkdir "$DIR"
           cp target/x86_64-pc-windows-msvc/release/leopardwm.exe "$DIR/"
           cp target/x86_64-pc-windows-msvc/release/leopardwm-cli.exe "$DIR/"
+          cp target/x86_64-pc-windows-msvc/release/lwm.exe "$DIR/"
           cp README.md LICENSE "$DIR/"
           7z a "${DIR}.zip" "$DIR"
       - name: Build MSI installer

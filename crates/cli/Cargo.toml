@@ -11,6 +11,12 @@ description = "Command-line interface for controlling LeopardWM"
 name = "leopardwm-cli"
 path = "src/main.rs"
 
+# Short alias — same source, just a faster name to type. Distribution
+# channels ship both binaries.
+[[bin]]
+name = "lwm"
+path = "src/main.rs"
+
 [dependencies]
 leopardwm-ipc = { path = "../ipc" }
 leopardwm-platform-win32 = { path = "../platform_win32" }

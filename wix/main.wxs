@@ -81,6 +81,14 @@
                                 Source='$(var.CargoTargetBinDir)\leopardwm-cli.exe'
                                 KeyPath='yes'/>
                         </Component>
+                        <Component Id='LwmExe' Guid='*'>
+                            <File
+                                Id='exeLwm'
+                                Name='lwm.exe'
+                                DiskId='1'
+                                Source='$(var.CargoTargetBinDir)\lwm.exe'
+                                KeyPath='yes'/>
+                        </Component>
                     </Directory>
                 </Directory>
             </Directory>
@@ -98,6 +106,7 @@
             <ComponentRef Id='License'/>
             <ComponentRef Id='DaemonExe'/>
             <ComponentRef Id='CliExe'/>
+            <ComponentRef Id='LwmExe'/>
 
             <Feature
                 Id='Environment'
