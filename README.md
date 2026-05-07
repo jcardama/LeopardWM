@@ -42,6 +42,8 @@ Download the latest release from [GitHub Releases](https://github.com/jcardama/L
 2. Run `leopardwm.exe`
 3. (Optional) Enable autostart: `leopardwm-cli autostart enable`
 
+Releases are signed via the [SignPath Foundation](https://signpath.org/) program.
+
 ## Quick Start (from source)
 
 Prerequisites: [Rust](https://rustup.rs) with the MSVC toolchain (`stable-x86_64-pc-windows-msvc`)
