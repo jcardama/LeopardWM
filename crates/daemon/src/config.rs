@@ -515,6 +515,12 @@ impl Default for HotkeyConfig {
             bindings.insert(format!("Ctrl+Alt+{}", i), format!("switch_workspace_{}", i));
         }
 
+        // Workspace prev/next — Win+Ctrl+Left / Win+Ctrl+Right.
+        // Hijacks Windows' native Virtual Desktop switch shortcut so the
+        // user's muscle memory drives LeopardWM workspaces instead.
+        bindings.insert("Win+Ctrl+Left".to_string(), "workspace_prev".to_string());
+        bindings.insert("Win+Ctrl+Right".to_string(), "workspace_next".to_string());
+
         // Move window to workspace — Ctrl+Alt+Shift + 1-9
         for i in 1..=9u8 {
             bindings.insert(format!("Ctrl+Alt+Shift+{}", i), format!("move_to_workspace_{}", i));
@@ -760,6 +766,8 @@ pub fn parse_command(cmd: &str) -> Option<leopardwm_ipc::IpcCommand> {
         "switch_workspace_7" => Some(IpcCommand::SwitchWorkspace { index: 7 }),
         "switch_workspace_8" => Some(IpcCommand::SwitchWorkspace { index: 8 }),
         "switch_workspace_9" => Some(IpcCommand::SwitchWorkspace { index: 9 }),
+        "workspace_prev" => Some(IpcCommand::WorkspacePrev),
+        "workspace_next" => Some(IpcCommand::WorkspaceNext),
         "move_to_workspace_1" => Some(IpcCommand::MoveToWorkspace { index: 1 }),
         "move_to_workspace_2" => Some(IpcCommand::MoveToWorkspace { index: 2 }),
         "move_to_workspace_3" => Some(IpcCommand::MoveToWorkspace { index: 3 }),
@@ -1173,6 +1181,11 @@ focus_follows_mouse = false
 "Ctrl+Alt+R" = "refresh"
 "Ctrl+Alt+Shift+R" = "reload"
 
+# Workspace prev/next — hijacks Windows' native Virtual Desktop shortcut so
+# the user's muscle memory drives LeopardWM workspaces instead.
+"Win+Ctrl+Left" = "workspace_prev"
+"Win+Ctrl+Right" = "workspace_next"
+
 # Emergency restore + stop daemon
 "Win+Ctrl+Escape" = "panic_revert"
 
@@ -1283,7 +1296,7 @@ mod tests {
     #[test]
     fn test_hotkey_config_default() {
         let config = HotkeyConfig::default();
-        assert_eq!(config.bindings.len(), 49);
+        assert_eq!(config.bindings.len(), 51);
         assert_eq!(
             config.bindings.get("Ctrl+Alt+H"),
             Some(&"focus_left".to_string())

@@ -6,6 +6,7 @@ All notable changes to LeopardWM will be documented in this file.
 
 ### Improvements
 
+- Forward `Win+Ctrl+Left` and `Win+Ctrl+Right` to LeopardWM workspace prev/next. Hijacks Windows' native Virtual Desktop switch shortcut so the user's existing muscle memory drives LeopardWM workspaces directly, with cycle wrapping (workspace 1 ← Win+Ctrl+Left from workspace 9, etc.). New IPC commands `WorkspacePrev` and `WorkspaceNext`, hotkey command names `workspace_prev` / `workspace_next`. Both are in the default `[hotkeys]` section — rebind freely if you want native VDs back
 - Add an in-app update notifier. The daemon polls the GitHub Releases API once on startup (after a 30-second delay) and once per day, comparing the latest tag against `CARGO_PKG_VERSION` via semver. When a newer release is observed, the tray's "Check for Updates" menu item relabels to `Update available: vX.Y.Z`; clicking opens `https://github.com/jcardama/LeopardWM/releases` in the browser. No auto-download, no telemetry beyond the single anonymous HTTPS GET to `api.github.com`. Opt out via `behavior.check_for_updates = false` in `config.toml`. Useful for users on standalone-MSI installs; users on winget/Scoop continue to get updates natively via `winget upgrade` / `scoop update`
 
 ### Distribution

@@ -546,6 +546,19 @@ impl AppState {
                     uptime_seconds: uptime,
                 }
             }
+            IpcCommand::WorkspacePrev | IpcCommand::WorkspaceNext => {
+                const COUNT: usize = 9;
+                let monitor = self.focused_monitor;
+                let current = self.active_workspace_idx(monitor);
+                let target = match cmd {
+                    IpcCommand::WorkspacePrev => (current + COUNT - 1) % COUNT,
+                    IpcCommand::WorkspaceNext => (current + 1) % COUNT,
+                    _ => unreachable!(),
+                };
+                self.handle_command(IpcCommand::SwitchWorkspace {
+                    index: (target + 1) as u8,
+                })
+            }
             IpcCommand::SwitchWorkspace { index } => {
                 if !(1..=9).contains(&index) {
                     return IpcResponse::error("Workspace index must be 1-9");

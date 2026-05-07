@@ -256,6 +256,10 @@ pub enum IpcCommand {
         /// Workspace number (1-9).
         index: u8,
     },
+    /// Switch to the previous workspace (cycles 1 → 9 on wrap).
+    WorkspacePrev,
+    /// Switch to the next workspace (cycles 9 → 1 on wrap).
+    WorkspaceNext,
 
     /// Query whether the daemon is configured to auto-start with Windows.
     GetAutoStart,
