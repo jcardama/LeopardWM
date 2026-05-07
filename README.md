@@ -16,23 +16,33 @@ A scrollable tiling window manager for Windows.
 Most Windows tilers use tree or BSP layouts. LeopardWM is **scroll-first**: windows sit on a horizontal strip, and your monitor acts as a viewport that scrolls over them. Navigation stays spatially consistent as windows are added — you move through context instead of constantly rebuilding split trees.
 
 - **Vsync-aligned animations** — smooth scrolling powered by a `DwmFlush`-driven animation engine
-- **Written in Rust** — safe, fast, and easy to hack on
+- **First-class touchpad gestures** — three-finger swipes drive focus and scroll out of the box
+- **Disables Windows 11 Snap Layouts on managed windows** — no more accidental edge-snap when you drag a tile
+- **Auto-detected per-window rounded corners and high-contrast/reduced-motion/battery awareness** — system integration that respects user settings
+- **WebView2 settings GUI** with Mica backdrop and live theme switching — not just a config file
+- **GPL-3.0** — commercial use without a paid license, written in safe Rust
 
 ## Features
 
-- Multi-monitor workspaces with monitor-aware focus and move
+- Multi-monitor workspaces with monitor-aware focus and move (9 workspaces per monitor)
 - Global hotkeys with live config reload
-- Smooth scroll animations with layout transition effects
+- Smooth scroll animations with layout transition effects (vsync-locked)
 - Touchpad gestures with configurable swipe actions
 - Drag-and-drop column reorder (Shift+drag to merge windows)
 - Floating and fullscreen toggles
-- Width and height presets with column equalization
+- Width and height presets with column equalization, maximize-column, center-column
+- Active focus border with auto-detected rounded corners
 - System tray with pause, reload, settings, and diagnostics
-- WebView-based settings GUI
+- WebView-based settings GUI (Mica backdrop, live theme switching, dark mode)
 - Safe mode for troubleshooting (`--safe-mode`)
 - Built-in diagnostics (`lwm doctor`)
 - Workspace persistence and session recovery
-- Autostart via Registry
+- Autostart via Registry, configurable from CLI / Settings / tray
+- In-app update notifier — daily check against GitHub Releases, opt-out
+- Windows 11 Snap Layouts disabled for managed tiled windows
+- Battery-aware: animations auto-disable on battery / power saver
+- Respects Windows reduced-motion and high-contrast settings
+- DPI-aware gap and border scaling per-monitor
 
 ## Installation
 
@@ -64,7 +74,7 @@ A default config is created automatically at `%APPDATA%\leopardwm\config\config.
 
 ## Default Hotkeys
 
-All hotkeys use `Ctrl+Alt` as the base modifier. Layered pattern: base = focus, +Shift = move, +Win = monitor scope.
+Most hotkeys use `Ctrl+Alt` as the base modifier. Layered pattern: base = focus, +Shift = move, +Win = monitor scope. Workspace prev/next reuses Windows' native `Win+Ctrl+Arrow` shortcut so it works with existing muscle memory. Every hotkey is rebindable in `config.toml`.
 
 | Key | Action |
 |---|---|
@@ -77,8 +87,13 @@ All hotkeys use `Ctrl+Alt` as the base modifier. Layered pattern: base = focus, 
 | `Ctrl+Alt+Shift+Minus` / `Ctrl+Alt+Shift+Equals` | Cycle window height down / up |
 | `Ctrl+Alt+0` | Equalize all column widths |
 | `Ctrl+Alt+Shift+0` | Equalize window heights in column |
+| `Ctrl+Alt+M` | Maximize focused column to viewport width |
+| `Ctrl+Alt+C` | Center focused column in viewport |
 | `Ctrl+Alt+Win+,`/`.` | Focus monitor left / right |
 | `Ctrl+Alt+Win+Shift+,`/`.` | Move window to monitor |
+| `Ctrl+Alt+1`...`9` | Switch to workspace 1–9 |
+| `Ctrl+Alt+Shift+1`...`9` | Move focused window to workspace 1–9 |
+| `Win+Ctrl+Left` / `Right` | Workspace prev / next (cycles) |
 | `Ctrl+Alt+W` | Close focused window |
 | `Ctrl+Alt+F` | Toggle floating |
 | `Ctrl+Alt+Shift+F` | Toggle fullscreen |
