@@ -70,12 +70,6 @@ When you have the values from Step 2, share them and I'll:
 
 ---
 
-## Pending: add `lwm.exe` to Scoop manifest
-
-The CLI binary now also installs as `lwm` (short alias). MSI + GitHub-zip already ship both, but the Scoop manifest at `ScoopInstaller/Extras/bucket/leopardwm.json` is still pinned to the two-binary `bin` array because it was submitted before `lwm.exe` existed.
-
-After v0.1.11 (or whichever release first contains `lwm.exe` in the zip) is published, submit a small follow-up PR to ScoopInstaller/Extras adding `"lwm.exe"` to the `bin` array. Excavator (which auto-bumps the version/url/hash) does **not** update `bin` — must be a manual one-line PR.
-
 ## Status checklist
 
 - [ ] WINGET_TOKEN secret created (Section 1)
