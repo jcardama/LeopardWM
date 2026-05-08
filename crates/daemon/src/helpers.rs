@@ -1334,6 +1334,29 @@ impl AppState {
                     self.show_border(hwnd);
                 }
             }
+
+            // LayoutChanged broadcast with signature dedup. Animation
+            // frames between two settled layouts produce identical
+            // signatures so the dedup check suppresses them; only
+            // structural changes (column added/removed/reordered, width
+            // changed, focus moved between columns) emit.
+            let sig = self.focused_layout_signature();
+            if self.last_emitted_layout_sig != Some(sig) {
+                self.last_emitted_layout_sig = Some(sig);
+                let monitor = self.focused_monitor;
+                let workspace_index = self.active_workspace_idx(monitor);
+                let focused_column = self
+                    .workspaces
+                    .get(&monitor)
+                    .and_then(|list| list.get(workspace_index))
+                    .map(|ws| ws.focused_column_index());
+                self.broadcast_event(leopardwm_ipc::IpcEvent::LayoutChanged {
+                    monitor: monitor as i64,
+                    workspace_index: workspace_index as u8,
+                    focused_column,
+                    columns: self.focused_layout_columns(),
+                });
+            }
         }
 
         result

@@ -137,6 +137,139 @@ pub struct WindowInfo {
     pub is_focused: bool,
 }
 
+/// Kinds of events a subscriber can receive. Used as the `Subscribe`
+/// command's filter set and to dedup which event variants flow to which
+/// client.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum EventKind {
+    /// Workspace switches (`WorkspaceChanged`).
+    Workspace,
+    /// Focused window changes (`FocusedWindowChanged`).
+    FocusedWindow,
+    /// Layout structure changes (`LayoutChanged`). Also fires once on
+    /// subscribe as part of the initial snapshot.
+    Layout,
+    /// Configuration reloads (`ConfigReloaded`).
+    Config,
+    /// Periodic liveness heartbeats (`Heartbeat`). Subscribers receive
+    /// one every 30s of silence so they can detect dead daemon pipes.
+    Heartbeat,
+}
+
+impl EventKind {
+    /// All event kinds, useful as a default subscription set.
+    pub fn all() -> std::collections::BTreeSet<EventKind> {
+        [
+            EventKind::Workspace,
+            EventKind::FocusedWindow,
+            EventKind::Layout,
+            EventKind::Config,
+            EventKind::Heartbeat,
+        ]
+        .into_iter()
+        .collect()
+    }
+}
+
+/// One column entry in a `LayoutChanged` event payload.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ColumnSummary {
+    /// Window IDs in the column, top to bottom.
+    pub window_ids: Vec<u64>,
+    /// Column width in pixels (intrinsic strip width, monitor-independent).
+    pub width_px: i32,
+    /// Per-window height weights (parallel to `window_ids`, sums to ~1.0).
+    /// Empty means equal distribution. Populated so bars rendering
+    /// stacked windows can show vertical-split changes (cycle-height,
+    /// equalize-heights) without a follow-up query.
+    #[serde(default)]
+    pub height_weights: Vec<f64>,
+}
+
+/// Events streamed to subscribers after a `Subscribe` command. Each frame
+/// is one JSON object on the wire (newline-terminated, same framing as
+/// `IpcResponse`). After a client receives `IpcResponse::Subscribed`, all
+/// subsequent frames on that pipe deserialize as `IpcEvent`, NOT
+/// `IpcResponse` — the two types share the wire format but have
+/// incompatible serde tags (`type` vs `status`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum IpcEvent {
+    /// The active workspace on a monitor changed.
+    WorkspaceChanged {
+        /// Monitor ID where the workspace switch happened.
+        monitor: i64,
+        /// Previous workspace index (0-based; CLI displays 1-based).
+        old_index: u8,
+        /// New workspace index (0-based).
+        new_index: u8,
+    },
+    /// The focused window changed (or was cleared). Title/class/exec
+    /// fields are best-effort enrichment and may be `None` if the window
+    /// died between the focus event and the lookup.
+    FocusedWindowChanged {
+        /// Monitor ID of the focused window (or where focus was last seen).
+        monitor: i64,
+        /// HWND of the focused window, or `None` if focus was cleared.
+        hwnd: Option<u64>,
+        /// Window title, if obtainable.
+        title: Option<String>,
+        /// Window class name, if obtainable.
+        class_name: Option<String>,
+        /// Process executable path, if obtainable.
+        executable: Option<String>,
+    },
+    /// The structurally-distinct layout for the focused workspace
+    /// settled. Carries column structure inline so subscribers can render
+    /// without a follow-up `QueryWorkspace`.
+    LayoutChanged {
+        /// Monitor ID whose layout settled.
+        monitor: i64,
+        /// Workspace index that settled.
+        workspace_index: u8,
+        /// Index of the focused column, or `None` if no column is focused.
+        focused_column: Option<usize>,
+        /// Columns in left-to-right order.
+        columns: Vec<ColumnSummary>,
+    },
+    /// `lwm reload` completed (config reread, rules recompiled, layout reapplied).
+    ConfigReloaded,
+    /// Periodic liveness signal. Sent after ~30s of silence on a stream
+    /// so clients can detect dead daemon pipes via missing heartbeats.
+    Heartbeat {
+        /// Daemon uptime in seconds at the time of the heartbeat.
+        uptime_seconds: u64,
+    },
+    /// The daemon's broadcast buffer overflowed for this subscriber and
+    /// some events were dropped. Recommended recovery: reconnect with a
+    /// fresh `Subscribe` to receive a new snapshot.
+    Lagged {
+        /// Number of events the broadcast layer dropped before delivery.
+        skipped: u64,
+    },
+}
+
+impl IpcEvent {
+    /// The `EventKind` this variant belongs to. Used by the IPC server to
+    /// filter events against a subscriber's chosen set.
+    pub fn kind(&self) -> EventKind {
+        match self {
+            IpcEvent::WorkspaceChanged { .. } => EventKind::Workspace,
+            IpcEvent::FocusedWindowChanged { .. } => EventKind::FocusedWindow,
+            IpcEvent::LayoutChanged { .. } => EventKind::Layout,
+            IpcEvent::ConfigReloaded => EventKind::Config,
+            IpcEvent::Heartbeat { .. } => EventKind::Heartbeat,
+            // Lagged is an internal control event, not subscribable; emit
+            // unconditionally to any subscriber that hits the lagged
+            // branch on the broadcast receiver, regardless of filter.
+            IpcEvent::Lagged { .. } => EventKind::Heartbeat,
+        }
+    }
+}
+
 /// Commands that can be sent from the CLI to the daemon.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -268,6 +401,17 @@ pub enum IpcCommand {
         /// Whether auto-start should be enabled.
         enabled: bool,
     },
+
+    /// Switch the connection into stream mode and start receiving
+    /// `IpcEvent` frames as state changes occur. After the daemon
+    /// responds with `IpcResponse::Subscribed`, the pipe stays open and
+    /// each subsequent frame is an `IpcEvent` (not an `IpcResponse`). The
+    /// pipe cannot be used for further commands; clients open a second
+    /// pipe for ad-hoc queries while subscribed.
+    Subscribe {
+        /// Event kinds to receive. An empty set is treated as "all kinds".
+        events: std::collections::BTreeSet<EventKind>,
+    },
 }
 
 /// Responses from the daemon to the CLI.
@@ -336,6 +480,14 @@ pub enum IpcResponse {
     AutoStartState {
         /// Whether auto-start is currently enabled.
         enabled: bool,
+    },
+    /// Acknowledgment for `IpcCommand::Subscribe`. After the client reads
+    /// this response, it must switch its frame parser from `IpcResponse`
+    /// to `IpcEvent` for all subsequent reads on this pipe.
+    Subscribed {
+        /// Echoed event-kind set the daemon will deliver (matches the
+        /// requested set after defaulting and validation).
+        events: std::collections::BTreeSet<EventKind>,
     },
     /// Health check response.
     HealthInfo {
@@ -715,5 +867,138 @@ mod tests {
         // Between 1 KiB and 1 MiB
         const { assert!(MAX_IPC_MESSAGE_SIZE >= 1024) };
         const { assert!(MAX_IPC_MESSAGE_SIZE <= 1024 * 1024) };
+    }
+
+    #[test]
+    fn test_subscribe_command_round_trip() {
+        let mut events = std::collections::BTreeSet::new();
+        events.insert(EventKind::Workspace);
+        events.insert(EventKind::FocusedWindow);
+        let cmd = IpcCommand::Subscribe { events };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains("subscribe"));
+        assert!(json.contains("workspace"));
+        assert!(json.contains("focused_window"));
+        let cmd2: IpcCommand = serde_json::from_str(&json).unwrap();
+        assert_eq!(cmd, cmd2);
+    }
+
+    #[test]
+    fn test_subscribed_response_round_trip() {
+        let resp = IpcResponse::Subscribed { events: EventKind::all() };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("subscribed"));
+        let resp2: IpcResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(resp, resp2);
+    }
+
+    #[test]
+    fn test_event_workspace_changed_round_trip() {
+        let ev = IpcEvent::WorkspaceChanged {
+            monitor: 12345,
+            old_index: 0,
+            new_index: 4,
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(json.contains("workspace_changed"));
+        let ev2: IpcEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(ev, ev2);
+    }
+
+    #[test]
+    fn test_event_focused_window_changed_round_trip() {
+        let ev = IpcEvent::FocusedWindowChanged {
+            monitor: 1,
+            hwnd: Some(0xABCD),
+            title: Some("Notepad".to_string()),
+            class_name: Some("Notepad".to_string()),
+            executable: Some("C:\\Windows\\notepad.exe".to_string()),
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        let ev2: IpcEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(ev, ev2);
+
+        let cleared = IpcEvent::FocusedWindowChanged {
+            monitor: 1,
+            hwnd: None,
+            title: None,
+            class_name: None,
+            executable: None,
+        };
+        let json = serde_json::to_string(&cleared).unwrap();
+        let cleared2: IpcEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(cleared, cleared2);
+    }
+
+    #[test]
+    fn test_event_layout_changed_round_trip() {
+        let ev = IpcEvent::LayoutChanged {
+            monitor: 1,
+            workspace_index: 2,
+            focused_column: Some(1),
+            columns: vec![
+                ColumnSummary {
+                    window_ids: vec![100, 200],
+                    width_px: 800,
+                    height_weights: vec![0.6, 0.4],
+                },
+                ColumnSummary {
+                    window_ids: vec![300],
+                    width_px: 600,
+                    height_weights: vec![1.0],
+                },
+            ],
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(json.contains("layout_changed"));
+        let ev2: IpcEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(ev, ev2);
+    }
+
+    #[test]
+    fn test_event_config_reloaded_round_trip() {
+        let ev = IpcEvent::ConfigReloaded;
+        let json = serde_json::to_string(&ev).unwrap();
+        assert_eq!(json, r#"{"type":"config_reloaded"}"#);
+        let ev2: IpcEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(ev, ev2);
+    }
+
+    #[test]
+    fn test_event_heartbeat_round_trip() {
+        let ev = IpcEvent::Heartbeat { uptime_seconds: 12345 };
+        let json = serde_json::to_string(&ev).unwrap();
+        let ev2: IpcEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(ev, ev2);
+    }
+
+    #[test]
+    fn test_event_lagged_round_trip() {
+        let ev = IpcEvent::Lagged { skipped: 42 };
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(json.contains("lagged"));
+        let ev2: IpcEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(ev, ev2);
+    }
+
+    #[test]
+    fn test_event_kind_filtering() {
+        assert_eq!(
+            IpcEvent::WorkspaceChanged { monitor: 1, old_index: 0, new_index: 1 }.kind(),
+            EventKind::Workspace
+        );
+        assert_eq!(IpcEvent::ConfigReloaded.kind(), EventKind::Config);
+        assert_eq!(IpcEvent::Heartbeat { uptime_seconds: 0 }.kind(), EventKind::Heartbeat);
+    }
+
+    #[test]
+    fn test_event_kind_all_contains_every_variant() {
+        let all = EventKind::all();
+        assert!(all.contains(&EventKind::Workspace));
+        assert!(all.contains(&EventKind::FocusedWindow));
+        assert!(all.contains(&EventKind::Layout));
+        assert!(all.contains(&EventKind::Config));
+        assert!(all.contains(&EventKind::Heartbeat));
+        assert_eq!(all.len(), 5);
     }
 }

@@ -155,6 +155,17 @@ enum Commands {
     },
     /// Stop the daemon
     Stop,
+    /// Subscribe to LeopardWM state changes (newline-delimited JSON to stdout)
+    ///
+    /// Pipe into `jq` for pretty output, or wire into a status bar to
+    /// re-render on each event. Default is to receive every event kind;
+    /// `--events workspace,focused_window` filters at the daemon level.
+    /// Press Ctrl+C to disconnect.
+    Subscribe {
+        /// Comma-separated event kinds: workspace, focused_window, layout, config, heartbeat
+        #[arg(long, value_delimiter = ',')]
+        events: Option<Vec<String>>,
+    },
     /// Toggle pause/resume of tiling operations
     #[command(visible_alias = "pause")]
     TogglePause,
@@ -392,6 +403,7 @@ fn to_ipc_command(cmd: &Commands) -> IpcCommand {
         Commands::Status => IpcCommand::QueryStatus,
         Commands::PanicRevert => IpcCommand::PanicRevert,
         Commands::Run { .. } => unreachable!("Run handled separately"),
+        Commands::Subscribe { .. } => unreachable!("Subscribe handled separately"),
         Commands::Doctor => unreachable!("Doctor handled separately"),
         Commands::Autostart { .. } => unreachable!("Autostart handled separately"),
         Commands::CollectLogs => unreachable!("CollectLogs handled separately"),
@@ -1088,6 +1100,116 @@ fn handle_emergency_uncloak() -> Result<()> {
         .context("Failed to execute local emergency visibility restore")
 }
 
+/// Subscribe to daemon events and stream them as newline-delimited JSON
+/// to stdout. After the daemon answers `Subscribed`, the connection
+/// stays open and every subsequent line is an `IpcEvent` frame. This is
+/// the documented client-state-machine mode-switch — the response parser
+/// is `IpcResponse` for the first frame, `IpcEvent` for all subsequent
+/// frames.
+async fn handle_subscribe(events: Option<Vec<String>>) -> Result<()> {
+    use leopardwm_ipc::EventKind;
+    use std::collections::BTreeSet;
+
+    // Parse the requested kinds. Empty/missing means "all".
+    let requested: BTreeSet<EventKind> = match events {
+        None => BTreeSet::new(), // server interprets empty as all
+        Some(list) => {
+            let mut out = BTreeSet::new();
+            for raw in list {
+                let trimmed = raw.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                let kind = match trimmed {
+                    "workspace" => EventKind::Workspace,
+                    "focused_window" => EventKind::FocusedWindow,
+                    "layout" => EventKind::Layout,
+                    "config" => EventKind::Config,
+                    "heartbeat" => EventKind::Heartbeat,
+                    other => anyhow::bail!(
+                        "Unknown event kind '{}'. Valid: workspace, focused_window, \
+                         layout, config, heartbeat",
+                        other
+                    ),
+                };
+                out.insert(kind);
+            }
+            out
+        }
+    };
+
+    if !probe_daemon_running()? {
+        anyhow::bail!("Daemon is not running. Start it with `leopardwm-cli run`.");
+    }
+
+    // Open the pipe and send Subscribe.
+    let client =
+        open_pipe_with_retry(IPC_CONNECT_TIMEOUT, Some(IPC_NOT_FOUND_FAST_FAIL_AFTER)).await?;
+    let (reader, mut writer) = tokio::io::split(client);
+    let cmd = IpcCommand::Subscribe { events: requested };
+    let cmd_json = serde_json::to_string(&cmd)? + "\n";
+    writer
+        .write_all(cmd_json.as_bytes())
+        .await
+        .context("Failed to send Subscribe command")?;
+
+    // Read the Subscribed ack as IpcResponse — last frame parsed via
+    // that type. After this, the parser switches to IpcEvent. We
+    // intentionally do NOT use `reader.take(MAX_IPC_MESSAGE_SIZE)` here
+    // (that would cap *total* bytes, killing long-lived subscribers
+    // after ~64 KiB of events). Per-frame size guarding is the daemon's
+    // responsibility (write_event_frame caps each frame at 64 KiB).
+    let mut buf = tokio::io::BufReader::new(reader);
+    let mut line = String::new();
+    let bytes = buf
+        .read_line(&mut line)
+        .await
+        .context("Failed to read Subscribed ack")?;
+    if bytes == 0 {
+        anyhow::bail!("Daemon disconnected before sending Subscribed ack");
+    }
+    let ack: IpcResponse = serde_json::from_str(line.trim())
+        .with_context(|| format!("Failed to parse Subscribed ack: {}", line.trim()))?;
+    match ack {
+        IpcResponse::Subscribed { .. } => {}
+        IpcResponse::Error { message } => anyhow::bail!("Subscribe rejected: {}", message),
+        other => anyhow::bail!("Unexpected response to Subscribe: {:?}", other),
+    }
+
+    // Stream loop. Each frame is a single line of JSON; raw passthrough
+    // to stdout so users can pipe into `jq` etc.
+    let mut stdout = tokio::io::stdout();
+    let mut event_line = Vec::new();
+    loop {
+        event_line.clear();
+        let bytes = buf
+            .read_until(b'\n', &mut event_line)
+            .await
+            .context("Failed to read event frame")?;
+        if bytes == 0 {
+            // Daemon closed the pipe (shutdown, restart, etc.)
+            break;
+        }
+        // Validate as IpcEvent so we surface daemon-side bugs noisily,
+        // but pass the raw bytes through to stdout to preserve any
+        // formatting subtleties for jq consumers.
+        if let Err(e) = serde_json::from_slice::<leopardwm_ipc::IpcEvent>(&event_line) {
+            eprintln!(
+                "Warning: failed to parse event frame ({}): {}",
+                e,
+                String::from_utf8_lossy(&event_line).trim_end()
+            );
+            continue;
+        }
+        stdout
+            .write_all(&event_line)
+            .await
+            .context("Failed to write event to stdout")?;
+        stdout.flush().await.ok();
+    }
+    Ok(())
+}
+
 fn parse_ipc_response_line(raw: &str) -> Result<IpcResponse> {
     serde_json::from_str(raw.trim()).context("Failed to parse response")
 }
@@ -1279,6 +1401,13 @@ fn print_response(response: &IpcResponse) {
         }
         IpcResponse::AutoStartState { enabled } => {
             println!("Auto-start: {}", if *enabled { "enabled" } else { "disabled" });
+        }
+        IpcResponse::Subscribed { events } => {
+            // Reaching this arm via the normal command path means the
+            // caller used send_command for Subscribe, which is wrong —
+            // Subscribe transitions the connection to stream mode and the
+            // dedicated `lwm subscribe` subcommand handles that flow.
+            println!("Subscribed (events: {:?}); stream mode active", events);
         }
         IpcResponse::Unknown => {
             println!("Daemon returned an unknown response status (client/daemon version mismatch)");
@@ -1850,6 +1979,7 @@ async fn main() -> Result<()> {
             safe_mode,
             no_watchdog,
         } => return handle_run(no_apply, wait_ms, safe_mode, no_watchdog).await,
+        Commands::Subscribe { events } => return handle_subscribe(events).await,
         Commands::Stop => return handle_stop().await,
         Commands::PanicRevert => return handle_panic_revert().await,
         Commands::EmergencyUncloak => return handle_emergency_uncloak(),

@@ -573,3 +573,131 @@ fn test_max_ipc_message_size_accessible() {
     const { assert!(leopardwm_ipc::MAX_IPC_MESSAGE_SIZE >= 1024) };
     const { assert!(leopardwm_ipc::MAX_IPC_MESSAGE_SIZE <= 1024 * 1024) };
 }
+
+// ============================================================================
+// Pub/Sub protocol — Subscribe handshake + event frames
+// ============================================================================
+
+/// The Subscribe → Subscribed handshake round-trips cleanly at the wire
+/// level. After the ack the client is expected to switch parsers from
+/// IpcResponse to IpcEvent — this test pins the byte-for-byte encoding
+/// of both halves so a stray rename of the discriminator field would
+/// break loudly.
+#[test]
+fn test_subscribe_handshake_wire_format() {
+    use leopardwm_ipc::EventKind;
+    use std::collections::BTreeSet;
+
+    let mut events = BTreeSet::new();
+    events.insert(EventKind::Workspace);
+    events.insert(EventKind::FocusedWindow);
+
+    // Subscribe command: tagged with `type`
+    let cmd = IpcCommand::Subscribe { events: events.clone() };
+    let cmd_json = serde_json::to_string(&cmd).unwrap();
+    assert!(cmd_json.starts_with(r#"{"type":"subscribe""#));
+
+    // Subscribed response: tagged with `status` (different field!)
+    let resp = IpcResponse::Subscribed { events };
+    let resp_json = serde_json::to_string(&resp).unwrap();
+    assert!(resp_json.starts_with(r#"{"status":"subscribed""#));
+
+    // The two MUST use different tags — a client that tries to
+    // deserialize a Subscribe command as an IpcResponse should fail,
+    // and vice versa. This is the "mode-switch" the protocol relies on.
+    assert!(serde_json::from_str::<IpcResponse>(&cmd_json).is_err()
+        || matches!(serde_json::from_str::<IpcResponse>(&cmd_json), Ok(IpcResponse::Unknown)));
+}
+
+/// Event frames use `type` discriminator; mixing them with IpcResponse
+/// parsing fails with a clear error so client bugs don't fail silently.
+/// (IpcResponse requires a `status` tag — events have `type` instead, so
+/// serde returns "missing field `status`" rather than silently mapping
+/// to `Unknown`. This is the desired behavior: noisy mismatch.)
+#[test]
+fn test_event_frame_distinct_from_response_frame() {
+    use leopardwm_ipc::IpcEvent;
+
+    let event = IpcEvent::WorkspaceChanged { monitor: 1, old_index: 0, new_index: 1 };
+    let event_json = serde_json::to_string(&event).unwrap();
+    assert!(event_json.contains(r#""type":"workspace_changed""#));
+
+    // Parsing as IpcResponse fails (missing `status` field). Clients
+    // that forget the parser-mode-switch hit this error immediately.
+    let as_response: Result<IpcResponse, _> = serde_json::from_str(&event_json);
+    assert!(as_response.is_err());
+    assert!(as_response.unwrap_err().to_string().contains("status"));
+}
+
+/// Filter set roundtrips losslessly, including the empty set (which the
+/// daemon treats as "all kinds") and full-set shortcuts.
+#[test]
+fn test_subscribe_filter_set_roundtrip() {
+    use leopardwm_ipc::EventKind;
+    use std::collections::BTreeSet;
+
+    for set in [
+        BTreeSet::new(),
+        EventKind::all(),
+        BTreeSet::from([EventKind::Workspace]),
+        BTreeSet::from([EventKind::Workspace, EventKind::Layout, EventKind::Heartbeat]),
+    ] {
+        let cmd = IpcCommand::Subscribe { events: set.clone() };
+        let json = serde_json::to_string(&cmd).unwrap();
+        let parsed: IpcCommand = serde_json::from_str(&json).unwrap();
+        match parsed {
+            IpcCommand::Subscribe { events } => assert_eq!(events, set),
+            _ => panic!("Round-trip changed variant"),
+        }
+    }
+}
+
+/// `IpcEvent::kind()` correctly classifies every variant — used by the
+/// IPC server to filter events against per-subscriber filter sets.
+#[test]
+fn test_event_kind_classification() {
+    use leopardwm_ipc::{ColumnSummary, EventKind, IpcEvent};
+
+    let cases = [
+        (
+            IpcEvent::WorkspaceChanged { monitor: 1, old_index: 0, new_index: 1 },
+            EventKind::Workspace,
+        ),
+        (
+            IpcEvent::FocusedWindowChanged {
+                monitor: 1, hwnd: None, title: None, class_name: None, executable: None,
+            },
+            EventKind::FocusedWindow,
+        ),
+        (
+            IpcEvent::LayoutChanged {
+                monitor: 1, workspace_index: 0, focused_column: None,
+                columns: vec![ColumnSummary {
+                    window_ids: vec![],
+                    width_px: 100,
+                    height_weights: vec![],
+                }],
+            },
+            EventKind::Layout,
+        ),
+        (IpcEvent::ConfigReloaded, EventKind::Config),
+        (IpcEvent::Heartbeat { uptime_seconds: 0 }, EventKind::Heartbeat),
+    ];
+
+    for (event, expected_kind) in cases {
+        assert_eq!(event.kind(), expected_kind);
+    }
+}
+
+/// Lagged events use the same wire format as ordinary events but
+/// shouldn't be filtered out (broadcast layer surfaces them
+/// regardless). Verify the wire shape is what bar developers expect.
+#[test]
+fn test_lagged_event_wire_format() {
+    use leopardwm_ipc::IpcEvent;
+    let lagged = IpcEvent::Lagged { skipped: 99 };
+    let json = serde_json::to_string(&lagged).unwrap();
+    assert_eq!(json, r#"{"type":"lagged","skipped":99}"#);
+    let parsed: IpcEvent = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed, lagged);
+}

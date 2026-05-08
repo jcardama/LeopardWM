@@ -175,6 +175,16 @@ lwm autostart disable  # removes it
 
 This is also exposed as a Settings UI toggle and a tray menu item.
 
+### Subscribe to events (status bars, custom integrations)
+
+```bash
+lwm subscribe                                       # all events, newline-delimited JSON
+lwm subscribe --events workspace,focused_window     # filtered subset
+lwm subscribe | jq                                   # pretty-printed in another terminal
+```
+
+After the daemon answers `Subscribed`, the connection stays open and streams `IpcEvent` frames (`workspace_changed`, `focused_window_changed`, `layout_changed`, `config_reloaded`, `heartbeat`) as state changes occur. Pipe into a status bar (Yasb, eww, custom Tauri/Electron widgets) to re-render on each event without polling. Full schemas + sample clients in `agent_docs/ipc-events.md`.
+
 ### Troubleshooting
 
 ```bash

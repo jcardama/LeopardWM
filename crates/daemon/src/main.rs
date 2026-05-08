@@ -866,7 +866,9 @@ async fn main() -> Result<()> {
     }
     let mut _settings_handle: Option<settings::SettingsWindowHandle> = None;
 
-    // Spawn IPC server
+    // Spawn IPC server. Subscribe is handled via a dedicated
+    // DaemonEvent variant routed through this channel, so the per-client
+    // task itself doesn't need direct AppState access.
     let ipc_tx = event_tx.clone();
     tokio::spawn(async move {
         run_ipc_server(ipc_tx).await;
@@ -967,6 +969,78 @@ async fn main() -> Result<()> {
         };
 
         match event {
+            DaemonEvent::IpcSubscribe { events, responder } => {
+                // Build the (ack + snapshot + receiver) bundle atomically
+                // under the AppState mutex so any event emitted after the
+                // receiver is created is guaranteed to land in `rx`, and
+                // the snapshot reflects exactly that instant. See
+                // `events::SubscribeStartup` for the contract.
+                use leopardwm_ipc::EventKind;
+                use leopardwm_platform_win32::get_process_executable;
+                let s = state.lock().await;
+                let receiver = s.event_broadcaster.subscribe();
+                let mut snapshot = Vec::new();
+
+                if events.contains(&EventKind::Workspace) {
+                    for (monitor, &idx) in &s.active_workspace {
+                        snapshot.push(leopardwm_ipc::IpcEvent::WorkspaceChanged {
+                            monitor: *monitor as i64,
+                            old_index: idx as u8,
+                            new_index: idx as u8,
+                        });
+                    }
+                }
+                if events.contains(&EventKind::FocusedWindow) {
+                    let hwnd = s.previous_focused_hwnd;
+                    let monitor = s.focused_monitor as i64;
+                    let (title, class_name, executable) = if let Some(h) = hwnd {
+                        match s.lookup_window_info(h) {
+                            Some(i) => (
+                                Some(i.title.clone()),
+                                Some(i.class_name.clone()),
+                                Some(get_process_executable(i.process_id).unwrap_or_default()),
+                            ),
+                            None => (None, None, None),
+                        }
+                    } else {
+                        (None, None, None)
+                    };
+                    snapshot.push(leopardwm_ipc::IpcEvent::FocusedWindowChanged {
+                        monitor,
+                        hwnd,
+                        title,
+                        class_name,
+                        executable,
+                    });
+                }
+                if events.contains(&EventKind::Layout) {
+                    let monitor = s.focused_monitor;
+                    let workspace_index = s.active_workspace_idx(monitor);
+                    let focused_column = s
+                        .workspaces
+                        .get(&monitor)
+                        .and_then(|list| list.get(workspace_index))
+                        .map(|ws| ws.focused_column_index());
+                    snapshot.push(leopardwm_ipc::IpcEvent::LayoutChanged {
+                        monitor: monitor as i64,
+                        workspace_index: workspace_index as u8,
+                        focused_column,
+                        columns: s.focused_layout_columns(),
+                    });
+                }
+
+                let ack = leopardwm_ipc::IpcResponse::Subscribed {
+                    events: events.clone(),
+                };
+                drop(s);
+
+                let _ = responder.send(crate::events::SubscribeStartup {
+                    ack,
+                    snapshot,
+                    receiver,
+                });
+                continue;
+            }
             DaemonEvent::IpcCommand { cmd, responder } => {
                 if let Some(mode) = shutdown_mode_for_command(&cmd) {
                     if mode == ShutdownMode::PanicRevert {

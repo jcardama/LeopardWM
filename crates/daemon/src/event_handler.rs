@@ -523,8 +523,27 @@ impl AppState {
                     // Track the OS-foreground window — including floating windows —
                     // so that ToggleFloating can reliably detect and unfloat the
                     // currently focused floating window.
+                    let focus_actually_changed = self.previous_focused_hwnd != Some(hwnd);
                     self.previous_focused_hwnd = Some(hwnd);
                     self.last_focus_change_at = Some(now);
+                    if focus_actually_changed {
+                        let info = self.lookup_window_info(hwnd);
+                        let (title, class_name, executable) = match info {
+                            Some(ref i) => (
+                                Some(i.title.clone()),
+                                Some(i.class_name.clone()),
+                                Some(get_process_executable(i.process_id).unwrap_or_default()),
+                            ),
+                            None => (None, None, None),
+                        };
+                        self.broadcast_event(leopardwm_ipc::IpcEvent::FocusedWindowChanged {
+                            monitor: monitor_id as i64,
+                            hwnd: Some(hwnd),
+                            title,
+                            class_name,
+                            executable,
+                        });
+                    }
                 } else {
                     // Recovery path: if a user focuses a window that was
                     // suppressed by recently_hidden_hwnds (e.g., tray-restored
@@ -607,8 +626,18 @@ impl AppState {
                     // Focus went to an unmanaged window (e.g. settings, taskbar).
                     // Hide the border overlay and clear tracked hwnd so animation
                     // frames don't re-show it.
+                    let focus_was_set = self.previous_focused_hwnd.is_some();
                     self.hide_border();
                     self.previous_focused_hwnd = None;
+                    if focus_was_set {
+                        self.broadcast_event(leopardwm_ipc::IpcEvent::FocusedWindowChanged {
+                            monitor: self.focused_monitor as i64,
+                            hwnd: None,
+                            title: None,
+                            class_name: None,
+                            executable: None,
+                        });
+                    }
                 }
             }
             WindowEvent::Minimized(hwnd) => {

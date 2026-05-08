@@ -4,6 +4,10 @@ All notable changes to LeopardWM will be documented in this file.
 
 ## Unreleased
 
+### Improvements
+
+- Add an IPC pub/sub event subscription channel for external bars (Yasb, Tauri/Electron-based custom bars, eww). `lwm subscribe` opens the named pipe, sends `IpcCommand::Subscribe { events }`, and streams newline-delimited JSON `IpcEvent` frames to stdout — pipe into `jq` for ad-hoc inspection or wire into a status bar to re-render on each event. Five event kinds: `WorkspaceChanged`, `FocusedWindowChanged`, `LayoutChanged`, `ConfigReloaded`, `Heartbeat` (every 30s of silence). Filter at the daemon level via `--events workspace,focused_window` or omit for "all kinds". The handshake is atomic: when the daemon receives `Subscribe`, the broadcast `Receiver` and a snapshot of current state are constructed in the same `AppState` mutex critical section, so no event between handoff and stream-start can be lost. Capacity is 256 buffered events per subscriber; a subscriber that lags further behind receives `IpcEvent::Lagged { skipped }` and should reconnect for a fresh snapshot. `LayoutChanged` carries inline column structure (`window_ids`, `width_px` per column) so bars don't need a follow-up `QueryWorkspace`. Sender-side signature dedup prevents the per-frame animation spam: only structurally-distinct settled layouts emit. The protocol is mode-switching: after the `Subscribed` ack frame (tagged with `status`), every subsequent frame is an `IpcEvent` (tagged with `type`) — clients must transition parsers. Documented in `agent_docs/ipc-events.md` with sample clients (Rust, Python, Yasb recipe). Backwards compatible: existing CLI users never send `Subscribe` so the request/response path is unchanged
+
 ## 0.1.12
 
 ### Reliability

@@ -274,6 +274,13 @@ pub(crate) struct AppState {
     /// Number of late-worker recovery passes executed after cancellation.
     #[cfg(test)]
     pub(crate) late_worker_recovery_count: Arc<AtomicUsize>,
+    /// Fanout for IPC pub/sub. The IPC server's per-client task calls
+    /// `subscribe()` on this to receive an `IpcEvent` stream.
+    pub(crate) event_broadcaster: tokio::sync::broadcast::Sender<leopardwm_ipc::IpcEvent>,
+    /// Hash of the last `IpcEvent::LayoutChanged` payload we emitted —
+    /// used to dedup repeat emissions when the layout signature is
+    /// unchanged (e.g. animation frames between settled positions).
+    pub(crate) last_emitted_layout_sig: Option<u64>,
 }
 
 /// Snapshot of workspace state for persistence.
@@ -410,12 +417,79 @@ impl AppState {
             injected_apply_placements_behavior: None,
             #[cfg(test)]
             late_worker_recovery_count: Arc::new(AtomicUsize::new(0)),
+            // Capacity 256 is comfortable for human-rate events. A
+            // subscriber that lags >256 events behind receives `Lagged`
+            // and is expected to reconnect with a fresh Subscribe.
+            event_broadcaster: tokio::sync::broadcast::channel(256).0,
+            last_emitted_layout_sig: None,
         }
     }
 
     /// Get the active workspace index (0-based) for a given monitor.
     pub(crate) fn active_workspace_idx(&self, monitor_id: MonitorId) -> usize {
         self.active_workspace.get(&monitor_id).copied().unwrap_or(0)
+    }
+
+    /// Send an event to all IPC subscribers. `broadcast::Sender::send` is
+    /// sync (no .await), so this is safe to call while holding any tokio
+    /// mutex. Err on zero-receivers is ignored — that just means nobody
+    /// is subscribed yet.
+    pub(crate) fn broadcast_event(&self, event: leopardwm_ipc::IpcEvent) {
+        let _ = self.event_broadcaster.send(event);
+    }
+
+    /// Compute a cheap signature of the focused workspace's column
+    /// structure for `LayoutChanged` dedup. Animation frames between two
+    /// settled layouts produce the same signature, so the sender-side
+    /// dedup suppresses all but the structurally-distinct emission.
+    pub(crate) fn focused_layout_signature(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.focused_monitor.hash(&mut hasher);
+        let ws_idx = self.active_workspace_idx(self.focused_monitor);
+        ws_idx.hash(&mut hasher);
+        if let Some(ws) = self
+            .workspaces
+            .get(&self.focused_monitor)
+            .and_then(|list| list.get(ws_idx))
+        {
+            ws.focused_column_index().hash(&mut hasher);
+            ws.columns().len().hash(&mut hasher);
+            for col in ws.columns() {
+                col.width().hash(&mut hasher);
+                col.windows().len().hash(&mut hasher);
+                for &w in col.windows() {
+                    w.hash(&mut hasher);
+                }
+                // Include height weights so vertical-split changes
+                // (cycle-height, equalize-heights, resize) emit a fresh
+                // LayoutChanged. Hash the bit pattern; weights are f64
+                // so plain Hash isn't implemented.
+                for w in col.height_weights() {
+                    w.to_bits().hash(&mut hasher);
+                }
+            }
+        }
+        hasher.finish()
+    }
+
+    /// Build the column summary list for a `LayoutChanged` event payload.
+    pub(crate) fn focused_layout_columns(&self) -> Vec<leopardwm_ipc::ColumnSummary> {
+        let ws_idx = self.active_workspace_idx(self.focused_monitor);
+        self.workspaces
+            .get(&self.focused_monitor)
+            .and_then(|list| list.get(ws_idx))
+            .map(|ws| {
+                ws.columns()
+                    .iter()
+                    .map(|col| leopardwm_ipc::ColumnSummary {
+                        window_ids: col.windows().to_vec(),
+                        width_px: col.width(),
+                        height_weights: col.height_weights().to_vec(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Get the currently focused workspace (active workspace on the focused monitor).

@@ -309,6 +309,7 @@ impl AppState {
                     if let Err(e) = self.apply_layout() {
                         return IpcResponse::error(format!("Failed to apply layout: {}", e));
                     }
+                    self.broadcast_event(leopardwm_ipc::IpcEvent::ConfigReloaded);
                     IpcResponse::Ok
                 }
                 Err(e) => IpcResponse::error(format!("Failed to reload config: {}", e)),
@@ -661,6 +662,11 @@ impl AppState {
                     return IpcResponse::error(format!("Failed to apply layout: {}", e));
                 }
                 self.sync_foreground_window();
+                self.broadcast_event(leopardwm_ipc::IpcEvent::WorkspaceChanged {
+                    monitor: monitor as i64,
+                    old_index: current_idx as u8,
+                    new_index: idx as u8,
+                });
                 info!("Switched to workspace {}", index);
                 IpcResponse::Ok
             }
@@ -805,6 +811,17 @@ impl AppState {
                     }
                     Err(e) => IpcResponse::error(format!("Failed to update auto-start: {}", e)),
                 }
+            }
+            IpcCommand::Subscribe { .. } => {
+                // Subscribe is handled out-of-band by ipc_server.rs
+                // (per-client task acquires AppState directly so subscribe
+                // + snapshot are atomic). Reaching this arm means the IPC
+                // server accidentally routed a Subscribe through the
+                // command path — it's a bug, not a user error.
+                IpcResponse::error(
+                    "Subscribe must be handled in stream mode by the IPC server, not the main \
+                     command loop — this is an internal routing bug.",
+                )
             }
         }
     }

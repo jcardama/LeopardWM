@@ -1,19 +1,27 @@
 //! Named-pipe IPC server and client handling.
 
 use super::DaemonEvent;
+use crate::events::SubscribeStartup;
 use anyhow::Result;
-use leopardwm_ipc::{preferred_pipe_name, IpcCommand, IpcResponse, MAX_IPC_MESSAGE_SIZE};
+use leopardwm_ipc::{
+    preferred_pipe_name, EventKind, IpcCommand, IpcEvent, IpcResponse, MAX_IPC_MESSAGE_SIZE,
+};
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::windows::named_pipe::{PipeMode, ServerOptions};
-use tokio::sync::{mpsc, oneshot, Semaphore};
+use tokio::sync::{broadcast, mpsc, oneshot, OwnedSemaphorePermit, Semaphore};
 use tracing::{debug, error, warn};
 
 /// IPC read timeout - clients must send within this period.
 pub(crate) const IPC_READ_TIMEOUT: Duration = Duration::from_secs(5);
 /// IPC responder timeout - daemon must answer within this period.
 pub(crate) const IPC_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Heartbeat interval for stream-mode subscribers. Subscribers receive a
+/// `IpcEvent::Heartbeat` after this much silence so they can detect a
+/// dead daemon pipe by missing keepalives.
+pub(crate) const STREAM_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 /// Poll interval for cooperative timed thread joins.
 const JOIN_WITH_TIMEOUT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
@@ -34,6 +42,8 @@ pub(crate) async fn run_ipc_server(event_tx: mpsc::Sender<DaemonEvent>) {
     let mut is_first_instance = true;
     let pipe_name = preferred_pipe_name();
     // Bound concurrent IPC handlers to avoid local task-exhaustion DoS.
+    // Stream-mode (Subscribe) connections drop their permit on entry so
+    // long-lived subscribers don't starve normal command handlers.
     let connection_limit = Arc::new(Semaphore::new(32));
 
     loop {
@@ -81,49 +91,66 @@ pub(crate) async fn run_ipc_server(event_tx: mpsc::Sender<DaemonEvent>) {
         // Handle this client
         let event_tx = event_tx.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_client(server, event_tx).await {
+            if let Err(e) = handle_client(server, event_tx, permit).await {
                 warn!("Client handler error: {}", e);
             }
-            drop(permit);
         });
     }
+}
+
+/// Serialize an `IpcResponse` to a newline-terminated frame and write it.
+async fn write_response_frame<W>(writer: &mut W, response: &IpcResponse) -> Result<()>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    let mut response_json = match serde_json::to_string(response) {
+        Ok(json) => json + "\n",
+        Err(e) => {
+            warn!("Failed to serialize IPC response: {}", e);
+            "{\"status\":\"error\",\"message\":\"Internal serialization error\"}\n".to_string()
+        }
+    };
+
+    if response_json.len() > MAX_IPC_MESSAGE_SIZE {
+        warn!(
+            "IPC response exceeded {} bytes; returning bounded error response instead",
+            MAX_IPC_MESSAGE_SIZE
+        );
+        response_json = serde_json::to_string(&IpcResponse::error(
+            "IPC response exceeded maximum size; narrow query scope and retry",
+        ))
+        .unwrap_or_else(|_| {
+            "{\"status\":\"error\",\"message\":\"Internal serialization error\"}".to_string()
+        });
+        response_json.push('\n');
+    }
+
+    writer.write_all(response_json.as_bytes()).await?;
+    Ok(())
+}
+
+/// Serialize an `IpcEvent` to a newline-terminated frame and write it.
+async fn write_event_frame<W>(writer: &mut W, event: &IpcEvent) -> Result<()>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    let mut json = serde_json::to_string(event)? + "\n";
+    if json.len() > MAX_IPC_MESSAGE_SIZE {
+        // Oversize events shouldn't happen given the small variant
+        // payloads, but if a future LayoutChanged ever blows the cap,
+        // surface a Lagged-style hint instead of a corrupt frame.
+        json = serde_json::to_string(&IpcEvent::Lagged { skipped: 0 })? + "\n";
+    }
+    writer.write_all(json.as_bytes()).await?;
+    Ok(())
 }
 
 /// Handle a single client connection.
 async fn handle_client(
     pipe: tokio::net::windows::named_pipe::NamedPipeServer,
     event_tx: mpsc::Sender<DaemonEvent>,
+    permit: OwnedSemaphorePermit,
 ) -> Result<()> {
-    async fn write_ipc_response_line<W>(writer: &mut W, response: &IpcResponse) -> Result<()>
-    where
-        W: tokio::io::AsyncWrite + Unpin,
-    {
-        let mut response_json = match serde_json::to_string(response) {
-            Ok(json) => json + "\n",
-            Err(e) => {
-                warn!("Failed to serialize IPC response: {}", e);
-                "{\"status\":\"error\",\"message\":\"Internal serialization error\"}\n".to_string()
-            }
-        };
-
-        if response_json.len() > MAX_IPC_MESSAGE_SIZE {
-            warn!(
-                "IPC response exceeded {} bytes; returning bounded error response instead",
-                MAX_IPC_MESSAGE_SIZE
-            );
-            response_json = serde_json::to_string(&IpcResponse::error(
-                "IPC response exceeded maximum size; narrow query scope and retry",
-            ))
-            .unwrap_or_else(|_| {
-                "{\"status\":\"error\",\"message\":\"Internal serialization error\"}".to_string()
-            });
-            response_json.push('\n');
-        }
-
-        writer.write_all(response_json.as_bytes()).await?;
-        Ok(())
-    }
-
     let (reader, mut writer) = tokio::io::split(pipe);
     let limited_reader = reader.take(MAX_IPC_MESSAGE_SIZE as u64);
     let mut reader = BufReader::new(limited_reader);
@@ -149,7 +176,7 @@ async fn handle_client(
         } else {
             "IPC command must be newline-terminated"
         };
-        write_ipc_response_line(&mut writer, &IpcResponse::error(msg)).await?;
+        write_response_frame(&mut writer, &IpcResponse::error(msg)).await?;
         return Ok(());
     }
 
@@ -161,16 +188,39 @@ async fn handle_client(
         Ok(cmd) => cmd,
         Err(e) => {
             let response = IpcResponse::error(format!("Invalid command: {}", e));
-            write_ipc_response_line(&mut writer, &response).await?;
+            write_response_frame(&mut writer, &response).await?;
             return Ok(());
         }
     };
 
-    // Create a oneshot channel for the response
+    // Subscribe is routed through a dedicated DaemonEvent variant whose
+    // responder carries (ack, snapshot, broadcast::Receiver). The main
+    // daemon loop processes it under the AppState mutex so the receiver
+    // creation + snapshot read happen in one atomic critical section —
+    // no event between handoff and receiver-creation can be lost.
+    if let IpcCommand::Subscribe { events } = cmd {
+        return handle_subscribe(writer, event_tx, events, permit).await;
+    }
+
+    // Everything else: existing oneshot path through the daemon main loop.
+    handle_command_oneshot(writer, event_tx, cmd, permit).await
+}
+
+/// Existing single-command request/response path.
+async fn handle_command_oneshot<W>(
+    mut writer: W,
+    event_tx: mpsc::Sender<DaemonEvent>,
+    cmd: IpcCommand,
+    permit: OwnedSemaphorePermit,
+) -> Result<()>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    let _permit = permit; // released when this task returns
+
     let (resp_tx, resp_rx) = oneshot::channel();
     let response_cmd = cmd.clone();
 
-    // Send the command to the event loop
     if event_tx
         .send(DaemonEvent::IpcCommand {
             cmd,
@@ -180,21 +230,140 @@ async fn handle_client(
         .is_err()
     {
         let response = IpcResponse::error("Daemon is shutting down");
-        write_ipc_response_line(&mut writer, &response).await?;
+        write_response_frame(&mut writer, &response).await?;
         return Ok(());
     }
 
-    // Wait for the response (bounded so clients don't hang forever).
     let response = match tokio::time::timeout(IPC_RESPONSE_TIMEOUT, resp_rx).await {
         Ok(Ok(resp)) => resp,
         Ok(Err(_)) => response_for_ipc_wait_failure(&response_cmd, false),
         Err(_) => response_for_ipc_wait_failure(&response_cmd, true),
     };
 
-    // Send response back to client.
-    write_ipc_response_line(&mut writer, &response).await?;
-
+    write_response_frame(&mut writer, &response).await?;
     Ok(())
+}
+
+/// Stream-mode entry: route Subscribe through a dedicated DaemonEvent
+/// variant so the daemon main loop can subscribe + snapshot atomically
+/// under the AppState mutex, then drive an event loop that writes
+/// `IpcEvent` frames until the pipe closes or the broadcaster is dropped.
+async fn handle_subscribe<W>(
+    mut writer: W,
+    event_tx: mpsc::Sender<DaemonEvent>,
+    requested_raw: BTreeSet<EventKind>,
+    permit: OwnedSemaphorePermit,
+) -> Result<()>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    // Empty-set means "all kinds" so users can do `Subscribe { events: {} }`
+    // as a "give me everything" shortcut.
+    let requested = if requested_raw.is_empty() {
+        EventKind::all()
+    } else {
+        requested_raw
+    };
+
+    // Send Subscribe to the daemon main loop, which builds the bundle
+    // (ack + snapshot + broadcast::Receiver) under the AppState mutex.
+    let (resp_tx, resp_rx) = oneshot::channel();
+    if event_tx
+        .send(DaemonEvent::IpcSubscribe {
+            events: requested.clone(),
+            responder: resp_tx,
+        })
+        .await
+        .is_err()
+    {
+        let response = IpcResponse::error("Daemon is shutting down");
+        let _ = write_response_frame(&mut writer, &response).await;
+        return Ok(());
+    }
+
+    let startup = match tokio::time::timeout(IPC_RESPONSE_TIMEOUT, resp_rx).await {
+        Ok(Ok(s)) => s,
+        Ok(Err(_)) => {
+            let _ = write_response_frame(
+                &mut writer,
+                &IpcResponse::error("Failed to get subscribe response from daemon"),
+            )
+            .await;
+            return Ok(());
+        }
+        Err(_) => {
+            let _ = write_response_frame(
+                &mut writer,
+                &IpcResponse::error("Timed out waiting for subscribe response"),
+            )
+            .await;
+            return Ok(());
+        }
+    };
+
+    let SubscribeStartup {
+        ack,
+        snapshot,
+        mut receiver,
+    } = startup;
+
+    // Stream-mode connections release the connection-limiter permit
+    // before entering the long-lived loop. Otherwise 32 long-lived
+    // subscribers would starve all other IPC commands.
+    drop(permit);
+
+    // Write ack
+    if write_response_frame(&mut writer, &ack).await.is_err() {
+        return Ok(());
+    }
+
+    // Write snapshot frames
+    for ev in &snapshot {
+        if write_event_frame(&mut writer, ev).await.is_err() {
+            return Ok(());
+        }
+    }
+
+    // Stream loop: events + heartbeat. The heartbeat's uptime field is
+    // per-subscriber connection time (since we entered stream mode),
+    // NOT the daemon process uptime — that's intentional, callers can
+    // detect "did we just reconnect" vs "are we still on the original
+    // connection". Computing daemon-wide uptime would require an extra
+    // mutex acquisition per heartbeat for negligible signal.
+    let stream_started = std::time::Instant::now();
+    let mut heartbeat = tokio::time::interval(STREAM_HEARTBEAT_INTERVAL);
+    // Skip the immediate first tick so we don't send a heartbeat right
+    // after the snapshot.
+    heartbeat.tick().await;
+
+    loop {
+        tokio::select! {
+            recv = receiver.recv() => match recv {
+                Ok(ev) => {
+                    if !requested.contains(&ev.kind()) {
+                        continue;
+                    }
+                    if write_event_frame(&mut writer, &ev).await.is_err() {
+                        return Ok(());
+                    }
+                }
+                Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                    let lagged = IpcEvent::Lagged { skipped };
+                    if write_event_frame(&mut writer, &lagged).await.is_err() {
+                        return Ok(());
+                    }
+                }
+                Err(broadcast::error::RecvError::Closed) => return Ok(()),
+            },
+            _ = heartbeat.tick() => {
+                let uptime = stream_started.elapsed().as_secs();
+                let hb = IpcEvent::Heartbeat { uptime_seconds: uptime };
+                if write_event_frame(&mut writer, &hb).await.is_err() {
+                    return Ok(());
+                }
+            }
+        }
+    }
 }
 
 /// Spawn a named forwarding thread that receives events from a std::sync::mpsc channel
