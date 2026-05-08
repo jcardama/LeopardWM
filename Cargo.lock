@@ -1165,6 +1165,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "leopardwm-watchdog"
+version = "0.1.12"
+dependencies = [
+ "anyhow",
+ "leopardwm-platform-win32",
+ "tracing",
+ "tracing-subscriber",
+ "windows 0.62.2",
+ "winreg",
+]
+
+[[package]]
 name = "libappindicator"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

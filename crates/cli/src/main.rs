@@ -148,6 +148,10 @@ enum Commands {
         /// Start daemon in safe mode (no hotkeys, no cloaking)
         #[arg(long)]
         safe_mode: bool,
+        /// Spawn the daemon directly without the watchdog supervisor (useful
+        /// for development/debugging — disables crash recovery + auto-restart).
+        #[arg(long)]
+        no_watchdog: bool,
     },
     /// Stop the daemon
     Stop,
@@ -398,6 +402,14 @@ fn to_ipc_command(cmd: &Commands) -> IpcCommand {
     }
 }
 
+fn watchdog_binary_name() -> &'static str {
+    if cfg!(windows) {
+        "leopardwm-watchdog.exe"
+    } else {
+        "leopardwm-watchdog"
+    }
+}
+
 fn daemon_binary_name() -> &'static str {
     if cfg!(windows) {
         "leopardwm.exe"
@@ -479,6 +491,83 @@ fn spawn_daemon(safe_mode: bool) -> Result<u32> {
         println!("Started leopardwm daemon in SAFE MODE (PID {}).", child.id());
     } else {
         println!("Started leopardwm daemon (PID {}).", child.id());
+    }
+    println!(
+        "Logs: {} / {}",
+        stdout_path.display(),
+        stderr_path.display()
+    );
+    Ok(child.id())
+}
+
+fn find_watchdog_binary() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let exe_dir = exe.parent()?;
+    let candidate = exe_dir.join(watchdog_binary_name());
+    if candidate.exists() {
+        return Some(candidate);
+    }
+
+    let cwd = std::env::current_dir().ok()?;
+    let debug = cwd
+        .join("target")
+        .join("debug")
+        .join(watchdog_binary_name());
+    if debug.exists() {
+        return Some(debug);
+    }
+    let release = cwd
+        .join("target")
+        .join("release")
+        .join(watchdog_binary_name());
+    if release.exists() {
+        return Some(release);
+    }
+    None
+}
+
+fn spawn_watchdog(safe_mode: bool) -> Result<u32> {
+    let Some(watchdog_path) = find_watchdog_binary() else {
+        // Watchdog not bundled (e.g. dev build that didn't `cargo build` it).
+        // Fall back to direct daemon spawn rather than failing — preserves
+        // backwards-compatible behavior for users who build a partial workspace.
+        eprintln!(
+            "leopardwm-watchdog binary not found alongside this CLI; \
+             falling back to direct daemon spawn (no crash recovery)."
+        );
+        return spawn_daemon(safe_mode);
+    };
+
+    // Make sure the daemon binary is buildable / present too — the watchdog
+    // looks for it next to itself, so resolve it via the same search the
+    // direct-spawn path uses (covers the "ran from cargo target/" case).
+    ensure_daemon_binary()?;
+
+    let log_dir = std::env::temp_dir();
+    let stdout_path = log_dir.join("leopardwm-watchdog.log");
+    let stderr_path = log_dir.join("leopardwm-watchdog.err.log");
+
+    let stdout = File::create(&stdout_path).context("Failed to create watchdog stdout log")?;
+    let stderr = File::create(&stderr_path).context("Failed to create watchdog stderr log")?;
+
+    let mut cmd = Command::new(watchdog_path);
+    cmd.stdin(Stdio::null()).stdout(stdout).stderr(stderr);
+    if safe_mode {
+        cmd.arg("--safe-mode");
+    }
+    apply_detach_flags(&mut cmd);
+
+    let child = cmd.spawn().context("Failed to start leopardwm-watchdog")?;
+    if safe_mode {
+        println!(
+            "Started leopardwm-watchdog supervising daemon in SAFE MODE (PID {}).",
+            child.id()
+        );
+    } else {
+        println!(
+            "Started leopardwm-watchdog supervising daemon (PID {}).",
+            child.id()
+        );
     }
     println!(
         "Logs: {} / {}",
@@ -734,7 +823,12 @@ async fn open_pipe_with_retry(
     }
 }
 
-async fn handle_run(no_apply: bool, wait_ms: u64, safe_mode: bool) -> Result<()> {
+async fn handle_run(
+    no_apply: bool,
+    wait_ms: u64,
+    safe_mode: bool,
+    no_watchdog: bool,
+) -> Result<()> {
     let already_running = probe_daemon_running()?;
 
     if already_running && safe_mode {
@@ -742,7 +836,11 @@ async fn handle_run(no_apply: bool, wait_ms: u64, safe_mode: bool) -> Result<()>
     }
 
     if !already_running {
-        spawn_daemon(safe_mode)?;
+        if no_watchdog {
+            spawn_daemon(safe_mode)?;
+        } else {
+            spawn_watchdog(safe_mode)?;
+        }
     } else {
         println!("Daemon already running.");
     }
@@ -1750,7 +1848,8 @@ async fn main() -> Result<()> {
             no_apply,
             wait_ms,
             safe_mode,
-        } => return handle_run(no_apply, wait_ms, safe_mode).await,
+            no_watchdog,
+        } => return handle_run(no_apply, wait_ms, safe_mode, no_watchdog).await,
         Commands::Stop => return handle_stop().await,
         Commands::PanicRevert => return handle_panic_revert().await,
         Commands::EmergencyUncloak => return handle_emergency_uncloak(),

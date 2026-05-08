@@ -1,0 +1,22 @@
+[package]
+name = "leopardwm-watchdog"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Process supervisor for the LeopardWM daemon — restarts on crash, runs panic-revert, surfaces a recovery toast"
+
+[[bin]]
+name = "leopardwm-watchdog"
+path = "src/main.rs"
+
+[dependencies]
+leopardwm-platform-win32 = { path = "../platform_win32" }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+# Watchdog also needs WinRT toast bindings + XML DOM for the recovery
+# notification. These are additive over the workspace's Win32_* features.
+windows = { workspace = true, features = ["UI_Notifications", "Data_Xml_Dom"] }
+winreg = "0.56"

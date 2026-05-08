@@ -89,6 +89,14 @@
                                 Source='$(var.CargoTargetBinDir)\lwm.exe'
                                 KeyPath='yes'/>
                         </Component>
+                        <Component Id='WatchdogExe' Guid='*'>
+                            <File
+                                Id='exeWatchdog'
+                                Name='leopardwm-watchdog.exe'
+                                DiskId='1'
+                                Source='$(var.CargoTargetBinDir)\leopardwm-watchdog.exe'
+                                KeyPath='yes'/>
+                        </Component>
                     </Directory>
                 </Directory>
             </Directory>
@@ -107,6 +115,7 @@
             <ComponentRef Id='DaemonExe'/>
             <ComponentRef Id='CliExe'/>
             <ComponentRef Id='LwmExe'/>
+            <ComponentRef Id='WatchdogExe'/>
 
             <Feature
                 Id='Environment'
