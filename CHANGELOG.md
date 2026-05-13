@@ -4,6 +4,49 @@ All notable changes to LeopardWM will be documented in this file.
 
 ## Unreleased
 
+## 0.1.14
+
+### Improvements
+
+- Add **tabbed columns** — toggle a column between vertical stacking and a clickable tab strip with `Ctrl+Alt+T`. Inspired by niri's headline Linux feature; the *combination* of tabs and a scrolling viewport is genuinely 1-of-1 on Windows today (komorebi's `stackbar` is a static container, GlazeWM has nothing).
+
+  **Using tabbed columns**
+  - `Ctrl+Alt+T` on the focused column toggles between vertical-stack mode (the default) and tabbed mode, where only the active tab fills the column rect and the rest sit in a strip above
+  - `Ctrl+Alt+J` / `Ctrl+Alt+K` cycle the active tab — the existing intra-column focus keys do double duty, so there are no new bindings to learn
+  - Click any tab in the strip to activate it; the click is a real focus change, so the border, foreground state, and IPC events all follow
+  - Tab titles update live as windows rename themselves (Chrome navigations, Slack channel switches, terminal `cd`s)
+  - Tab icons refresh every couple of seconds so notification-badge swaps in Discord, Slack, etc. propagate without manual interaction
+  - The active-tab highlight slides between tabs over a 150ms ease-out animation when you cycle
+  - A tabbed column with one window auto-reverts to vertical mode (a 1-tab tabbed column is visually identical anyway); minimizing the active tab falls back to the next visible one so the column always renders something
+
+  **Drag-and-drop (Chrome semantics)**
+  - Drop a window anywhere on a tabbed column — body or strip — and it appends at the rightmost position and becomes the active tab ("the tab I just added goes to the right and that's what I want to see")
+  - The drag-preview ghost spans the entire column rect when hovering a tabbed target rather than a per-slot rectangle, so the drop zone reads as "this whole column" instead of misleading vertical-stack semantics
+  - The strip stays pinned through the entire drag — including cross-column drags that briefly focus a Vertical column on the way (it falls back to rendering the workspace's first tabbed column so it never flickers in and out)
+  - The dropped window lands at its tab position without a smoothed slide
+
+  **Appearance and configuration**
+  - Strip height, background colour, active/inactive text colours, active-tab background, and opacity are all configurable from `[appearance]` (`tab_strip_height`, `tab_strip_bg`, `tab_strip_active_bg`, `tab_strip_active_text`, `tab_strip_inactive_text`, `tab_strip_opacity`) and surfaced in the WebView Settings UI alongside the border controls, with a divider rule separating the strip section from the border-position field
+  - The strip's corner radius matches Win11's window radius automatically and tab buttons round to a slightly smaller inner radius for outer > inner parity; the gap between strip and window content reuses the workspace's inter-element `gap` value so the tabbed area visually rhymes with adjacent columns
+
+  **Persistence and lifecycle**
+  - Tabbed mode (and which tab is active) survives daemon restart via the existing `StateSnapshot` JSON
+  - Existing v0.1.13 configs round-trip cleanly with `mode = vertical` defaults — no migration needed
+  - The strip hides during fullscreen, pause, and on workspaces with no tabbed column, and repositions per animation frame so it tracks the column rect smoothly through workspace switches and monitor changes
+
+  **For bar integrators and scripters**
+  - New IPC commands: `ToggleTabbed` (no payload) and `SetActiveTab { column, tab }` — the latter is what the strip's click handler synthesizes internally, with `(monitor, workspace_idx, column_idx)` captured at draw time so click dispatch doesn't race with focus changes
+  - New CLI subcommand: `lwm toggle-tabbed`
+  - `lwm subscribe --events layout` now emits an additional `ColumnSummary.mode` field on every `LayoutChanged` event — either `{"type":"vertical"}` or `{"type":"tabbed","active_idx":N}`. `IPC_PROTOCOL_VERSION` is bumped from 1 to 2; v1 clients (no `mode` key) still parse cleanly via `serde(default)`
+
+  **Implementation notes (for the curious)**
+  - The strip is a Win32 `WS_EX_LAYERED` window with GDI text rendering (`Segoe UI`, DPI-scaled, ellipsis on overflow, automatic font-link fallback for CJK/emoji via Microsoft YaHei / Yu Gothic / Malgun Gothic / Segoe UI Emoji)
+  - Anti-aliased rounded fills via per-pixel alpha compositing (`UpdateLayeredWindow` with `AC_SRC_ALPHA`, 4×4 supersampled coverage); no GDI+ dependency
+  - Click hit-testing uses `WM_LBUTTONDOWN` with a per-pixel alpha-byte fixup so layered-window hit-testing works regardless of blend mode; `WM_MOUSEACTIVATE → MA_NOACTIVATE` keeps the strip from stealing focus when clicked; `LoadCursorW(IDC_ARROW)` ensures the standard pointer instead of the daemon's busy cursor
+  - Icon retrieval falls through `WM_GETICON` (`ICON_SMALL2` → `ICON_SMALL` → `ICON_BIG`) with `GCLP_HICONSM` / `GCLP_HICON` class fallbacks; title-change notifications come from an `EVENT_OBJECT_NAMECHANGE` (`0x800C`) WinEvent hook
+
+  **Hotkey divergence from the original spec:** the planning roadmap proposed `Ctrl+Alt+T` + `Ctrl+Alt+[` / `Ctrl+Alt+]` (cycle) + `Ctrl+Alt+Shift+T` (untab); the brackets are already `move_window_left/right` and the `J/K` cycling makes the others redundant, so v0.1.14 ships with one new binding total
+
 ## 0.1.13
 
 ### Improvements

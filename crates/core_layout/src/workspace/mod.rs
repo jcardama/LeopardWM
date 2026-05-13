@@ -122,6 +122,14 @@ pub struct Workspace {
     /// State for maximized column toggle (fills viewport width).
     #[serde(skip)]
     pub(crate) maximized_column: Option<MaximizedColumnState>,
+    /// Pixels reserved at the top of each Tabbed column for the tab strip
+    /// overlay. The daemon sets this from `appearance.tab_strip_height` scaled
+    /// by the focused monitor's DPI so the strip has room to render above
+    /// the active tab. `0` (default, used in tests/headless) means no
+    /// reservation — strip would overlap the active tab's top edge or sit
+    /// off-screen above the work area.
+    #[serde(skip)]
+    pub(crate) tab_strip_reserve_px: i32,
 }
 
 /// State saved when a column is maximized to fill the viewport width.
@@ -158,6 +166,7 @@ impl Default for Workspace {
             reduce_motion: false,
             center_past_edges: false,
             maximized_column: None,
+            tab_strip_reserve_px: 0,
         }
     }
 }
@@ -396,6 +405,17 @@ impl Workspace {
     /// Value is clamped to >= MIN_COLUMN_WIDTH (100px).
     pub fn set_default_column_width(&mut self, width: i32) {
         self.default_column_width = width.max(MIN_COLUMN_WIDTH);
+    }
+
+    /// Get the pixels reserved at the top of Tabbed columns for the tab strip overlay.
+    pub fn tab_strip_reserve_px(&self) -> i32 {
+        self.tab_strip_reserve_px
+    }
+
+    /// Set the pixels reserved at the top of Tabbed columns for the tab strip overlay.
+    /// Value is clamped to >= 0. Vertical columns ignore this value.
+    pub fn set_tab_strip_reserve_px(&mut self, px: i32) {
+        self.tab_strip_reserve_px = px.max(0);
     }
 
     /// Get the centering mode for focus changes.

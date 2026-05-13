@@ -632,6 +632,40 @@ async fn main() -> Result<()> {
     // Collect forwarding thread handles for graceful shutdown
     let mut thread_handles: Vec<std::thread::JoinHandle<()>> = Vec::new();
 
+    // Tab strip overlay click channel. The overlay's WndProc posts a
+    // `TabClickEvent` on `WM_LBUTTONDOWN`; the forwarder thread below
+    // resolves the focused column under a brief AppState lock and
+    // dispatches `IpcCommand::SetActiveTab` through the main event queue.
+    let (tab_click_tx, tab_click_rx) =
+        std::sync::mpsc::channel::<leopardwm_platform_win32::tab_strip::TabClickEvent>();
+    {
+        let mut state_guard = state.lock().await;
+        state_guard.install_tab_strip(tab_click_tx);
+    }
+    {
+        let event_tx_for_clicks = event_tx.clone();
+        match std::thread::Builder::new()
+            .name("tab-click-forwarder".into())
+            .spawn(move || {
+                while let Ok(click) = tab_click_rx.recv() {
+                    if event_tx_for_clicks
+                        .blocking_send(DaemonEvent::TabClicked {
+                            monitor: click.monitor,
+                            workspace_idx: click.workspace_idx,
+                            column_idx: click.column_idx,
+                            tab_idx: click.tab_idx,
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            }) {
+            Ok(handle) => thread_handles.push(handle),
+            Err(e) => warn!("Failed to spawn tab-click forwarder thread: {}", e),
+        }
+    }
+
     // Install WinEvent hooks for window lifecycle tracking (if enabled in config)
     let _hook_handle = if config.behavior.track_focus_changes {
         match install_event_hooks() {
@@ -850,6 +884,26 @@ async fn main() -> Result<()> {
         update_check::spawn_update_checker(cancel, move |tag| {
             // Best-effort send — if the receiver is gone we're already shutting down.
             let _ = tx.blocking_send(DaemonEvent::UpdateAvailable(tag));
+        });
+    }
+
+    // Tab-strip icon poll: Windows has no MSAA event for icon-only
+    // changes (e.g., Discord/Slack swapping in a notification-badge
+    // icon without touching the window title), so a low-frequency tick
+    // is the pragmatic way to keep background tab icons fresh. 2s is
+    // slow enough that the periodic GDI work is negligible and fast
+    // enough that badge updates feel responsive.
+    {
+        let tx = event_tx.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(Duration::from_millis(2000));
+            ticker.tick().await;
+            loop {
+                ticker.tick().await;
+                if tx.send(DaemonEvent::TabStripIconPoll).await.is_err() {
+                    break;
+                }
+            }
         });
     }
 
@@ -1669,6 +1723,56 @@ async fn main() -> Result<()> {
             DaemonEvent::UpdateAvailable(tag) => {
                 if let Some(ref mgr) = tray_manager {
                     mgr.set_available_update(Some(tag));
+                }
+            }
+            DaemonEvent::TabStripIconPoll => {
+                // Single lock: check-and-refresh atomically so the state
+                // we gated on (overlay present, workspace not fullscreen,
+                // a Tabbed column exists, not paused) can't shift between
+                // the check and the refresh call.
+                let s = state.lock().await;
+                let needs_refresh = s.tab_strip_overlay.is_some()
+                    && !s.paused
+                    && s.focused_workspace().is_some_and(|ws| {
+                        !ws.is_fullscreen()
+                            && (0..ws.column_count())
+                                .any(|i| ws.column(i).is_some_and(|c| c.is_tabbed()))
+                    });
+                if needs_refresh {
+                    s.update_tab_strip();
+                }
+            }
+            DaemonEvent::TabClicked {
+                monitor,
+                workspace_idx,
+                column_idx,
+                tab_idx,
+            } => {
+                // Trust the strip's captured identity over current
+                // focus — focus may have changed between click and
+                // dispatch, and we want the click to apply to the column
+                // the user saw, not whatever is focused now.
+                let mut s = state.lock().await;
+                // Make sure the focused workspace matches what the strip
+                // was showing; if not, switch focus to the clicked column
+                // before activating its tab so the post-set sync correctly
+                // raises the new tab's window.
+                let needs_focus_switch = s.focused_monitor != monitor
+                    || s.active_workspace_idx(monitor) != workspace_idx
+                    || s.focused_workspace()
+                        .is_none_or(|ws| ws.focused_column_index() != column_idx);
+                if needs_focus_switch {
+                    s.focused_monitor = monitor;
+                    if let Some(ws) = s.focused_workspace_mut() {
+                        let _ = ws.set_focus(column_idx, 0);
+                    }
+                }
+                let resp = s.handle_command(IpcCommand::SetActiveTab {
+                    column: column_idx,
+                    tab: tab_idx,
+                });
+                if let IpcResponse::Error { message } = resp {
+                    warn!("SetActiveTab from tab click failed: {}", message);
                 }
             }
             DaemonEvent::Settings(settings_event) => {

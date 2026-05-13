@@ -14,6 +14,7 @@ pub mod gestures;
 pub mod hotkeys;
 pub mod mouse_hook;
 pub mod overlay;
+pub mod tab_strip;
 
 mod enumeration;
 mod event_hooks;
@@ -34,13 +35,13 @@ pub use enumeration::{
 pub use event_hooks::{install_event_hooks, EventHookHandle, WindowEvent};
 pub use placement::{
     apply_placements, clear_inset_cache, dwm_uncloak_all, dwm_uncloak_window,
-    get_window_invisible_insets, is_placement_cloaked, ApplyPlacementsResult, HeightViolation,
-    PlacementCache, WidthViolation,
+    get_window_invisible_insets, is_placement_cloaked, set_dwm_transitions_disabled,
+    ApplyPlacementsResult, HeightViolation, PlacementCache, WidthViolation,
 };
 pub use types::{MonitorId, MonitorInfo, PlatformConfig, Win32Error, WindowInfo};
 pub use utils::{
-    are_animations_enabled, cascade_windows, close_window, get_cursor_pos, get_window_corner_radius,
-    is_on_battery_or_power_saver,
+    are_animations_enabled, cascade_windows, close_window, get_cursor_pos,
+    get_window_corner_radius, get_window_icon, is_on_battery_or_power_saver,
     remove_maximizebox, restore_maximizebox, restore_maximizebox_all,
     restore_maximizebox_panic_recovery, scale_px,
     get_system_highlight_color_bgr, get_window_chrome_rect, get_window_visible_rect,

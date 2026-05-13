@@ -28,6 +28,16 @@ impl AppState {
         if self.paused {
             return;
         }
+
+        // Re-pin the tab strip to the top of the z-order on every drag
+        // mouse-move. The dragged window is being raised to `HWND_TOP`
+        // by the OS continuously during a drag, which pushes our strip
+        // behind it between repaints. `raise()` is a cheap z-order-only
+        // SetWindowPos — no re-render — so calling it per mouse-move
+        // doesn't add visible overhead.
+        if let Some(ref strip) = self.tab_strip_overlay {
+            strip.raise();
+        }
         let Some(win_info) = self.lookup_window_info(hwnd) else {
             return;
         };
@@ -161,15 +171,32 @@ impl AppState {
                 return;
             };
             let column_bounds = column_bounds_from_placements(workspace, viewport);
-            let target_col = match compute_target_column_index(&column_bounds, cursor_x) {
-                Some(idx) => idx,
-                None => return,
+
+            // If the cursor is over a visible tab strip, route the drop
+            // to that strip's owning column. The strip overhangs the
+            // column rect (sits in the reserved gap above the active
+            // tab), so a cursor over the strip wouldn't otherwise hit
+            // any column via `compute_target_column_index`. Tab-index
+            // within the strip is intentionally ignored — see the slot
+            // computation below for the "always append" rationale.
+            let strip_hit =
+                leopardwm_platform_win32::tab_strip::hit_test_screen(cursor_x, cursor_y);
+            let target_col = match strip_hit {
+                Some(hit) => hit.column_idx,
+                None => match compute_target_column_index(&column_bounds, cursor_x) {
+                    Some(idx) => idx,
+                    None => return,
+                },
             };
 
             // Determine if the dragged window is in the target column.
             let is_same_column = workspace
                 .column(target_col)
                 .is_some_and(|c| c.contains(hwnd));
+
+            let target_is_tabbed = workspace
+                .column(target_col)
+                .is_some_and(|c| c.is_tabbed());
 
             let n_existing = workspace
                 .column(target_col)
@@ -190,18 +217,56 @@ impl AppState {
                 None => return,
             };
 
-            let window_slot = compute_window_slot(&col_rect, n_total, cursor_y);
+            // Slot selection: Tabbed targets always append to the end
+            // (Chrome new-tab semantics — "the tab I just added goes to
+            // the right"). Strip-hit position is intentionally ignored
+            // for Tabbed targets even when the user happens to drop on
+            // a specific tab; the cursor's column-internal position has
+            // no useful meaning in a Tabbed column where every tab
+            // occupies the same screen rect, and predictability beats
+            // cleverness here. Vertical targets still pick the slot
+            // from the cursor's Y.
+            let window_slot = if target_is_tabbed {
+                n_total.saturating_sub(1)
+            } else {
+                compute_window_slot(&col_rect, n_total, cursor_y)
+            };
+            let _ = strip_hit;
 
             let drop_target = DropTarget {
                 monitor: target_monitor_id,
                 insert_index: target_col,
                 window_slot: Some(window_slot),
             };
+            let drop_target_unchanged = self
+                .drag_state
+                .as_ref()
+                .is_some_and(|d| d.last_drop_target == Some(drop_target));
             if let Some(ref mut drag) = self.drag_state {
-                if drag.last_drop_target == Some(drop_target) {
-                    return;
-                }
                 drag.last_drop_target = Some(drop_target);
+            }
+            if drop_target_unchanged {
+                // Layout is already correct from the previous tick — skip
+                // apply_layout. The `clear_drag_placeholder()` call at the
+                // top of this function did, however, remove the placeholder
+                // we previously inserted; `finalize_drag_merge` relies on
+                // finding the placeholder on drop, so re-insert it at the
+                // same position for cross-column drags. Same-column drags
+                // don't use a placeholder, so nothing to do there.
+                if !is_same_column {
+                    if let Some(ws) = self
+                        .workspaces
+                        .get_mut(&target_monitor_id)
+                        .and_then(|v| v.get_mut(ws_idx))
+                    {
+                        let _ = ws.insert_window_in_column_at(
+                            DRAG_PLACEHOLDER_HWND,
+                            target_col,
+                            window_slot,
+                        );
+                    }
+                }
+                return;
             }
 
             if is_same_column {
@@ -278,7 +343,11 @@ impl AppState {
                 };
 
                 let tgt_idx = self.active_workspace_idx(target_monitor_id);
-                if let Some(ws) = self.workspaces.get_mut(&target_monitor_id).and_then(|v| v.get_mut(tgt_idx)) {
+                let target_is_tabbed_final = if let Some(ws) =
+                    self.workspaces.get_mut(&target_monitor_id).and_then(|v| v.get_mut(tgt_idx))
+                {
+                    let it = adj_target_col < ws.column_count()
+                        && ws.column(adj_target_col).is_some_and(|c| c.is_tabbed());
                     if adj_target_col < ws.column_count() {
                         let _ = ws.insert_window_in_column_at(
                             DRAG_PLACEHOLDER_HWND,
@@ -288,8 +357,24 @@ impl AppState {
                     } else {
                         let _ = ws.insert_window(DRAG_PLACEHOLDER_HWND, None);
                     }
+                    it
+                } else {
+                    false
+                };
+                // Skip the live-preview transition for Tabbed targets.
+                // Tabbed columns hide non-active tabs off-screen, so the
+                // placeholder doesn't introduce a visible "gap" to
+                // animate into — running the transition just shifts
+                // every column laterally for ~150ms with no informational
+                // payoff, which reads as the strip-and-column "sliding
+                // weirdly" the user reported. Vertical targets still
+                // animate so the user sees where the dragged window
+                // will land.
+                if !target_is_tabbed_final {
+                    self.start_layout_transition(snapshot);
+                } else {
+                    let _ = snapshot;
                 }
-                self.start_layout_transition(snapshot);
                 if let Err(e) = self.apply_layout() {
                     warn!("Failed to apply layout during live drag preview: {}", e);
                 }
@@ -312,37 +397,52 @@ impl AppState {
                 if let Some(ghost_col_rect) =
                     compute_column_rect(workspace, viewport, ghost_col)
                 {
-                    // Count only visible (non-minimized) windows and convert
-                    // the raw slot index to a visible-window index so the ghost
-                    // position is correct when minimized windows precede it.
-                    let (ghost_n, visible_slot) = workspace
+                    let ghost_col_is_tabbed = workspace
                         .column(ghost_col)
-                        .map(|c| {
-                            let mut vis_count = 0usize;
-                            let mut vis_slot = 0usize;
-                            for (i, w) in c.windows().iter().enumerate() {
-                                if !workspace.is_minimized(*w) {
-                                    if i < ghost_slot {
-                                        vis_slot += 1;
+                        .is_some_and(|c| c.is_tabbed());
+                    let ghost = if ghost_col_is_tabbed {
+                        // Tabbed targets drop-as-tab (Chrome semantics —
+                        // always append rightmost), so the ghost should
+                        // communicate "this whole column is the target,"
+                        // not "this specific Y-slot." A slot-sized ghost
+                        // reads as vertical-stack semantics and misleads
+                        // the user about where the window will actually
+                        // land.
+                        ghost_col_rect
+                    } else {
+                        // Count only visible (non-minimized) windows and
+                        // convert the raw slot index to a visible-window
+                        // index so the ghost position is correct when
+                        // minimized windows precede it.
+                        let (ghost_n, visible_slot) = workspace
+                            .column(ghost_col)
+                            .map(|c| {
+                                let mut vis_count = 0usize;
+                                let mut vis_slot = 0usize;
+                                for (i, w) in c.windows().iter().enumerate() {
+                                    if !workspace.is_minimized(*w) {
+                                        if i < ghost_slot {
+                                            vis_slot += 1;
+                                        }
+                                        vis_count += 1;
                                     }
-                                    vis_count += 1;
                                 }
-                            }
-                            (vis_count, vis_slot)
-                        })
-                        .unwrap_or((1, 0));
-                    let gap = workspace.gap();
-                    let total_gaps = (ghost_n as i32 - 1) * gap;
-                    let usable_height = ghost_col_rect.height - total_gaps;
-                    let slot_height = usable_height / ghost_n as i32;
-                    let slot_y =
-                        ghost_col_rect.y + visible_slot as i32 * (slot_height + gap);
-                    let ghost = Rect::new(
-                        ghost_col_rect.x,
-                        slot_y,
-                        ghost_col_rect.width,
-                        slot_height,
-                    );
+                                (vis_count, vis_slot)
+                            })
+                            .unwrap_or((1, 0));
+                        let gap = workspace.gap();
+                        let total_gaps = (ghost_n as i32 - 1) * gap;
+                        let usable_height = ghost_col_rect.height - total_gaps;
+                        let slot_height = usable_height / ghost_n as i32;
+                        let slot_y =
+                            ghost_col_rect.y + visible_slot as i32 * (slot_height + gap);
+                        Rect::new(
+                            ghost_col_rect.x,
+                            slot_y,
+                            ghost_col_rect.width,
+                            slot_height,
+                        )
+                    };
                     self.pending_drag_hint = Some(DragHintAction::ShowGhost { rect: ghost });
                 }
             }
@@ -383,27 +483,35 @@ impl AppState {
                     win_rect.y + win_rect.height / 2,
                 )
             });
-            let col_idx = match compute_target_column_index(&column_bounds, cx) {
-                Some(idx) => idx,
-                None => {
-                    self.snap_back_tiled(source_monitor, drag.source_workspace_idx);
-                    return;
-                }
-            };
-            let is_same_col = workspace
-                .column(col_idx)
-                .is_some_and(|c| c.contains(hwnd));
-            let n_existing = workspace
-                .column(col_idx)
-                .map(|c| c.len())
-                .unwrap_or(0);
-            let n_total = if is_same_col { n_existing } else { n_existing + 1 };
-            let col_rect = compute_column_rect(workspace, target_viewport, col_idx);
-            let slot = match col_rect {
-                Some(ref r) if n_total > 0 => compute_window_slot(r, n_total, cy),
-                _ => 0,
-            };
-            (col_idx, slot)
+
+            // If the drop lands on a visible tab strip, route to that
+            // tab's slot in the strip's owning column — overrides the
+            // column-based hit test below.
+            if let Some(hit) = leopardwm_platform_win32::tab_strip::hit_test_screen(cx, cy) {
+                (hit.column_idx, hit.tab_idx)
+            } else {
+                let col_idx = match compute_target_column_index(&column_bounds, cx) {
+                    Some(idx) => idx,
+                    None => {
+                        self.snap_back_tiled(source_monitor, drag.source_workspace_idx);
+                        return;
+                    }
+                };
+                let is_same_col = workspace
+                    .column(col_idx)
+                    .is_some_and(|c| c.contains(hwnd));
+                let n_existing = workspace
+                    .column(col_idx)
+                    .map(|c| c.len())
+                    .unwrap_or(0);
+                let n_total = if is_same_col { n_existing } else { n_existing + 1 };
+                let col_rect = compute_column_rect(workspace, target_viewport, col_idx);
+                let slot = match col_rect {
+                    Some(ref r) if n_total > 0 => compute_window_slot(r, n_total, cy),
+                    _ => 0,
+                };
+                (col_idx, slot)
+            }
         };
 
         // Check if window was already removed from source during live drag preview.
@@ -477,15 +585,40 @@ impl AppState {
         if let Some(workspace) = self.workspaces.get_mut(&target_monitor).and_then(|v| v.get_mut(tgt_mut_idx)) {
             if workspace.column_count() == 0 {
                 let _ = workspace.insert_window(hwnd, None);
-            } else if let Err(e) =
-                workspace.insert_window_in_column_at(hwnd, effective_target_col, window_slot)
-            {
-                warn!(
-                    "Failed to merge window {} into column {} at slot {}: {}",
-                    hwnd, effective_target_col, window_slot, e
-                );
-                let _ = workspace.insert_window(hwnd, None);
+            } else {
+                // Chrome semantics: drops into a Tabbed column always
+                // append at the rightmost position, even when the drop
+                // lands on a specific tab in the strip. Override the
+                // cursor-derived slot here so the strip-hit branch above
+                // (which returns `hit.tab_idx`) doesn't place new tabs
+                // at the leftmost slot.
+                let target_is_tabbed = workspace
+                    .column(effective_target_col)
+                    .is_some_and(|c| c.is_tabbed());
+                let effective_slot = if target_is_tabbed {
+                    workspace
+                        .column(effective_target_col)
+                        .map(|c| c.len())
+                        .unwrap_or(window_slot)
+                } else {
+                    window_slot
+                };
+                if let Err(e) =
+                    workspace.insert_window_in_column_at(hwnd, effective_target_col, effective_slot)
+                {
+                    warn!(
+                        "Failed to merge window {} into column {} at slot {}: {}",
+                        hwnd, effective_target_col, effective_slot, e
+                    );
+                    let _ = workspace.insert_window(hwnd, None);
+                }
             }
+            // Drop activates the inserted window in both Vertical and
+            // Tabbed targets — matches the Chrome-tab mental model
+            // ("I just dropped this here, of course I want to see it").
+            // `focus_window` follows the hwnd and
+            // `sync_active_tab_to_focus` promotes it to the active tab
+            // in Tabbed columns.
             if let Err(e) = workspace.focus_window(hwnd) {
                 debug!("Failed to focus merged window {}: {}", hwnd, e);
             }
@@ -508,6 +641,30 @@ impl AppState {
     /// Finalize a default drag-drop by swapping the placeholder with the real window.
     /// Avoids a redundant transition since windows are already at their final positions
     /// from the live preview during drag.
+    ///
+    /// **Known visual limitation (v0.1.14)**: when a single-window source
+    /// column gets emptied by the drop, the source column is removed and
+    /// every column to its right shifts left to fill the gap — including
+    /// a Tabbed destination column. The user perceives this as the tabbed
+    /// column "sliding" into its new x position when they drop into it.
+    /// We've tried (1) skipping the live-preview `start_layout_transition`
+    /// for Tabbed targets (no visible placeholder gap to animate),
+    /// (2) clearing `layout_transition` to None in this function (no
+    /// drop-time interpolation), and (3) disabling DWM transitions on
+    /// the dragged window so its final `SetWindowPos` lands without
+    /// DWM's position smoothing. The column geometry still actually
+    /// changes when the source collapses — there's no transition to
+    /// suppress, the column simply arrives at a different `x` because
+    /// there's one fewer column before it.
+    ///
+    /// Future fix (deferred): preserve a sentinel "ghost" hwnd in the
+    /// source column on drop so the column slot survives the drop, then
+    /// remove it on the next user-driven layout change. That keeps the
+    /// destination column's `x` stable at the cost of a brief gap where
+    /// the source used to be. Not implemented for v0.1.14 — the
+    /// behavior is consistent with how Vertical→Vertical drags resize
+    /// columns, just more noticeable when the destination is Tabbed
+    /// (the strip moves with the column).
     pub(crate) fn finalize_drag_merge(
         &mut self,
         hwnd: u64,
@@ -575,14 +732,33 @@ impl AppState {
             if let Some(ws) = self.workspaces.get_mut(&target_monitor).and_then(|v| v.get_mut(tgt_idx)) {
                 if ws.column_count() == 0 {
                     let _ = ws.insert_window(hwnd, None);
-                } else if let Err(e) = ws.insert_window_in_column_at(hwnd, adj_col, ph_slot)
-                {
-                    warn!(
-                        "Failed to place window {} at col {} slot {}: {}",
-                        hwnd, adj_col, ph_slot, e
-                    );
-                    let _ = ws.insert_window(hwnd, None);
+                } else {
+                    // Chrome semantics: Tabbed drops always append to
+                    // the rightmost position. The placeholder slot
+                    // reflects where live-preview anchored it, which can
+                    // be wrong if the cursor wiggled across columns
+                    // during the drag — force the end here so the user
+                    // sees the new tab where they expect it.
+                    let target_is_tabbed = ws
+                        .column(adj_col)
+                        .is_some_and(|c| c.is_tabbed());
+                    let effective_slot = if target_is_tabbed {
+                        ws.column(adj_col).map(|c| c.len()).unwrap_or(ph_slot)
+                    } else {
+                        ph_slot
+                    };
+                    if let Err(e) = ws.insert_window_in_column_at(hwnd, adj_col, effective_slot)
+                    {
+                        warn!(
+                            "Failed to place window {} at col {} slot {}: {}",
+                            hwnd, adj_col, effective_slot, e
+                        );
+                        let _ = ws.insert_window(hwnd, None);
+                    }
                 }
+                // Drop activates the inserted window for both Vertical
+                // and Tabbed targets — Chrome-tab semantics. Mirrors
+                // `execute_window_merge`.
                 if let Err(e) = ws.focus_window(hwnd) {
                     debug!("Failed to focus merged window {}: {}", hwnd, e);
                 }

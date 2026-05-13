@@ -59,6 +59,25 @@ pub(crate) enum DaemonEvent {
     PowerStateChanged { on_battery_or_saver: bool },
     /// Update checker observed a newer release tag (e.g. `v0.1.11`).
     UpdateAvailable(String),
+    /// User clicked a tab in the tab strip overlay. The strip captures
+    /// the column identity (`monitor`, `workspace_idx`, `column_idx`) at
+    /// `show()` time so the click routes to the column the user *saw* —
+    /// not whatever happens to be focused when the main loop processes
+    /// this event. (Focus can change between `WM_LBUTTONDOWN` arriving
+    /// in the strip's WndProc and the main loop draining the channel.)
+    TabClicked {
+        monitor: isize,
+        workspace_idx: usize,
+        column_idx: usize,
+        tab_idx: usize,
+    },
+    /// Low-frequency tick that triggers a tab-strip refresh so background
+    /// icon changes (notification badges, app icon swaps that don't
+    /// accompany a title change) propagate without user interaction.
+    /// Windows has no MSAA event for icon-only changes — `WM_SETICON` is
+    /// a per-window message, not a global hook — so polling is the
+    /// pragmatic alternative.
+    TabStripIconPoll,
     /// Shutdown signal.
     Shutdown,
 }

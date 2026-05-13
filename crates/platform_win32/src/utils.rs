@@ -92,7 +92,7 @@ use leopardwm_core_layout::{Rect, Visibility, WindowId, WindowPlacement};
 use std::collections::HashSet;
 use std::ffi::c_void;
 use std::sync::Mutex;
-use windows::Win32::Foundation::{HWND, RECT};
+use windows::Win32::Foundation::{HWND, LPARAM, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{
     DwmGetWindowAttribute, DwmSetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS,
 };
@@ -144,6 +144,74 @@ pub fn get_window_corner_radius(hwnd: WindowId) -> Option<f32> {
             DWMWCP_ROUNDSMALL => Some(4.0),
             _ => None,
         }
+    }
+}
+
+/// Fetch the window's small icon as a raw `HICON` handle. Resolution order:
+/// 1. `SendMessageW(WM_GETICON, ICON_SMALL2)` (taskbar size — preferred)
+/// 2. `SendMessageW(WM_GETICON, ICON_SMALL)` (legacy)
+/// 3. `GetClassLongPtrW(GCLP_HICONSM)` (class-registered small)
+/// 4. `SendMessageW(WM_GETICON, ICON_BIG)` (big icon, scaled down by caller)
+/// 5. `GetClassLongPtrW(GCLP_HICON)` (class-registered big)
+///
+/// The returned handle is owned by the app (not by us); callers must NOT
+/// `DestroyIcon` it. Returned as `isize` to keep the value `Send`/`Sync`
+/// across thread boundaries — convert back to `HICON` at the call site.
+/// Returns `None` if every probe fails (e.g. iconless tool windows).
+pub fn get_window_icon(hwnd: WindowId) -> Option<isize> {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetClassLongPtrW, SendMessageTimeoutW, GCLP_HICON, GCLP_HICONSM, ICON_BIG, ICON_SMALL,
+        ICON_SMALL2, SEND_MESSAGE_TIMEOUT_FLAGS, SMTO_ABORTIFHUNG, WM_GETICON,
+    };
+    if hwnd == 0 {
+        return None;
+    }
+    unsafe {
+        let target = HWND(hwnd as *mut c_void);
+        if !IsWindow(Some(target)).as_bool() {
+            return None;
+        }
+        // Bounded `SendMessage` so a frozen app can't stall the daemon's
+        // per-frame tab strip update. `SMTO_ABORTIFHUNG` returns early
+        // (with 0 in the out-param) if the target window is unresponsive;
+        // 50ms is comfortably above normal Win32 response time and well
+        // below the human-perceptible animation frame budget.
+        let smto: SEND_MESSAGE_TIMEOUT_FLAGS = SMTO_ABORTIFHUNG;
+        let timeout_ms: u32 = 50;
+        let probe = |wparam: usize| -> Option<isize> {
+            let mut out: usize = 0;
+            let result = SendMessageTimeoutW(
+                target,
+                WM_GETICON,
+                WPARAM(wparam),
+                LPARAM(0),
+                smto,
+                timeout_ms,
+                Some(&mut out as *mut usize),
+            );
+            if result.0 == 0 || out == 0 {
+                None
+            } else {
+                Some(out as isize)
+            }
+        };
+        for kind in [ICON_SMALL2, ICON_SMALL] {
+            if let Some(h) = probe(kind as usize) {
+                return Some(h);
+            }
+        }
+        let class_small = GetClassLongPtrW(target, GCLP_HICONSM);
+        if class_small != 0 {
+            return Some(class_small as isize);
+        }
+        if let Some(h) = probe(ICON_BIG as usize) {
+            return Some(h);
+        }
+        let class_big = GetClassLongPtrW(target, GCLP_HICON);
+        if class_big != 0 {
+            return Some(class_big as isize);
+        }
+        None
     }
 }
 

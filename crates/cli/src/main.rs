@@ -181,6 +181,9 @@ enum Commands {
     ToggleFloating,
     /// Toggle fullscreen for the focused window
     ToggleFullscreen,
+    /// Toggle tabbed mode on the focused column (niri-style: only the
+    /// active tab is visible, with a tab strip overlay above the column)
+    ToggleTabbed,
     /// Set the focused column width
     SetWidth {
         /// Width as fraction of viewport (e.g., 0.333, 0.5, 0.667)
@@ -387,6 +390,7 @@ fn to_ipc_command(cmd: &Commands) -> IpcCommand {
         Commands::CloseWindow => IpcCommand::CloseWindow,
         Commands::ToggleFloating => IpcCommand::ToggleFloating,
         Commands::ToggleFullscreen => IpcCommand::ToggleFullscreen,
+        Commands::ToggleTabbed => IpcCommand::ToggleTabbed,
         Commands::SetWidth { fraction } => IpcCommand::SetColumnWidth {
             fraction: *fraction,
         },

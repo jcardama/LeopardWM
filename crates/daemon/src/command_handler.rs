@@ -823,6 +823,39 @@ impl AppState {
                      command loop — this is an internal routing bug.",
                 )
             }
+            IpcCommand::ToggleTabbed => {
+                self.execute_workspace_command(true, false, |ws, _vw| {
+                    ws.toggle_focused_column_tabbed_mode();
+                    info!("Toggled tabbed mode on focused column");
+                })
+            }
+            IpcCommand::SetActiveTab { column, tab } => {
+                // Pre-arm the same-column-suppression bypass so the
+                // synthesized SetForegroundWindow that follows doesn't get
+                // squashed as redundant intra-column churn.
+                let monitor = self.focused_monitor;
+                let ws_idx = self.active_workspace_idx(monitor);
+                self.pending_tab_focus = Some(crate::state::PendingTabFocus {
+                    monitor,
+                    workspace_idx: ws_idx,
+                    column_idx: column,
+                    tab_idx: tab,
+                    set_at: std::time::Instant::now(),
+                });
+                let Some(workspace) = self.focused_workspace_mut() else {
+                    return IpcResponse::error("No focused workspace");
+                };
+                if let Err(e) = workspace.set_active_tab(column, tab) {
+                    self.pending_tab_focus = None;
+                    return IpcResponse::error(format!("set_active_tab failed: {}", e));
+                }
+                if let Err(e) = self.apply_layout() {
+                    return IpcResponse::error(format!("apply_layout failed: {}", e));
+                }
+                self.sync_foreground_window();
+                info!("Set active tab: column={}, tab={}", column, tab);
+                IpcResponse::Ok
+            }
         }
     }
 }

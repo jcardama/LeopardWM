@@ -25,7 +25,8 @@ impl AppState {
             | WindowEvent::Restored(id)
             | WindowEvent::MovedOrResized(id)
             | WindowEvent::MoveSizeStart(id)
-            | WindowEvent::MoveSizeEnd(id) => Some(*id),
+            | WindowEvent::MoveSizeEnd(id)
+            | WindowEvent::TitleChanged(id) => Some(*id),
             WindowEvent::DisplayChange | WindowEvent::MouseEnterWindow(_) => None,
         };
 
@@ -326,6 +327,12 @@ impl AppState {
                 // scrolling near the boundary between stacked windows. Windows'
                 // "scroll inactive windows" feature can cause the foreground to
                 // ping-pong between adjacent windows during rapid scrolling.
+                //
+                // Exception: a tab-strip click or `Ctrl+Alt+J/K` cycle in a
+                // Tabbed column synthesizes a deliberate same-column focus
+                // change. The command handler sets `pending_tab_focus`
+                // before triggering it; we consume that flag here so the
+                // expected event flows through.
                 let now = std::time::Instant::now();
                 if let Some(prev_hwnd) = self.previous_focused_hwnd {
                     if let Some(last_change) = self.last_focus_change_at {
@@ -342,11 +349,23 @@ impl AppState {
                                                 matches!((loc_a, loc_b), (Some((ca, _)), Some((cb, _))) if ca == cb)
                                             });
                                         if same_col {
+                                            // Check for a fresh tab-focus intent that
+                                            // matches this event. If it does, consume the
+                                            // flag and fall through (the focus change is
+                                            // expected, not noisy churn).
+                                            let consumed = self
+                                                .consume_pending_tab_focus_for(mon_a, ws_a, hwnd);
+                                            if !consumed {
+                                                debug!(
+                                                    "Suppressed rapid same-column focus switch: {} -> {}",
+                                                    prev_hwnd, hwnd
+                                                );
+                                                return;
+                                            }
                                             debug!(
-                                                "Suppressed rapid same-column focus switch: {} -> {}",
+                                                "Same-column focus switch allowed (tab intent): {} -> {}",
                                                 prev_hwnd, hwnd
                                             );
-                                            return;
                                         }
                                     }
                                 }
@@ -807,6 +826,15 @@ impl AppState {
                     last_hint_update: None,
                     removed_from_source: false,
                 });
+                // Disable DWM-managed position interpolation on the
+                // dragged window so its final SetWindowPos on drop
+                // lands instantly. Without this, DWM smooths the
+                // transition between the drop point and the layout
+                // slot — the user perceives this as the column
+                // "sliding" into place when dropping into a Tabbed
+                // target where no layout-transition animation is
+                // running.
+                leopardwm_platform_win32::set_dwm_transitions_disabled(hwnd, true);
             }
             WindowEvent::MoveSizeEnd(hwnd) => {
                 debug!("User finished dragging/resizing window {}", hwnd);
@@ -824,6 +852,11 @@ impl AppState {
                 // Handle resize completion (border drag) — snap to nearest preset.
                 if self.resize_hwnd.take() == Some(hwnd) {
                     self.handle_resize_complete(hwnd);
+                    // Re-enable DWM transitions before returning (paired
+                    // with MoveSizeStart's disable). Each early-return path
+                    // needs this — otherwise the window's transitions stay
+                    // suppressed for the rest of its lifetime.
+                    leopardwm_platform_win32::set_dwm_transitions_disabled(hwnd, false);
                     return;
                 }
 
@@ -831,6 +864,10 @@ impl AppState {
                 // event for a different window should not tear down the drag state.
                 if self.drag_state.as_ref().is_some_and(|d| d.hwnd != hwnd) {
                     debug!("Ignoring MoveSizeEnd for {} — drag active for different window", hwnd);
+                    // Mismatched event — re-enable transitions on the hwnd
+                    // we just got the event for; the original drag's hwnd
+                    // will re-enable on its own MoveSizeEnd.
+                    leopardwm_platform_win32::set_dwm_transitions_disabled(hwnd, false);
                     return;
                 }
 
@@ -838,7 +875,10 @@ impl AppState {
                 // Always hide the drag hint overlay on drop.
                 self.pending_drag_hint = Some(DragHintAction::Hide);
 
-                let Some(drag) = drag else { return };
+                let Some(drag) = drag else {
+                    leopardwm_platform_win32::set_dwm_transitions_disabled(hwnd, false);
+                    return;
+                };
 
                 if !drag.is_tiled {
                     // Floating window: update stored rect so layout won't snap it back.
@@ -853,6 +893,7 @@ impl AppState {
                             }
                         }
                     }
+                    leopardwm_platform_win32::set_dwm_transitions_disabled(hwnd, false);
                     return;
                 }
 
@@ -866,6 +907,10 @@ impl AppState {
                         }
                     }
                     self.snap_back_tiled(drag.source_monitor, drag.source_workspace_idx);
+                    // No-op if hwnd is truly destroyed, but cheap and
+                    // covers the edge case where lookup returns None
+                    // transiently while the window still exists.
+                    leopardwm_platform_win32::set_dwm_transitions_disabled(hwnd, false);
                     return;
                 };
                 let monitors: Vec<_> = self.monitors.values().cloned().collect();
@@ -897,6 +942,13 @@ impl AppState {
                     // Default drop: swap placeholder with real window in-place.
                     self.finalize_drag_merge(hwnd, &drag, target_monitor, &win_info.rect);
                 }
+                // Re-enable DWM transitions on the dropped window now
+                // that the final SetWindowPos has already landed. We
+                // disable them at MoveSizeStart specifically to suppress
+                // the drop-position-to-layout-slot slide; once the
+                // window is settled there's no reason to keep its
+                // minimize/maximize/etc. transitions suppressed.
+                leopardwm_platform_win32::set_dwm_transitions_disabled(hwnd, false);
             }
             WindowEvent::MovedOrResized(hwnd) => {
                 // Skip events triggered by our own apply_layout() to avoid feedback loop.
@@ -1135,6 +1187,26 @@ impl AppState {
             WindowEvent::MouseEnterWindow(_hwnd) => {
                 // This is handled by the main event loop with debouncing
                 // (focus_follows_mouse delay)
+            }
+            WindowEvent::TitleChanged(hwnd) => {
+                // Only refresh the tab strip when the title change is
+                // for a window that's a tab in the focused workspace's
+                // visible Tabbed column — every other title change
+                // (e.g. a background app's notification badge) would
+                // waste a render. `update_tab_strip` already rebuilds
+                // labels from `lookup_window_info`, so we don't have
+                // to thread the new title through ourselves.
+                let in_visible_tabbed_column = self
+                    .focused_workspace()
+                    .map(|ws| {
+                        ws.columns()
+                            .iter()
+                            .any(|c| c.is_tabbed() && c.contains(hwnd))
+                    })
+                    .unwrap_or(false);
+                if in_visible_tabbed_column {
+                    self.update_tab_strip();
+                }
             }
         }
     }

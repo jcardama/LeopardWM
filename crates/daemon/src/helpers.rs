@@ -27,12 +27,14 @@ pub(crate) struct ScaledLayoutParams {
     pub outer_gap_top: i32,
     pub outer_gap_bottom: i32,
     pub default_column_width: i32,
+    pub tab_strip_reserve_px: i32,
 }
 
 impl ScaledLayoutParams {
     /// Compute scaled layout parameters from config + monitor DPI + viewport width.
     pub fn from_config(
         layout: &config::LayoutConfig,
+        appearance: &config::AppearanceConfig,
         scale_factor: f64,
         viewport_width: i32,
     ) -> Self {
@@ -41,6 +43,13 @@ impl ScaledLayoutParams {
         let outer_gap_right = scale_px(layout.outer_gap_right, scale_factor);
         let outer_gap_top = scale_px(layout.outer_gap_top, scale_factor);
         let outer_gap_bottom = scale_px(layout.outer_gap_bottom, scale_factor);
+        // Reserve room for the strip PLUS the inter-element gap below
+        // it, so the strip's bottom edge sits `gap` pixels above the
+        // active tab — same spacing as between adjacent columns and
+        // within a Vertical column. Reusing `layout.gap` keeps the
+        // visual rhythm consistent across the workspace.
+        let strip_with_gap = appearance.tab_strip_height as i32 + layout.gap.max(0);
+        let tab_strip_reserve_px = scale_px(strip_with_gap, scale_factor);
 
         // Compute default column width using scaled gap values (mirrors LayoutConfig::default_column_width_px)
         let base = viewport_width
@@ -57,6 +66,7 @@ impl ScaledLayoutParams {
             outer_gap_top,
             outer_gap_bottom,
             default_column_width,
+            tab_strip_reserve_px,
         }
     }
 
@@ -70,6 +80,7 @@ impl ScaledLayoutParams {
             self.outer_gap_bottom,
         );
         workspace.set_default_column_width(self.default_column_width);
+        workspace.set_tab_strip_reserve_px(self.tab_strip_reserve_px);
     }
 }
 
@@ -131,13 +142,19 @@ impl AppState {
         } else if !self.config.appearance.active_border && old_border_on {
             self.hide_border();
         }
+        self.update_tab_strip();
 
         for (&monitor_id, ws_vec) in self.workspaces.iter_mut() {
             let scale = self.monitors.get(&monitor_id).map(|m| m.scale_factor).unwrap_or(1.0);
             let viewport_width = self.monitors.get(&monitor_id)
                 .map(|m| m.work_area.width)
                 .unwrap_or(FALLBACK_VIEWPORT_WIDTH);
-            let params = ScaledLayoutParams::from_config(&self.config.layout, scale, viewport_width);
+            let params = ScaledLayoutParams::from_config(
+                &self.config.layout,
+                &self.config.appearance,
+                scale,
+                viewport_width,
+            );
 
             for workspace in ws_vec.iter_mut() {
                 // Read the previously-applied scaled gap values from the workspace
@@ -395,7 +412,12 @@ impl AppState {
                     let vw = self.monitors.get(&id)
                         .map(|m| m.work_area.width)
                         .unwrap_or(FALLBACK_VIEWPORT_WIDTH);
-                    let params = ScaledLayoutParams::from_config(&self.config.layout, scale, vw);
+                    let params = ScaledLayoutParams::from_config(
+                        &self.config.layout,
+                        &self.config.appearance,
+                        scale,
+                        vw,
+                    );
                     while ws_vec.len() <= ws_idx {
                         let mut ws = Workspace::with_directional_gaps(
                             params.gap,
@@ -405,6 +427,7 @@ impl AppState {
                             params.outer_gap_bottom,
                         );
                         ws.set_default_column_width(params.default_column_width);
+                        ws.set_tab_strip_reserve_px(params.tab_strip_reserve_px);
                         ws.set_centering_mode(self.config.layout.centering_mode.into());
                         ws.set_center_past_edges(self.config.layout.center_past_edges);
                         ws.set_reduce_motion(self.reduce_motion);
@@ -512,7 +535,12 @@ impl AppState {
                     let viewport_width = self.monitors.get(&monitor_id)
                         .map(|m| m.work_area.width)
                         .unwrap_or(FALLBACK_VIEWPORT_WIDTH);
-                    let params = ScaledLayoutParams::from_config(&self.config.layout, scale, viewport_width);
+                    let params = ScaledLayoutParams::from_config(
+                        &self.config.layout,
+                        &self.config.appearance,
+                        scale,
+                        viewport_width,
+                    );
                     for workspace in ws_vec.iter_mut() {
                         let old_gap = workspace.gap();
                         let (old_ol, old_or, _, _) = workspace.outer_gaps();
@@ -537,6 +565,7 @@ impl AppState {
             if !old_ids.contains(&monitor.id) {
                 let params = ScaledLayoutParams::from_config(
                     &self.config.layout,
+                    &self.config.appearance,
                     monitor.scale_factor,
                     monitor.work_area.width,
                 );
@@ -548,6 +577,7 @@ impl AppState {
                     params.outer_gap_bottom,
                 );
                 workspace.set_default_column_width(params.default_column_width);
+                workspace.set_tab_strip_reserve_px(params.tab_strip_reserve_px);
                 workspace.set_centering_mode(self.config.layout.centering_mode.into());
                 workspace.set_center_past_edges(self.config.layout.center_past_edges);
                 workspace.set_reduce_motion(self.reduce_motion);
@@ -639,7 +669,12 @@ impl AppState {
             let viewport_width = self.monitors.get(&monitor_id)
                 .map(|m| m.work_area.width)
                 .unwrap_or(FALLBACK_VIEWPORT_WIDTH);
-            let params = ScaledLayoutParams::from_config(&self.config.layout, scale, viewport_width);
+            let params = ScaledLayoutParams::from_config(
+                &self.config.layout,
+                &self.config.appearance,
+                scale,
+                viewport_width,
+            );
 
             for workspace in ws_vec.iter_mut() {
                 let old_gap = workspace.gap();
@@ -973,6 +1008,7 @@ impl AppState {
                 self.show_border(hwnd);
             }
         }
+        self.update_tab_strip();
         Ok(true)
     }
 
@@ -1334,6 +1370,8 @@ impl AppState {
                     self.show_border(hwnd);
                 }
             }
+            // Reposition tab strip overlay (mirror border lifecycle).
+            self.update_tab_strip();
 
             // LayoutChanged broadcast with signature dedup. Animation
             // frames between two settled layouts produce identical
@@ -1370,11 +1408,7 @@ impl AppState {
         if leopardwm_platform_win32::is_high_contrast_enabled() {
             return Some(leopardwm_platform_win32::get_system_highlight_color_bgr());
         }
-        let color = u32::from_str_radix(&self.config.appearance.active_border_color, 16).ok()?;
-        let r = (color >> 16) & 0xFF;
-        let g = (color >> 8) & 0xFF;
-        let b = color & 0xFF;
-        Some((b << 16) | (g << 8) | r)
+        hex_rgb_to_bgr(&self.config.appearance.active_border_color)
     }
 
     /// Refresh the cached `high_contrast` flag from the live system setting.
@@ -1605,6 +1639,167 @@ impl AppState {
         }
     }
 
+    /// Hide the tab strip overlay if installed.
+    pub(crate) fn hide_tab_strip(&self) {
+        if let Some(ref strip) = self.tab_strip_overlay {
+            strip.hide();
+        }
+    }
+
+    /// Show or hide the tab strip overlay based on current state.
+    /// Mirrors `show_border`'s "every-apply, every-frame" lifecycle so the
+    /// strip tracks the focused column's screen rect through animations
+    /// and monitor changes (per Codex HIGH-4).
+    ///
+    /// Strip is visible only when:
+    /// - tab strip overlay is installed (i.e., not in test/headless),
+    /// - daemon isn't paused,
+    /// - focused workspace exists and is not fullscreen,
+    /// - the focused column is Tabbed and has at least one non-minimized window.
+    pub(crate) fn update_tab_strip(&self) {
+        use leopardwm_platform_win32::tab_strip::{TabLabel, TabStripColors};
+
+        let Some(ref strip) = self.tab_strip_overlay else {
+            return;
+        };
+        if self.paused {
+            strip.hide();
+            return;
+        }
+        let Some(ws) = self.focused_workspace() else {
+            strip.hide();
+            return;
+        };
+        if ws.is_fullscreen() {
+            strip.hide();
+            return;
+        }
+        // Pick the column whose strip to render. Prefer the focused
+        // column when it's Tabbed; otherwise fall back to the first
+        // Tabbed column in the workspace. Matches niri's "every tabbed
+        // column shows its strip" model with our single-overlay
+        // implementation: the strip stays visible whenever any Tabbed
+        // column exists, so common workflows (drag-in, expel, focus a
+        // neighboring Vertical column to glance at it) don't flicker
+        // the strip in and out.
+        let col_idx = {
+            let focused = ws.focused_column_index();
+            if ws.column(focused).is_some_and(|c| c.is_tabbed()) {
+                focused
+            } else {
+                match (0..ws.column_count())
+                    .find(|&i| ws.column(i).is_some_and(|c| c.is_tabbed()))
+                {
+                    Some(i) => i,
+                    None => {
+                        strip.hide();
+                        return;
+                    }
+                }
+            }
+        };
+        let Some(col) = ws.column(col_idx) else {
+            strip.hide();
+            return;
+        };
+        if !col.is_tabbed() {
+            strip.hide();
+            return;
+        }
+        // Use the shared "effective visible tab" picker so the strip
+        // tracks the same window the layout is rendering — even when
+        // `active_idx` points at a minimized tab and the layout falls
+        // back. The strip's highlight (`active_idx` for visual styling)
+        // still uses the column's stored active_idx so the user sees
+        // their last selection.
+        let Some(visible_tab) = col.effective_visible_tab(|w| ws.is_minimized(w)) else {
+            strip.hide();
+            return;
+        };
+        let Some(visible_hwnd) = col.get(visible_tab) else {
+            strip.hide();
+            return;
+        };
+        let Some(rect) = self.compute_window_layout_rect(visible_hwnd) else {
+            strip.hide();
+            return;
+        };
+        // For the highlight, prefer the stored active tab if it's
+        // visible; otherwise fall back to the rendered tab.
+        let stored_active = col.active_tab_idx().unwrap_or(visible_tab);
+        let active_idx = if col
+            .get(stored_active)
+            .is_some_and(|w| !ws.is_minimized(w))
+        {
+            stored_active
+        } else {
+            visible_tab
+        };
+
+        // Build tab labels from window titles + app icons. Empty titles
+        // become an empty string (still occupies a clickable cell);
+        // missing icons fall back to text-only rendering. The drag
+        // placeholder sentinel (`DRAG_PLACEHOLDER_HWND`) is filtered out
+        // — it represents the gap a dragged window will land in and has
+        // no real window backing, so showing it as a blank tab would
+        // confuse the user mid-drag.
+        let tabs: Vec<TabLabel> = col
+            .windows()
+            .iter()
+            .filter(|&&w| w != crate::state::DRAG_PLACEHOLDER_HWND)
+            .map(|&w| TabLabel {
+                title: self
+                    .lookup_window_info(w)
+                    .map(|info| info.title)
+                    .unwrap_or_default(),
+                icon: leopardwm_platform_win32::get_window_icon(w),
+            })
+            .collect();
+
+        // DPI-scale the configured strip height by the focused monitor's scale.
+        let scale = self
+            .monitors
+            .get(&self.focused_monitor)
+            .map(|m| m.scale_factor)
+            .unwrap_or(1.0);
+        let strip_height =
+            (self.config.appearance.tab_strip_height as f64 * scale).round() as u32;
+        // Use the workspace's inter-element gap (DPI-scaled) for the
+        // space between the strip and the active tab — same gap value
+        // that separates adjacent columns and stacked windows, so the
+        // tabbed area visually rhymes with the rest of the layout.
+        // `ScaledLayoutParams::from_config` already reserves
+        // `strip_height + layout.gap` worth of pixels at the top of
+        // Tabbed columns, so what we render here fits inside that
+        // reservation rather than overlapping window content.
+        let bottom_gap_px = (self.config.layout.gap.max(0) as f64 * scale).round() as u32;
+
+        // Pull configurable colors from the [appearance] config section.
+        // Hex strings are RGB; convert to the 0xBBGGRR layout the strip
+        // expects (GDI's COLORREF is BGR-byte-order in a u32).
+        let app = &self.config.appearance;
+        let colors = TabStripColors {
+            bg: hex_rgb_to_bgr(&app.tab_strip_bg).unwrap_or(0x1F1F1F),
+            active_bg: hex_rgb_to_bgr(&app.tab_strip_active_bg).unwrap_or(0x303030),
+            active_text: hex_rgb_to_bgr(&app.tab_strip_active_text).unwrap_or(0xFFFFFF),
+            inactive_text: hex_rgb_to_bgr(&app.tab_strip_inactive_text).unwrap_or(0xA0A0A0),
+            opacity: app.tab_strip_opacity,
+        };
+        let monitor = self.focused_monitor;
+        let ws_idx = self.active_workspace_idx(monitor);
+        strip.show(
+            rect,
+            tabs,
+            active_idx,
+            colors,
+            strip_height,
+            bottom_gap_px,
+            monitor,
+            ws_idx,
+            col_idx,
+        );
+    }
+
     /// Set the OS foreground window to match the workspace's focused window.
     /// Also updates active window border if configured.
     ///
@@ -1636,11 +1831,13 @@ impl AppState {
             #[cfg(not(test))]
             let _ = leopardwm_platform_win32::set_foreground_window(hwnd);
             self.previous_focused_hwnd = Some(hwnd);
+            self.update_tab_strip();
         } else {
             // No focused window on the active workspace — clear stale state
             // so border/focus don't target a window that's no longer here.
             self.previous_focused_hwnd = None;
             self.hide_border();
+            self.hide_tab_strip();
             debug!("sync_foreground_window: no focused visible window");
         }
     }
@@ -2032,6 +2229,7 @@ impl AppState {
             // Restore WS_MAXIMIZEBOX so windows behave normally while paused
             self.restore_snap_for_all_windows();
             self.hide_border();
+            self.hide_tab_strip();
             // Hide any visible drag ghost overlay
             self.pending_drag_hint = Some(crate::state::DragHintAction::Hide);
         } else {
@@ -2049,4 +2247,19 @@ impl AppState {
         }
         Ok(())
     }
+}
+
+/// Parse a hex RGB string (e.g. `"4285F4"` or `"#4285F4"`) into a
+/// BGR-byte-order `u32` suitable for GDI `COLORREF`. Accepts 6-digit
+/// hex with optional leading `#`. Returns `None` on malformed input.
+pub(crate) fn hex_rgb_to_bgr(hex: &str) -> Option<u32> {
+    let stripped = hex.strip_prefix('#').unwrap_or(hex);
+    if stripped.len() != 6 {
+        return None;
+    }
+    let color = u32::from_str_radix(stripped, 16).ok()?;
+    let r = (color >> 16) & 0xFF;
+    let g = (color >> 8) & 0xFF;
+    let b = color & 0xFF;
+    Some((b << 16) | (g << 8) | r)
 }

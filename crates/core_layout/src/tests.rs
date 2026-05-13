@@ -766,7 +766,7 @@ mod tests {
         assert!(empty_col.is_empty());
         assert_eq!(empty_col.width(), 300);
         assert_eq!(empty_col.len(), 0);
-        assert_eq!(empty_col.windows(), &[]);
+        assert_eq!(empty_col.windows(), &[] as &[WindowId]);
 
         // Verify workspace doesn't produce placements for non-existent windows
         let mut ws = Workspace::new();
@@ -3130,6 +3130,7 @@ mod tests {
             width: 800,
             windows: vec![1, 2],
             height_weights: Vec::new(), // backward compat: empty
+            mode: ColumnMode::default(),
         };
         assert!(col.height_weights.is_empty());
         // Compute placements should fall back to equal distribution
@@ -3165,5 +3166,476 @@ mod tests {
         assert_eq!(weights.len(), 2);
         assert!((weights[0] - 0.5).abs() < 1e-9);
         assert!((weights[1] - 0.5).abs() < 1e-9);
+    }
+
+    // ========================================================================
+    // Tabbed Columns (Milestone 5)
+    // ========================================================================
+
+    fn ws_3_tabs() -> Workspace {
+        // Build a single column with 3 windows (1, 2, 3); focus on tab 0.
+        let mut ws = Workspace::with_gaps(0, 0);
+        ws.insert_window(1, Some(800)).unwrap();
+        ws.insert_window_in_column(2, 0).unwrap();
+        ws.insert_window_in_column(3, 0).unwrap();
+        ws.set_focus(0, 0).unwrap();
+        ws
+    }
+
+    #[test]
+    fn test_column_default_mode_is_vertical() {
+        let col = Column::new(1, 800);
+        assert!(matches!(col.mode(), ColumnMode::Vertical));
+        assert!(!col.is_tabbed());
+        assert_eq!(col.active_tab_idx(), None);
+    }
+
+    #[test]
+    fn test_set_tabbed_clamps_active_idx() {
+        let mut col = Column::new(1, 800);
+        col.add_window(2);
+        col.add_window(3);
+        col.set_tabbed(99); // out of range
+        assert_eq!(col.active_tab_idx(), Some(2)); // clamped to last
+    }
+
+    #[test]
+    fn test_set_tabbed_noop_on_empty_column() {
+        let mut col = Column::empty(800);
+        col.set_tabbed(0);
+        assert!(matches!(col.mode(), ColumnMode::Vertical));
+    }
+
+    #[test]
+    fn test_cycle_active_tab_wraps() {
+        let mut col = Column::new(1, 800);
+        col.add_window(2);
+        col.add_window(3);
+        col.set_tabbed(0);
+        assert_eq!(col.cycle_active_tab(true), Some(1));
+        assert_eq!(col.cycle_active_tab(true), Some(2));
+        assert_eq!(col.cycle_active_tab(true), Some(0)); // wrap forward
+        assert_eq!(col.cycle_active_tab(false), Some(2)); // wrap backward
+    }
+
+    #[test]
+    fn test_cycle_active_tab_noop_on_vertical() {
+        let mut col = Column::new(1, 800);
+        col.add_window(2);
+        // Vertical: cycle returns None
+        assert_eq!(col.cycle_active_tab(true), None);
+    }
+
+    #[test]
+    fn test_cycle_active_tab_noop_on_single_window() {
+        let mut col = Column::new(1, 800);
+        col.set_tabbed(0);
+        // Single-window tabbed auto-reverts to Vertical via maintain_mode_invariant
+        // (1-tab tabbed is degenerate). cycle returns None either way.
+        assert_eq!(col.cycle_active_tab(true), None);
+    }
+
+    #[test]
+    fn test_toggle_focused_column_tabbed_mode_seeds_active() {
+        let mut ws = ws_3_tabs();
+        ws.set_focus(0, 1).unwrap();
+        ws.toggle_focused_column_tabbed_mode();
+        assert_eq!(ws.columns[0].active_tab_idx(), Some(1));
+        // Toggle off
+        ws.toggle_focused_column_tabbed_mode();
+        assert!(matches!(ws.columns[0].mode(), ColumnMode::Vertical));
+    }
+
+    #[test]
+    fn test_toggle_tabbed_noop_on_single_window_column() {
+        let mut ws = Workspace::with_gaps(0, 0);
+        ws.insert_window(1, Some(800)).unwrap();
+        ws.toggle_focused_column_tabbed_mode();
+        // 1-window column stays Vertical
+        assert!(matches!(ws.columns[0].mode(), ColumnMode::Vertical));
+    }
+
+    #[test]
+    fn test_set_active_tab_updates_focus_when_focused() {
+        let mut ws = ws_3_tabs();
+        ws.toggle_focused_column_tabbed_mode();
+        ws.set_active_tab(0, 2).unwrap();
+        assert_eq!(ws.columns[0].active_tab_idx(), Some(2));
+        assert_eq!(ws.focused_window_in_column, 2);
+    }
+
+    #[test]
+    fn test_set_active_tab_no_focus_change_when_unfocused() {
+        let mut ws = ws_3_tabs();
+        // Add a second column and focus there.
+        ws.insert_window(99, Some(800)).unwrap();
+        // Make column 0 tabbed, then focus column 1.
+        ws.set_focus(0, 0).unwrap();
+        ws.toggle_focused_column_tabbed_mode();
+        ws.set_focus(1, 0).unwrap();
+        // Now switch active tab on the unfocused column 0.
+        ws.set_active_tab(0, 2).unwrap();
+        assert_eq!(ws.columns[0].active_tab_idx(), Some(2));
+        // Focus stayed on column 1.
+        assert_eq!(ws.focused_column_index(), 1);
+    }
+
+    #[test]
+    fn test_set_active_tab_errors_on_vertical_column() {
+        let mut ws = ws_3_tabs();
+        // Column 0 is still Vertical.
+        assert!(ws.set_active_tab(0, 1).is_err());
+    }
+
+    #[test]
+    fn test_set_active_tab_errors_on_out_of_range() {
+        let mut ws = ws_3_tabs();
+        ws.toggle_focused_column_tabbed_mode();
+        assert!(ws.set_active_tab(0, 99).is_err());
+        assert!(ws.set_active_tab(99, 0).is_err());
+    }
+
+    #[test]
+    fn test_focus_up_cycles_tabs_with_wrap() {
+        let mut ws = ws_3_tabs();
+        ws.toggle_focused_column_tabbed_mode();
+        // Active was 0; focus_up wraps to 2.
+        ws.focus_up();
+        assert_eq!(ws.focused_window_in_column, 2);
+        assert_eq!(ws.columns[0].active_tab_idx(), Some(2));
+        ws.focus_up();
+        assert_eq!(ws.focused_window_in_column, 1);
+    }
+
+    #[test]
+    fn test_focus_down_cycles_tabs_with_wrap() {
+        let mut ws = ws_3_tabs();
+        ws.toggle_focused_column_tabbed_mode();
+        ws.focus_down();
+        assert_eq!(ws.focused_window_in_column, 1);
+        ws.focus_down();
+        assert_eq!(ws.focused_window_in_column, 2);
+        ws.focus_down(); // wrap
+        assert_eq!(ws.focused_window_in_column, 0);
+        assert_eq!(ws.columns[0].active_tab_idx(), Some(0));
+    }
+
+    #[test]
+    fn test_focus_up_in_vertical_no_wrap() {
+        let mut ws = ws_3_tabs();
+        // Vertical: focus_up at top of column is no-op (existing behavior).
+        ws.set_focus(0, 0).unwrap();
+        ws.focus_up();
+        assert_eq!(ws.focused_window_in_column, 0);
+    }
+
+    #[test]
+    fn test_focus_left_into_tabbed_lands_on_active() {
+        // Two columns: col 0 Tabbed with active=2, col 1 Vertical.
+        let mut ws = Workspace::with_gaps(0, 0);
+        ws.insert_window(1, Some(800)).unwrap();
+        ws.insert_window_in_column(2, 0).unwrap();
+        ws.insert_window_in_column(3, 0).unwrap();
+        ws.set_focus(0, 2).unwrap();
+        ws.toggle_focused_column_tabbed_mode();
+        // Add column 1 (Vertical, single window).
+        ws.insert_window(99, Some(800)).unwrap();
+        // Focus column 1, then back to column 0.
+        ws.set_focus(1, 0).unwrap();
+        ws.focus_left();
+        assert_eq!(ws.focused_column_index(), 0);
+        // Should land on the active tab (2), not whatever index was carried.
+        assert_eq!(ws.focused_window_in_column, 2);
+    }
+
+    #[test]
+    fn test_layout_only_active_tab_visible() {
+        let mut ws = ws_3_tabs();
+        ws.toggle_focused_column_tabbed_mode();
+        ws.set_active_tab(0, 1).unwrap();
+        let viewport = Rect::new(0, 0, 800, 1000);
+        let placements = ws.compute_placements(viewport);
+        // Three placements: active (visible) + 2 off-screen.
+        assert_eq!(placements.len(), 3);
+        let visible: Vec<_> = placements
+            .iter()
+            .filter(|p| matches!(p.visibility, Visibility::Visible))
+            .collect();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].window_id, 2); // window at index 1
+        assert_eq!(visible[0].rect.height, 1000); // full column height
+    }
+
+    #[test]
+    fn test_layout_tabbed_active_minimized_falls_back() {
+        let mut ws = ws_3_tabs();
+        ws.toggle_focused_column_tabbed_mode();
+        ws.set_active_tab(0, 1).unwrap();
+        ws.mark_minimized(2); // minimize the active tab
+        let viewport = Rect::new(0, 0, 800, 1000);
+        let placements = ws.compute_placements(viewport);
+        // Visible should fall back to first non-minimized tab (window 1).
+        let visible: Vec<_> = placements
+            .iter()
+            .filter(|p| matches!(p.visibility, Visibility::Visible))
+            .collect();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].window_id, 1);
+    }
+
+    #[test]
+    fn test_remove_active_tab_advances_active_idx() {
+        let mut ws = ws_3_tabs();
+        ws.toggle_focused_column_tabbed_mode();
+        ws.set_active_tab(0, 1).unwrap();
+        // Remove active tab (window 2).
+        ws.remove_window(2).unwrap();
+        // Column has 2 windows now (windows 1 and 3); active should pin to
+        // the new index 1 (which is window 3, slid down into the slot).
+        assert_eq!(ws.columns[0].active_tab_idx(), Some(1));
+        assert_eq!(ws.columns[0].windows()[1], 3);
+    }
+
+    #[test]
+    fn test_remove_before_active_decrements_active_idx() {
+        let mut ws = ws_3_tabs();
+        ws.toggle_focused_column_tabbed_mode();
+        ws.set_active_tab(0, 2).unwrap();
+        // Remove window at idx 0 (window 1) — active should shift left to 1.
+        ws.remove_window(1).unwrap();
+        assert_eq!(ws.columns[0].active_tab_idx(), Some(1));
+        // The window at the new active idx is still window 3 (originally idx 2).
+        assert_eq!(ws.columns[0].windows()[1], 3);
+    }
+
+    #[test]
+    fn test_remove_after_active_keeps_active_idx() {
+        let mut ws = ws_3_tabs();
+        ws.toggle_focused_column_tabbed_mode();
+        ws.set_active_tab(0, 0).unwrap();
+        ws.remove_window(3).unwrap(); // remove last
+        assert_eq!(ws.columns[0].active_tab_idx(), Some(0));
+        assert_eq!(ws.columns[0].windows()[0], 1);
+    }
+
+    #[test]
+    fn test_remove_drops_to_one_auto_reverts_to_vertical() {
+        let mut ws = ws_3_tabs();
+        ws.toggle_focused_column_tabbed_mode();
+        ws.set_active_tab(0, 1).unwrap();
+        ws.remove_window(1).unwrap();
+        ws.remove_window(2).unwrap();
+        // Only window 3 left — column should auto-revert to Vertical.
+        assert!(matches!(ws.columns[0].mode(), ColumnMode::Vertical));
+    }
+
+    #[test]
+    fn test_insert_at_or_before_active_shifts_active() {
+        let mut ws = ws_3_tabs();
+        ws.toggle_focused_column_tabbed_mode();
+        ws.set_active_tab(0, 1).unwrap();
+        ws.insert_window_in_column_at(99, 0, 0).unwrap();
+        // Insert at idx 0 → active was at 1, should shift to 2.
+        assert_eq!(ws.columns[0].active_tab_idx(), Some(2));
+    }
+
+    #[test]
+    fn test_insert_after_active_keeps_active_idx() {
+        let mut ws = ws_3_tabs();
+        ws.toggle_focused_column_tabbed_mode();
+        ws.set_active_tab(0, 0).unwrap();
+        ws.insert_window_in_column_at(99, 0, 3).unwrap(); // append
+        assert_eq!(ws.columns[0].active_tab_idx(), Some(0));
+    }
+
+    #[test]
+    fn test_swap_around_active_tracks_window() {
+        let mut ws = ws_3_tabs();
+        ws.toggle_focused_column_tabbed_mode();
+        ws.set_active_tab(0, 1).unwrap();
+        // Swap idx 0 and 1 — active (1) should follow window to idx 0.
+        ws.columns[0].swap_windows(0, 1);
+        assert_eq!(ws.columns[0].active_tab_idx(), Some(0));
+        // Window at the new active idx is the original "active" window (was at idx 1).
+        assert_eq!(ws.columns[0].windows()[0], 2);
+    }
+
+    #[test]
+    fn test_move_window_up_in_tabbed_column_tracks_active() {
+        let mut ws = ws_3_tabs();
+        ws.toggle_focused_column_tabbed_mode();
+        ws.set_active_tab(0, 1).unwrap();
+        // Focus the active tab, move_up swaps with idx 0.
+        ws.move_window_up_in_column();
+        assert_eq!(ws.focused_window_in_column, 0);
+        assert_eq!(ws.columns[0].active_tab_idx(), Some(0));
+    }
+
+    #[test]
+    fn test_move_window_left_into_tabbed_keeps_focus_on_moved() {
+        // Source: col 0 with 1 window. Receiver: col 1 Tabbed with 2 windows.
+        let mut ws = Workspace::with_gaps(0, 0);
+        ws.insert_window(1, Some(800)).unwrap();
+        ws.insert_window(2, Some(800)).unwrap();
+        ws.insert_window_in_column(3, 1).unwrap();
+        ws.set_focus(1, 0).unwrap();
+        ws.toggle_focused_column_tabbed_mode();
+        // Now col 0 has just [1], col 1 is Tabbed with [2, 3] active=0.
+        // Place focus on col 0's window and move it left... wait, col 0 is leftmost.
+        // Use move_window_right from col 0 instead.
+        ws.set_focus(0, 0).unwrap();
+        // After move_window_right, window 1 joins col 1 at end. Per plan,
+        // keyboard-initiated move makes the moved window the active tab.
+        ws.move_window_right();
+        // Col 1 now has [2, 3, 1], active should be 2 (the moved window).
+        assert_eq!(ws.columns.len(), 1); // col 0 was emptied
+        assert_eq!(ws.columns[0].active_tab_idx(), Some(2));
+        assert_eq!(ws.focused_window_in_column, 2);
+    }
+
+    #[test]
+    fn test_expel_active_tab_creates_vertical_column() {
+        let mut ws = ws_3_tabs();
+        ws.toggle_focused_column_tabbed_mode();
+        ws.set_active_tab(0, 1).unwrap();
+        ws.set_focus(0, 1).unwrap();
+        ws.expel_to_right();
+        // Original column (col 0) drops from 3 → 2 windows; stays Tabbed.
+        // active_idx was 1 (the expelled window) — `remove_at_index` advances
+        // it by clamping to len-1.
+        assert!(ws.columns[0].is_tabbed());
+        assert_eq!(ws.columns[0].active_tab_idx(), Some(1));
+        assert_eq!(ws.columns[0].windows(), &[1, 3]);
+        // New column (col 1) is the expelled window; always Vertical.
+        assert!(matches!(ws.columns[1].mode(), ColumnMode::Vertical));
+        assert_eq!(ws.columns[1].windows(), &[2]);
+    }
+
+    #[test]
+    fn test_expel_drops_to_one_auto_reverts_to_vertical() {
+        // Build 2-window tabbed column, expel one — drops to 1, auto-reverts.
+        let mut ws = Workspace::with_gaps(0, 0);
+        ws.insert_window(1, Some(800)).unwrap();
+        ws.insert_window_in_column(2, 0).unwrap();
+        ws.set_focus(0, 0).unwrap();
+        ws.toggle_focused_column_tabbed_mode();
+        assert!(ws.columns[0].is_tabbed());
+        ws.set_focus(0, 1).unwrap();
+        ws.expel_to_right();
+        // Col 0 has 1 window left → Vertical.
+        assert!(matches!(ws.columns[0].mode(), ColumnMode::Vertical));
+    }
+
+    #[test]
+    fn test_workspace_json_roundtrip_with_tabbed_column() {
+        let mut ws = ws_3_tabs();
+        ws.toggle_focused_column_tabbed_mode();
+        ws.set_active_tab(0, 1).unwrap();
+        let json = serde_json::to_string(&ws).unwrap();
+        let restored: Workspace = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            restored.columns[0].active_tab_idx(),
+            Some(1),
+            "active_idx should round-trip through JSON"
+        );
+        assert!(restored.columns[0].is_tabbed());
+        assert_eq!(restored.focused_window_in_column, 1);
+    }
+
+    #[test]
+    fn test_workspace_json_legacy_payload_defaults_to_vertical() {
+        // Synthesize a legacy JSON payload (no `mode` field on columns).
+        let legacy = r#"{
+            "columns": [{"width": 800, "windows": [1, 2, 3], "height_weights": [0.33, 0.33, 0.34]}],
+            "focused_column": 0,
+            "focused_window_in_column": 0,
+            "scroll_offset": 0.0,
+            "gap": 0,
+            "outer_gap_left": 0,
+            "outer_gap_right": 0,
+            "outer_gap_top": 0,
+            "outer_gap_bottom": 0,
+            "default_column_width": 800,
+            "centering_mode": "Center"
+        }"#;
+        let ws: Workspace = serde_json::from_str(legacy).unwrap();
+        assert!(matches!(ws.columns[0].mode(), ColumnMode::Vertical));
+    }
+
+    #[test]
+    fn test_cycle_height_noop_on_tabbed_column() {
+        let mut ws = ws_3_tabs();
+        ws.toggle_focused_column_tabbed_mode();
+        let before = ws.columns[0].height_weights().to_vec();
+        ws.cycle_height_up(&[0.333, 0.5, 0.667]);
+        let after = ws.columns[0].height_weights().to_vec();
+        assert_eq!(before, after, "cycle_height should be no-op on Tabbed");
+    }
+
+    #[test]
+    fn test_equalize_heights_noop_on_tabbed_column() {
+        let mut ws = ws_3_tabs();
+        // Set unequal weights first (in Vertical mode).
+        ws.columns[0].set_height_weight(0, 0.7);
+        let before = ws.columns[0].height_weights().to_vec();
+        ws.toggle_focused_column_tabbed_mode();
+        ws.equalize_focused_column_heights();
+        let after = ws.columns[0].height_weights().to_vec();
+        assert_eq!(before, after, "equalize should be no-op on Tabbed");
+    }
+
+    #[test]
+    fn test_snap_height_noop_on_tabbed_column() {
+        let mut ws = ws_3_tabs();
+        let before = ws.columns[0].height_weights().to_vec();
+        ws.toggle_focused_column_tabbed_mode();
+        ws.snap_window_height_to_preset(0, 1, 600, &[0.333, 0.5, 0.667], 1000);
+        let after = ws.columns[0].height_weights().to_vec();
+        assert_eq!(before, after, "snap_height should be no-op on Tabbed");
+    }
+
+    #[test]
+    fn test_focus_up_with_minimized_tabs_skips() {
+        let mut ws = ws_3_tabs();
+        ws.toggle_focused_column_tabbed_mode();
+        ws.set_active_tab(0, 0).unwrap();
+        ws.mark_minimized(2); // window at idx 1 minimized
+        // focus_down from 0 should skip 1 and land on 2.
+        ws.focus_down();
+        assert_eq!(ws.focused_window_in_column, 2);
+    }
+
+    #[test]
+    fn test_active_idx_invariant_with_focus() {
+        // After every focus mutation in a focused tabbed column,
+        // active_idx == focused_window_in_column.
+        let mut ws = ws_3_tabs();
+        ws.toggle_focused_column_tabbed_mode();
+        ws.set_focus(0, 1).unwrap();
+        assert_eq!(ws.columns[0].active_tab_idx(), Some(1));
+        ws.set_focus(0, 2).unwrap();
+        assert_eq!(ws.columns[0].active_tab_idx(), Some(2));
+    }
+
+    #[test]
+    fn test_insert_in_tabbed_column_preserves_active_idx_without_focus() {
+        // Raw-insert behavior at the core_layout level: inserting a
+        // window into a Tabbed column should NOT touch `active_idx`.
+        // The daemon's drag-merge path follows the insert with
+        // `focus_window(hwnd)` to promote the dropped window to active
+        // (Chrome-tab semantics), but that's a daemon policy — the
+        // layer-level guarantee is "insert is non-disturbing".
+        let mut ws = Workspace::with_gaps(0, 0);
+        ws.insert_window(1, Some(800)).unwrap();
+        ws.insert_window(2, Some(800)).unwrap();
+        ws.insert_window_in_column(3, 1).unwrap();
+        ws.set_focus(1, 1).unwrap();
+        ws.toggle_focused_column_tabbed_mode();
+        // active_idx == 1 (focus was on idx 1).
+        assert_eq!(ws.columns[1].active_tab_idx(), Some(1));
+        // Insert at end of tabbed column without a follow-up focus call.
+        ws.insert_window_in_column_at(99, 1, 2).unwrap();
+        // active_idx should still be 1 (not the dragged window).
+        assert_eq!(ws.columns[1].active_tab_idx(), Some(1));
     }
 }

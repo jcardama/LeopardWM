@@ -22,6 +22,14 @@ use windows::Win32::UI::WindowsAndMessaging::{
 /// invisible to the user. Used by the Windows shell for virtual desktops.
 const DWMWA_CLOAK: DWMWINDOWATTRIBUTE = DWMWINDOWATTRIBUTE(13i32);
 
+/// Disable DWM-managed visual transitions (minimize/maximize fade,
+/// position interpolation between SetWindowPos calls, etc.) on a
+/// specific window. Tiling WMs want instant snap behavior, not DWM
+/// smoothing — without this, dragging a window into a tabbed column
+/// makes the dropped window visibly "slide" from the drop point to
+/// its layout slot.
+const DWMWA_TRANSITIONS_FORCEDISABLED: DWMWINDOWATTRIBUTE = DWMWINDOWATTRIBUTE(3i32);
+
 /// Set or clear the DWM cloak on a window.
 unsafe fn dwm_set_cloak(hwnd: HWND, cloaked: bool) {
     let value = BOOL::from(cloaked);
@@ -31,6 +39,24 @@ unsafe fn dwm_set_cloak(hwnd: HWND, cloaked: bool) {
         &value as *const _ as _,
         std::mem::size_of::<BOOL>() as u32,
     );
+}
+
+/// Disable (or re-enable) DWM-managed visual transitions on a window.
+/// Pass `true` to make subsequent `SetWindowPos` calls land instantly
+/// without DWM's automatic position-interpolation smoothing.
+pub fn set_dwm_transitions_disabled(window_id: WindowId, disabled: bool) {
+    let Ok(hwnd) = window_id_to_hwnd(window_id) else {
+        return;
+    };
+    unsafe {
+        let value = BOOL::from(disabled);
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_TRANSITIONS_FORCEDISABLED,
+            &value as *const _ as _,
+            std::mem::size_of::<BOOL>() as u32,
+        );
+    }
 }
 
 /// Lock GLOBAL_CLOAKED, recovering from poison (a prior panic while holding

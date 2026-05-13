@@ -53,6 +53,9 @@ fn test_all_commands_roundtrip() {
         IpcCommand::Stop,
         IpcCommand::PanicRevert,
         IpcCommand::TogglePause,
+        IpcCommand::ToggleTabbed,
+        IpcCommand::SetActiveTab { column: 0, tab: 0 },
+        IpcCommand::SetActiveTab { column: 3, tab: 7 },
     ];
 
     for cmd in commands {
@@ -676,6 +679,7 @@ fn test_event_kind_classification() {
                     window_ids: vec![],
                     width_px: 100,
                     height_weights: vec![],
+                    mode: leopardwm_ipc::ColumnSummaryMode::default(),
                 }],
             },
             EventKind::Layout,
@@ -700,4 +704,76 @@ fn test_lagged_event_wire_format() {
     assert_eq!(json, r#"{"type":"lagged","skipped":99}"#);
     let parsed: IpcEvent = serde_json::from_str(&json).unwrap();
     assert_eq!(parsed, lagged);
+}
+
+/// Tabbed columns extend `LayoutChanged` with `ColumnSummary.mode`.
+/// Verify a mixed-vertical-and-tabbed payload round-trips and that
+/// subscribers see the active_idx clearly enough to render a tab strip.
+#[test]
+fn test_layout_changed_mixed_vertical_and_tabbed_columns() {
+    use leopardwm_ipc::{ColumnSummary, ColumnSummaryMode, IpcEvent};
+    let ev = IpcEvent::LayoutChanged {
+        monitor: 65537,
+        workspace_index: 0,
+        focused_column: Some(1),
+        columns: vec![
+            ColumnSummary {
+                window_ids: vec![100],
+                width_px: 600,
+                height_weights: vec![1.0],
+                mode: ColumnSummaryMode::Vertical,
+            },
+            ColumnSummary {
+                window_ids: vec![200, 300, 400],
+                width_px: 800,
+                height_weights: Vec::new(),
+                mode: ColumnSummaryMode::Tabbed { active_idx: 2 },
+            },
+        ],
+    };
+    let json = serde_json::to_string(&ev).unwrap();
+    assert!(json.contains("\"mode\":{\"type\":\"vertical\"}"));
+    assert!(json.contains("\"mode\":{\"type\":\"tabbed\",\"active_idx\":2}"));
+    let parsed: IpcEvent = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed, ev);
+}
+
+/// Documented backward-compat: a v1 daemon's payload (no `mode` key on
+/// columns) must be parseable by a v2-aware client. This test mirrors
+/// the IPC-crate test but at the integration layer to lock the contract
+/// for any future protocol bumps.
+#[test]
+fn test_layout_changed_v1_payload_parses_in_v2_client() {
+    use leopardwm_ipc::{ColumnSummaryMode, IpcEvent};
+    let v1 = r#"{
+        "type": "layout_changed",
+        "monitor": 65537,
+        "workspace_index": 0,
+        "focused_column": 0,
+        "columns": [
+            {"window_ids": [100], "width_px": 800, "height_weights": [1.0]}
+        ]
+    }"#;
+    let parsed: IpcEvent = serde_json::from_str(v1).unwrap();
+    if let IpcEvent::LayoutChanged { columns, .. } = parsed {
+        assert!(matches!(columns[0].mode, ColumnSummaryMode::Vertical));
+    } else {
+        panic!("expected LayoutChanged");
+    }
+}
+
+/// Subscribers must distinguish ToggleTabbed (no payload) from
+/// SetActiveTab (column+tab). Verify the wire shapes don't collide.
+#[test]
+fn test_tab_commands_have_distinct_wire_shapes() {
+    use leopardwm_ipc::IpcCommand;
+    let toggle = IpcCommand::ToggleTabbed;
+    let set = IpcCommand::SetActiveTab { column: 1, tab: 2 };
+    let toggle_json = serde_json::to_string(&toggle).unwrap();
+    let set_json = serde_json::to_string(&set).unwrap();
+    assert_ne!(toggle_json, set_json);
+    assert!(toggle_json.contains("toggle_tabbed"));
+    assert!(set_json.contains("set_active_tab"));
+    assert!(set_json.contains("\"column\":1"));
+    assert!(set_json.contains("\"tab\":2"));
 }

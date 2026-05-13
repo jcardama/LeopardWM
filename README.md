@@ -37,6 +37,7 @@ A few deliberate **non-features**, so you know what you're getting:
 - Smooth scroll animations with layout transition effects (vsync-locked)
 - Touchpad gestures with configurable swipe actions
 - Drag-and-drop column reorder (Shift+drag to merge windows)
+- **Tabbed columns** — toggle a column between vertical-stack and tab-strip mode (`Ctrl+Alt+T`); only the active tab fills the column rect, the rest sit in a clickable strip above
 - Floating and fullscreen toggles
 - Width and height presets with column equalization, maximize-column, center-column
 - Active focus border with auto-detected rounded corners
@@ -121,10 +122,32 @@ Most hotkeys use `Ctrl+Alt` as the base modifier. Layered pattern: base = focus,
 | `Ctrl+Alt+W` | Close focused window |
 | `Ctrl+Alt+F` | Toggle floating |
 | `Ctrl+Alt+Shift+F` | Toggle fullscreen |
+| `Ctrl+Alt+T` | Toggle tabbed mode on focused column |
 | `Ctrl+Alt+P` | Toggle pause |
 | `Ctrl+Alt+R` | Refresh (re-enumerate windows) |
 | `Ctrl+Alt+Shift+R` | Reload config |
 | `Win+Ctrl+Escape` | Emergency restore + panic-revert |
+
+## Tabbed columns
+
+Stack multiple windows into a clickable tab strip inside any column. Combine with the scrolling viewport for niri-style tabs that also pan horizontally — a combination no other Windows window manager ships today.
+
+**Basics**
+- `Ctrl+Alt+T` on the focused column toggles between vertical stacking (the default) and tabbed mode
+- `Ctrl+Alt+J` / `Ctrl+Alt+K` cycle the active tab — same keys as intra-column focus, no new bindings to learn
+- Click any tab in the strip to activate it; the click is a real focus change, so the border, foreground state, and IPC events all follow
+- Tab titles and icons update live as windows rename themselves or swap notification badges
+
+**Drag-and-drop (Chrome semantics)**
+- Drop a window onto a tabbed column from anywhere — body or strip — and it appends as the rightmost tab and becomes active
+- The drop-zone ghost spans the whole column rect so the target is unambiguous
+
+**Lifecycle**
+- A tabbed column with one window auto-reverts to vertical mode
+- Tabbed state (and which tab is active) survives daemon restart
+- The strip hides during fullscreen, pause, and on workspaces with no tabbed column
+
+**Customization** — strip height, background, active/inactive text colours, active highlight, and opacity are configurable from the Settings UI or `[appearance]` (`tab_strip_height`, `tab_strip_bg`, `tab_strip_active_bg`, `tab_strip_active_text`, `tab_strip_inactive_text`, `tab_strip_opacity`).
 
 ## CLI
 

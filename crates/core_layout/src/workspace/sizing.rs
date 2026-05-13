@@ -385,6 +385,9 @@ impl Workspace {
 
     /// Snap a window's height weight to the nearest height preset based on the
     /// new pixel height from a user resize. Only meaningful for multi-window columns.
+    /// No-op for Tabbed columns (only one tab is rendered at a time, so
+    /// height_weights have no visible effect — silent mutation here would
+    /// surface as drift the moment the user reverts to Vertical).
     pub fn snap_window_height_to_preset(
         &mut self,
         col_idx: usize,
@@ -399,7 +402,7 @@ impl Workspace {
         let Some(column) = self.columns.get(col_idx) else {
             return;
         };
-        if column.len() <= 1 {
+        if column.len() <= 1 || column.is_tabbed() {
             return;
         }
 
@@ -460,7 +463,9 @@ impl Workspace {
             Some(c) => c,
             None => return,
         };
-        if col.len() <= 1 {
+        // Tabbed columns: height cycling is meaningless (only the active tab
+        // renders at full column height).
+        if col.len() <= 1 || col.is_tabbed() {
             return;
         }
         col.ensure_height_weights();
@@ -482,8 +487,12 @@ impl Workspace {
     }
 
     /// Equalize height weights in the focused column.
+    /// No-op for Tabbed columns (only one tab visible at a time).
     pub fn equalize_focused_column_heights(&mut self) {
         if let Some(col) = self.columns.get_mut(self.focused_column) {
+            if col.is_tabbed() {
+                return;
+            }
             col.equalize_height_weights();
         }
     }
@@ -553,6 +562,7 @@ impl Workspace {
     }
 
     /// Compute the nearest height weight preset for a window, without mutating state.
+    /// Returns None for Tabbed columns (height_weights aren't visible there).
     fn nearest_preset_height_weight(
         &self,
         col_idx: usize,
@@ -564,7 +574,7 @@ impl Workspace {
             return None;
         }
         let column = self.columns.get(col_idx)?;
-        if column.len() <= 1 {
+        if column.len() <= 1 || column.is_tabbed() {
             return None;
         }
 

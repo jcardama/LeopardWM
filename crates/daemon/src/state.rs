@@ -180,6 +180,11 @@ pub(crate) struct AppState {
     pub(crate) last_prune_at: Option<std::time::Instant>,
     /// Border frame overlay for the active window.
     pub(crate) border_frame: Option<leopardwm_platform_win32::border::BorderFrame>,
+    /// Tab strip overlay rendered above the focused tabbed column.
+    /// Single-instance — `helpers.rs::apply_layout` calls `.show(...)` whenever
+    /// the focused column is Tabbed, `.hide()` otherwise.
+    pub(crate) tab_strip_overlay:
+        Option<leopardwm_platform_win32::tab_strip::TabStripOverlay>,
     /// Whether tiling is paused.
     pub(crate) paused: bool,
     /// Guard flag to suppress MovedOrResized events during apply_layout().
@@ -281,6 +286,35 @@ pub(crate) struct AppState {
     /// used to dedup repeat emissions when the layout signature is
     /// unchanged (e.g. animation frames between settled positions).
     pub(crate) last_emitted_layout_sig: Option<u64>,
+    /// One-shot intent flag set by tab-click / tab-cycle commands so the
+    /// resulting `WindowEvent::Focused` bypasses same-column suppression.
+    /// `(monitor_id, ws_idx, col_idx, tab_idx, set_at)` — `set_at` is a
+    /// monotonic timestamp used to TTL the flag (~500ms) so a missed
+    /// Focused event doesn't permanently disable suppression.
+    pub(crate) pending_tab_focus: Option<PendingTabFocus>,
+}
+
+/// Tracks an in-flight tab focus change synthesized by the tab strip
+/// overlay's click handler or `Ctrl+Alt+J/K` cycle. Consumed by
+/// `event_handler.rs`'s same-column suppression bypass when the matching
+/// `WindowEvent::Focused` arrives.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PendingTabFocus {
+    pub(crate) monitor: MonitorId,
+    pub(crate) workspace_idx: usize,
+    pub(crate) column_idx: usize,
+    pub(crate) tab_idx: usize,
+    pub(crate) set_at: std::time::Instant,
+}
+
+impl PendingTabFocus {
+    /// TTL after which the flag is considered stale and ignored.
+    pub(crate) const TTL: std::time::Duration = std::time::Duration::from_millis(500);
+
+    /// Whether this pending intent still applies (within TTL).
+    pub(crate) fn is_fresh(&self) -> bool {
+        self.set_at.elapsed() < Self::TTL
+    }
 }
 
 /// Snapshot of workspace state for persistence.
@@ -324,6 +358,7 @@ impl AppState {
         for monitor in monitors {
             let params = ScaledLayoutParams::from_config(
                 &config.layout,
+                &config.appearance,
                 monitor.scale_factor,
                 monitor.work_area.width,
             );
@@ -335,6 +370,7 @@ impl AppState {
                 params.outer_gap_bottom,
             );
             workspace.set_default_column_width(params.default_column_width);
+            workspace.set_tab_strip_reserve_px(params.tab_strip_reserve_px);
             workspace.set_centering_mode(config.layout.centering_mode.into());
             workspace.set_center_past_edges(config.layout.center_past_edges);
             workspace.set_reduce_motion(
@@ -380,6 +416,12 @@ impl AppState {
             } else {
                 leopardwm_platform_win32::border::BorderFrame::new().ok()
             },
+            // Tab strip is installed separately via `install_tab_strip`
+            // because its click sender lives in the main.rs setup scope
+            // (so the matching receiver can be drained into DaemonEvents).
+            // Tests don't call install_tab_strip, leaving this None — same
+            // cfg(test) gate as border_frame.
+            tab_strip_overlay: None,
             // Paused under cfg(test): placeholder hwnds collide with real
             // HWNDs and lag the mouse via DWM. Tests opt out as needed.
             paused: cfg!(test),
@@ -422,6 +464,7 @@ impl AppState {
             // and is expected to reconnect with a fresh Subscribe.
             event_broadcaster: tokio::sync::broadcast::channel(256).0,
             last_emitted_layout_sig: None,
+            pending_tab_focus: None,
         }
     }
 
@@ -468,6 +511,17 @@ impl AppState {
                 for w in col.height_weights() {
                     w.to_bits().hash(&mut hasher);
                 }
+                // Fold the column's display mode + active tab into the
+                // signature so tab switches (Tabbed -> different active_idx)
+                // and toggling Vertical<->Tabbed produce a fresh
+                // `LayoutChanged` event for IPC subscribers.
+                match col.mode() {
+                    leopardwm_core_layout::ColumnMode::Vertical => 0u8.hash(&mut hasher),
+                    leopardwm_core_layout::ColumnMode::Tabbed { active_idx } => {
+                        1u8.hash(&mut hasher);
+                        active_idx.hash(&mut hasher);
+                    }
+                }
             }
         }
         hasher.finish()
@@ -486,6 +540,16 @@ impl AppState {
                         window_ids: col.windows().to_vec(),
                         width_px: col.width(),
                         height_weights: col.height_weights().to_vec(),
+                        mode: match col.mode() {
+                            leopardwm_core_layout::ColumnMode::Vertical => {
+                                leopardwm_ipc::ColumnSummaryMode::Vertical
+                            }
+                            leopardwm_core_layout::ColumnMode::Tabbed { active_idx } => {
+                                leopardwm_ipc::ColumnSummaryMode::Tabbed {
+                                    active_idx: *active_idx,
+                                }
+                            }
+                        },
                     })
                     .collect()
             })
@@ -504,6 +568,71 @@ impl AppState {
         self.workspaces.get_mut(&self.focused_monitor)?.get_mut(idx)
     }
 
+    /// Install the tab strip overlay. Called once during daemon startup
+    /// after the click channel pair has been created in main.rs scope —
+    /// the overlay receives `tab_click_tx` and posts to it on
+    /// `WM_LBUTTONDOWN`; main.rs drains the matching receiver and
+    /// translates clicks to `IpcCommand::SetActiveTab`.
+    ///
+    /// Skipped in test builds (would create real layered DWM windows).
+    pub(crate) fn install_tab_strip(
+        &mut self,
+        tab_click_tx: std::sync::mpsc::Sender<
+            leopardwm_platform_win32::tab_strip::TabClickEvent,
+        >,
+    ) {
+        if cfg!(test) {
+            drop(tab_click_tx);
+            return;
+        }
+        match leopardwm_platform_win32::tab_strip::TabStripOverlay::new(tab_click_tx) {
+            Ok(overlay) => self.tab_strip_overlay = Some(overlay),
+            Err(e) => tracing::warn!("Failed to create TabStripOverlay: {}", e),
+        }
+    }
+
+    /// Try to consume `pending_tab_focus` if it matches the given event
+    /// (same monitor + workspace, and `hwnd` resolves to the expected tab
+    /// in the expected column). Returns `true` if the flag was consumed
+    /// and the caller should bypass same-column suppression.
+    ///
+    /// Stale flags (older than `PendingTabFocus::TTL`) are dropped
+    /// silently as a safety net for cases where the synthetic
+    /// SetForegroundWindow never produced an event.
+    pub(crate) fn consume_pending_tab_focus_for(
+        &mut self,
+        monitor: MonitorId,
+        workspace_idx: usize,
+        hwnd: u64,
+    ) -> bool {
+        let Some(pending) = self.pending_tab_focus else {
+            return false;
+        };
+        if !pending.is_fresh() {
+            self.pending_tab_focus = None;
+            return false;
+        }
+        if pending.monitor != monitor || pending.workspace_idx != workspace_idx {
+            return false;
+        }
+        // Verify the event's hwnd matches the expected (column, tab) in
+        // the workspace state. If it doesn't, leave the flag in place so a
+        // later matching event can still consume it.
+        let matches = self
+            .workspaces
+            .get(&monitor)
+            .and_then(|list| list.get(workspace_idx))
+            .and_then(|ws| ws.column(pending.column_idx))
+            .and_then(|col| col.get(pending.tab_idx))
+            .is_some_and(|w| w == hwnd);
+        if matches {
+            self.pending_tab_focus = None;
+            true
+        } else {
+            false
+        }
+    }
+
     /// Ensure workspace index exists for a monitor, creating empty workspaces as needed.
     /// Returns a mutable reference to the workspace at the given index.
     pub(crate) fn ensure_workspace_exists(&mut self, monitor_id: MonitorId, idx: usize) -> Option<&mut Workspace> {
@@ -513,7 +642,12 @@ impl AppState {
         let vw = self.monitors.get(&monitor_id)
             .map(|m| m.work_area.width)
             .unwrap_or(FALLBACK_VIEWPORT_WIDTH);
-        let params = ScaledLayoutParams::from_config(&self.config.layout, scale, vw);
+        let params = ScaledLayoutParams::from_config(
+            &self.config.layout,
+            &self.config.appearance,
+            scale,
+            vw,
+        );
 
         let config = &self.config;
         let ws_vec = self.workspaces.get_mut(&monitor_id)?;
@@ -526,6 +660,7 @@ impl AppState {
                 params.outer_gap_bottom,
             );
             ws.set_default_column_width(params.default_column_width);
+            ws.set_tab_strip_reserve_px(params.tab_strip_reserve_px);
             ws.set_centering_mode(config.layout.centering_mode.into());
             ws.set_center_past_edges(config.layout.center_past_edges);
             ws.set_reduce_motion(self.reduce_motion);

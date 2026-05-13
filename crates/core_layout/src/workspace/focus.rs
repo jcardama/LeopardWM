@@ -243,11 +243,7 @@ impl Workspace {
         let start = self.focused_column;
         while self.focused_column > 0 {
             self.focused_column -= 1;
-            // Clamp focused window in column
-            let col_len = self.columns[self.focused_column].len();
-            if self.focused_window_in_column >= col_len {
-                self.focused_window_in_column = col_len.saturating_sub(1);
-            }
+            self.land_focus_in_current_column();
             // Skip columns where every window is minimized
             if self.has_visible_window_in_column(self.focused_column) {
                 self.adjust_focus_to_visible_in_column();
@@ -257,17 +253,14 @@ impl Workspace {
         // If we didn't find a visible column, stay at original
         if !self.has_visible_window_in_column(self.focused_column) {
             self.focused_column = start;
-            if let Some(col) = self.columns.get(self.focused_column) {
-                if self.focused_window_in_column >= col.len() {
-                    self.focused_window_in_column = col.len().saturating_sub(1);
-                }
-            }
+            self.land_focus_in_current_column();
         }
 
         self.clamp_focus_indices();
         if self.has_visible_window_in_column(self.focused_column) {
             self.adjust_focus_to_visible_in_column();
         }
+        self.sync_active_tab_to_focus();
 
         debug_assert!(
             self.columns.is_empty()
@@ -284,11 +277,7 @@ impl Workspace {
         let start = self.focused_column;
         while self.focused_column + 1 < self.columns.len() {
             self.focused_column += 1;
-            // Clamp focused window in column
-            let col_len = self.columns[self.focused_column].len();
-            if self.focused_window_in_column >= col_len {
-                self.focused_window_in_column = col_len.saturating_sub(1);
-            }
+            self.land_focus_in_current_column();
             // Skip columns where every window is minimized
             if self.has_visible_window_in_column(self.focused_column) {
                 self.adjust_focus_to_visible_in_column();
@@ -298,17 +287,14 @@ impl Workspace {
         // If we didn't find a visible column, stay at original
         if !self.has_visible_window_in_column(self.focused_column) {
             self.focused_column = start;
-            if let Some(col) = self.columns.get(self.focused_column) {
-                if self.focused_window_in_column >= col.len() {
-                    self.focused_window_in_column = col.len().saturating_sub(1);
-                }
-            }
+            self.land_focus_in_current_column();
         }
 
         self.clamp_focus_indices();
         if self.has_visible_window_in_column(self.focused_column) {
             self.adjust_focus_to_visible_in_column();
         }
+        self.sync_active_tab_to_focus();
 
         debug_assert!(
             self.columns.is_empty()
@@ -319,31 +305,62 @@ impl Workspace {
     }
 
     /// Move focus to the window above in the current column, skipping
-    /// minimized windows.
+    /// minimized windows. In a Tabbed column, cycles to the previous tab
+    /// (wrapping at the start) so a single keypress walks the tab list.
     pub fn focus_up(&mut self) {
-        if let Some(column) = self.columns.get(self.focused_column) {
-            let mut target = self.focused_window_in_column;
-            while target > 0 {
-                target -= 1;
+        let Some(column) = self.columns.get(self.focused_column) else {
+            return;
+        };
+        if column.is_tabbed() && column.len() >= 2 {
+            // Cycle to the previous tab, wrapping. Skip minimized tabs.
+            let n = column.len();
+            let cur = self.focused_window_in_column;
+            for offset in 1..=n {
+                let target = (cur + n - offset) % n;
                 if !self.minimized_windows.contains(&column.windows[target]) {
                     self.focused_window_in_column = target;
+                    self.sync_active_tab_to_focus();
                     return;
                 }
+            }
+            return;
+        }
+        let mut target = self.focused_window_in_column;
+        while target > 0 {
+            target -= 1;
+            if !self.minimized_windows.contains(&column.windows[target]) {
+                self.focused_window_in_column = target;
+                return;
             }
         }
     }
 
     /// Move focus to the window below in the current column, skipping
-    /// minimized windows.
+    /// minimized windows. In a Tabbed column, cycles to the next tab
+    /// (wrapping at the end) so a single keypress walks the tab list.
     pub fn focus_down(&mut self) {
-        if let Some(column) = self.columns.get(self.focused_column) {
-            let mut target = self.focused_window_in_column;
-            while target + 1 < column.len() {
-                target += 1;
+        let Some(column) = self.columns.get(self.focused_column) else {
+            return;
+        };
+        if column.is_tabbed() && column.len() >= 2 {
+            let n = column.len();
+            let cur = self.focused_window_in_column;
+            for offset in 1..=n {
+                let target = (cur + offset) % n;
                 if !self.minimized_windows.contains(&column.windows[target]) {
                     self.focused_window_in_column = target;
+                    self.sync_active_tab_to_focus();
                     return;
                 }
+            }
+            return;
+        }
+        let mut target = self.focused_window_in_column;
+        while target + 1 < column.len() {
+            target += 1;
+            if !self.minimized_windows.contains(&column.windows[target]) {
+                self.focused_window_in_column = target;
+                return;
             }
         }
     }
@@ -368,19 +385,27 @@ impl Workspace {
                 target += 1;
                 if !self.minimized_windows.contains(&column.windows[target]) {
                     self.focused_window_in_column = target;
+                    self.sync_active_tab_to_focus();
                     return;
                 }
             }
         }
 
-        // Move to next columns, wrapping around
+        // Move to next columns, wrapping around. Tabbed targets land on
+        // their active tab; Vertical targets land on the first visible.
         let n = self.columns.len();
         for offset in 1..=n {
             let col_idx = (start_col + offset) % n;
             if self.has_visible_window_in_column(col_idx) {
                 self.focused_column = col_idx;
-                self.focused_window_in_column = 0;
+                let landing = self
+                    .columns
+                    .get(col_idx)
+                    .and_then(|c| c.active_tab_idx())
+                    .unwrap_or(0);
+                self.focused_window_in_column = landing;
                 self.adjust_focus_to_visible_in_column();
+                self.sync_active_tab_to_focus();
                 return;
             }
         }
@@ -406,26 +431,136 @@ impl Workspace {
                 target -= 1;
                 if !self.minimized_windows.contains(&column.windows[target]) {
                     self.focused_window_in_column = target;
+                    self.sync_active_tab_to_focus();
                     return;
                 }
             }
         }
 
-        // Move to previous columns, wrapping around
+        // Move to previous columns, wrapping around. Tabbed targets land
+        // on their active tab; Vertical targets land on the last visible.
         let n = self.columns.len();
         for offset in 1..=n {
             let col_idx = (start_col + n - offset) % n;
             if let Some(column) = self.columns.get(col_idx) {
-                // Find the last visible window in this column
+                // Tabbed: jump straight to active tab if visible.
+                if let Some(active_idx) = column.active_tab_idx() {
+                    if active_idx < column.len()
+                        && !self.minimized_windows.contains(&column.windows[active_idx])
+                    {
+                        self.focused_column = col_idx;
+                        self.focused_window_in_column = active_idx;
+                        return;
+                    }
+                }
+                // Vertical (or minimized active tab): find the last visible.
                 for i in (0..column.len()).rev() {
                     if !self.minimized_windows.contains(&column.windows[i]) {
                         self.focused_column = col_idx;
                         self.focused_window_in_column = i;
+                        self.sync_active_tab_to_focus();
                         return;
                     }
                 }
             }
         }
+    }
+
+    /// Land `focused_window_in_column` in the current column appropriately:
+    /// for Vertical, clamp to length; for Tabbed, jump to `active_idx`.
+    /// Used by `focus_left`/`focus_right` so entering a Tabbed column shows
+    /// the tab the user last had active there, not whatever index happened
+    /// to be carried over from the source column.
+    fn land_focus_in_current_column(&mut self) {
+        let Some(col) = self.columns.get(self.focused_column) else {
+            return;
+        };
+        match col.mode {
+            ColumnMode::Vertical => {
+                let col_len = col.len();
+                if self.focused_window_in_column >= col_len {
+                    self.focused_window_in_column = col_len.saturating_sub(1);
+                }
+            }
+            ColumnMode::Tabbed { active_idx } => {
+                self.focused_window_in_column = active_idx;
+            }
+        }
+    }
+
+    /// If the focused column is Tabbed, force its `active_idx` to match
+    /// `focused_window_in_column`. Called at the end of any focus mutation
+    /// to maintain the focused-column invariant: in a focused Tabbed column,
+    /// `active_idx == focused_window_in_column`.
+    pub(crate) fn sync_active_tab_to_focus(&mut self) {
+        let idx = self.focused_window_in_column;
+        if let Some(col) = self.columns.get_mut(self.focused_column) {
+            col.set_active_tab(idx);
+        }
+    }
+
+    /// Toggle the focused column between Vertical and Tabbed display modes.
+    ///
+    /// On entry to Tabbed, `active_idx` is seeded with `focused_window_in_column`
+    /// so the currently-focused window remains active. On exit to Vertical,
+    /// no focus change occurs (focus already points to the active tab).
+    ///
+    /// No-op when there is no focused column or when the column has fewer
+    /// than 2 windows (1-tab tabbed is degenerate).
+    pub fn toggle_focused_column_tabbed_mode(&mut self) {
+        let cur_focus = self.focused_window_in_column;
+        let Some(col) = self.columns.get_mut(self.focused_column) else {
+            return;
+        };
+        match col.mode {
+            ColumnMode::Vertical => {
+                if col.len() < 2 {
+                    return;
+                }
+                col.set_tabbed(cur_focus);
+            }
+            ColumnMode::Tabbed { .. } => {
+                col.set_vertical();
+            }
+        }
+    }
+
+    /// Set the active tab for a Tabbed column. Returns an error if the
+    /// column is out of bounds, the column is not Tabbed, or `tab_idx`
+    /// is out of range.
+    ///
+    /// When `column == focused_column`, also moves `focused_window_in_column`
+    /// to the new tab so the focused/active invariant holds. The caller is
+    /// responsible for `apply_layout()` and `sync_foreground_window()` to
+    /// flow the focus change out to Win32.
+    pub fn set_active_tab(&mut self, column: usize, tab_idx: usize) -> Result<(), LayoutError> {
+        if column >= self.columns.len() {
+            return Err(LayoutError::ColumnOutOfBounds(
+                column,
+                self.columns.len().saturating_sub(1),
+            ));
+        }
+        let col = &mut self.columns[column];
+        if !col.is_tabbed() {
+            // Caller must toggle first; we don't auto-promote.
+            return Err(LayoutError::WindowIndexOutOfBounds(
+                tab_idx,
+                column,
+                col.len().saturating_sub(1),
+            ));
+        }
+        if tab_idx >= col.len() {
+            return Err(LayoutError::WindowIndexOutOfBounds(
+                tab_idx,
+                column,
+                col.len().saturating_sub(1),
+            ));
+        }
+        col.set_active_tab(tab_idx);
+        if column == self.focused_column {
+            self.focused_window_in_column = tab_idx;
+        }
+        Ok(())
     }
 
     /// Clamp focus indices to valid column/window bounds.
@@ -562,6 +697,7 @@ impl Workspace {
 
         self.focused_column = column;
         self.focused_window_in_column = window_in_column;
+        self.sync_active_tab_to_focus();
         Ok(())
     }
 
@@ -575,6 +711,7 @@ impl Workspace {
             if let Some(win_idx) = column.windows.iter().position(|&w| w == window_id) {
                 self.focused_column = col_idx;
                 self.focused_window_in_column = win_idx;
+                self.sync_active_tab_to_focus();
                 return Ok(());
             }
         }

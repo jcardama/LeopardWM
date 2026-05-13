@@ -127,25 +127,82 @@ impl Workspace {
                 Visibility::Visible => natural_screen_x,
             };
 
-            // Filter out minimized windows, collecting (original_index, window_id) pairs
-            let visible_windows: Vec<(usize, WindowId)> = column
-                .windows()
-                .iter()
-                .enumerate()
-                .filter(|(_, w)| !self.minimized_windows.contains(w))
-                .map(|(i, &w)| (i, w))
-                .collect();
+            // Build the set of windows that occupy column geometry on this pass.
+            // Vertical: all non-minimized windows split by height_weights.
+            // Tabbed: only the active tab takes the full column rect; if it's
+            // minimized, fall back to the first visible tab so the column
+            // doesn't render empty.
+            let visible_windows: Vec<(usize, WindowId)> = match column.mode() {
+                crate::ColumnMode::Vertical => column
+                    .windows()
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, w)| !self.minimized_windows.contains(w))
+                    .map(|(i, &w)| (i, w))
+                    .collect(),
+                crate::ColumnMode::Tabbed { .. } => {
+                    // Shared picker: prefer active tab, fall back to first
+                    // visible if active is minimized.
+                    column
+                        .effective_visible_tab(|w| self.minimized_windows.contains(&w))
+                        .and_then(|i| column.windows().get(i).map(|&w| (i, w)))
+                        .into_iter()
+                        .collect()
+                }
+            };
 
             // Skip columns where all windows are minimized
             if !self.is_column_active(column) {
                 continue;
             }
 
+            // In Tabbed mode, every non-active non-minimized tab gets an
+            // off-screen placement so the daemon's cloak machinery hides it.
+            // (Minimized tabs are already excluded by the apply path.)
+            //
+            // The rect is positioned `viewport.width` pixels to the LEFT of
+            // the viewport so the window is genuinely off-screen even with
+            // `SWP_NOSIZE` keeping its previous size. Cloak is still applied
+            // by the platform layer; this position is defense-in-depth in
+            // case cloak races, fails, or hasn't taken effect on the first
+            // frame after the toggle.
+            if column.is_tabbed() {
+                let on_screen_idx = visible_windows.first().map(|(i, _)| *i);
+                let offscreen_x = viewport.x.saturating_sub(viewport.width.max(1));
+                for (i, &wid) in column.windows().iter().enumerate() {
+                    if Some(i) == on_screen_idx {
+                        continue;
+                    }
+                    if self.minimized_windows.contains(&wid) {
+                        continue;
+                    }
+                    placements.push(WindowPlacement {
+                        window_id: wid,
+                        rect: Rect::new(offscreen_x, viewport.y, 0, 0),
+                        visibility: Visibility::OffScreenLeft,
+                        column_index: col_idx,
+                    });
+                }
+            }
+
+            // Reserve space at the top of Tabbed columns for the tab strip
+            // overlay. Without this the strip is positioned at
+            // `column.y - strip_h`, which lands above the work-area top
+            // edge when `outer_top` is small — i.e. invisible. Reserving
+            // shifts the active tab down by `strip_h` so the overlay has
+            // room to render *inside* the column's allocated area.
+            let column_top_reserve = if column.is_tabbed() {
+                self.tab_strip_reserve_px.max(0)
+            } else {
+                0
+            };
+
             // Build visible-window weights
             let usable_height = viewport
                 .height
                 .saturating_sub(outer_top)
                 .saturating_sub(outer_bottom)
+                .saturating_sub(column_top_reserve)
                 .max(0);
             let window_count = visible_windows.len() as i32;
             let window_gaps = if window_count > 1 {
@@ -187,7 +244,7 @@ impl Workspace {
             // the last-window remainder rule absorbs any leftover space.
             let has_flex = flex_weight_sum > 0.0;
 
-            let mut current_y = viewport.y + outer_top;
+            let mut current_y = viewport.y + outer_top + column_top_reserve;
 
             for (win_idx, &(_, window_id)) in visible_windows.iter().enumerate() {
                 let is_last = win_idx == visible_windows.len() - 1;

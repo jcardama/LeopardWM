@@ -330,6 +330,13 @@ html, body {
   padding-right: 16px;
 }
 .field + .field { border-top: 1px solid var(--divider-stroke); }
+/* Section divider — used to split a card into sub-sections (e.g. the
+   border-vs-tab-strip split inside the Appearance card). Mirrors the
+   .field + .field hairline so the visual break reads consistently with
+   the rest of the card's inter-field dividers. Without this rule the
+   <div class="card-divider"> renders as a zero-height empty element
+   and adjacent fields look fused into one row. */
+.card-divider { height: 0; border-top: 1px solid var(--divider-stroke); margin: 0 -16px; }
 .field-info { flex: 1; min-width: 0; padding-right: 16px; }
 .field-label { font-size: 14px; line-height: 20px; }
 .field-desc { font-size: 12px; line-height: 16px; color: var(--text-secondary); margin-top: 2px; }
@@ -864,6 +871,31 @@ input[type="range"]::-webkit-slider-thumb {
               </div>
             </div>
           </div>
+          <div class="card-divider"></div>
+          <div class="field">
+            <div class="field-info"><div class="field-label">Tab strip height</div><div class="field-desc">Tab strip height in pixels at 96 DPI (scaled per monitor)</div></div>
+            <input type="number" id="appearance-tab_strip_height" min="16" max="64">
+          </div>
+          <div class="field">
+            <div class="field-info"><div class="field-label">Tab strip background</div><div class="field-desc">Background color for the strip</div></div>
+            <input type="color" id="appearance-tab_strip_bg">
+          </div>
+          <div class="field">
+            <div class="field-info"><div class="field-label">Active tab background</div><div class="field-desc">Highlight color for the active tab</div></div>
+            <input type="color" id="appearance-tab_strip_active_bg">
+          </div>
+          <div class="field">
+            <div class="field-info"><div class="field-label">Active tab text</div><div class="field-desc">Text color for the active tab</div></div>
+            <input type="color" id="appearance-tab_strip_active_text">
+          </div>
+          <div class="field">
+            <div class="field-info"><div class="field-label">Inactive tab text</div><div class="field-desc">Text color for inactive tabs</div></div>
+            <input type="color" id="appearance-tab_strip_inactive_text">
+          </div>
+          <div class="field">
+            <div class="field-info"><div class="field-label">Tab strip opacity</div><div class="field-desc">Strip translucency (0 transparent &rarr; 255 opaque)</div></div>
+            <input type="number" id="appearance-tab_strip_opacity" min="0" max="255">
+          </div>
         </div>
       </div>
 
@@ -1162,6 +1194,12 @@ function init(cfg) {
   setVal('appearance-active_border_color', hexToInput(cfg.appearance.active_border_color));
   setVal('appearance-active_border_width', cfg.appearance.active_border_width);
   setCb('cb-appearance-active_border_position', cfg.appearance.active_border_position);
+  setVal('appearance-tab_strip_height', cfg.appearance.tab_strip_height);
+  setVal('appearance-tab_strip_bg', hexToInput(cfg.appearance.tab_strip_bg));
+  setVal('appearance-tab_strip_active_bg', hexToInput(cfg.appearance.tab_strip_active_bg));
+  setVal('appearance-tab_strip_active_text', hexToInput(cfg.appearance.tab_strip_active_text));
+  setVal('appearance-tab_strip_inactive_text', hexToInput(cfg.appearance.tab_strip_inactive_text));
+  setVal('appearance-tab_strip_opacity', cfg.appearance.tab_strip_opacity);
 
   if (cfg.high_contrast) {
     document.getElementById('hc-info-bar').hidden = false;
@@ -1223,7 +1261,8 @@ var CMD_LABELS = {
   focus_monitor_left: 'Focus monitor left', focus_monitor_right: 'Focus monitor right',
   move_to_monitor_left: 'Move to monitor left', move_to_monitor_right: 'Move to monitor right',
   close_window: 'Close window', toggle_floating: 'Toggle floating',
-  toggle_fullscreen: 'Toggle fullscreen', toggle_pause: 'Toggle pause',
+  toggle_fullscreen: 'Toggle fullscreen', toggle_tabbed: 'Toggle tabbed column',
+  toggle_pause: 'Toggle pause',
   refresh: 'Refresh', reload: 'Reload config',
   panic_revert: 'Emergency restore',
   switch_workspace_1: 'Workspace 1', switch_workspace_2: 'Workspace 2',
@@ -1250,7 +1289,7 @@ var CMD_ORDER = [
   'focus_monitor_left', 'focus_monitor_right',
   'move_to_monitor_left', 'move_to_monitor_right',
   'center_column', 'maximize_column',
-  'close_window', 'toggle_floating', 'toggle_fullscreen',
+  'close_window', 'toggle_floating', 'toggle_fullscreen', 'toggle_tabbed',
   'toggle_pause', 'refresh', 'reload',
   'panic_revert',
   'switch_workspace_1', 'switch_workspace_2', 'switch_workspace_3',
@@ -1277,7 +1316,8 @@ var DEFAULT_HOTKEYS = {
   "Ctrl+Alt+C": "center_column",
   "Ctrl+Alt+M": "maximize_column",
   "Ctrl+Alt+W": "close_window", "Ctrl+Alt+F": "toggle_floating",
-  "Ctrl+Alt+Shift+F": "toggle_fullscreen", "Ctrl+Alt+P": "toggle_pause",
+  "Ctrl+Alt+Shift+F": "toggle_fullscreen", "Ctrl+Alt+T": "toggle_tabbed",
+  "Ctrl+Alt+P": "toggle_pause",
   "Ctrl+Alt+R": "refresh", "Ctrl+Alt+Shift+R": "reload",
   "Win+Ctrl+Escape": "panic_revert",
   "Ctrl+Alt+1": "switch_workspace_1", "Ctrl+Alt+2": "switch_workspace_2",
@@ -1434,7 +1474,13 @@ function readConfig() {
       active_border: checked('appearance-active_border'),
       active_border_color: inputToHex(val('appearance-active_border_color')),
       active_border_width: num('appearance-active_border_width'),
-      active_border_position: cbVal('cb-appearance-active_border_position')
+      active_border_position: cbVal('cb-appearance-active_border_position'),
+      tab_strip_height: num('appearance-tab_strip_height'),
+      tab_strip_bg: inputToHex(val('appearance-tab_strip_bg')),
+      tab_strip_active_bg: inputToHex(val('appearance-tab_strip_active_bg')),
+      tab_strip_active_text: inputToHex(val('appearance-tab_strip_active_text')),
+      tab_strip_inactive_text: inputToHex(val('appearance-tab_strip_inactive_text')),
+      tab_strip_opacity: num('appearance-tab_strip_opacity')
     },
     behavior: {
       focus_new_windows: checked('behavior-focus_new_windows'),

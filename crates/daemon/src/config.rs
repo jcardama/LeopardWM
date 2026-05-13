@@ -208,6 +208,49 @@ pub struct AppearanceConfig {
     /// Active window border position: "outside" or "inside".
     #[serde(default = "default_active_border_position")]
     pub active_border_position: String,
+
+    /// Tab strip height in pixels at 96 DPI (DPI-scaled at render).
+    #[serde(default = "default_tab_strip_height")]
+    pub tab_strip_height: u32,
+
+    /// Tab strip background color as hex RGB (e.g., "1F1F1F").
+    #[serde(default = "default_tab_strip_bg")]
+    pub tab_strip_bg: String,
+
+    /// Active-tab background color as hex RGB.
+    #[serde(default = "default_tab_strip_active_bg")]
+    pub tab_strip_active_bg: String,
+
+    /// Active-tab text color as hex RGB.
+    #[serde(default = "default_tab_strip_active_text")]
+    pub tab_strip_active_text: String,
+
+    /// Inactive-tab text color as hex RGB.
+    #[serde(default = "default_tab_strip_inactive_text")]
+    pub tab_strip_inactive_text: String,
+
+    /// Tab strip opacity (0..=255). 255 is fully opaque; default ~90%.
+    #[serde(default = "default_tab_strip_opacity")]
+    pub tab_strip_opacity: u8,
+}
+
+fn default_tab_strip_height() -> u32 {
+    28
+}
+fn default_tab_strip_bg() -> String {
+    "1F1F1F".to_string()
+}
+fn default_tab_strip_active_bg() -> String {
+    "303030".to_string()
+}
+fn default_tab_strip_active_text() -> String {
+    "FFFFFF".to_string()
+}
+fn default_tab_strip_inactive_text() -> String {
+    "A0A0A0".to_string()
+}
+fn default_tab_strip_opacity() -> u8 {
+    230
 }
 
 impl Default for AppearanceConfig {
@@ -217,6 +260,12 @@ impl Default for AppearanceConfig {
             active_border_color: default_active_border_color(),
             active_border_width: default_active_border_width(),
             active_border_position: default_active_border_position(),
+            tab_strip_height: default_tab_strip_height(),
+            tab_strip_bg: default_tab_strip_bg(),
+            tab_strip_active_bg: default_tab_strip_active_bg(),
+            tab_strip_active_text: default_tab_strip_active_text(),
+            tab_strip_inactive_text: default_tab_strip_inactive_text(),
+            tab_strip_opacity: default_tab_strip_opacity(),
         }
     }
 }
@@ -526,6 +575,7 @@ impl Default for HotkeyConfig {
         bindings.insert("Ctrl+Alt+W".to_string(), "close_window".to_string());
         bindings.insert("Ctrl+Alt+F".to_string(), "toggle_floating".to_string());
         bindings.insert("Ctrl+Alt+Shift+F".to_string(), "toggle_fullscreen".to_string());
+        bindings.insert("Ctrl+Alt+T".to_string(), "toggle_tabbed".to_string());
         bindings.insert("Ctrl+Alt+P".to_string(), "toggle_pause".to_string());
         bindings.insert("Ctrl+Alt+R".to_string(), "refresh".to_string());
         bindings.insert("Ctrl+Alt+Shift+R".to_string(), "reload".to_string());
@@ -777,6 +827,7 @@ pub fn parse_command(cmd: &str) -> Option<leopardwm_ipc::IpcCommand> {
         "close_window" => Some(IpcCommand::CloseWindow),
         "toggle_floating" => Some(IpcCommand::ToggleFloating),
         "toggle_fullscreen" => Some(IpcCommand::ToggleFullscreen),
+        "toggle_tabbed" => Some(IpcCommand::ToggleTabbed),
         "width_third" => Some(IpcCommand::SetColumnWidth { fraction: 0.333 }),
         "width_half" => Some(IpcCommand::SetColumnWidth { fraction: 0.5 }),
         "width_two_thirds" => Some(IpcCommand::SetColumnWidth { fraction: 0.667 }),
@@ -950,6 +1001,67 @@ impl Config {
                 });
                 self.appearance.active_border_color = default_active_border_color();
             }
+        }
+
+        // Tab strip colors must each be exactly 6 hex characters; height
+        // is clamped to a sane range so a typo doesn't make the strip
+        // invisible (height=1) or eat the screen (height=10000).
+        for (field, value, default_fn) in [
+            (
+                "appearance.tab_strip_bg",
+                &self.appearance.tab_strip_bg.clone(),
+                default_tab_strip_bg as fn() -> String,
+            ),
+            (
+                "appearance.tab_strip_active_bg",
+                &self.appearance.tab_strip_active_bg.clone(),
+                default_tab_strip_active_bg as fn() -> String,
+            ),
+            (
+                "appearance.tab_strip_active_text",
+                &self.appearance.tab_strip_active_text.clone(),
+                default_tab_strip_active_text as fn() -> String,
+            ),
+            (
+                "appearance.tab_strip_inactive_text",
+                &self.appearance.tab_strip_inactive_text.clone(),
+                default_tab_strip_inactive_text as fn() -> String,
+            ),
+        ] {
+            let is_valid = value.len() == 6 && value.chars().all(|c| c.is_ascii_hexdigit());
+            if !is_valid {
+                warnings.push(ConfigWarning {
+                    field: field.to_string(),
+                    message: format!(
+                        "Invalid hex color '{}' (must be 6 hex chars, e.g. \"1F1F1F\"), reset to default",
+                        value
+                    ),
+                });
+                let default = default_fn();
+                match field {
+                    "appearance.tab_strip_bg" => self.appearance.tab_strip_bg = default,
+                    "appearance.tab_strip_active_bg" => {
+                        self.appearance.tab_strip_active_bg = default
+                    }
+                    "appearance.tab_strip_active_text" => {
+                        self.appearance.tab_strip_active_text = default
+                    }
+                    "appearance.tab_strip_inactive_text" => {
+                        self.appearance.tab_strip_inactive_text = default
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if !(16..=64).contains(&self.appearance.tab_strip_height) {
+            warnings.push(ConfigWarning {
+                field: "appearance.tab_strip_height".to_string(),
+                message: format!(
+                    "tab_strip_height must be between 16 and 64 px (got {}), reset to default",
+                    self.appearance.tab_strip_height
+                ),
+            });
+            self.appearance.tab_strip_height = default_tab_strip_height();
         }
 
         // behavior.log_level must be one of trace/debug/info/warn/error
@@ -1211,6 +1323,7 @@ focus_follows_mouse = false
 "Ctrl+Alt+W" = "close_window"
 "Ctrl+Alt+F" = "toggle_floating"
 "Ctrl+Alt+Shift+F" = "toggle_fullscreen"
+"Ctrl+Alt+T" = "toggle_tabbed"
 "Ctrl+Alt+P" = "toggle_pause"
 "Ctrl+Alt+R" = "refresh"
 "Ctrl+Alt+Shift+R" = "reload"
@@ -1337,7 +1450,11 @@ mod tests {
     #[test]
     fn test_hotkey_config_default() {
         let config = HotkeyConfig::default();
-        assert_eq!(config.bindings.len(), 51);
+        assert_eq!(config.bindings.len(), 52);
+        assert_eq!(
+            config.bindings.get("Ctrl+Alt+T"),
+            Some(&"toggle_tabbed".to_string())
+        );
         assert_eq!(
             config.bindings.get("Ctrl+Alt+H"),
             Some(&"focus_left".to_string())

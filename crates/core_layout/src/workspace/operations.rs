@@ -201,17 +201,17 @@ impl Workspace {
 
     /// Move the focused window to the column on the left (joining it).
     /// Focus follows the moved window. If the source column becomes empty it is removed.
+    /// In a Tabbed receiver, the moved window becomes the new active tab
+    /// (consistent with the "user-initiated keyboard move" intent).
     pub fn move_window_left(&mut self) {
         if self.focused_column == 0 {
             return;
         }
-        let wid = self.columns[self.focused_column]
-            .windows
-            .remove(self.focused_window_in_column);
-        if self.focused_window_in_column < self.columns[self.focused_column].height_weights.len() {
-            self.columns[self.focused_column].height_weights.remove(self.focused_window_in_column);
-        }
-        self.columns[self.focused_column].equalize_height_weights();
+        let Some(wid) = self.columns[self.focused_column]
+            .remove_at_index(self.focused_window_in_column)
+        else {
+            return;
+        };
         let source_empty = self.columns[self.focused_column].is_empty();
         if source_empty {
             self.columns.remove(self.focused_column);
@@ -221,21 +221,21 @@ impl Workspace {
         self.columns[target_idx].add_window(wid);
         self.focused_column = target_idx;
         self.focused_window_in_column = self.columns[target_idx].len() - 1;
+        self.sync_active_tab_to_focus();
     }
 
     /// Move the focused window to the column on the right (joining it).
     /// Focus follows the moved window. If the source column becomes empty it is removed.
+    /// In a Tabbed receiver, the moved window becomes the new active tab.
     pub fn move_window_right(&mut self) {
         if self.focused_column + 1 >= self.columns.len() {
             return;
         }
-        let wid = self.columns[self.focused_column]
-            .windows
-            .remove(self.focused_window_in_column);
-        if self.focused_window_in_column < self.columns[self.focused_column].height_weights.len() {
-            self.columns[self.focused_column].height_weights.remove(self.focused_window_in_column);
-        }
-        self.columns[self.focused_column].equalize_height_weights();
+        let Some(wid) = self.columns[self.focused_column]
+            .remove_at_index(self.focused_window_in_column)
+        else {
+            return;
+        };
         let source_empty = self.columns[self.focused_column].is_empty();
         if source_empty {
             self.columns.remove(self.focused_column);
@@ -243,27 +243,27 @@ impl Workspace {
             self.columns[self.focused_column].add_window(wid);
             self.focused_window_in_column = self.columns[self.focused_column].len() - 1;
         } else {
-            // Clamp focus in source column (we don't stay there, but keep it consistent)
             let right_idx = self.focused_column + 1;
             self.columns[right_idx].add_window(wid);
             self.focused_column = right_idx;
             self.focused_window_in_column = self.columns[right_idx].len() - 1;
         }
+        self.sync_active_tab_to_focus();
     }
 
     /// Push the focused window out to a new column on the left.
+    /// The new column is always Vertical (single-window).
     pub fn expel_to_left(&mut self) {
         if self.columns[self.focused_column].len() <= 1 {
             return;
         }
-        let wid = self.columns[self.focused_column]
-            .windows
-            .remove(self.focused_window_in_column);
-        if self.focused_window_in_column < self.columns[self.focused_column].height_weights.len() {
-            self.columns[self.focused_column].height_weights.remove(self.focused_window_in_column);
-        }
-        self.columns[self.focused_column].equalize_height_weights();
-        // Clamp focus in old column
+        let Some(wid) = self.columns[self.focused_column]
+            .remove_at_index(self.focused_window_in_column)
+        else {
+            return;
+        };
+        // Clamp focus in old column (column.remove_at_index already adjusted
+        // active_idx for Tabbed; here we clamp focused_window_in_column).
         let old_len = self.columns[self.focused_column].len();
         if self.focused_window_in_column >= old_len {
             self.focused_window_in_column = old_len.saturating_sub(1);
@@ -273,21 +273,20 @@ impl Workspace {
         self.columns.insert(self.focused_column, new_col);
         // Focus the new column (it took the current index)
         self.focused_window_in_column = 0;
+        // sync not needed: new column is Vertical.
     }
 
     /// Push the focused window out to a new column on the right.
+    /// The new column is always Vertical (single-window).
     pub fn expel_to_right(&mut self) {
         if self.columns[self.focused_column].len() <= 1 {
             return;
         }
-        let wid = self.columns[self.focused_column]
-            .windows
-            .remove(self.focused_window_in_column);
-        if self.focused_window_in_column < self.columns[self.focused_column].height_weights.len() {
-            self.columns[self.focused_column].height_weights.remove(self.focused_window_in_column);
-        }
-        self.columns[self.focused_column].equalize_height_weights();
-        // Clamp focus in old column
+        let Some(wid) = self.columns[self.focused_column]
+            .remove_at_index(self.focused_window_in_column)
+        else {
+            return;
+        };
         let old_len = self.columns[self.focused_column].len();
         if self.focused_window_in_column >= old_len {
             self.focused_window_in_column = old_len.saturating_sub(1);
@@ -300,6 +299,8 @@ impl Workspace {
     }
 
     /// Swap the focused window with the one above in the same column.
+    /// In a Tabbed column, `swap_windows` keeps `active_idx` tracking the
+    /// same window (handled inside `Column::swap_windows`).
     pub fn move_window_up_in_column(&mut self) {
         if self.focused_window_in_column == 0 {
             return;
@@ -307,6 +308,7 @@ impl Workspace {
         self.columns[self.focused_column]
             .swap_windows(self.focused_window_in_column, self.focused_window_in_column - 1);
         self.focused_window_in_column -= 1;
+        self.sync_active_tab_to_focus();
     }
 
     /// Swap the focused window with the one below in the same column.
@@ -317,6 +319,7 @@ impl Workspace {
         self.columns[self.focused_column]
             .swap_windows(self.focused_window_in_column, self.focused_window_in_column + 1);
         self.focused_window_in_column += 1;
+        self.sync_active_tab_to_focus();
     }
 
     /// Scroll the viewport by a pixel delta.

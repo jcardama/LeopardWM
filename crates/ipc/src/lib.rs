@@ -14,7 +14,13 @@ pub const PIPE_NAME: &str = r"\\.\pipe\leopardwm";
 const MAX_PIPE_SCOPE_SEGMENT_LEN: usize = 64;
 
 /// IPC protocol version for lightweight compatibility checks.
-pub const IPC_PROTOCOL_VERSION: u32 = 1;
+///
+/// History:
+/// - v1: initial (workspace ops, focus ops, queries, pub/sub Subscribe).
+/// - v2: tabbed columns — `ColumnSummary.mode` extension on `LayoutChanged`,
+///   new `ToggleTabbed` and `SetActiveTab` commands. Wire is additive;
+///   subscribers using `serde(default)` parse v1 payloads cleanly.
+pub const IPC_PROTOCOL_VERSION: u32 = 2;
 /// Minimum protocol version this crate supports.
 pub const IPC_MIN_SUPPORTED_PROTOCOL_VERSION: u32 = 1;
 
@@ -174,19 +180,42 @@ impl EventKind {
     }
 }
 
+/// Display mode for a column in a `LayoutChanged` event payload.
+///
+/// Mirrors `core_layout::ColumnMode`. Vertical (default) renders all
+/// non-minimized windows stacked top-to-bottom. Tabbed renders only the
+/// window at `active_idx` filling the column rect; bars should render a
+/// tab strip listing all `window_ids`.
+///
+/// Wire: tagged `{"type": "vertical"}` or `{"type": "tabbed", "active_idx": N}`.
+/// `#[serde(default)]` on the parent `ColumnSummary.mode` field means v1
+/// payloads (no `mode` key) deserialize as `Vertical` for forward compat.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ColumnSummaryMode {
+    #[default]
+    Vertical,
+    Tabbed { active_idx: usize },
+}
+
 /// One column entry in a `LayoutChanged` event payload.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ColumnSummary {
-    /// Window IDs in the column, top to bottom.
+    /// Window IDs in the column, top to bottom (or tab order, in Tabbed mode).
     pub window_ids: Vec<u64>,
     /// Column width in pixels (intrinsic strip width, monitor-independent).
     pub width_px: i32,
     /// Per-window height weights (parallel to `window_ids`, sums to ~1.0).
     /// Empty means equal distribution. Populated so bars rendering
     /// stacked windows can show vertical-split changes (cycle-height,
-    /// equalize-heights) without a follow-up query.
+    /// equalize-heights) without a follow-up query. Ignored in Tabbed mode
+    /// since only one window is visible at a time.
     #[serde(default)]
     pub height_weights: Vec<f64>,
+    /// Display mode for this column. Added in protocol v2; defaults to
+    /// `Vertical` so v1 payloads deserialize cleanly.
+    #[serde(default)]
+    pub mode: ColumnSummaryMode,
 }
 
 /// Events streamed to subscribers after a `Subscribe` command. Each frame
@@ -411,6 +440,26 @@ pub enum IpcCommand {
     Subscribe {
         /// Event kinds to receive. An empty set is treated as "all kinds".
         events: std::collections::BTreeSet<EventKind>,
+    },
+
+    /// Toggle the focused column between Vertical (stacked) and Tabbed
+    /// display modes. Entering Tabbed seeds `active_idx` with the focused
+    /// window. No-op if the focused column has fewer than 2 windows.
+    /// Added in protocol v2.
+    ToggleTabbed,
+
+    /// Set the active tab on a Tabbed column. Used internally by the tab
+    /// strip overlay's click handler to translate `WM_LBUTTONDOWN` into a
+    /// real focus change. Sets the column's `active_idx` AND, when the
+    /// target column is the focused column, also moves
+    /// `focused_window_in_column` so the dependent invariants (border
+    /// placement, `QueryFocused`, `sync_foreground_window`) flow through.
+    /// Added in protocol v2.
+    SetActiveTab {
+        /// Column index (0-based).
+        column: usize,
+        /// Tab index within the column (0-based).
+        tab: usize,
     },
 }
 
@@ -941,11 +990,13 @@ mod tests {
                     window_ids: vec![100, 200],
                     width_px: 800,
                     height_weights: vec![0.6, 0.4],
+                    mode: ColumnSummaryMode::default(),
                 },
                 ColumnSummary {
                     window_ids: vec![300],
                     width_px: 600,
                     height_weights: vec![1.0],
+                    mode: ColumnSummaryMode::default(),
                 },
             ],
         };
@@ -953,6 +1004,77 @@ mod tests {
         assert!(json.contains("layout_changed"));
         let ev2: IpcEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(ev, ev2);
+    }
+
+    #[test]
+    fn test_event_layout_changed_with_tabbed_column_round_trip() {
+        let ev = IpcEvent::LayoutChanged {
+            monitor: 1,
+            workspace_index: 2,
+            focused_column: Some(0),
+            columns: vec![ColumnSummary {
+                window_ids: vec![100, 200, 300],
+                width_px: 800,
+                height_weights: Vec::new(),
+                mode: ColumnSummaryMode::Tabbed { active_idx: 1 },
+            }],
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        // Tag-based representation; subscribers branch on `mode.type`.
+        assert!(json.contains("\"mode\":{\"type\":\"tabbed\""));
+        assert!(json.contains("\"active_idx\":1"));
+        let ev2: IpcEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(ev, ev2);
+    }
+
+    #[test]
+    fn test_layout_changed_v1_payload_backward_compat() {
+        // A v1-shape `LayoutChanged` (no `mode` field on columns) must
+        // deserialize into the new struct with `mode = Vertical` so old
+        // daemons / cached payloads stay compatible.
+        let v1 = r#"{
+            "type": "layout_changed",
+            "monitor": 1,
+            "workspace_index": 0,
+            "focused_column": 0,
+            "columns": [
+                {"window_ids": [100, 200], "width_px": 800, "height_weights": [0.5, 0.5]}
+            ]
+        }"#;
+        let ev: IpcEvent = serde_json::from_str(v1).unwrap();
+        if let IpcEvent::LayoutChanged { columns, .. } = ev {
+            assert_eq!(columns.len(), 1);
+            assert!(matches!(columns[0].mode, ColumnSummaryMode::Vertical));
+        } else {
+            panic!("expected LayoutChanged");
+        }
+    }
+
+    #[test]
+    fn test_toggle_tabbed_command_round_trip() {
+        let cmd = IpcCommand::ToggleTabbed;
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert_eq!(json, r#"{"type":"toggle_tabbed"}"#);
+        let cmd2: IpcCommand = serde_json::from_str(&json).unwrap();
+        assert_eq!(cmd, cmd2);
+    }
+
+    #[test]
+    fn test_set_active_tab_command_round_trip() {
+        let cmd = IpcCommand::SetActiveTab { column: 2, tab: 1 };
+        let json = serde_json::to_string(&cmd).unwrap();
+        let cmd2: IpcCommand = serde_json::from_str(&json).unwrap();
+        assert_eq!(cmd, cmd2);
+    }
+
+    #[test]
+    fn test_protocol_version_bumped_to_v2() {
+        // Sanity guard: bumping the version forces a deliberate review of
+        // wire-compat docs in agent_docs/ipc-events.md when this test breaks.
+        assert_eq!(IPC_PROTOCOL_VERSION, 2);
+        // Old v1 clients should still negotiate.
+        assert!(is_protocol_version_supported(1));
+        assert!(is_protocol_version_supported(2));
     }
 
     #[test]

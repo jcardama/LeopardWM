@@ -27,6 +27,7 @@ pub(crate) const EVENT_SYSTEM_MINIMIZEEND: u32 = 0x0017;
 pub(crate) const EVENT_SYSTEM_MOVESIZESTART: u32 = 0x000A;
 pub(crate) const EVENT_SYSTEM_MOVESIZEEND: u32 = 0x000B;
 pub(crate) const EVENT_OBJECT_LOCATIONCHANGE: u32 = 0x800B;
+pub(crate) const EVENT_OBJECT_NAMECHANGE: u32 = 0x800C;
 const OBJID_WINDOW: i32 = 0;
 const WINEVENT_OUTOFCONTEXT: u32 = 0x0000;
 const WINEVENT_SKIPOWNPROCESS: u32 = 0x0002;
@@ -59,6 +60,11 @@ pub enum WindowEvent {
     DisplayChange,
     /// Mouse cursor entered a window (for focus-follows-mouse).
     MouseEnterWindow(WindowId),
+    /// A window's title text changed. The daemon refreshes the tab
+    /// strip overlay so tab labels stay in sync with the underlying
+    /// window's title without waiting for the next layout-changing
+    /// event.
+    TitleChanged(WindowId),
 }
 
 /// Global sender for window events from WinEvent callbacks.
@@ -162,6 +168,7 @@ pub fn install_event_hooks() -> Result<(EventHookHandle, mpsc::Receiver<WindowEv
                     (EVENT_SYSTEM_MOVESIZESTART, EVENT_SYSTEM_MOVESIZEEND),
                     (EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE),
                     (EVENT_OBJECT_FOCUS, EVENT_OBJECT_FOCUS),
+                    (EVENT_OBJECT_NAMECHANGE, EVENT_OBJECT_NAMECHANGE),
                 ];
 
                 let mut hooks = Vec::new();
@@ -356,6 +363,7 @@ fn win_event_callback_inner(
         EVENT_SYSTEM_MOVESIZESTART => WindowEvent::MoveSizeStart(window_id),
         EVENT_SYSTEM_MOVESIZEEND => WindowEvent::MoveSizeEnd(window_id),
         EVENT_OBJECT_LOCATIONCHANGE => WindowEvent::MovedOrResized(window_id),
+        EVENT_OBJECT_NAMECHANGE => WindowEvent::TitleChanged(window_id),
         _ => return,
     };
 
