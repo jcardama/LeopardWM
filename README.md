@@ -138,16 +138,25 @@ Stack multiple windows into a clickable tab strip inside any column. Combine wit
 - Click any tab in the strip to activate it; the click is a real focus change, so the border, foreground state, and IPC events all follow
 - Tab titles and icons update live as windows rename themselves or swap notification badges
 
+**Per-tab actions**
+- Hover any tab to reveal a close-X at its right edge — click to close the tabbed window
+- **Middle-click** does the same as the close-X
+- **Right-click** any tab for a context menu: `Close window` / `Untab this window` / `Rename tab…`
+- The implicit close gesture (X-button / middle-click) is configurable in Settings → Behavior → "Tab close action" — `close_window` (default, browser-style) or `untab` (rip the tab out into a new vertical column to the right)
+- Right-click menu items always carry their literal action — `Close window` always closes regardless of the toggle, `Untab this window` always untabs
+- "Rename tab…" opens a modal dialog seeded with the current tab title. Submitting saves a per-window override that survives untab, workspace moves, and daemon restart. Clearing the field removes the override and the live title returns
+
 **Drag-and-drop (Chrome semantics)**
 - Drop a window onto a tabbed column from anywhere — body or strip — and it appends as the rightmost tab and becomes active
 - The drop-zone ghost spans the whole column rect so the target is unambiguous
 
 **Lifecycle**
 - A tabbed column with one window auto-reverts to vertical mode
-- Tabbed state (and which tab is active) survives daemon restart
+- Tabbed state (and which tab is active) survives daemon restart, along with any per-tab title overrides
+- Tab overrides for windows that no longer exist are pruned automatically at daemon startup
 - The strip hides during fullscreen, pause, and on workspaces with no tabbed column
 
-**Customization** — strip height, background, active/inactive text colours, active highlight, and opacity are configurable from the Settings UI or `[appearance]` (`tab_strip_height`, `tab_strip_bg`, `tab_strip_active_bg`, `tab_strip_active_text`, `tab_strip_inactive_text`, `tab_strip_opacity`).
+**Customization** — strip height, background, active/inactive text colours, active highlight, opacity, and the tab close action are configurable from the Settings UI or `[appearance]` / `[behavior]` (`tab_strip_height`, `tab_strip_bg`, `tab_strip_active_bg`, `tab_strip_active_text`, `tab_strip_inactive_text`, `tab_strip_opacity`, `tab_close_action`).
 
 ## CLI
 

@@ -270,6 +270,17 @@ impl Default for AppearanceConfig {
     }
 }
 
+/// Default action for the implicit "close tab" gestures (X-button click,
+/// middle-click). The right-click menu items always carry their literal
+/// action and never consult this toggle.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TabCloseAction {
+    #[default]
+    CloseWindow,
+    Untab,
+}
+
 /// Behavior-related configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -306,6 +317,11 @@ pub struct BehaviorConfig {
     /// Single anonymous HTTPS GET to api.github.com; no other telemetry.
     #[serde(default = "default_true")]
     pub check_for_updates: bool,
+
+    /// Default action for implicit "close tab" gestures (X-button click,
+    /// middle-click on a tab). The right-click menu items are unaffected.
+    #[serde(default)]
+    pub tab_close_action: TabCloseAction,
 }
 
 impl Default for BehaviorConfig {
@@ -318,6 +334,7 @@ impl Default for BehaviorConfig {
             focus_follows_mouse_delay_ms: default_focus_delay(),
             disable_snap_layouts: true,
             check_for_updates: true,
+            tab_close_action: TabCloseAction::default(),
         }
     }
 }

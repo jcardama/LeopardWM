@@ -250,6 +250,13 @@ impl AppState {
                 // entries for windows that no longer exist.
                 self.last_placed_layout_rects.remove(&hwnd);
 
+                // Drop any tab title override too — both Destroyed and
+                // Hidden imply the window is no longer in any tabbed
+                // column. Without this, hidden-but-not-destroyed apps
+                // (minimize-to-tray patterns) would accumulate stale
+                // overrides indefinitely in the persisted state.
+                self.tab_title_overrides.remove(&hwnd);
+
                 // Only mark as transient (suppress future re-creation) if the
                 // window was managed briefly. Long-lived windows (e.g., close-to-tray
                 // apps) should be allowed to re-tile when restored.

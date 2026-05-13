@@ -164,8 +164,9 @@ pub fn run_settings_window(
             serde_json::to_string(&val).unwrap_or_else(|_| "{}".to_string())
         };
 
+        let settings_html = SETTINGS_HTML.replace("{VERSION}", env!("CARGO_PKG_VERSION"));
         let webview = wry::WebViewBuilder::new_with_web_context(&mut web_context)
-            .with_html(SETTINGS_HTML)
+            .with_html(&settings_html)
             .with_initialization_script(format!("window._initConfig = {};", config_json))
             .with_ipc_handler(move |req| {
                 handle_ipc(req.body(), &event_tx, hwnd);

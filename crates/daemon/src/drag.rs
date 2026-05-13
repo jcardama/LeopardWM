@@ -35,7 +35,7 @@ impl AppState {
         // behind it between repaints. `raise()` is a cheap z-order-only
         // SetWindowPos — no re-render — so calling it per mouse-move
         // doesn't add visible overhead.
-        if let Some(ref strip) = self.tab_strip_overlay {
+        for strip in self.tab_strip_overlays.values() {
             strip.raise();
         }
         let Some(win_info) = self.lookup_window_info(hwnd) else {
@@ -179,8 +179,13 @@ impl AppState {
             // any column via `compute_target_column_index`. Tab-index
             // within the strip is intentionally ignored — see the slot
             // computation below for the "always append" rationale.
-            let strip_hit =
-                leopardwm_platform_win32::tab_strip::hit_test_screen(cursor_x, cursor_y);
+            // Iterate every live strip — multiple strips can be visible
+            // simultaneously (one per tabbed column), and any of them
+            // may be under the cursor.
+            let strip_hit = self
+                .tab_strip_overlays
+                .values()
+                .find_map(|s| s.hit_test_screen(cursor_x, cursor_y));
             let target_col = match strip_hit {
                 Some(hit) => hit.column_idx,
                 None => match compute_target_column_index(&column_bounds, cursor_x) {
@@ -487,7 +492,11 @@ impl AppState {
             // If the drop lands on a visible tab strip, route to that
             // tab's slot in the strip's owning column — overrides the
             // column-based hit test below.
-            if let Some(hit) = leopardwm_platform_win32::tab_strip::hit_test_screen(cx, cy) {
+            let strip_hit = self
+                .tab_strip_overlays
+                .values()
+                .find_map(|s| s.hit_test_screen(cx, cy));
+            if let Some(hit) = strip_hit {
                 (hit.column_idx, hit.tab_idx)
             } else {
                 let col_idx = match compute_target_column_index(&column_bounds, cx) {
@@ -925,14 +934,25 @@ struct ColumnBound {
 }
 
 /// Derive column screen boundaries from animated placements.
+///
+/// Tabbed columns emit off-screen placements for inactive tabs (positioned
+/// at `viewport.x - viewport.width`, size 0×0). Those must be excluded
+/// from the bounds aggregation: including them would stretch the column's
+/// reported `screen_left` to a huge negative number, and the "first
+/// matching bound" pick in `compute_target_column_index` would then claim
+/// any cursor to the left of the tabbed column as belonging to it.
 fn column_bounds_from_placements(
     workspace: &leopardwm_core_layout::Workspace,
     viewport: Rect,
 ) -> Vec<ColumnBound> {
     let placements = workspace.compute_placements_animated(viewport);
-    // Group placements by column_index and compute left/right per column.
+    // Group placements by column_index and compute left/right per column,
+    // skipping off-screen (inactive-tab) placements.
     let mut map: std::collections::HashMap<usize, (i32, i32)> = std::collections::HashMap::new();
     for p in &placements {
+        if !matches!(p.visibility, leopardwm_core_layout::Visibility::Visible) {
+            continue;
+        }
         let entry = map
             .entry(p.column_index)
             .or_insert((p.rect.x, p.rect.x + p.rect.width));

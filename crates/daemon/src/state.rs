@@ -180,11 +180,25 @@ pub(crate) struct AppState {
     pub(crate) last_prune_at: Option<std::time::Instant>,
     /// Border frame overlay for the active window.
     pub(crate) border_frame: Option<leopardwm_platform_win32::border::BorderFrame>,
-    /// Tab strip overlay rendered above the focused tabbed column.
-    /// Single-instance — `helpers.rs::apply_layout` calls `.show(...)` whenever
-    /// the focused column is Tabbed, `.hide()` otherwise.
-    pub(crate) tab_strip_overlay:
-        Option<leopardwm_platform_win32::tab_strip::TabStripOverlay>,
+    /// Tab strip overlays — one per tabbed column across all visible
+    /// workspaces. Keyed by `(monitor, workspace_idx, column_idx)`.
+    /// `helpers.rs::update_tab_strip` reconciles this map against the
+    /// current set of tabbed columns on every relayout / focus change:
+    /// new tabbed columns get a fresh overlay, columns that became
+    /// non-tabbed (or disappeared) have their overlay dropped.
+    pub(crate) tab_strip_overlays: std::collections::HashMap<
+        (isize, usize, usize),
+        leopardwm_platform_win32::tab_strip::TabStripOverlay,
+    >,
+    /// Cached `mpsc::Sender<TabActionEvent>` used when spawning new tab
+    /// strip overlays on demand. Set once during startup (in `state.rs`
+    /// `init_tab_strip_overlay`) and reused for every strip created
+    /// afterward.
+    pub(crate) tab_strip_action_tx: Option<
+        std::sync::mpsc::Sender<
+            leopardwm_platform_win32::tab_strip::TabActionEvent,
+        >,
+    >,
     /// Whether tiling is paused.
     pub(crate) paused: bool,
     /// Guard flag to suppress MovedOrResized events during apply_layout().
@@ -292,6 +306,22 @@ pub(crate) struct AppState {
     /// monotonic timestamp used to TTL the flag (~500ms) so a missed
     /// Focused event doesn't permanently disable suppression.
     pub(crate) pending_tab_focus: Option<PendingTabFocus>,
+    /// User-supplied tab title overrides, keyed globally by `WindowId`
+    /// (HWND). Survives workspace moves and column membership changes —
+    /// re-entering a Tabbed column anywhere restores the preferred name.
+    /// Cleared when the window is destroyed/hidden (see event_handler).
+    pub(crate) tab_title_overrides: HashMap<u64, String>,
+    /// Guard preventing concurrent rename dialogs. Set to `true` by the
+    /// handler before spawning the dialog thread; cleared by that thread
+    /// on exit. `Arc` so the spawned thread can clear it after the main
+    /// event loop has moved on.
+    pub(crate) rename_dialog_active: Arc<AtomicBool>,
+    /// Sender for rename-dialog results. Installed once during daemon
+    /// startup (parallel to `install_tab_strip`); the spawned dialog
+    /// thread posts a `TabRenameResult` here, which a forwarder thread
+    /// translates to `DaemonEvent::TabRenameSubmitted`.
+    pub(crate) rename_result_tx:
+        Option<std::sync::mpsc::Sender<crate::events::TabRenameResult>>,
 }
 
 /// Tracks an in-flight tab focus change synthesized by the tab strip
@@ -343,6 +373,10 @@ pub(crate) struct StateSnapshot {
     /// Defaults to empty for backward compatibility.
     #[serde(default)]
     pub(crate) active_workspace: HashMap<String, usize>,
+    /// User-supplied tab title overrides keyed by HWND. Defaults to
+    /// empty so v0.1.14-shape snapshots load cleanly.
+    #[serde(default)]
+    pub(crate) tab_title_overrides: HashMap<u64, String>,
 }
 
 impl AppState {
@@ -416,12 +450,12 @@ impl AppState {
             } else {
                 leopardwm_platform_win32::border::BorderFrame::new().ok()
             },
-            // Tab strip is installed separately via `install_tab_strip`
-            // because its click sender lives in the main.rs setup scope
-            // (so the matching receiver can be drained into DaemonEvents).
-            // Tests don't call install_tab_strip, leaving this None — same
-            // cfg(test) gate as border_frame.
-            tab_strip_overlay: None,
+            // Tab strip overlays are spawned on demand by `update_tab_strip`
+            // — there's no global "the strip" anymore. `install_tab_strip`
+            // just stashes the action sender so subsequent spawns can wire
+            // it to the same DaemonEvent drain.
+            tab_strip_overlays: std::collections::HashMap::new(),
+            tab_strip_action_tx: None,
             // Paused under cfg(test): placeholder hwnds collide with real
             // HWNDs and lag the mouse via DWM. Tests opt out as needed.
             paused: cfg!(test),
@@ -465,6 +499,9 @@ impl AppState {
             event_broadcaster: tokio::sync::broadcast::channel(256).0,
             last_emitted_layout_sig: None,
             pending_tab_focus: None,
+            tab_title_overrides: HashMap::new(),
+            rename_dialog_active: Arc::new(AtomicBool::new(false)),
+            rename_result_tx: None,
         }
     }
 
@@ -568,27 +605,58 @@ impl AppState {
         self.workspaces.get_mut(&self.focused_monitor)?.get_mut(idx)
     }
 
+    /// Resolve the displayed title for the tab at the given strip-relative
+    /// identity. Single source of truth for both strip rendering AND the
+    /// rename dialog seed: override wins, then live window title, then "".
+    /// An absent override always falls back to the live title — never an
+    /// empty cleared string — so re-opening the dialog after an
+    /// empty-submit clear seeds with the real title.
+    pub(crate) fn tab_title_for(
+        &self,
+        monitor: MonitorId,
+        workspace_idx: usize,
+        column_idx: usize,
+        tab_idx: usize,
+    ) -> String {
+        let hwnd = self
+            .workspaces
+            .get(&monitor)
+            .and_then(|wss| wss.get(workspace_idx))
+            .and_then(|ws| ws.column(column_idx))
+            .and_then(|col| col.get(tab_idx));
+        match hwnd {
+            Some(h) => self
+                .tab_title_overrides
+                .get(&h)
+                .cloned()
+                .or_else(|| self.lookup_window_info(h).map(|i| i.title))
+                .unwrap_or_default(),
+            None => String::new(),
+        }
+    }
+
     /// Install the tab strip overlay. Called once during daemon startup
-    /// after the click channel pair has been created in main.rs scope —
-    /// the overlay receives `tab_click_tx` and posts to it on
-    /// `WM_LBUTTONDOWN`; main.rs drains the matching receiver and
-    /// translates clicks to `IpcCommand::SetActiveTab`.
+    /// after the action channel pair has been created in main.rs scope —
+    /// the overlay receives `tab_action_tx` and posts to it on
+    /// WM_LBUTTONDOWN / WM_MBUTTONUP / WM_RBUTTONUP / close-X hit; main.rs
+    /// drains the matching receiver and routes the action.
     ///
     /// Skipped in test builds (would create real layered DWM windows).
     pub(crate) fn install_tab_strip(
         &mut self,
-        tab_click_tx: std::sync::mpsc::Sender<
-            leopardwm_platform_win32::tab_strip::TabClickEvent,
+        tab_action_tx: std::sync::mpsc::Sender<
+            leopardwm_platform_win32::tab_strip::TabActionEvent,
         >,
     ) {
         if cfg!(test) {
-            drop(tab_click_tx);
+            drop(tab_action_tx);
             return;
         }
-        match leopardwm_platform_win32::tab_strip::TabStripOverlay::new(tab_click_tx) {
-            Ok(overlay) => self.tab_strip_overlay = Some(overlay),
-            Err(e) => tracing::warn!("Failed to create TabStripOverlay: {}", e),
-        }
+        // Stash the sender for on-demand spawning. `update_tab_strip`
+        // creates one `TabStripOverlay` per tabbed column the next time
+        // it runs — all of them share this cloned sender so click /
+        // close / rename actions land in the same DaemonEvent drain.
+        self.tab_strip_action_tx = Some(tab_action_tx);
     }
 
     /// Try to consume `pending_tab_focus` if it matches the given event

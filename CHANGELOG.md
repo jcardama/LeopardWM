@@ -4,6 +4,46 @@ All notable changes to LeopardWM will be documented in this file.
 
 ## Unreleased
 
+## 0.1.15
+
+### Improvements
+
+- **Tab strip action affordances.** Tabbed columns now behave like browser
+  tabs: hover close-X, middle-click to close, right-click context menu, and
+  inline rename. No more `Ctrl+Alt+W` as the only way to remove a single tab.
+
+  - **Hover close-X** with a Fluent-style tooltip. Narrow tabs ellipsize
+    first, then hide the icon, then hide the close-X (right-click still
+    works at any size).
+  - **Middle-click closes** the tab, same as the X.
+  - **Configurable close action.** `[behavior].tab_close_action` (Settings →
+    Behavior) sets what the X and middle-click do: `close_window` (default,
+    browser-style) or `untab` (rip the tab into a new vertical column to
+    the right). Right-click menu items always carry their literal action.
+  - **Inline rename.** Right-click → "Rename tab…" *or* double-click a tab
+    title turns the tab into an in-place editor: a pill popup over the
+    tab with the icon, the title in an embedded text field, and a save
+    check on the right. Enter or check commits; Esc or click-away cancels.
+    Empty submission clears the override (live title returns). Max 128
+    UTF-8 bytes. Overrides are keyed by HWND so they survive workspace
+    moves, untab, and re-tab, and persist across daemon restarts.
+  - **Tab-strip font + icon sizing** now matches Win11 Terminal / Edge:
+    Segoe UI ~12 px char height and ~16 px icon at the default 28 px
+    strip. Both scale with strip height.
+  - **About page** now shows the running version (was hardcoded `0.1.0`).
+
+  **Implementation notes**
+  - Close handling is daemon-internal (no new IPC variant; `IPC_PROTOCOL_VERSION`
+    stays at 2). Untab reuses the v0.1.14 `pending_tab_focus` machinery; no
+    new core_layout operations.
+  - The rename popup is a uniform-alpha layered top-level window on a
+    dedicated thread, with DWM rounded corners for AA edges. Rename target
+    is captured by HWND at spawn (not by tab index), so column mutations
+    during the popup's lifetime can't retarget the override. The tab icon
+    is `CopyIcon`'d so the popup is independent of source-window lifetime.
+  - The check-button tooltip reuses the strip's tooltip pipeline, so it
+    matches the close-X tooltip exactly.
+
 ## 0.1.14
 
 ### Improvements

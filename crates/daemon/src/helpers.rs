@@ -349,6 +349,7 @@ impl AppState {
             workspaces: snapshots,
             focused_monitor_name: focused_name,
             active_workspace: active_ws_map,
+            tab_title_overrides: self.tab_title_overrides.clone(),
         };
 
         let state_path = Self::state_file_path();
@@ -472,6 +473,24 @@ impl AppState {
             .find(|(_, m)| m.device_name == snapshot.focused_monitor_name)
         {
             self.focused_monitor = id;
+        }
+
+        // Restore tab title overrides, pruning entries whose HWND is no
+        // longer live. Guards against HWND reuse across daemon-offline
+        // window closures: if the original window was destroyed while
+        // the daemon was down, Windows can re-issue the same HWND to a
+        // different process and the persisted override would silently
+        // attach. The `IsWindow` check is cheap and catches the common
+        // case; we don't bother with class/exe tagging in v0.1.15.
+        for (&hwnd, title) in &snapshot.tab_title_overrides {
+            if leopardwm_platform_win32::is_valid_window(hwnd) {
+                self.tab_title_overrides.insert(hwnd, title.clone());
+            } else {
+                debug!(
+                    "Pruning stale tab title override for dead HWND {}: {:?}",
+                    hwnd, title
+                );
+            }
         }
 
         restored_monitors
@@ -1639,140 +1658,39 @@ impl AppState {
         }
     }
 
-    /// Hide the tab strip overlay if installed.
+    /// Hide every tab strip overlay if installed. Used by paths that
+    /// know strips must not be visible (e.g., before re-applying layout
+    /// during a configuration reload, prior to fullscreen entry).
+    /// Doesn't drop the overlays — `update_tab_strip` will reuse them.
     pub(crate) fn hide_tab_strip(&self) {
-        if let Some(ref strip) = self.tab_strip_overlay {
+        for strip in self.tab_strip_overlays.values() {
             strip.hide();
         }
     }
 
-    /// Show or hide the tab strip overlay based on current state.
-    /// Mirrors `show_border`'s "every-apply, every-frame" lifecycle so the
-    /// strip tracks the focused column's screen rect through animations
-    /// and monitor changes (per Codex HIGH-4).
+    /// Reconcile the set of tab strip overlays against the current
+    /// "every tabbed column gets its own strip" model.
     ///
-    /// Strip is visible only when:
-    /// - tab strip overlay is installed (i.e., not in test/headless),
-    /// - daemon isn't paused,
-    /// - focused workspace exists and is not fullscreen,
-    /// - the focused column is Tabbed and has at least one non-minimized window.
-    pub(crate) fn update_tab_strip(&self) {
+    /// For each visible workspace across all monitors:
+    ///   - every column whose mode is Tabbed gets a strip
+    ///   - strips for non-tabbed (or removed) columns are dropped
+    ///   - fullscreen workspaces show no strips
+    ///
+    /// Strips persist across focus changes — refocusing a different
+    /// column just changes which strip's highlight is "active", not
+    /// which strips are visible.
+    pub(crate) fn update_tab_strip(&mut self) {
         use leopardwm_platform_win32::tab_strip::{TabLabel, TabStripColors};
 
-        let Some(ref strip) = self.tab_strip_overlay else {
+        // No-op when the action sender wasn't installed (tests / headless).
+        if self.tab_strip_action_tx.is_none() {
             return;
-        };
+        }
         if self.paused {
-            strip.hide();
+            // Tear everything down. The next non-paused update repopulates.
+            self.tab_strip_overlays.clear();
             return;
         }
-        let Some(ws) = self.focused_workspace() else {
-            strip.hide();
-            return;
-        };
-        if ws.is_fullscreen() {
-            strip.hide();
-            return;
-        }
-        // Pick the column whose strip to render. Prefer the focused
-        // column when it's Tabbed; otherwise fall back to the first
-        // Tabbed column in the workspace. Matches niri's "every tabbed
-        // column shows its strip" model with our single-overlay
-        // implementation: the strip stays visible whenever any Tabbed
-        // column exists, so common workflows (drag-in, expel, focus a
-        // neighboring Vertical column to glance at it) don't flicker
-        // the strip in and out.
-        let col_idx = {
-            let focused = ws.focused_column_index();
-            if ws.column(focused).is_some_and(|c| c.is_tabbed()) {
-                focused
-            } else {
-                match (0..ws.column_count())
-                    .find(|&i| ws.column(i).is_some_and(|c| c.is_tabbed()))
-                {
-                    Some(i) => i,
-                    None => {
-                        strip.hide();
-                        return;
-                    }
-                }
-            }
-        };
-        let Some(col) = ws.column(col_idx) else {
-            strip.hide();
-            return;
-        };
-        if !col.is_tabbed() {
-            strip.hide();
-            return;
-        }
-        // Use the shared "effective visible tab" picker so the strip
-        // tracks the same window the layout is rendering — even when
-        // `active_idx` points at a minimized tab and the layout falls
-        // back. The strip's highlight (`active_idx` for visual styling)
-        // still uses the column's stored active_idx so the user sees
-        // their last selection.
-        let Some(visible_tab) = col.effective_visible_tab(|w| ws.is_minimized(w)) else {
-            strip.hide();
-            return;
-        };
-        let Some(visible_hwnd) = col.get(visible_tab) else {
-            strip.hide();
-            return;
-        };
-        let Some(rect) = self.compute_window_layout_rect(visible_hwnd) else {
-            strip.hide();
-            return;
-        };
-        // For the highlight, prefer the stored active tab if it's
-        // visible; otherwise fall back to the rendered tab.
-        let stored_active = col.active_tab_idx().unwrap_or(visible_tab);
-        let active_idx = if col
-            .get(stored_active)
-            .is_some_and(|w| !ws.is_minimized(w))
-        {
-            stored_active
-        } else {
-            visible_tab
-        };
-
-        // Build tab labels from window titles + app icons. Empty titles
-        // become an empty string (still occupies a clickable cell);
-        // missing icons fall back to text-only rendering. The drag
-        // placeholder sentinel (`DRAG_PLACEHOLDER_HWND`) is filtered out
-        // — it represents the gap a dragged window will land in and has
-        // no real window backing, so showing it as a blank tab would
-        // confuse the user mid-drag.
-        let tabs: Vec<TabLabel> = col
-            .windows()
-            .iter()
-            .filter(|&&w| w != crate::state::DRAG_PLACEHOLDER_HWND)
-            .map(|&w| TabLabel {
-                title: self
-                    .lookup_window_info(w)
-                    .map(|info| info.title)
-                    .unwrap_or_default(),
-                icon: leopardwm_platform_win32::get_window_icon(w),
-            })
-            .collect();
-
-        // DPI-scale the configured strip height by the focused monitor's scale.
-        let scale = self
-            .monitors
-            .get(&self.focused_monitor)
-            .map(|m| m.scale_factor)
-            .unwrap_or(1.0);
-        let strip_height =
-            (self.config.appearance.tab_strip_height as f64 * scale).round() as u32;
-        // Use the workspace's inter-element gap (DPI-scaled) for the
-        // space between the strip and the active tab — same gap value
-        // that separates adjacent columns and stacked windows, so the
-        // tabbed area visually rhymes with the rest of the layout.
-        // `ScaledLayoutParams::from_config` already reserves
-        // `strip_height + layout.gap` worth of pixels at the top of
-        // Tabbed columns, so what we render here fits inside that
-        // reservation rather than overlapping window content.
-        let bottom_gap_px = (self.config.layout.gap.max(0) as f64 * scale).round() as u32;
 
         // Pull configurable colors from the [appearance] config section.
         // Hex strings are RGB; convert to the 0xBBGGRR layout the strip
@@ -1785,19 +1703,146 @@ impl AppState {
             inactive_text: hex_rgb_to_bgr(&app.tab_strip_inactive_text).unwrap_or(0xA0A0A0),
             opacity: app.tab_strip_opacity,
         };
-        let monitor = self.focused_monitor;
-        let ws_idx = self.active_workspace_idx(monitor);
-        strip.show(
-            rect,
-            tabs,
-            active_idx,
-            colors,
-            strip_height,
-            bottom_gap_px,
-            monitor,
-            ws_idx,
-            col_idx,
-        );
+        let close_action = match self.config.behavior.tab_close_action {
+            crate::config::TabCloseAction::CloseWindow => {
+                leopardwm_platform_win32::TabCloseAction::CloseWindow
+            }
+            crate::config::TabCloseAction::Untab => {
+                leopardwm_platform_win32::TabCloseAction::Untab
+            }
+        };
+
+        // First pass: figure out the desired key set + per-key show args.
+        struct StripShow {
+            rect: leopardwm_core_layout::Rect,
+            tabs: Vec<TabLabel>,
+            active_idx: usize,
+            scale: f64,
+        }
+        let mut desired: std::collections::HashMap<(isize, usize, usize), StripShow> =
+            std::collections::HashMap::new();
+
+        // Snapshot monitor + workspace identity into a vec so the
+        // subsequent column walk can borrow `self` (immutable) again
+        // without aliasing the iteration over `self.workspaces`.
+        let monitor_ids: Vec<isize> = self.workspaces.keys().copied().collect();
+        for monitor in monitor_ids {
+            let ws_idx = self.active_workspace_idx(monitor);
+            let Some(ws_vec) = self.workspaces.get(&monitor) else {
+                continue;
+            };
+            let Some(ws) = ws_vec.get(ws_idx) else { continue };
+            if ws.is_fullscreen() {
+                continue;
+            }
+            let scale = self
+                .monitors
+                .get(&monitor)
+                .map(|m| m.scale_factor)
+                .unwrap_or(1.0);
+            for col_idx in 0..ws.column_count() {
+                let Some(col) = ws.column(col_idx) else { continue };
+                if !col.is_tabbed() {
+                    continue;
+                }
+                let Some(visible_tab) =
+                    col.effective_visible_tab(|w| ws.is_minimized(w))
+                else {
+                    continue;
+                };
+                let Some(visible_hwnd) = col.get(visible_tab) else { continue };
+                let Some(rect) = self.compute_window_layout_rect(visible_hwnd) else {
+                    continue;
+                };
+                let stored_active = col.active_tab_idx().unwrap_or(visible_tab);
+                let active_idx = if col
+                    .get(stored_active)
+                    .is_some_and(|w| !ws.is_minimized(w))
+                {
+                    stored_active
+                } else {
+                    visible_tab
+                };
+                let tabs: Vec<TabLabel> = col
+                    .windows()
+                    .iter()
+                    .filter(|&&w| w != crate::state::DRAG_PLACEHOLDER_HWND)
+                    .map(|&w| TabLabel {
+                        title: self
+                            .tab_title_overrides
+                            .get(&w)
+                            .cloned()
+                            .or_else(|| self.lookup_window_info(w).map(|info| info.title))
+                            .unwrap_or_default(),
+                        icon: leopardwm_platform_win32::get_window_icon(w),
+                    })
+                    .collect();
+                desired.insert(
+                    (monitor, ws_idx, col_idx),
+                    StripShow {
+                        rect,
+                        tabs,
+                        active_idx,
+                        scale,
+                    },
+                );
+            }
+        }
+
+        // Drop overlays whose key is no longer desired (column became
+        // Vertical, workspace switched out, monitor disconnected, etc.).
+        // Drop happens via `retain` so each removed overlay's `Drop` impl
+        // tears down its thread + hwnds + tooltip cleanly.
+        self.tab_strip_overlays
+            .retain(|key, _| desired.contains_key(key));
+
+        // For each desired key, ensure an overlay exists and call show.
+        let strip_height =
+            (self.config.appearance.tab_strip_height as f64 * 1.0).round() as u32;
+        let bottom_gap_px = self.config.layout.gap.max(0) as u32;
+        let _ = strip_height; // per-strip scaling done below
+        let _ = bottom_gap_px;
+        for (key, show) in desired {
+            let (monitor, ws_idx, col_idx) = key;
+            // Spawn the overlay if missing. New overlays always render
+            // at the next show() so the user sees the strip immediately.
+            if !self.tab_strip_overlays.contains_key(&key) {
+                let Some(tx) = self.tab_strip_action_tx.clone() else {
+                    continue;
+                };
+                match leopardwm_platform_win32::tab_strip::TabStripOverlay::new(tx) {
+                    Ok(overlay) => {
+                        self.tab_strip_overlays.insert(key, overlay);
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to create TabStripOverlay for {:?}: {}",
+                            key,
+                            e
+                        );
+                        continue;
+                    }
+                }
+            }
+            let Some(strip) = self.tab_strip_overlays.get(&key) else { continue };
+            let scaled_strip_height =
+                (self.config.appearance.tab_strip_height as f64 * show.scale).round() as u32;
+            let scaled_bottom_gap_px =
+                (self.config.layout.gap.max(0) as f64 * show.scale).round() as u32;
+            strip.show(
+                show.rect,
+                show.tabs,
+                show.active_idx,
+                colors,
+                scaled_strip_height,
+                scaled_bottom_gap_px,
+                monitor,
+                ws_idx,
+                col_idx,
+                show.scale,
+                close_action,
+            );
+        }
     }
 
     /// Set the OS foreground window to match the workspace's focused window.

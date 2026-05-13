@@ -192,6 +192,7 @@ fn test_state_snapshot_serialization() {
         workspaces: vec![],
         focused_monitor_name: "DISPLAY1".to_string(),
         active_workspace: HashMap::new(),
+        tab_title_overrides: HashMap::new(),
     };
     let json = serde_json::to_string(&snapshot).expect("serialize");
     let parsed: StateSnapshot = serde_json::from_str(&json).expect("deserialize");
@@ -224,11 +225,45 @@ fn test_save_and_load_roundtrip() {
         }],
         focused_monitor_name: "DISPLAY1".to_string(),
         active_workspace: HashMap::new(),
+        tab_title_overrides: HashMap::new(),
     };
     let json = serde_json::to_string_pretty(&snapshot).expect("serialize");
     let parsed: StateSnapshot = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(parsed.workspaces.len(), 1);
     assert_eq!(parsed.workspaces[0].monitor_device_name, "DISPLAY1");
+}
+
+#[test]
+fn test_state_snapshot_with_tab_title_overrides_roundtrip() {
+    let mut overrides = HashMap::new();
+    overrides.insert(0xDEAD_BEEFu64, "My Notes".to_string());
+    overrides.insert(0xCAFE_F00Du64, "Build Log".to_string());
+    let snapshot = StateSnapshot {
+        saved_at: "2026-05-13T12:00:00".to_string(),
+        workspaces: vec![],
+        focused_monitor_name: "DISPLAY1".to_string(),
+        active_workspace: HashMap::new(),
+        tab_title_overrides: overrides.clone(),
+    };
+    let json = serde_json::to_string(&snapshot).expect("serialize");
+    let parsed: StateSnapshot = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(parsed.tab_title_overrides, overrides);
+}
+
+#[test]
+fn test_state_snapshot_v0_1_14_backward_compat() {
+    // A v0.1.14-shape JSON has no `tab_title_overrides` field. Verify
+    // it loads with the new field defaulted to an empty map so existing
+    // users don't lose their workspace state on upgrade.
+    let legacy_json = r#"{
+        "saved_at": "2026-04-01T00:00:00",
+        "workspaces": [],
+        "focused_monitor_name": "DISPLAY1",
+        "active_workspace": {}
+    }"#;
+    let parsed: StateSnapshot = serde_json::from_str(legacy_json).expect("deserialize");
+    assert!(parsed.tab_title_overrides.is_empty());
+    assert_eq!(parsed.focused_monitor_name, "DISPLAY1");
 }
 
 #[test]
@@ -1464,6 +1499,7 @@ fn test_restore_state_preserves_scroll_offset() {
         }],
         focused_monitor_name: "DISPLAY1".to_string(),
         active_workspace: HashMap::new(),
+        tab_title_overrides: HashMap::new(),
     };
 
     let restored = state.restore_state(&snapshot);
@@ -1493,6 +1529,7 @@ fn test_restore_state_on_empty_workspace_safe() {
         }],
         focused_monitor_name: "DISPLAY1".to_string(),
         active_workspace: HashMap::new(),
+        tab_title_overrides: HashMap::new(),
     };
 
     // Should not panic even on empty workspace
@@ -1542,6 +1579,7 @@ fn test_restore_state_returns_restored_monitor_ids() {
         }],
         focused_monitor_name: "DISPLAY1".to_string(),
         active_workspace: HashMap::new(),
+        tab_title_overrides: HashMap::new(),
     };
 
     let restored = state.restore_state(&snapshot);
@@ -1562,6 +1600,7 @@ fn test_restore_state_returns_restored_monitor_ids() {
         }],
         focused_monitor_name: "DISPLAY1".to_string(),
         active_workspace: HashMap::new(),
+        tab_title_overrides: HashMap::new(),
     };
 
     let restored2 = state.restore_state(&snapshot2);

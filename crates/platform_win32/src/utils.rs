@@ -384,6 +384,19 @@ pub fn is_cursor_on_resize_border(hwnd: WindowId) -> bool {
     }
 }
 
+/// Cheap existence check for a window handle. Returns `false` if the
+/// HWND has been recycled / the window no longer exists. Does NOT
+/// require visibility or non-minimized state (use
+/// `is_window_alive_and_visible` for that). Suitable for guarding
+/// async deferred operations whose target may have been destroyed
+/// between request and apply time.
+pub fn is_window_valid(hwnd: WindowId) -> bool {
+    if hwnd == 0 {
+        return false;
+    }
+    unsafe { IsWindow(Some(HWND(hwnd as *mut c_void))).as_bool() }
+}
+
 /// Check if a managed window is still valid and visible.
 ///
 /// Returns `false` if the window no longer exists, is not visible,

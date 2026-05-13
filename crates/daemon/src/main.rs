@@ -632,28 +632,29 @@ async fn main() -> Result<()> {
     // Collect forwarding thread handles for graceful shutdown
     let mut thread_handles: Vec<std::thread::JoinHandle<()>> = Vec::new();
 
-    // Tab strip overlay click channel. The overlay's WndProc posts a
-    // `TabClickEvent` on `WM_LBUTTONDOWN`; the forwarder thread below
-    // resolves the focused column under a brief AppState lock and
-    // dispatches `IpcCommand::SetActiveTab` through the main event queue.
-    let (tab_click_tx, tab_click_rx) =
-        std::sync::mpsc::channel::<leopardwm_platform_win32::tab_strip::TabClickEvent>();
+    // Tab strip overlay action channel. The overlay's WndProc posts a
+    // `TabActionEvent` on WM_LBUTTONDOWN / WM_MBUTTONUP / WM_RBUTTONUP /
+    // close-X; the forwarder thread below dispatches a `DaemonEvent::TabAction`
+    // carrying the captured column identity through the main event queue.
+    let (tab_action_tx, tab_action_rx) =
+        std::sync::mpsc::channel::<leopardwm_platform_win32::tab_strip::TabActionEvent>();
     {
         let mut state_guard = state.lock().await;
-        state_guard.install_tab_strip(tab_click_tx);
+        state_guard.install_tab_strip(tab_action_tx);
     }
     {
-        let event_tx_for_clicks = event_tx.clone();
+        let event_tx_for_actions = event_tx.clone();
         match std::thread::Builder::new()
-            .name("tab-click-forwarder".into())
+            .name("tab-action-forwarder".into())
             .spawn(move || {
-                while let Ok(click) = tab_click_rx.recv() {
-                    if event_tx_for_clicks
-                        .blocking_send(DaemonEvent::TabClicked {
-                            monitor: click.monitor,
-                            workspace_idx: click.workspace_idx,
-                            column_idx: click.column_idx,
-                            tab_idx: click.tab_idx,
+                while let Ok(action_event) = tab_action_rx.recv() {
+                    if event_tx_for_actions
+                        .blocking_send(DaemonEvent::TabAction {
+                            monitor: action_event.monitor,
+                            workspace_idx: action_event.workspace_idx,
+                            column_idx: action_event.column_idx,
+                            tab_idx: action_event.tab_idx,
+                            action: action_event.action,
                         })
                         .is_err()
                     {
@@ -662,7 +663,45 @@ async fn main() -> Result<()> {
                 }
             }) {
             Ok(handle) => thread_handles.push(handle),
-            Err(e) => warn!("Failed to spawn tab-click forwarder thread: {}", e),
+            Err(e) => warn!("Failed to spawn tab-action forwarder thread: {}", e),
+        }
+    }
+
+    // Rename-dialog result channel. The Rename arm spawns a modal
+    // dialog on its own short-lived thread; that thread posts a
+    // `TabRenameResult` here when the user OKs or cancels. This
+    // forwarder converts the result into a `DaemonEvent::TabRenameSubmitted`
+    // so the daemon writes the override under the main event loop's
+    // serial lock (no races with concurrent layout work).
+    let (rename_result_tx, rename_result_rx) =
+        std::sync::mpsc::channel::<crate::events::TabRenameResult>();
+    {
+        let mut state_guard = state.lock().await;
+        state_guard.rename_result_tx = Some(rename_result_tx);
+    }
+    {
+        let event_tx_for_rename = event_tx.clone();
+        match std::thread::Builder::new()
+            .name("tab-rename-forwarder".into())
+            .spawn(move || {
+                while let Ok(result) = rename_result_rx.recv() {
+                    if event_tx_for_rename
+                        .blocking_send(DaemonEvent::TabRenameSubmitted {
+                            monitor: result.monitor,
+                            workspace_idx: result.workspace_idx,
+                            column_idx: result.column_idx,
+                            tab_idx: result.tab_idx,
+                            target_hwnd: result.target_hwnd,
+                            new_title: result.new_title,
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            }) {
+            Ok(handle) => thread_handles.push(handle),
+            Err(e) => warn!("Failed to spawn tab-rename forwarder thread: {}", e),
         }
     }
 
@@ -1730,8 +1769,8 @@ async fn main() -> Result<()> {
                 // we gated on (overlay present, workspace not fullscreen,
                 // a Tabbed column exists, not paused) can't shift between
                 // the check and the refresh call.
-                let s = state.lock().await;
-                let needs_refresh = s.tab_strip_overlay.is_some()
+                let mut s = state.lock().await;
+                let needs_refresh = !s.tab_strip_overlays.is_empty()
                     && !s.paused
                     && s.focused_workspace().is_some_and(|ws| {
                         !ws.is_fullscreen()
@@ -1742,38 +1781,249 @@ async fn main() -> Result<()> {
                     s.update_tab_strip();
                 }
             }
-            DaemonEvent::TabClicked {
+            DaemonEvent::TabAction {
                 monitor,
                 workspace_idx,
                 column_idx,
                 tab_idx,
+                action,
             } => {
-                // Trust the strip's captured identity over current
-                // focus — focus may have changed between click and
-                // dispatch, and we want the click to apply to the column
-                // the user saw, not whatever is focused now.
-                let mut s = state.lock().await;
-                // Make sure the focused workspace matches what the strip
-                // was showing; if not, switch focus to the clicked column
-                // before activating its tab so the post-set sync correctly
-                // raises the new tab's window.
-                let needs_focus_switch = s.focused_monitor != monitor
-                    || s.active_workspace_idx(monitor) != workspace_idx
-                    || s.focused_workspace()
-                        .is_none_or(|ws| ws.focused_column_index() != column_idx);
-                if needs_focus_switch {
-                    s.focused_monitor = monitor;
-                    if let Some(ws) = s.focused_workspace_mut() {
-                        let _ = ws.set_focus(column_idx, 0);
+                use leopardwm_platform_win32::tab_strip::TabAction;
+                match action {
+                    TabAction::Activate => {
+                        // Trust the strip's captured identity over current
+                        // focus — focus may have changed between click and
+                        // dispatch, and we want the click to apply to the
+                        // column the user saw, not whatever is focused now.
+                        let mut s = state.lock().await;
+                        let needs_focus_switch = s.focused_monitor != monitor
+                            || s.active_workspace_idx(monitor) != workspace_idx
+                            || s.focused_workspace()
+                                .is_none_or(|ws| ws.focused_column_index() != column_idx);
+                        if needs_focus_switch {
+                            s.focused_monitor = monitor;
+                            if let Some(ws) = s.focused_workspace_mut() {
+                                let _ = ws.set_focus(column_idx, 0);
+                            }
+                        }
+                        let resp = s.handle_command(IpcCommand::SetActiveTab {
+                            column: column_idx,
+                            tab: tab_idx,
+                        });
+                        if let IpcResponse::Error { message } = resp {
+                            warn!("SetActiveTab from tab click failed: {}", message);
+                        }
+                    }
+                    TabAction::Close => {
+                        let s = state.lock().await;
+                        let target_hwnd = s
+                            .workspaces
+                            .get(&monitor)
+                            .and_then(|wss| wss.get(workspace_idx))
+                            .and_then(|ws| ws.column(column_idx))
+                            .and_then(|col| col.get(tab_idx));
+                        drop(s);
+                        match target_hwnd {
+                            Some(hwnd) => {
+                                if let Err(e) = leopardwm_platform_win32::close_window(hwnd) {
+                                    warn!("close_window from tab strip failed: {}", e);
+                                }
+                            }
+                            None => debug!(
+                                "TabAction::Close target missing (monitor={}, ws={}, col={}, tab={})",
+                                monitor, workspace_idx, column_idx, tab_idx
+                            ),
+                        }
+                    }
+                    TabAction::Untab => {
+                        let mut s = state.lock().await;
+                        if s.focused_monitor != monitor {
+                            s.focused_monitor = monitor;
+                        }
+                        s.pending_tab_focus = Some(crate::state::PendingTabFocus {
+                            monitor,
+                            workspace_idx,
+                            column_idx,
+                            tab_idx,
+                            set_at: std::time::Instant::now(),
+                        });
+                        // Run all workspace operations under one borrow,
+                        // collecting the proceed-or-abort decision so we
+                        // can drop the borrow before invoking handle_command.
+                        let proceed = match s.focused_workspace_mut() {
+                            None => false,
+                            Some(ws) => {
+                                if ws.set_focus(column_idx, 0).is_err() {
+                                    false
+                                } else if let Err(e) = ws.set_active_tab(column_idx, tab_idx) {
+                                    warn!("Untab set_active_tab failed: {}", e);
+                                    false
+                                } else {
+                                    let col_len = ws
+                                        .column(column_idx)
+                                        .map_or(0, |c| c.windows().len());
+                                    col_len > 1
+                                }
+                            }
+                        };
+                        if proceed {
+                            let resp = s.handle_command(IpcCommand::ExpelToRight);
+                            if let IpcResponse::Error { message } = resp {
+                                warn!("ExpelToRight from untab failed: {}", message);
+                                s.pending_tab_focus = None;
+                            }
+                        } else {
+                            s.pending_tab_focus = None;
+                        }
+                    }
+                    TabAction::Rename => {
+                        let s = state.lock().await;
+                        // Only one rename popup in flight at a time.
+                        if s.rename_dialog_active.swap(
+                            true,
+                            std::sync::atomic::Ordering::SeqCst,
+                        ) {
+                            debug!("Rename popup already active, ignoring duplicate request");
+                        } else {
+                            let initial = s.tab_title_for(
+                                monitor,
+                                workspace_idx,
+                                column_idx,
+                                tab_idx,
+                            );
+                            // Resolve the strip overlay that owns this
+                            // column so the rename popup lands precisely
+                            // over the right tab cell. With per-column
+                            // overlays the lookup is keyed by identity.
+                            let (tab_rect, colors) = match s
+                                .tab_strip_overlays
+                                .get(&(monitor, workspace_idx, column_idx))
+                            {
+                                Some(strip) => (
+                                    strip.tab_screen_rect(tab_idx),
+                                    strip.current_colors(),
+                                ),
+                                None => (None, None),
+                            };
+                            // Resolve the tab's HWND ONCE at spawn —
+                            // this is the authoritative rename target.
+                            // Capturing the HWND here means a column
+                            // mutation (close/reorder/untab) while the
+                            // popup is open won't retarget the override
+                            // to a different window. Index-based
+                            // resolution at submission time was racy.
+                            let target_hwnd_opt = s
+                                .workspaces
+                                .get(&monitor)
+                                .and_then(|wss| wss.get(workspace_idx))
+                                .and_then(|ws| ws.column(column_idx))
+                                .and_then(|col| col.get(tab_idx));
+                            let icon = target_hwnd_opt
+                                .and_then(leopardwm_platform_win32::get_window_icon);
+                            let tx = s.rename_result_tx.clone();
+                            let guard = s.rename_dialog_active.clone();
+                            // Second clone — needed for the spawn-failure
+                            // path below since the closure consumes `guard`.
+                            let guard_for_spawn_failure = guard.clone();
+                            drop(s);
+                            match (tab_rect, colors, target_hwnd_opt) {
+                                (Some(rect), Some(c), Some(target_hwnd)) => {
+                                    let spawn_res = std::thread::Builder::new()
+                                        .name("tab-rename-popup".into())
+                                        .spawn(move || {
+                                            let result =
+                                                leopardwm_platform_win32::dialog::show_rename_inline_popup(
+                                                    initial,
+                                                    rect,
+                                                    c.active_bg,
+                                                    c.active_text,
+                                                    icon,
+                                                )
+                                                .unwrap_or_else(|e| {
+                                                    warn!("Rename popup failed to open: {}", e);
+                                                    None
+                                                });
+                                            if let Some(sender) = tx {
+                                                let _ = sender.send(
+                                                    crate::events::TabRenameResult {
+                                                        monitor,
+                                                        workspace_idx,
+                                                        column_idx,
+                                                        tab_idx,
+                                                        target_hwnd,
+                                                        new_title: result,
+                                                    },
+                                                );
+                                            }
+                                            guard.store(false, std::sync::atomic::Ordering::SeqCst);
+                                        });
+                                    // Thread::spawn can fail (OOM, hit
+                                    // OS thread limit). The closure owns
+                                    // `guard`, so on Err we must reset
+                                    // it ourselves — otherwise the
+                                    // active-flag stays `true` forever
+                                    // and all future renames are
+                                    // silently suppressed.
+                                    if let Err(e) = spawn_res {
+                                        warn!("Failed to spawn rename popup thread: {}", e);
+                                        guard_for_spawn_failure
+                                            .store(false, std::sync::atomic::Ordering::SeqCst);
+                                    }
+                                }
+                                _ => {
+                                    debug!(
+                                        "TabAction::Rename: strip not visible, tab idx out of range, or HWND missing"
+                                    );
+                                    guard.store(false, std::sync::atomic::Ordering::SeqCst);
+                                }
+                            }
+                        }
                     }
                 }
-                let resp = s.handle_command(IpcCommand::SetActiveTab {
-                    column: column_idx,
-                    tab: tab_idx,
-                });
-                if let IpcResponse::Error { message } = resp {
-                    warn!("SetActiveTab from tab click failed: {}", message);
+            }
+            DaemonEvent::TabRenameSubmitted {
+                monitor,
+                workspace_idx,
+                column_idx,
+                tab_idx,
+                target_hwnd,
+                new_title,
+            } => {
+                let Some(title) = new_title else {
+                    // User cancelled; nothing to do.
+                    continue;
+                };
+                let mut s = state.lock().await;
+                // Use the HWND captured at spawn time — column mutation
+                // during the popup's lifetime would otherwise retarget
+                // the override to a different window.
+                let hwnd = target_hwnd;
+                if !leopardwm_platform_win32::is_window_valid(hwnd) {
+                    debug!(
+                        "TabRenameSubmitted: target window gone (monitor={}, ws={}, col={}, tab={}, hwnd={})",
+                        monitor, workspace_idx, column_idx, tab_idx, hwnd
+                    );
+                    continue;
                 }
+                if title.is_empty() {
+                    s.tab_title_overrides.remove(&hwnd);
+                } else if title.len()
+                    > leopardwm_platform_win32::dialog::TAB_TITLE_MAX_BYTES
+                {
+                    // The dialog already rejects over-length input, but
+                    // belt-and-suspenders in case a future surface bypasses it.
+                    warn!(
+                        "Rejecting tab title override ({} bytes > {} max)",
+                        title.len(),
+                        leopardwm_platform_win32::dialog::TAB_TITLE_MAX_BYTES
+                    );
+                    continue;
+                } else {
+                    s.tab_title_overrides.insert(hwnd, title);
+                }
+                // Refresh the strip so the new label shows immediately.
+                s.update_tab_strip();
+                let _ = s.save_state();
             }
             DaemonEvent::Settings(settings_event) => {
                 match settings_event {

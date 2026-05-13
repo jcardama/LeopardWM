@@ -10,11 +10,14 @@
 
 pub mod autostart;
 pub mod border;
+pub mod dialog;
 pub mod gestures;
 pub mod hotkeys;
 pub mod mouse_hook;
 pub mod overlay;
 pub mod tab_strip;
+
+pub use tab_strip::{TabAction, TabActionEvent, TabCloseAction};
 
 mod enumeration;
 mod event_hooks;
@@ -48,7 +51,7 @@ pub use utils::{
     is_high_contrast_enabled,
     is_cursor_on_resize_border, is_move_offscreen_sentinel_position, is_window_maximized,
     is_move_offscreen_sentinel_rect, is_shift_key_pressed, is_valid_window, is_window_shell_cloaked,
-    is_window_alive_and_visible, is_window_visible, move_window_offscreen,
+    is_window_alive_and_visible, is_window_valid, is_window_visible, move_window_offscreen,
     ms_since_last_user_input, reset_window_border_color,
     restore_all_windows_moved_offscreen_best_effort,
     restore_window_moved_offscreen, restore_windows_moved_offscreen, set_dpi_awareness,
