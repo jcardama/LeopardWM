@@ -322,6 +322,15 @@ pub struct BehaviorConfig {
     /// middle-click on a tab). The right-click menu items are unaffected.
     #[serde(default)]
     pub tab_close_action: TabCloseAction,
+
+    /// Use DWM thumbnails to animate Chromium / Electron / Mozilla /
+    /// Cascadia windows during layout transitions instead of per-frame
+    /// `SetWindowPos` on the live HWND. Eliminates the visible 1px
+    /// wobble and Chrome stutter during column scroll. Default off in
+    /// v0.1.16 as an opt-in soak period; flip to default on in v0.1.17
+    /// after no critical issues filed.
+    #[serde(default = "default_false")]
+    pub swap_chain_ghost_animation: bool,
 }
 
 impl Default for BehaviorConfig {
@@ -335,6 +344,7 @@ impl Default for BehaviorConfig {
             disable_snap_layouts: true,
             check_for_updates: true,
             tab_close_action: TabCloseAction::default(),
+            swap_chain_ghost_animation: false,
         }
     }
 }
@@ -1306,6 +1316,13 @@ focus_follows_mouse = false
 # Check GitHub Releases once a day for a newer version. One anonymous HTTPS GET to
 # api.github.com on startup + every 24h. Disable to skip entirely.
 # check_for_updates = false
+
+# Animate Chromium / Electron / Mozilla / Cascadia windows via DWM thumbnails
+# instead of per-frame SetWindowPos during column scrolls. Eliminates the
+# 1px wobble and renderer stutter on swap-chain-sensitive apps (Chrome,
+# Edge, Slack, Discord, Beeper, Spotify, VS Code, Firefox, Windows Terminal).
+# Opt-in in v0.1.16 while we soak it; default flips on in v0.1.17.
+# swap_chain_ghost_animation = true
 
 [hotkeys]
 # Navigation (focus) — Ctrl+Alt + HJKL

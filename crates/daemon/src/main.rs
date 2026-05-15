@@ -1039,6 +1039,10 @@ async fn main() -> Result<()> {
     // Persistent animation worker thread (DwmFlush-based vsync pacing)
     let animation_worker = animation_worker::AnimationWorkerHandle::spawn(event_tx.clone())
         .expect("Failed to spawn animation worker");
+    {
+        let mut state_guard = state.lock().await;
+        state_guard.animation_worker_control = Some(animation_worker.control());
+    }
     let mut animation_active = false;
     let mut last_frame_instant: Option<std::time::Instant> = None;
 
@@ -2185,6 +2189,41 @@ async fn main() -> Result<()> {
                     // bypasses the worker cache to reposition every window.
                     {
                         let mut state = state.lock().await;
+
+                        // HWND-recycling guard for ghosted wids: if the
+                        // source class changed since registration, the HWND
+                        // was recycled or the window died — drop the entry
+                        // (GhostEntry::Drop unregisters) without uncloaking.
+                        let ghost_wids: Vec<u64> =
+                            state.ghost_handles.keys().copied().collect();
+                        let mut surviving: Vec<u64> = Vec::with_capacity(ghost_wids.len());
+                        for wid in ghost_wids {
+                            let still_valid = {
+                                let class_now =
+                                    leopardwm_platform_win32::thumbnail::class_name(wid);
+                                state
+                                    .ghost_handles
+                                    .get(&wid)
+                                    .map(|e| e.class_at_register == class_now)
+                                    .unwrap_or(false)
+                            };
+                            if still_valid {
+                                surviving.push(wid);
+                            } else {
+                                leopardwm_platform_win32::unmark_ghost_cloaked(wid);
+                                state.ghost_handles.remove(&wid);
+                                // Don't apply_cloak_state — we don't know
+                                // what HWND we'd be uncloaking.
+                            }
+                        }
+
+                        // Uncloak surviving sources BEFORE apply_layout so
+                        // the synchronous SetWindowPos hits a visible HWND.
+                        for &wid in &surviving {
+                            leopardwm_platform_win32::unmark_ghost_cloaked(wid);
+                            leopardwm_platform_win32::apply_cloak_state(wid);
+                        }
+
                         // Only this landing pass follows an async frame burst,
                         // so it is the only `apply_layout` that needs to fire
                         // the sticky-compositor `(w-1 → w)` nudge. Routine
@@ -2193,9 +2232,61 @@ async fn main() -> Result<()> {
                         // visible 1 px wobble on every Chromium / Firefox
                         // window every time the layout is re-applied.
                         state.post_animation_nudge_pending = true;
-                        if let Err(e) = state.apply_layout() {
-                            warn!("Final landing layout failed: {}", e);
+                        let landing_ok = state.apply_layout().is_ok();
+                        if !landing_ok {
+                            warn!(
+                                "Final landing layout failed; dropping any active ghosts \
+                                 without crossfade"
+                            );
                         }
+
+                        // Stage D: if landing succeeded and we have ghosts,
+                        // transfer their handles to the worker for an
+                        // 8-frame ease-in-cubic crossfade. If landing
+                        // failed, drop handles immediately (hard cut) —
+                        // a fade over a misaligned source produces a
+                        // visible duplicate.
+                        if landing_ok && !surviving.is_empty() {
+                            state.crossfade_epoch_counter =
+                                state.crossfade_epoch_counter.saturating_add(1);
+                            let epoch = state.crossfade_epoch_counter;
+                            let mut entries: Vec<animation_worker::CrossfadeEntry> =
+                                Vec::with_capacity(surviving.len());
+                            let mut sources: std::collections::HashSet<u64> =
+                                std::collections::HashSet::with_capacity(surviving.len());
+                            for wid in &surviving {
+                                if let Some(entry) = state.ghost_handles.remove(wid) {
+                                    let dest = entry.final_dest_client_rect;
+                                    entries.push(animation_worker::CrossfadeEntry {
+                                        handle_isize: entry.take_isize(),
+                                        dest_client_rect: dest,
+                                    });
+                                    sources.insert(*wid);
+                                }
+                            }
+                            // Any non-surviving entries (HWND recycled) are
+                            // already cleared above. Drop any stragglers
+                            // belt-and-suspenders.
+                            state.ghost_handles.clear();
+                            state.crossfade_sources.insert(epoch, sources);
+                            state.active_crossfade =
+                                Some(crate::state::CrossfadeState { epoch });
+                            if let Err(e) =
+                                animation_worker.send_crossfade(epoch, entries, 8)
+                            {
+                                warn!("Failed to send crossfade to worker: {}", e);
+                                // No worker: clear state so next transition
+                                // isn't stuck waiting for a CrossfadeComplete
+                                // that will never arrive.
+                                state.active_crossfade = None;
+                                state.crossfade_sources.remove(&epoch);
+                            }
+                        } else {
+                            // Hard cut: drop handles immediately. Each
+                            // GhostEntry::Drop calls unregister_raw.
+                            state.ghost_handles.clear();
+                        }
+
                         // Re-sync OS foreground to match the workspace's focus.
                         // During animation, SetWindowPos can trigger spurious
                         // EVENT_SYSTEM_FOREGROUND events that override
@@ -2207,6 +2298,18 @@ async fn main() -> Result<()> {
                     }
                     debug!("All animations complete");
                 }
+            }
+            DaemonEvent::CrossfadeComplete { epoch } => {
+                let mut state = state.lock().await;
+                let active = state.active_crossfade.as_ref().map(|s| s.epoch);
+                if active == Some(epoch) {
+                    state.active_crossfade = None;
+                }
+                // Always release this epoch's re-registration barrier.
+                // Per-epoch tracking means an aborted fade's stale
+                // CrossfadeComplete only clears its own entry, not a
+                // newer in-flight fade's.
+                state.crossfade_sources.remove(&epoch);
             }
             DaemonEvent::HideSnapHint => {
                 if let Some(ref overlay) = snap_hint_overlay {
@@ -2239,7 +2342,15 @@ async fn main() -> Result<()> {
                 // may have re-populated it with stale border metrics.
                 leopardwm_platform_win32::clear_inset_cache();
                 animation_worker.clear_cache();
+                // Resize the DWM thumbnail host to the new virtual-screen
+                // geometry so subsequent ghost-animation registrations use
+                // correct coordinates. Safe no-op when host construction
+                // failed earlier (returns Ok with hwnd_raw == 0).
+                leopardwm_platform_win32::thumbnail::host().resize_to_virtual_screen();
                 let mut state = state.lock().await;
+                // Cancel any in-flight ghost animation — its rects were
+                // computed under the old geometry.
+                state.abort_active_ghost_transition();
                 state.display_change_pending = false;
                 // Clear stale min-width and min-height constraints — they were
                 // computed with old border metrics and cause cumulative column

@@ -625,6 +625,7 @@ pub(crate) fn should_skip_window_by_class(class_name: &str) -> bool {
         "Chrome_RenderWidgetHostHWND", // Internal Electron/Chrome render widget, not a real window
         "LeopardWMSettings",          // Our own settings window
         "LeopardWMBorderFrame",       // Our own border overlay
+        "LeopardWMThumbnailHost",     // Our own DWM thumbnail host
     ];
 
     SKIP_CLASSES.contains(&class_name)

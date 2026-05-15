@@ -4,6 +4,41 @@ All notable changes to LeopardWM will be documented in this file.
 
 ## Unreleased
 
+## 0.1.16
+
+### Improvements
+
+- **Smooth animations for Chromium and Electron apps (Preview).** Chrome,
+  Edge, Slack, Discord, Beeper, Spotify, VS Code, Cursor, Firefox / Zen,
+  and Windows Terminal Preview now glide through layout transitions
+  instead of stuttering. Replaces the v0.1.10 landing nudge, which only
+  cleaned up after the animation finished. The 1px wobble during scrolls
+  and the first-frame stall after the landing are both gone.
+
+  Animations stay smooth across:
+
+  - Column scrolls with multiple Chrome / Electron columns visible
+  - Off-screen columns scrolling into view
+  - Tab cycling inside a tabbed column
+  - Rapid back-to-back scrolls (one transition can preempt another
+    cleanly mid-fade)
+  - Pause, reload, display change, drag cancel, and window close
+    mid-animation
+
+  **Default is off in this release.** Enable in Settings → Behavior →
+  "Smooth Chromium animations", run `lwm ghost enable`, or add
+  `swap_chain_ghost_animation = true` under `[behavior]`. If nothing
+  breaks during the opt-in window, the default flips on in v0.1.17.
+
+  **Known limitations:**
+
+  - The focused window keeps using the original animation path. This
+    avoids a Windows quirk where the focus-restore call can land on a
+    temporarily-hidden window. Every other window in the same transition
+    still gets the smooth path.
+  - Cross-monitor moves are not animated through the new path. They use
+    the v0.1.15 path, which already looked fine for that case.
+
 ## 0.1.15
 
 ### Improvements

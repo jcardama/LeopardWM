@@ -372,6 +372,10 @@ pub enum IpcCommand {
     PanicRevert,
     /// Toggle paused state for tiling operations.
     TogglePause,
+    /// Toggle the swap-chain ghost-animation feature at runtime.
+    /// `None` queries current state; `Some(b)` sets it. Returns
+    /// `BoolValue` with the new (or current) state.
+    SetGhostAnimation { enabled: Option<bool> },
 
     /// Query detailed information about all managed windows.
     QueryAllWindows,
@@ -529,6 +533,11 @@ pub enum IpcResponse {
     AutoStartState {
         /// Whether auto-start is currently enabled.
         enabled: bool,
+    },
+    /// Generic boolean state response (e.g., `SetGhostAnimation`).
+    BoolValue {
+        /// The state being reported.
+        value: bool,
     },
     /// Acknowledgment for `IpcCommand::Subscribe`. After the client reads
     /// this response, it must switch its frame parser from `IpcResponse`

@@ -50,6 +50,11 @@ pub(crate) enum DaemonEvent {
     Settings(settings::SettingsEvent),
     /// An animation frame was applied by the worker thread.
     AnimationFrameApplied(animation_worker::FrameResult),
+    /// A worker-driven crossfade for the given epoch completed (normal
+    /// end-of-fade OR aborted). Daemon clears `active_crossfade` and
+    /// releases the `crossfade_sources` re-registration barrier when the
+    /// epoch matches.
+    CrossfadeComplete { epoch: u64 },
     /// Hide snap hint overlay after timeout.
     HideSnapHint,
     /// Apply focus-follows-mouse focus after delay.

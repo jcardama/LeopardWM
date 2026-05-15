@@ -433,6 +433,7 @@ impl AppState {
                                 let _ = leopardwm_platform_win32::move_window_offscreen(*wid);
                             }
                         }
+                        self.abort_active_ghost_transition();
                         self.layout_transition = None;
 
                         let slide_height = self.monitors.get(&monitor_id)

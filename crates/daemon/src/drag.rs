@@ -780,6 +780,7 @@ impl AppState {
             self.focused_monitor = target_monitor;
 
             // Clear any in-progress transition so windows stay at their current positions.
+            self.abort_active_ghost_transition();
             self.layout_transition = None;
             // Evict the dragged hwnd from last_placed_layout_rects: when the
             // user drops it back in its original column, the layout is

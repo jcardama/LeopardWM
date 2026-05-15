@@ -169,6 +169,11 @@ enum Commands {
     /// Toggle pause/resume of tiling operations
     #[command(visible_alias = "pause")]
     TogglePause,
+    /// Enable, disable, or check the swap-chain ghost-animation feature
+    Ghost {
+        #[command(subcommand)]
+        action: GhostAction,
+    },
     /// Emergency recovery command to revert managed windows
     #[command(visible_alias = "recover")]
     PanicRevert,
@@ -319,6 +324,16 @@ enum AutostartAction {
 }
 
 #[derive(Subcommand)]
+enum GhostAction {
+    /// Turn on swap-chain ghost animation
+    Enable,
+    /// Turn off swap-chain ghost animation
+    Disable,
+    /// Report the current state
+    Status,
+}
+
+#[derive(Subcommand)]
 enum ConfigAction {
     /// Generate default configuration file
     Init {
@@ -415,6 +430,13 @@ fn to_ipc_command(cmd: &Commands) -> IpcCommand {
         Commands::EmergencyUncloak => unreachable!("EmergencyUncloak handled separately"),
         Commands::Stop => IpcCommand::Stop,
         Commands::TogglePause => IpcCommand::TogglePause,
+        Commands::Ghost { action } => IpcCommand::SetGhostAnimation {
+            enabled: match action {
+                GhostAction::Enable => Some(true),
+                GhostAction::Disable => Some(false),
+                GhostAction::Status => None,
+            },
+        },
     }
 }
 
@@ -1405,6 +1427,9 @@ fn print_response(response: &IpcResponse) {
         }
         IpcResponse::AutoStartState { enabled } => {
             println!("Auto-start: {}", if *enabled { "enabled" } else { "disabled" });
+        }
+        IpcResponse::BoolValue { value } => {
+            println!("{}", if *value { "enabled" } else { "disabled" });
         }
         IpcResponse::Subscribed { events } => {
             // Reaching this arm via the normal command path means the

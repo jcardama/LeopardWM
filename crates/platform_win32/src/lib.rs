@@ -16,6 +16,7 @@ pub mod hotkeys;
 pub mod mouse_hook;
 pub mod overlay;
 pub mod tab_strip;
+pub mod thumbnail;
 
 pub use tab_strip::{TabAction, TabActionEvent, TabCloseAction};
 
@@ -37,10 +38,12 @@ pub use enumeration::{
 };
 pub use event_hooks::{install_event_hooks, EventHookHandle, WindowEvent};
 pub use placement::{
-    apply_placements, clear_inset_cache, dwm_uncloak_all, dwm_uncloak_window,
-    get_window_invisible_insets, is_placement_cloaked, set_dwm_transitions_disabled,
+    apply_placements, clear_inset_cache, drain_ghost_cloaked, dwm_uncloak_all,
+    dwm_uncloak_window, get_window_invisible_insets, is_placement_cloaked,
+    mark_ghost_cloaked, set_dwm_transitions_disabled, unmark_ghost_cloaked,
     ApplyPlacementsResult, HeightViolation, PlacementCache, WidthViolation,
 };
+pub use placement::apply_cloak_state;
 pub use types::{MonitorId, MonitorInfo, PlatformConfig, Win32Error, WindowInfo};
 pub use utils::{
     are_animations_enabled, cascade_windows, close_window, get_cursor_pos,

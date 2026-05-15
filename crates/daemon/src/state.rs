@@ -129,6 +129,88 @@ pub(crate) struct LayoutTransition {
     pub(crate) elapsed_ms: u64,
     /// Total duration in milliseconds.
     pub(crate) duration_ms: u64,
+    /// Window IDs being driven via a DWM thumbnail "ghost" rather than
+    /// per-frame `SetWindowPos` on the live HWND. Pure data — the owning
+    /// `ThumbnailHandle`s live in `AppState.ghost_handles`, which decouples
+    /// their lifetime from the transition's so they can survive into a
+    /// post-landing crossfade. `partition_for_animation` uses this set to
+    /// split frame placements into live + ghost streams.
+    pub(crate) ghosted_wids: HashSet<u64>,
+}
+
+/// Owns a registered DWM thumbnail handle for a single window across a
+/// ghost-animated layout transition. Dropping the entry unregisters the
+/// thumbnail via the platform-layer `unregister_raw` helper, so removal
+/// from `AppState.ghost_handles` (or `AppState::drop`-like cleanup) is
+/// always leak-free.
+///
+/// At landing, the handle is transferred to the animation worker via
+/// `take_isize` for the crossfade phase. After that point the entry is
+/// gone from `ghost_handles` and worker-owned `CrossfadeEntry` values
+/// own the registration until fade-complete.
+pub(crate) struct GhostEntry {
+    /// Raw `HTHUMBNAIL` value. `0` after `take_isize` consumes it, so
+    /// Drop becomes a no-op.
+    handle_isize: isize,
+    /// Class name captured at registration. Used as an HWND-recycling
+    /// guard at landing — if `GetClassNameW(hwnd)` no longer matches,
+    /// the source has died and we drop the entry without uncloaking
+    /// (we don't know what HWND we'd be uncloaking).
+    pub(crate) class_at_register: String,
+    /// Final on-screen rect (host-client coordinates) where the
+    /// thumbnail will rest during the post-landing crossfade.
+    #[allow(dead_code)] // Consumed in Stage D crossfade.
+    pub(crate) final_dest_client_rect: Rect,
+}
+
+impl Drop for GhostEntry {
+    fn drop(&mut self) {
+        if self.handle_isize != 0 {
+            leopardwm_platform_win32::thumbnail::unregister_raw(self.handle_isize);
+        }
+    }
+}
+
+impl GhostEntry {
+    pub(crate) fn new(
+        handle_isize: isize,
+        class_at_register: String,
+        final_dest_client_rect: Rect,
+    ) -> Self {
+        Self {
+            handle_isize,
+            class_at_register,
+            final_dest_client_rect,
+        }
+    }
+
+    /// Raw handle for cross-thread updates from the animation worker.
+    /// Read-only access — does not transfer ownership.
+    pub(crate) fn handle(&self) -> isize {
+        self.handle_isize
+    }
+
+    /// Consume this entry without firing Drop, returning the raw handle.
+    /// Caller takes responsibility for eventual unregistration. Used at
+    /// landing to transfer ownership into `WorkerCommand::Crossfade`
+    /// entries owned by the worker thread.
+    #[allow(dead_code)] // Consumed in Stage D crossfade.
+    pub(crate) fn take_isize(mut self) -> isize {
+        let raw = self.handle_isize;
+        self.handle_isize = 0;
+        std::mem::forget(self);
+        raw
+    }
+}
+
+/// Marker for an in-flight crossfade. Held by `AppState.active_crossfade`
+/// between the start of the worker's `Crossfade` command and the matching
+/// `DaemonEvent::CrossfadeComplete { epoch }`. Stale completions (from
+/// fades aborted by a newer transition) are ignored by checking the
+/// epoch.
+#[allow(dead_code)] // Read in Stage D CrossfadeComplete handler.
+pub(crate) struct CrossfadeState {
+    pub(crate) epoch: u64,
 }
 
 impl LayoutTransition {
@@ -275,6 +357,38 @@ pub(crate) struct AppState {
     pub(crate) high_contrast: bool,
     /// Active layout transition animation (window position interpolation).
     pub(crate) layout_transition: Option<LayoutTransition>,
+    /// DWM thumbnail handles owned across a ghost-animated transition.
+    /// Survives `LayoutTransition` clearing (so the landing pass can drain
+    /// them into the worker for crossfade). Each `GhostEntry::Drop` calls
+    /// `thumbnail::unregister_raw`, so every removal path is leak-safe.
+    pub(crate) ghost_handles: HashMap<u64, GhostEntry>,
+    /// Set when a crossfade is in flight on the animation worker. The
+    /// `epoch` lets us discriminate stale `CrossfadeComplete` events
+    /// (from fades aborted by a newer transition).
+    pub(crate) active_crossfade: Option<CrossfadeState>,
+    /// Window IDs whose thumbnails the worker is currently fading out.
+    /// Per-epoch map of source wids currently in a worker-side crossfade
+    /// (live or aborted-but-pending-ack). An entry is inserted when sending
+    /// `WorkerCommand::Crossfade` and removed when the matching
+    /// `CrossfadeComplete { epoch }` arrives. `should_ghost` refuses to
+    /// register a new thumbnail for any wid that appears in ANY entry's
+    /// value set — Microsoft Q&A 3229922 documents that registering a
+    /// second thumbnail for the same source while the first is still alive
+    /// can break the first on Win10 1903. Tracking per-epoch (rather than
+    /// a flat union) is required because abort paths can leave multiple
+    /// crossfades pending-ack simultaneously; clearing on any completion
+    /// would prematurely release the barrier for a still-live epoch.
+    pub(crate) crossfade_sources: std::collections::HashMap<u64, HashSet<u64>>,
+    /// Monotonic counter minted at each new crossfade. Used to tag
+    /// `WorkerCommand::Crossfade` and `DaemonEvent::CrossfadeComplete`
+    /// so daemon-side can ignore stale completions from aborted fades.
+    pub(crate) crossfade_epoch_counter: u64,
+    /// Cloneable handle for sending `AbortCrossfade` to the animation
+    /// worker from `abort_active_crossfade` (which is called by many
+    /// paths that don't have direct access to the owning worker).
+    /// Installed once at daemon startup via `install_animation_worker_control`.
+    pub(crate) animation_worker_control:
+        Option<crate::animation_worker::AnimationWorkerControl>,
     /// True when the next sync `apply_layout` is the landing pass after an
     /// animation (scroll or layout transition) and therefore needs the
     /// `(w-1 → w)` nudge to repair sticky-compositor swap-chain desyncs.
@@ -486,6 +600,11 @@ impl AppState {
                 || leopardwm_platform_win32::is_on_battery_or_power_saver(),
             high_contrast: leopardwm_platform_win32::is_high_contrast_enabled(),
             layout_transition: None,
+            ghost_handles: HashMap::new(),
+            active_crossfade: None,
+            crossfade_sources: std::collections::HashMap::new(),
+            crossfade_epoch_counter: 0,
+            animation_worker_control: None,
             post_animation_nudge_pending: false,
             #[cfg(test)]
             injected_window_info: HashMap::new(),

@@ -320,6 +320,17 @@ impl AppState {
                 }
                 IpcResponse::Ok
             }
+            IpcCommand::SetGhostAnimation { enabled } => {
+                if let Some(new_value) = enabled {
+                    // Aborts any active ghost transition first — the flag
+                    // flip mid-flight would otherwise leak handles.
+                    self.abort_active_ghost_transition();
+                    self.config.behavior.swap_chain_ghost_animation = new_value;
+                }
+                IpcResponse::BoolValue {
+                    value: self.config.behavior.swap_chain_ghost_animation,
+                }
+            }
             IpcCommand::Stop => {
                 // This is handled specially in the event loop
                 IpcResponse::Ok
@@ -598,6 +609,7 @@ impl AppState {
                         let _ = leopardwm_platform_win32::move_window_offscreen(*wid);
                     }
                 }
+                self.abort_active_ghost_transition();
                 self.layout_transition = None;
 
                 let slide_height = self.monitors.get(&monitor)

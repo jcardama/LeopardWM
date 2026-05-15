@@ -38,6 +38,153 @@ fn test_app_state_skips_border_frame_under_cfg_test() {
 }
 
 #[test]
+fn test_app_state_skips_thumbnail_host_under_cfg_test() {
+    // ThumbnailHost::new() panics under cfg(test). If AppState construction
+    // ever triggers it, this test will panic during setup — implicit proof
+    // that we don't accidentally call thumbnail::host() during initialization.
+    let _state = AppState::new_with_config(test_config(), test_monitors());
+}
+
+#[test]
+fn test_partition_for_animation_routes_ghosted_wids_to_ghost_stream() {
+    use crate::state::{GhostEntry, LayoutTransition};
+    use leopardwm_core_layout::{Visibility, WindowPlacement};
+    use std::collections::{HashMap, HashSet};
+
+    let mut ghosted_wids = HashSet::new();
+    ghosted_wids.insert(100u64);
+    ghosted_wids.insert(200u64);
+
+    let transition = LayoutTransition {
+        start_rects: HashMap::new(),
+        exit_rects: HashMap::new(),
+        elapsed_ms: 0,
+        duration_ms: 150,
+        ghosted_wids,
+    };
+
+    // GhostEntry with handle_isize=0 has a no-op Drop, so it's safe to
+    // construct in tests without touching the DWM thumbnail API.
+    let mut ghost_handles: HashMap<u64, GhostEntry> = HashMap::new();
+    ghost_handles.insert(
+        100,
+        GhostEntry::new(0, "Chrome_WidgetWin_1".into(), Rect::new(0, 0, 800, 600)),
+    );
+    ghost_handles.insert(
+        200,
+        GhostEntry::new(0, "MozillaWindowClass".into(), Rect::new(800, 0, 800, 600)),
+    );
+
+    let placements = vec![
+        WindowPlacement {
+            window_id: 100, // ghosted
+            rect: Rect::new(0, 0, 800, 600),
+            visibility: Visibility::Visible,
+            column_index: 0,
+        },
+        WindowPlacement {
+            window_id: 300, // not ghosted
+            rect: Rect::new(800, 0, 800, 600),
+            visibility: Visibility::Visible,
+            column_index: 1,
+        },
+        WindowPlacement {
+            window_id: 200, // ghosted
+            rect: Rect::new(0, 0, 800, 600),
+            visibility: Visibility::Visible,
+            column_index: 0,
+        },
+    ];
+
+    let (live, ghosts) =
+        AppState::partition_for_animation(placements, Some(&transition), &ghost_handles);
+
+    // 100 and 200 are ghosted; 300 stays live.
+    assert_eq!(live.len(), 1, "non-ghosted placement should stay live");
+    assert_eq!(live[0].window_id, 300);
+    assert_eq!(ghosts.len(), 2, "two ghosted placements should produce ghost frames");
+    // Worker only ever calls thumbnail::update with handle != 0; the test
+    // never does, so handle_isize == 0 here is fine.
+    assert!(ghosts.iter().all(|g| g.handle_isize == 0));
+}
+
+#[test]
+fn test_partition_for_animation_no_transition_keeps_everything_live() {
+    use leopardwm_core_layout::{Visibility, WindowPlacement};
+    use std::collections::HashMap;
+
+    let placements = vec![WindowPlacement {
+        window_id: 42,
+        rect: Rect::new(0, 0, 100, 100),
+        visibility: Visibility::Visible,
+        column_index: 0,
+    }];
+
+    let (live, ghosts) =
+        AppState::partition_for_animation(placements, None, &HashMap::new());
+    assert_eq!(live.len(), 1);
+    assert_eq!(ghosts.len(), 0);
+}
+
+#[test]
+fn test_abort_active_crossfade_clears_state_without_worker_panic() {
+    // No animation_worker_control installed (None) — abort should be a
+    // no-op on the worker side but still clear daemon-local state.
+    use crate::state::CrossfadeState;
+
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.crossfade_epoch_counter = 5;
+    state.active_crossfade = Some(CrossfadeState { epoch: 5 });
+    let mut sources = std::collections::HashSet::new();
+    sources.insert(42u64);
+    state.crossfade_sources.insert(5, sources);
+
+    state.abort_active_crossfade();
+
+    assert!(state.active_crossfade.is_none(), "abort should clear active");
+    // crossfade_sources[epoch] stays populated until CrossfadeComplete
+    // arrives — the worker may still be using the old entries for up to
+    // one frame.
+    assert!(state
+        .crossfade_sources
+        .get(&5)
+        .map(|s| s.contains(&42))
+        .unwrap_or(false));
+}
+
+#[test]
+fn test_partition_for_animation_missing_handle_drops_placement() {
+    use crate::state::LayoutTransition;
+    use leopardwm_core_layout::{Visibility, WindowPlacement};
+    use std::collections::{HashMap, HashSet};
+
+    // Wid is in ghosted_wids but ghost_handles is empty — registration
+    // failure path. partition should drop the placement entirely (the
+    // window lands at its target via the post-animation pass).
+    let mut ghosted_wids = HashSet::new();
+    ghosted_wids.insert(99u64);
+    let transition = LayoutTransition {
+        start_rects: HashMap::new(),
+        exit_rects: HashMap::new(),
+        elapsed_ms: 0,
+        duration_ms: 150,
+        ghosted_wids,
+    };
+
+    let placements = vec![WindowPlacement {
+        window_id: 99,
+        rect: Rect::new(0, 0, 100, 100),
+        visibility: Visibility::Visible,
+        column_index: 0,
+    }];
+
+    let (live, ghosts) =
+        AppState::partition_for_animation(placements, Some(&transition), &HashMap::new());
+    assert_eq!(live.len(), 0, "ghosted wid without handle should be dropped");
+    assert_eq!(ghosts.len(), 0);
+}
+
+#[test]
 fn test_app_state_focused_viewport() {
     let state = AppState::new_with_config(test_config(), test_monitors());
     let viewport = state.focused_viewport();
