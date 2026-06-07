@@ -189,7 +189,7 @@ pub fn dwm_uncloak_all() {
     // Use a set union so we don't issue redundant DWM calls for windows
     // present in both. Order doesn't matter — dwm_set_cloak is idempotent.
     let mut seen: HashSet<WindowId> = HashSet::with_capacity(global_ids.len() + ghost_ids.len());
-    for wid in global_ids.into_iter().chain(ghost_ids.into_iter()) {
+    for wid in global_ids.into_iter().chain(ghost_ids) {
         if seen.insert(wid) {
             if let Ok(hwnd) = window_id_to_hwnd(wid) {
                 unsafe { dwm_set_cloak(hwnd, false) };
