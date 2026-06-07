@@ -2271,7 +2271,9 @@ async fn main() -> Result<()> {
                             // belt-and-suspenders.
                             state.ghost_handles.clear();
                             let entry_count = entries.len();
-                            state.crossfade_sources.insert(epoch, sources);
+                            state
+                                .crossfade_sources
+                                .insert(epoch, (sources, std::time::Instant::now()));
                             state.active_crossfade =
                                 Some(crate::state::CrossfadeState { epoch });
                             debug!(

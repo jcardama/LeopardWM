@@ -137,7 +137,9 @@ fn test_abort_active_crossfade_clears_state_without_worker_panic() {
     state.active_crossfade = Some(CrossfadeState { epoch: 5 });
     let mut sources = std::collections::HashSet::new();
     sources.insert(42u64);
-    state.crossfade_sources.insert(5, sources);
+    state
+        .crossfade_sources
+        .insert(5, (sources, std::time::Instant::now()));
 
     state.abort_active_crossfade();
 
@@ -148,8 +150,39 @@ fn test_abort_active_crossfade_clears_state_without_worker_panic() {
     assert!(state
         .crossfade_sources
         .get(&5)
-        .map(|s| s.contains(&42))
+        .map(|(s, _)| s.contains(&42))
         .unwrap_or(false));
+}
+
+#[test]
+fn test_register_ghosts_sweeps_stale_crossfade_barrier() {
+    // A crossfade_sources entry whose CrossfadeComplete never arrived
+    // (worker died/stuck) must not bar its wids forever. An entry older
+    // than CROSSFADE_BARRIER_MAX_AGE is swept on the next ghost pass.
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+
+    let mut stale = std::collections::HashSet::new();
+    stale.insert(42u64);
+    let old = std::time::Instant::now() - crate::state::CROSSFADE_BARRIER_MAX_AGE
+        - std::time::Duration::from_secs(1);
+    state.crossfade_sources.insert(99, (stale, old));
+
+    let mut fresh = std::collections::HashSet::new();
+    fresh.insert(7u64);
+    state
+        .crossfade_sources
+        .insert(100, (fresh, std::time::Instant::now()));
+
+    state.sweep_stale_crossfade_barriers();
+
+    assert!(
+        !state.crossfade_sources.contains_key(&99),
+        "stale epoch should be swept"
+    );
+    assert!(
+        state.crossfade_sources.contains_key(&100),
+        "fresh epoch must survive"
+    );
 }
 
 #[test]

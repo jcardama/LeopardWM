@@ -88,6 +88,11 @@ pub(crate) const APPLY_LAYOUT_TIMEOUT: Duration = Duration::from_millis(5000);
 /// (it compares actual-vs-expected rect and short-circuits when they match
 /// within a small epsilon), which operates independently of this suppression.
 pub(crate) const MOVED_OR_RESIZED_SUPPRESSION_WINDOW: Duration = Duration::from_millis(250);
+/// Max age for a `crossfade_sources` re-registration barrier entry. A
+/// crossfade runs ~130ms (8 frames); 2s is a generous bound. An entry
+/// older than this means its `CrossfadeComplete` never arrived (worker
+/// died/stuck), so the barrier is swept to avoid stranding those wids.
+pub(crate) const CROSSFADE_BARRIER_MAX_AGE: Duration = Duration::from_secs(2);
 /// Windows managed for less than this duration before hiding are considered
 /// transient (e.g., Electron notification popups) and suppressed on re-creation.
 /// Windows managed longer (e.g., close-to-tray apps) are allowed to re-tile.
@@ -388,7 +393,15 @@ pub(crate) struct AppState {
     /// a flat union) is required because abort paths can leave multiple
     /// crossfades pending-ack simultaneously; clearing on any completion
     /// would prematurely release the barrier for a still-live epoch.
-    pub(crate) crossfade_sources: std::collections::HashMap<u64, HashSet<u64>>,
+    ///
+    /// Each entry carries the dispatch `Instant`. Normally the entry is
+    /// removed when its `CrossfadeComplete` arrives; the timestamp is a
+    /// safety net: if a worker ever dies without acking (today only at
+    /// shutdown), `register_ghosts_for_transition` sweeps any epoch older
+    /// than `CROSSFADE_BARRIER_MAX_AGE` so the barrier self-heals instead
+    /// of stranding those wids out of the ghost path forever.
+    pub(crate) crossfade_sources:
+        std::collections::HashMap<u64, (HashSet<u64>, std::time::Instant)>,
     /// Monotonic counter minted at each new crossfade. Used to tag
     /// `WorkerCommand::Crossfade` and `DaemonEvent::CrossfadeComplete`
     /// so daemon-side can ignore stale completions from aborted fades.

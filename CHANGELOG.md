@@ -16,6 +16,10 @@ All notable changes to LeopardWM will be documented in this file.
 - **`lwm doctor` now reports the animation thumbnail balance**, a quick
   health signal that should read 0 at rest. Useful for confirming the
   animation system isn't leaking compositor handles.
+- **Animation system self-recovers from an interrupted handoff.** If an
+  internal animation step is ever cut short, the affected windows are no
+  longer skipped by the smooth-animation path on later moves; the guard
+  clears itself within a couple of seconds.
 
 ## 0.1.17
 

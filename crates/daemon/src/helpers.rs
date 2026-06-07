@@ -997,6 +997,16 @@ impl AppState {
         }
     }
 
+    /// Drop re-registration barriers whose `CrossfadeComplete` never
+    /// arrived (worker died/stuck), so their source wids aren't stranded
+    /// out of the ghost path forever. A crossfade can't legitimately
+    /// outlive `CROSSFADE_BARRIER_MAX_AGE`. Run at the top of every ghost
+    /// registration pass.
+    pub(crate) fn sweep_stale_crossfade_barriers(&mut self) {
+        self.crossfade_sources
+            .retain(|_, (_, at)| at.elapsed() < crate::state::CROSSFADE_BARRIER_MAX_AGE);
+    }
+
     /// Walk the placements that will be live after the structural change,
     /// register thumbnails for swap-chain-sensitive windows whose rect
     /// is changing, and cloak the sources via GHOST_CLOAKED. Populates
@@ -1006,6 +1016,8 @@ impl AppState {
         start_rects: &std::collections::HashMap<u64, leopardwm_core_layout::Rect>,
         ghosted_wids: &mut std::collections::HashSet<u64>,
     ) {
+        self.sweep_stale_crossfade_barriers();
+
         if !leopardwm_platform_win32::thumbnail::host().is_available() {
             return;
         }
@@ -1062,7 +1074,7 @@ impl AppState {
             if self
                 .crossfade_sources
                 .values()
-                .any(|set| set.contains(&wid))
+                .any(|(set, _)| set.contains(&wid))
             {
                 continue;
             }
