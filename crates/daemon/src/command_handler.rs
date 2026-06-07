@@ -794,6 +794,8 @@ impl AppState {
                     total_windows,
                     monitors: self.monitors.len(),
                     paused: self.paused,
+                    thumbnail_register_balance:
+                        leopardwm_platform_win32::thumbnail::current_register_balance(),
                 }
             }
             IpcCommand::GetAutoStart => {

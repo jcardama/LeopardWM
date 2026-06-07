@@ -326,10 +326,10 @@ pub struct BehaviorConfig {
     /// Use DWM thumbnails to animate Chromium / Electron / Mozilla /
     /// Cascadia windows during layout transitions instead of per-frame
     /// `SetWindowPos` on the live HWND. Eliminates the visible 1px
-    /// wobble and Chrome stutter during column scroll. Default off in
-    /// v0.1.16 as an opt-in soak period; flip to default on in v0.1.17
-    /// after no critical issues filed.
-    #[serde(default = "default_false")]
+    /// wobble and Chrome stutter during column scroll. Shipped opt-in in
+    /// v0.1.16, soaked with no critical issues filed, default-on since
+    /// v0.1.18.
+    #[serde(default = "default_true")]
     pub swap_chain_ghost_animation: bool,
 }
 
@@ -344,7 +344,7 @@ impl Default for BehaviorConfig {
             disable_snap_layouts: true,
             check_for_updates: true,
             tab_close_action: TabCloseAction::default(),
-            swap_chain_ghost_animation: false,
+            swap_chain_ghost_animation: true,
         }
     }
 }
@@ -1321,8 +1321,9 @@ focus_follows_mouse = false
 # instead of per-frame SetWindowPos during column scrolls. Eliminates the
 # 1px wobble and renderer stutter on swap-chain-sensitive apps (Chrome,
 # Edge, Slack, Discord, Beeper, Spotify, VS Code, Firefox, Windows Terminal).
-# Opt-in in v0.1.16 while we soak it; default flips on in v0.1.17.
-# swap_chain_ghost_animation = true
+# Default on since v0.1.18. Set to false to fall back to the legacy
+# per-frame SetWindowPos path.
+# swap_chain_ghost_animation = false
 
 [hotkeys]
 # Navigation (focus) — Ctrl+Alt + HJKL

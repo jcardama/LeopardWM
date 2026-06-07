@@ -4,6 +4,19 @@ All notable changes to LeopardWM will be documented in this file.
 
 ## Unreleased
 
+## 0.1.18
+
+### Improvements
+
+- **Smooth Chromium and Electron animations are now on by default.** The
+  experimental swap-chain animation that shipped opt-in in v0.1.16 has
+  soaked with no critical issues, so it is enabled out of the box. Add
+  `swap_chain_ghost_animation = false` under `[behavior]` to fall back to
+  the old per-frame path.
+- **`lwm doctor` now reports the animation thumbnail balance**, a quick
+  health signal that should read 0 at rest. Useful for confirming the
+  animation system isn't leaking compositor handles.
+
 ## 0.1.17
 
 ### Fixes

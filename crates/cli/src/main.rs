@@ -1829,7 +1829,34 @@ async fn handle_doctor() -> Result<()> {
         }
     }
 
-    // 5. Admin check
+    // 5. Ghost-animation handle balance (only meaningful while running).
+    // A non-zero balance at rest means a DWM thumbnail leaked.
+    if matches!(probe_daemon_running(), Ok(true)) {
+        match send_command(IpcCommand::HealthCheck).await {
+            Ok(IpcResponse::HealthInfo {
+                thumbnail_register_balance,
+                ..
+            }) => {
+                if thumbnail_register_balance == 0 {
+                    CheckResult::Pass(
+                        "Ghost-animation thumbnail balance is 0 (no leak)".to_string(),
+                    )
+                } else {
+                    CheckResult::Warn(format!(
+                        "Ghost-animation thumbnail balance is {} (expected 0 at rest; possible leak if no animation is running)",
+                        thumbnail_register_balance
+                    ))
+                }
+                .print();
+            }
+            Ok(_) | Err(_) => {
+                // Older daemon without the field, or transient IPC issue;
+                // not worth failing the doctor over.
+            }
+        }
+    }
+
+    // 6. Admin check
     if is_running_as_admin() {
         CheckResult::Warn(
             "Running as administrator (may cause issues with non-elevated windows)".to_string(),

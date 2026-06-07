@@ -1091,6 +1091,13 @@ impl AppState {
                 }
             }
         }
+        if !ghosted_wids.is_empty() {
+            tracing::debug!(
+                "ghost: registered {} thumbnail(s), balance={}",
+                ghosted_wids.len(),
+                leopardwm_platform_win32::thumbnail::current_register_balance()
+            );
+        }
     }
 
     /// Apply layout transition interpolation to placements, including exit windows.

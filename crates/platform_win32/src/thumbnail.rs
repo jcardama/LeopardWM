@@ -200,24 +200,26 @@ pub fn unregister_raw(handle: isize) {
     if handle == 0 {
         return;
     }
-    let result = unsafe { DwmUnregisterThumbnail(handle) };
-    if let Err(e) = result {
-        // Failed unregister: don't decrement the balance, otherwise a
-        // run of failures could drive the counter negative and falsely
-        // demote the host to non-topmost while thumbnails remain alive.
-        warn!("DwmUnregisterThumbnail({}) failed: {}", handle, e);
-        return;
+    // A failed DwmUnregisterThumbnail leaks the DWM handle (the caller
+    // already gave up its owning reference, so we can't retry). Decrement
+    // anyway: the balance tracks handles WE account for, and pinning it
+    // above zero on a transient failure would strand the host topmost for
+    // the rest of the session and make the health metric lie. Clamp at
+    // zero so a double-unregister or failure run can't go negative.
+    if let Err(e) = unsafe { DwmUnregisterThumbnail(handle) } {
+        warn!("DwmUnregisterThumbnail({}) failed (handle leaked): {}", handle, e);
     }
     // Serialize the balance update with the z-order side effect.
     let mut z = Z_ORDER_STATE
         .lock()
         .unwrap_or_else(crate::recover_poisoned_mutex);
     let prev = z.balance;
-    z.balance -= 1;
+    z.balance = (z.balance - 1).max(0);
     REGISTER_BALANCE.store(z.balance, Ordering::Relaxed);
-    // Last thumbnail just went away: drop the host back to non-topmost so
-    // it stops interfering with the taskbar's auto-hide z-order.
-    if prev == 1 {
+    // Last accounted thumbnail just went away: drop the host back to
+    // non-topmost so it stops interfering with the taskbar's auto-hide
+    // z-order. Guard on prev >= 1 so a clamped underflow can't skip it.
+    if prev >= 1 && z.balance == 0 {
         host().set_topmost(false);
     }
 }

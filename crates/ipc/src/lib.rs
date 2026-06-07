@@ -559,6 +559,11 @@ pub enum IpcResponse {
         monitors: usize,
         /// Whether tiling is paused.
         paused: bool,
+        /// Live DWM thumbnail registrations for the swap-chain ghost
+        /// animation. Should be 0 at rest; a non-zero value while no
+        /// animation is in flight indicates a handle leak.
+        #[serde(default)]
+        thumbnail_register_balance: i64,
     },
     /// Forward-compatibility fallback for newer daemon responses unknown to this client.
     #[serde(other)]
@@ -780,6 +785,7 @@ mod tests {
                 total_windows: 3,
                 monitors: 1,
                 paused: false,
+                thumbnail_register_balance: 0,
             },
         ];
 

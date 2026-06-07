@@ -2270,9 +2270,14 @@ async fn main() -> Result<()> {
                             // already cleared above. Drop any stragglers
                             // belt-and-suspenders.
                             state.ghost_handles.clear();
+                            let entry_count = entries.len();
                             state.crossfade_sources.insert(epoch, sources);
                             state.active_crossfade =
                                 Some(crate::state::CrossfadeState { epoch });
+                            debug!(
+                                "ghost: crossfade epoch {} dispatched for {} source(s)",
+                                epoch, entry_count
+                            );
                             if let Err(e) =
                                 animation_worker.send_crossfade(epoch, entries, 8)
                             {
