@@ -84,6 +84,7 @@ fn test_all_responses_roundtrip() {
             scroll_offset: 123.5,
             total_width: 2400,
             active_workspace: 1,
+            active_workspace_name: None,
         },
         IpcResponse::FocusedWindow {
             window_id: Some(12345),
@@ -295,6 +296,7 @@ fn test_workspace_state_edge_values() {
         scroll_offset: 0.0,
         total_width: 0,
         active_workspace: 1,
+        active_workspace_name: None,
     };
 
     let json = serde_json::to_string(&resp).expect("serialize");
@@ -322,6 +324,7 @@ fn test_workspace_state_large_values() {
         scroll_offset: 50000.5,
         total_width: 100000,
         active_workspace: 1,
+        active_workspace_name: None,
     };
 
     let json = serde_json::to_string(&resp).expect("serialize");
@@ -351,6 +354,7 @@ fn test_workspace_state_negative_scroll() {
         scroll_offset: -100.0,
         total_width: 2400,
         active_workspace: 1,
+        active_workspace_name: None,
     };
 
     let json = serde_json::to_string(&resp).expect("serialize");
@@ -622,7 +626,7 @@ fn test_subscribe_handshake_wire_format() {
 fn test_event_frame_distinct_from_response_frame() {
     use leopardwm_ipc::IpcEvent;
 
-    let event = IpcEvent::WorkspaceChanged { monitor: 1, old_index: 0, new_index: 1 };
+    let event = IpcEvent::WorkspaceChanged { monitor: 1, old_index: 0, new_index: 1, name: None };
     let event_json = serde_json::to_string(&event).unwrap();
     assert!(event_json.contains(r#""type":"workspace_changed""#));
 
@@ -664,7 +668,7 @@ fn test_event_kind_classification() {
 
     let cases = [
         (
-            IpcEvent::WorkspaceChanged { monitor: 1, old_index: 0, new_index: 1 },
+            IpcEvent::WorkspaceChanged { monitor: 1, old_index: 0, new_index: 1, name: None },
             EventKind::Workspace,
         ),
         (

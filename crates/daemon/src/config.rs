@@ -47,6 +47,34 @@ pub struct Config {
     /// Animation timing configuration.
     #[serde(default)]
     pub animation: AnimationConfig,
+    /// Per-workspace display names.
+    #[serde(default)]
+    pub workspaces: WorkspacesConfig,
+}
+
+/// Workspace configuration.
+///
+/// `names` is position-based: index 0 names workspace 1, index 1 names
+/// workspace 2, and so on (up to 9). An empty string leaves that
+/// workspace unnamed (shown by its number). Trailing entries may be
+/// omitted; only workspaces you want to name need an entry.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WorkspacesConfig {
+    /// Display names for workspaces 1-9, by position.
+    pub names: Vec<String>,
+}
+
+impl WorkspacesConfig {
+    /// Resolve the display name for a 0-based workspace index, or `None`
+    /// if unnamed (no entry or empty string).
+    pub fn name_for(&self, index_0based: usize) -> Option<String> {
+        self.names
+            .get(index_0based)
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+    }
 }
 
 /// Layout-related configuration.
@@ -1475,6 +1503,12 @@ workspace_switch_duration_ms = 200  # switching workspaces
 scroll_duration_ms = 200            # scrolling a column into view
 easing = "ease_out"
 
+[workspaces]
+# Optional display names for workspaces 1-9, by position. Shown in
+# `lwm query workspace` and pushed to bars over IPC. Leave an entry empty
+# ("") to keep that workspace's number. Omit the list to name nothing.
+# names = ["web", "code", "chat", "media"]
+
 # Built-in example: Firefox / Zen Picture-in-Picture popups draw their own
 # square frame, so we override the focus-border corner style to match. Edit
 # or remove freely — corner_style accepts "square" | "rounded" | "small_rounded".
@@ -2222,6 +2256,31 @@ mod tests {
         assert_eq!(config.animation.layout_duration_ms, 80);
         // Unspecified fields fall back to defaults.
         assert_eq!(config.animation.scroll_duration_ms, 200);
+    }
+
+    #[test]
+    fn test_workspace_names_resolve_by_position() {
+        let mut config = Config::default();
+        config.workspaces.names = vec![
+            "web".to_string(),
+            "".to_string(),
+            "  chat  ".to_string(),
+        ];
+        assert_eq!(config.workspaces.name_for(0).as_deref(), Some("web"));
+        // Empty entry -> unnamed.
+        assert_eq!(config.workspaces.name_for(1), None);
+        // Whitespace is trimmed.
+        assert_eq!(config.workspaces.name_for(2).as_deref(), Some("chat"));
+        // Out of range -> unnamed.
+        assert_eq!(config.workspaces.name_for(8), None);
+    }
+
+    #[test]
+    fn test_workspace_names_parse_from_toml() {
+        let toml = "[workspaces]\nnames = [\"web\", \"code\", \"chat\"]\n";
+        let config: Config = toml::from_str(toml).expect("parse");
+        assert_eq!(config.workspaces.name_for(0).as_deref(), Some("web"));
+        assert_eq!(config.workspaces.name_for(2).as_deref(), Some("chat"));
     }
 
     #[test]

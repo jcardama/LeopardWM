@@ -1340,9 +1340,13 @@ fn print_response(response: &IpcResponse) {
             scroll_offset,
             total_width,
             active_workspace,
+            active_workspace_name,
         } => {
             println!("Workspace State:");
-            println!("  Active workspace: {}", active_workspace);
+            match active_workspace_name {
+                Some(name) => println!("  Active workspace: {} ({})", active_workspace, name),
+                None => println!("  Active workspace: {}", active_workspace),
+            }
             println!("  Columns: {}", columns);
             println!("  Windows: {}", windows);
             println!("  Focused column: {}", focused_column);

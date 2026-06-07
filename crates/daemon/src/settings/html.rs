@@ -834,6 +834,9 @@ input[type="range"]::-webkit-slider-thumb {
           </table>
         </div>
         <div class="table-actions"><button class="btn btn-sm" onclick="addPresetRow('height',null)">+ Add preset</button></div>
+        <h3 class="section-subtitle">Workspace names</h3>
+        <p class="section-desc">Optional labels for workspaces 1-9. Shown in <code>lwm query workspace</code> and sent to bars over IPC. Leave blank to use the number.</p>
+        <div class="card" id="workspace-names-card"></div>
       </div>
 
       <!-- Appearance -->
@@ -1291,6 +1294,21 @@ function init(cfg) {
   setVal('animation-workspace_switch_duration_ms', anim.workspace_switch_duration_ms != null ? anim.workspace_switch_duration_ms : 200);
   setVal('animation-scroll_duration_ms', anim.scroll_duration_ms != null ? anim.scroll_duration_ms : 200);
   setCb('cb-animation-easing', anim.easing || 'ease_out');
+
+  var wsNames = (cfg.workspaces && cfg.workspaces.names) || [];
+  var wsCard = document.getElementById('workspace-names-card');
+  if (wsCard && !wsCard.hasChildNodes()) {
+    for (var i = 1; i <= 9; i++) {
+      var row = document.createElement('div');
+      row.className = 'field';
+      row.innerHTML = '<div class="field-info"><div class="field-label">Workspace ' + i + '</div></div>' +
+        '<input type="text" id="workspace-name-' + i + '" maxlength="32" placeholder="' + i + '">';
+      wsCard.appendChild(row);
+    }
+  }
+  for (var j = 1; j <= 9; j++) {
+    setVal('workspace-name-' + j, wsNames[j - 1] || '');
+  }
 }
 
 /* ── Delete icon (X) ─────────────────────────────────────────────────── */
@@ -1562,8 +1580,24 @@ function readConfig() {
       workspace_switch_duration_ms: num('animation-workspace_switch_duration_ms'),
       scroll_duration_ms: num('animation-scroll_duration_ms'),
       easing: cbVal('cb-animation-easing')
+    },
+    workspaces: {
+      names: readWorkspaceNames()
     }
   };
+}
+
+function readWorkspaceNames() {
+  var names = [];
+  for (var i = 1; i <= 9; i++) {
+    var el = document.getElementById('workspace-name-' + i);
+    names.push(el ? el.value.trim() : '');
+  }
+  // Drop trailing empties so an all-blank list serializes as [].
+  while (names.length > 0 && names[names.length - 1] === '') {
+    names.pop();
+  }
+  return names;
 }
 
 function readHotkeys() {

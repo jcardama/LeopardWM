@@ -1090,6 +1090,7 @@ async fn main() -> Result<()> {
                             monitor: *monitor as i64,
                             old_index: idx as u8,
                             new_index: idx as u8,
+                            name: s.config.workspaces.name_for(idx),
                         });
                     }
                 }

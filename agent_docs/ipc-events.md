@@ -69,10 +69,12 @@ The `events` field of `Subscribe` accepts any subset of filter names (comma-sepa
 ### `WorkspaceChanged`
 
 ```json
-{ "type": "workspace_changed", "monitor": 65537, "old_index": 0, "new_index": 1 }
+{ "type": "workspace_changed", "monitor": 65537, "old_index": 0, "new_index": 1, "name": "code" }
 ```
 
 `monitor` is the Win32 `HMONITOR` value (i64). `old_index` and `new_index` are 0-based; CLI displays as 1-based. The initial snapshot delivers one frame per monitor with `old_index == new_index == current`.
+
+`name` is the display name of the new workspace, or `null` if unnamed (set via `[workspaces].names` in config). Bars should render the name when present and fall back to `new_index + 1` otherwise. Field is omitted-safe: older daemons don't send it, so treat a missing key as `null`.
 
 ### `FocusedWindowChanged`
 

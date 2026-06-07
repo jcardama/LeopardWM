@@ -235,6 +235,10 @@ pub enum IpcEvent {
         old_index: u8,
         /// New workspace index (0-based).
         new_index: u8,
+        /// Display name of the new workspace, or `None` if unnamed.
+        /// Lets bars render a label instead of a bare number.
+        #[serde(default)]
+        name: Option<String>,
     },
     /// The focused window changed (or was cleared). Title/class/exec
     /// fields are best-effort enrichment and may be `None` if the window
@@ -495,6 +499,9 @@ pub enum IpcResponse {
         /// Active workspace number (1-based).
         #[serde(default = "default_active_workspace")]
         active_workspace: u8,
+        /// Display name of the active workspace, or `None` if unnamed.
+        #[serde(default)]
+        active_workspace_name: Option<String>,
     },
     /// Focused window query response.
     FocusedWindow {
@@ -634,6 +641,7 @@ mod tests {
             scroll_offset: 100.5,
             total_width: 2400,
             active_workspace: 1,
+            active_workspace_name: None,
         };
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains("workspace_state"));
@@ -730,6 +738,7 @@ mod tests {
                 scroll_offset: 200.0,
                 total_width: 4000,
                 active_workspace: 1,
+                active_workspace_name: None,
             },
             IpcResponse::FocusedWindow {
                 window_id: Some(12345),
@@ -872,6 +881,7 @@ mod tests {
             scroll_offset: 0.0,
             total_width: 1600,
             active_workspace: 1,
+            active_workspace_name: None,
         };
         let wire_format = serde_json::to_string(&resp).unwrap() + "\n";
         let parsed: IpcResponse = serde_json::from_str(wire_format.trim()).unwrap();
@@ -962,6 +972,7 @@ mod tests {
             monitor: 12345,
             old_index: 0,
             new_index: 4,
+            name: None,
         };
         let json = serde_json::to_string(&ev).unwrap();
         assert!(json.contains("workspace_changed"));
@@ -1121,7 +1132,7 @@ mod tests {
     #[test]
     fn test_event_kind_filtering() {
         assert_eq!(
-            IpcEvent::WorkspaceChanged { monitor: 1, old_index: 0, new_index: 1 }.kind(),
+            IpcEvent::WorkspaceChanged { monitor: 1, old_index: 0, new_index: 1, name: None }.kind(),
             EventKind::Workspace
         );
         assert_eq!(IpcEvent::ConfigReloaded.kind(), EventKind::Config);

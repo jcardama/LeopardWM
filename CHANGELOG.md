@@ -25,6 +25,10 @@ All notable changes to LeopardWM will be documented in this file.
   scrolls, plus the easing curve (linear / ease in / ease out / ease
   in-out). Tune them in Settings → Behavior → Animation or in config.
   Set any duration to 0 to snap instantly.
+- **Workspaces can have names.** Label workspaces 1-9 (e.g. "web",
+  "code") in Settings → Layout or via `[workspaces].names` in config. The
+  name shows in `lwm query workspace` and is pushed to status bars over
+  IPC, so a bar can display a label instead of a number.
 
 ### Fixes
 

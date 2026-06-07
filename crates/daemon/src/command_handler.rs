@@ -260,8 +260,9 @@ impl AppState {
                 })
             }
             IpcCommand::QueryWorkspace => {
+                let active_idx = self.active_workspace_idx(self.focused_monitor);
+                let active_workspace_name = self.config.workspaces.name_for(active_idx);
                 if let Some(workspace) = self.focused_workspace() {
-                    let active_ws = self.active_workspace_idx(self.focused_monitor) as u8 + 1;
                     IpcResponse::WorkspaceState {
                         columns: workspace.column_count(),
                         windows: workspace.window_count(),
@@ -269,7 +270,8 @@ impl AppState {
                         focused_window: workspace.focused_window_index_in_column(),
                         scroll_offset: workspace.scroll_offset(),
                         total_width: workspace.total_width(),
-                        active_workspace: active_ws,
+                        active_workspace: active_idx as u8 + 1,
+                        active_workspace_name,
                     }
                 } else {
                     IpcResponse::error("No focused workspace")
@@ -675,6 +677,7 @@ impl AppState {
                     monitor: monitor as i64,
                     old_index: current_idx as u8,
                     new_index: idx as u8,
+                    name: self.config.workspaces.name_for(idx),
                 });
                 info!("Switched to workspace {}", index);
                 IpcResponse::Ok
