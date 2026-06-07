@@ -283,6 +283,8 @@ impl AppState {
                 // Clear stale focus reference
                 if self.previous_focused_hwnd == Some(hwnd) {
                     self.previous_focused_hwnd = None;
+                    let monitor = self.focused_monitor as i64;
+                    self.broadcast_focused_window_if_changed(monitor, None);
                 }
 
                 // Find which workspace contains this window
@@ -550,33 +552,21 @@ impl AppState {
                     // Track the OS-foreground window — including floating windows —
                     // so that ToggleFloating can reliably detect and unfloat the
                     // currently focused floating window.
-                    let focus_actually_changed = self.previous_focused_hwnd != Some(hwnd);
                     self.previous_focused_hwnd = Some(hwnd);
                     self.last_focus_change_at = Some(now);
-                    if focus_actually_changed {
-                        let info = self.lookup_window_info(hwnd);
-                        let (title, class_name, executable) = match info {
-                            Some(ref i) => (
-                                Some(i.title.clone()),
-                                Some(i.class_name.clone()),
-                                Some(get_process_executable(i.process_id).unwrap_or_default()),
-                            ),
-                            None => (None, None, None),
-                        };
-                        self.broadcast_event(leopardwm_ipc::IpcEvent::FocusedWindowChanged {
-                            monitor: monitor_id as i64,
-                            hwnd: Some(hwnd),
-                            title,
-                            class_name,
-                            executable,
-                        });
-                    }
+                    self.broadcast_focused_window_if_changed(monitor_id as i64, Some(hwnd));
                 } else {
                     // Recovery path: if a user focuses a window that was
                     // suppressed by recently_hidden_hwnds (e.g., tray-restored
                     // app), re-add it now. A user focusing a window proves it's
                     // not a transient popup.
-                    if self.recently_hidden_hwnds.remove(&hwnd).is_some() {
+                    //
+                    // Peek first, remove only on commit. If lookup_window_info
+                    // transiently fails or the rule says Ignore, leaving the
+                    // entry intact lets a subsequent Focused event retry the
+                    // recovery (or the TTL filter at the top of this handler
+                    // ages it out).
+                    if self.recently_hidden_hwnds.contains_key(&hwnd) {
                         if let Some(win_info) = self.lookup_window_info(hwnd) {
                             let executable =
                                 get_process_executable(win_info.process_id).unwrap_or_default();
@@ -590,20 +580,29 @@ impl AppState {
                                     "Recovering suppressed window: {} ({}) - user focused it",
                                     win_info.title, win_info.class_name
                                 );
-                                // Re-dispatch as Created to reuse add logic.
-                                // Safe: we already removed hwnd from recently_hidden_hwnds
-                                // above, so the Created handler won't re-suppress it.
+                                // Consume the entry now (immediately before
+                                // dispatch) so the Created handler doesn't
+                                // re-suppress on this same recovery path.
+                                self.recently_hidden_hwnds.remove(&hwnd);
                                 self.handle_window_event(WindowEvent::Created(hwnd));
                                 // Update tiled focus to match OS — the user just
                                 // focused this window. focus_window may fail for
                                 // floating windows, which is fine.
-                                if let Some((mid, widx)) = self.find_window_workspace(hwnd) {
-                                    if let Some(ws) = self.workspaces.get_mut(&mid).and_then(|v| v.get_mut(widx)) {
-                                        let _ = ws.focus_window(hwnd);
-                                    }
-                                }
+                                let recovery_monitor =
+                                    if let Some((mid, widx)) = self.find_window_workspace(hwnd) {
+                                        if let Some(ws) = self.workspaces.get_mut(&mid).and_then(|v| v.get_mut(widx)) {
+                                            let _ = ws.focus_window(hwnd);
+                                        }
+                                        mid
+                                    } else {
+                                        self.focused_monitor
+                                    };
                                 self.previous_focused_hwnd = Some(hwnd);
                                 self.show_border(hwnd);
+                                self.broadcast_focused_window_if_changed(
+                                    recovery_monitor as i64,
+                                    Some(hwnd),
+                                );
                                 return;
                             }
                         }
@@ -637,13 +636,21 @@ impl AppState {
                                         win_info.title, win_info.class_name
                                     );
                                     self.handle_window_event(WindowEvent::Created(hwnd));
-                                    if let Some((mid, widx)) = self.find_window_workspace(hwnd) {
-                                        if let Some(ws) = self.workspaces.get_mut(&mid).and_then(|v| v.get_mut(widx)) {
-                                            let _ = ws.focus_window(hwnd);
-                                        }
-                                    }
+                                    let recovery_monitor =
+                                        if let Some((mid, widx)) = self.find_window_workspace(hwnd) {
+                                            if let Some(ws) = self.workspaces.get_mut(&mid).and_then(|v| v.get_mut(widx)) {
+                                                let _ = ws.focus_window(hwnd);
+                                            }
+                                            mid
+                                        } else {
+                                            self.focused_monitor
+                                        };
                                     self.previous_focused_hwnd = Some(hwnd);
                                     self.show_border(hwnd);
+                                    self.broadcast_focused_window_if_changed(
+                                        recovery_monitor as i64,
+                                        Some(hwnd),
+                                    );
                                     return;
                                 }
                             }
@@ -653,18 +660,10 @@ impl AppState {
                     // Focus went to an unmanaged window (e.g. settings, taskbar).
                     // Hide the border overlay and clear tracked hwnd so animation
                     // frames don't re-show it.
-                    let focus_was_set = self.previous_focused_hwnd.is_some();
                     self.hide_border();
                     self.previous_focused_hwnd = None;
-                    if focus_was_set {
-                        self.broadcast_event(leopardwm_ipc::IpcEvent::FocusedWindowChanged {
-                            monitor: self.focused_monitor as i64,
-                            hwnd: None,
-                            title: None,
-                            class_name: None,
-                            executable: None,
-                        });
-                    }
+                    let monitor_id = self.focused_monitor as i64;
+                    self.broadcast_focused_window_if_changed(monitor_id, None);
                 }
             }
             WindowEvent::Minimized(hwnd) => {
@@ -1415,6 +1414,14 @@ impl AppState {
                     debug!(
                         "Focus-follows-mouse: focused floating window {} on monitor {}",
                         hwnd, monitor_id
+                    );
+                    // Pre-setting previous_focused_hwnd above would otherwise
+                    // make the OS-side EVENT_SYSTEM_FOREGROUND dedup at the
+                    // top of WindowEvent::Focused early-return, swallowing
+                    // the broadcast. Route through the helper directly.
+                    self.broadcast_focused_window_if_changed(
+                        monitor_id as i64,
+                        Some(hwnd),
                     );
                     return true;
                 }

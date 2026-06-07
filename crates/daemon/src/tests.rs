@@ -2683,3 +2683,121 @@ fn test_snap_default_config_is_enabled() {
     let config = test_config();
     assert!(config.behavior.disable_snap_layouts);
 }
+
+#[test]
+fn test_cmd_focus_left_broadcasts_focused_window_changed() {
+    // Regression: command-initiated focus changes were silently dropped
+    // by the OS-side dedup because sync_foreground_window pre-updated
+    // previous_focused_hwnd before EVENT_SYSTEM_FOREGROUND arrived.
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    {
+        let ws = state.focused_workspace_mut().unwrap();
+        ws.insert_window(100, Some(800)).unwrap();
+        ws.insert_window(200, Some(800)).unwrap();
+    }
+    // Pre-arm dedup so the first broadcast must be the focus event after
+    // FocusLeft; without this, the LayoutChanged emission can race depending
+    // on signature seeding.
+    let monitor = state.focused_monitor as i64;
+    state.last_broadcast_focused = Some((monitor, Some(200)));
+
+    let mut rx = state.event_broadcaster.subscribe();
+    let resp = state.handle_command(IpcCommand::FocusLeft);
+    assert_eq!(resp, IpcResponse::Ok);
+
+    let mut saw_focus_change = false;
+    while let Ok(event) = rx.try_recv() {
+        if let leopardwm_ipc::IpcEvent::FocusedWindowChanged { hwnd, .. } = event {
+            assert_eq!(hwnd, Some(100), "FocusLeft should land focus on hwnd 100");
+            saw_focus_change = true;
+        }
+    }
+    assert!(
+        saw_focus_change,
+        "FocusedWindowChanged was not broadcast for command-driven focus"
+    );
+    assert_eq!(state.last_broadcast_focused, Some((monitor, Some(100))));
+}
+
+#[test]
+fn test_recovery_arm_preserves_recently_hidden_entry_on_lookup_failure() {
+    // When the recovery arm runs but window_info lookup fails transiently
+    // (or the rule says Ignore), the suppression entry must be preserved
+    // so the TTL filter or a subsequent retry can handle it. Otherwise the
+    // next legitimate recreate of the same HWND slips through the filter.
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    let hwnd = 9999u64;
+    state
+        .recently_hidden_hwnds
+        .insert(hwnd, std::time::Instant::now());
+    // No injected_window_info -> lookup_window_info returns None.
+    state.handle_window_event(WindowEvent::Focused(hwnd));
+    assert!(
+        state.recently_hidden_hwnds.contains_key(&hwnd),
+        "entry must survive failed recovery so subsequent retries can succeed"
+    );
+}
+
+#[test]
+fn test_broadcast_focused_window_emits_on_monitor_change_with_same_hwnd() {
+    // Cross-monitor moves (MoveWindowToMonitorLeft/Right) keep the same
+    // HWND focused but change which monitor it's on. The dedup must key
+    // on (monitor, hwnd) so subscribers see the move.
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    let mut rx = state.event_broadcaster.subscribe();
+
+    state.broadcast_focused_window_if_changed(1, Some(42));
+    state.broadcast_focused_window_if_changed(2, Some(42));
+
+    let mut monitors_seen = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        if let leopardwm_ipc::IpcEvent::FocusedWindowChanged {
+            monitor,
+            hwnd: Some(42),
+            ..
+        } = event
+        {
+            monitors_seen.push(monitor);
+        }
+    }
+    assert_eq!(monitors_seen, vec![1, 2], "monitor change must emit");
+}
+
+#[test]
+fn test_broadcast_focused_window_dedup_suppresses_same_hwnd() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    let mut rx = state.event_broadcaster.subscribe();
+
+    state.broadcast_focused_window_if_changed(1, Some(42));
+    state.broadcast_focused_window_if_changed(1, Some(42));
+    state.broadcast_focused_window_if_changed(1, Some(42));
+
+    let mut count = 0;
+    while rx.try_recv().is_ok() {
+        count += 1;
+    }
+    assert_eq!(count, 1, "dedup should collapse repeated same-hwnd calls");
+}
+
+#[test]
+fn test_broadcast_focused_window_emits_on_clear() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    let mut rx = state.event_broadcaster.subscribe();
+
+    state.broadcast_focused_window_if_changed(1, Some(42));
+    state.broadcast_focused_window_if_changed(1, None);
+
+    let mut saw_set = false;
+    let mut saw_clear = false;
+    while let Ok(event) = rx.try_recv() {
+        if let leopardwm_ipc::IpcEvent::FocusedWindowChanged { hwnd, .. } = event {
+            match hwnd {
+                Some(42) => saw_set = true,
+                None => saw_clear = true,
+                _ => {}
+            }
+        }
+    }
+    assert!(saw_set && saw_clear, "should emit both set and clear events");
+    assert_eq!(state.last_broadcast_focused, Some((1, None)));
+}

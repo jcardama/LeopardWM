@@ -1596,6 +1596,8 @@ async fn main() -> Result<()> {
                             // 2. Clear focus and hide border
                             state.hide_border();
                             state.previous_focused_hwnd = None;
+                            let monitor = state.focused_monitor as i64;
+                            state.broadcast_focused_window_if_changed(monitor, None);
                             // 3. Cascade all managed windows
                             let window_ids = state.all_managed_window_ids();
                             cascade_windows(&window_ids);

@@ -2125,6 +2125,8 @@ impl AppState {
             let _ = target_cloaked; // silence unused warning under cfg(test)
             self.previous_focused_hwnd = Some(hwnd);
             self.update_tab_strip();
+            let monitor = self.focused_monitor as i64;
+            self.broadcast_focused_window_if_changed(monitor, Some(hwnd));
         } else {
             // No focused window on the active workspace — clear stale state
             // so border/focus don't target a window that's no longer here.
@@ -2132,6 +2134,8 @@ impl AppState {
             self.hide_border();
             self.hide_tab_strip();
             debug!("sync_foreground_window: no focused visible window");
+            let monitor = self.focused_monitor as i64;
+            self.broadcast_focused_window_if_changed(monitor, None);
         }
     }
 

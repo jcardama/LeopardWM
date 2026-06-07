@@ -255,6 +255,16 @@ pub(crate) struct AppState {
     pub(crate) compiled_rules: Vec<config::CompiledWindowRule>,
     /// Previously focused window for border color tracking.
     pub(crate) previous_focused_hwnd: Option<u64>,
+    /// `(monitor, hwnd)` of the most-recently-broadcast
+    /// `FocusedWindowChanged` event. Independent from
+    /// `previous_focused_hwnd`: command-driven focus paths
+    /// (sync_foreground_window) proactively update `previous_focused_hwnd`
+    /// to the intended target before Windows fires EVENT_SYSTEM_FOREGROUND,
+    /// which would mask the OS-side broadcast dedup. Tracking monitor too
+    /// keeps cross-monitor moves of the same HWND from being suppressed —
+    /// the IPC event carries `monitor`, and a subscriber that only sees
+    /// `hwnd`-keyed dedup would think the window stayed on its old monitor.
+    pub(crate) last_broadcast_focused: Option<(i64, Option<u64>)>,
     /// Timestamp of the last Focused event that changed `previous_focused_hwnd`.
     /// Used to debounce rapid same-column focus switches (e.g., from scroll events).
     pub(crate) last_focus_change_at: Option<std::time::Instant>,
@@ -556,6 +566,7 @@ impl AppState {
             config,
             compiled_rules,
             previous_focused_hwnd: None,
+            last_broadcast_focused: None,
             last_focus_change_at: None,
             last_prune_at: None,
             // Skipped under cfg(test): the layered DWM window would lag the mouse.
@@ -635,6 +646,42 @@ impl AppState {
     /// is subscribed yet.
     pub(crate) fn broadcast_event(&self, event: leopardwm_ipc::IpcEvent) {
         let _ = self.event_broadcaster.send(event);
+    }
+
+    /// Broadcast `FocusedWindowChanged` if `hwnd` differs from the last
+    /// broadcast. Centralizes the dedup so OS-driven and command-driven
+    /// focus paths emit through the same gate. Looks up window info for
+    /// the title/class/executable payload; pass `hwnd: None` when focus
+    /// was cleared.
+    pub(crate) fn broadcast_focused_window_if_changed(
+        &mut self,
+        monitor: i64,
+        hwnd: Option<u64>,
+    ) {
+        if self.last_broadcast_focused == Some((monitor, hwnd)) {
+            return;
+        }
+        let (title, class_name, executable) = match hwnd.and_then(|h| self.lookup_window_info(h)) {
+            Some(info) => (
+                Some(info.title.clone()),
+                Some(info.class_name.clone()),
+                Some(
+                    leopardwm_platform_win32::get_process_executable(info.process_id)
+                        .unwrap_or_default(),
+                ),
+            ),
+            None => (None, None, None),
+        };
+        let _ = self
+            .event_broadcaster
+            .send(leopardwm_ipc::IpcEvent::FocusedWindowChanged {
+                monitor,
+                hwnd,
+                title,
+                class_name,
+                executable,
+            });
+        self.last_broadcast_focused = Some((monitor, hwnd));
     }
 
     /// Compute a cheap signature of the focused workspace's column

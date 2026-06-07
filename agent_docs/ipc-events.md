@@ -14,6 +14,8 @@ lwm subscribe --events workspace,focused_window | jq
 
 Press Ctrl+C to disconnect. The daemon does not need to know who is listening; reconnect any time.
 
+`lwm subscribe` consumes the `Subscribed` ack frame internally and only forwards subsequent `IpcEvent` frames to stdout. Custom clients speaking the wire protocol directly see the ack on the wire and must handle the parser mode-switch themselves (see [Critical: parser mode-switch after Subscribed](#critical-parser-mode-switch-after-subscribed) below).
+
 ## Wire format
 
 - **Pipe**: `\\.\pipe\leopardwm_<scope>` where `<scope>` is the lowercased `USERDOMAIN\USERNAME` (e.g. `\\.\pipe\leopardwm_my-pc_jose`). Use `leopardwm_ipc::preferred_pipe_name()` from Rust or hard-code per the docs in `crates/ipc/src/lib.rs:11-71`.
@@ -96,13 +98,32 @@ The `events` field of `Subscribe` accepts any subset of filter names (comma-sepa
   "workspace_index": 0,
   "focused_column": 1,
   "columns": [
-    { "window_ids": [1223496256], "width_px": 1267, "height_weights": [1.0] },
-    { "window_ids": [13764602, 1246800], "width_px": 1267, "height_weights": [0.6, 0.4] }
+    {
+      "window_ids": [1223496256],
+      "width_px": 1267,
+      "height_weights": [1.0],
+      "mode": { "type": "vertical" }
+    },
+    {
+      "window_ids": [13764602, 1246800],
+      "width_px": 1267,
+      "height_weights": [0.6, 0.4],
+      "mode": { "type": "tabbed", "active_idx": 0 }
+    }
   ]
 }
 ```
 
-Carries enough column structure to render without a follow-up `QueryWorkspace`. `width_px` is the intrinsic column width in pixels (monitor-independent — the strip dimensions). `height_weights` is the per-window height fraction within a stacked column (parallel to `window_ids`, sums to ~1.0); empty means equal distribution. Sender-side dedup ensures only structurally-distinct layouts emit; mid-animation frames between two settled layouts are suppressed.
+Carries enough column structure to render without a follow-up `QueryWorkspace`.
+
+Per-column fields:
+
+- `window_ids`: top-to-bottom in `vertical` mode; tab order in `tabbed` mode.
+- `width_px`: intrinsic column width in pixels (monitor-independent strip dimensions).
+- `height_weights`: per-window height fraction in `vertical` mode (parallel to `window_ids`, sums to ~1.0). Empty means equal distribution. Ignored in `tabbed` mode since only one window is visible.
+- `mode`: tagged enum. `{"type":"vertical"}` (default) stacks all non-minimized windows top to bottom. `{"type":"tabbed","active_idx":N}` shows only `window_ids[N]` filling the column rect; bars should render a tab strip listing all `window_ids`. Missing in v1 payloads — bars deserializing the wire format should default to `vertical` when absent.
+
+Sender-side dedup ensures only structurally-distinct layouts emit; mid-animation frames between two settled layouts are suppressed.
 
 ### `ConfigReloaded`
 
@@ -195,15 +216,42 @@ while True:
 lwm subscribe | ForEach-Object { ConvertFrom-Json $_ | Format-Table -AutoSize }
 ```
 
-## Yasb integration recipe
+## Yasb integration
 
-[Yasb](https://github.com/amnweb/yasb) widgets can shell out to `lwm subscribe` and re-render on each event. Sketch (a real widget would be a Python plugin):
+[Yasb](https://github.com/amnweb/yasb) ships komorebi and GlazeWM widgets in-tree but does not have LeopardWM widgets yet (will be revisited once we have user demand for it). Two paths today:
+
+### Pure config (no plugin code)
+
+Use Yasb's `custom` widget to run `lwm subscribe` as a subprocess and render the most recent line. Add this to your Yasb `config.yaml`:
+
+```yaml
+widgets:
+  leopardwm_workspace:
+    type: "yasb.custom.CustomWidget"
+    options:
+      label: "<span>WS {data}</span>"
+      class_name: "leopardwm-workspace"
+      exec_options:
+        run_cmd: ["lwm", "subscribe", "--events", "workspace"]
+        run_interval: 0   # 0 means run once, keep stdout open
+        return_format: "json"
+      callbacks:
+        on_left: "do_nothing"
+```
+
+`run_interval: 0` keeps the subscription open for the life of the bar. `return_format: "json"` parses each newline-delimited frame; `{data}` in the label references the parsed event. Replace `workspace` with any comma-separated filter from the [Event kinds table](#event-kinds).
+
+This won't render a per-workspace strip or a title with executable icon — just whatever a single `{data}` placeholder can show. For richer rendering, write a real Python plugin (sketch below) or wait until a first-class LeopardWM widget set lands in Yasb.
+
+### Plugin sketch (Python)
+
+A real Yasb plugin would consume the stream and update multiple labels:
 
 ```python
 import json
 import subprocess
 
-proc = subprocess.Popen(["lwm", "subscribe", "--events", "workspace,focused_window"],
+proc = subprocess.Popen(["lwm", "subscribe", "--events", "workspace,focused_window,layout"],
                         stdout=subprocess.PIPE, text=True, bufsize=1)
 for line in proc.stdout:
     event = json.loads(line)
@@ -211,7 +259,21 @@ for line in proc.stdout:
         update_workspace_widget(new_index=event["new_index"])
     elif event["type"] == "focused_window_changed":
         update_title_widget(title=event.get("title"))
+    elif event["type"] == "layout_changed":
+        update_layout_widget(columns=event["columns"], focused=event["focused_column"])
 ```
+
+## Adding new IPC events (daemon developers)
+
+The pub/sub surface is part of the public LeopardWM contract. When adding daemon state that bars would want to observe, wire it into the IPC event stream rather than expecting consumers to poll:
+
+1. **Add the event variant** to `IpcEvent` and `EventKind` in `crates/ipc/src/lib.rs`. Pick a filter name (snake_case) for `EventKind` and a `#[serde(tag = "type")]` discriminator for `IpcEvent`.
+2. **Broadcast on every state-mutation site** that changes the observable value, using `self.broadcast_event(IpcEvent::Foo { ... })` from `AppState`. Both OS-driven paths (`event_handler.rs`) and command-driven paths (`command_handler.rs`, `helpers.rs::sync_foreground_window`, drag finalization) need coverage — a bar should see the same event regardless of what caused the change.
+3. **Include the new kind in the connection snapshot** at `main.rs::handle_subscribe` so reconnecting subscribers receive the current value, not just future changes.
+4. **Update this document**: add a row to the [Event kinds table](#event-kinds), write the schema under [Event schemas](#event-schemas), bump the `crates/ipc/src/lib.rs` round-trip test to cover the new variant.
+5. **Watch the broadcast capacity** (256). Events that fire at animation-frame rates need sender-side dedup (see how `LayoutChanged` collapses mid-transition frames).
+
+Check `MEMORY.md` → "IPC bar-integration validation deferred" before building reference consumers. Real bar work is deferred until first user demand; bug-fix work uncovered by inspection still lands.
 
 ## Limitations (v1)
 
@@ -220,3 +282,7 @@ for line in proc.stdout:
 - **No WebSocket bridge** — the daemon serves only the named pipe. Browser-based bars need a thin bridge component.
 - **Stream mode is uni-directional** — after Subscribe, the pipe only flows daemon→client. Open a second pipe for command queries.
 - **Daemon shutdown** delivers EOF (`BrokenPipe` on next read). Reconnect with backoff if your bar should survive daemon restarts.
+
+## Validation history
+
+- **2026-05-18**: Manual walk against v0.1.16 daemon confirmed `WorkspaceChanged`, `LayoutChanged`, `ConfigReloaded`, `Heartbeat`, snapshot delivery, and filter behavior all match docs. Two issues surfaced and were both fixed in v0.1.17: (1) `LayoutChanged.columns[].mode` was emitted but undocumented (docs updated); (2) `FocusedWindowChanged` did not fire for command-initiated focus changes (`lwm focus left/right`, workspace switches) because `sync_foreground_window` was pre-updating the OS-side dedup baseline before Windows could fire `EVENT_SYSTEM_FOREGROUND`. Daemon now tracks `last_broadcast_focused_hwnd` independently of `previous_focused_hwnd`, and `sync_foreground_window` broadcasts through the same dedup helper as the OS event handler. All focus changes — OS-driven, command-driven, recovery-path — now emit through one gate.

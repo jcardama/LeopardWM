@@ -4,6 +4,25 @@ All notable changes to LeopardWM will be documented in this file.
 
 ## Unreleased
 
+## 0.1.17
+
+### Fixes
+
+- **External bars now see all focus changes, not just clicks and Alt+Tab.**
+  Focus changes triggered by `lwm focus left/right`, workspace switches, and
+  similar keyboard commands were silently swallowed by the IPC event stream,
+  so any custom bar showing the current window title would go stale until you
+  clicked something. They fire correctly now.
+
+### Docs
+
+- **IPC events reference** (`agent_docs/ipc-events.md`) updated for v0.1.17:
+  documents the previously undocumented per-column `mode` field on
+  `LayoutChanged` (vertical vs tabbed), clarifies that `lwm subscribe`
+  consumes the `Subscribed` ack frame internally, adds a Yasb custom-widget
+  config snippet that needs no plugin code, and adds a checklist for daemon
+  developers wiring new state changes into the event stream.
+
 ## 0.1.16
 
 ### Improvements
