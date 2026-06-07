@@ -445,7 +445,7 @@ impl AppState {
                         let old_placements: Vec<(u64, leopardwm_core_layout::Rect)> =
                             self.workspaces.get(&monitor_id)
                                 .and_then(|v| v.get(active_idx))
-                                .and_then(|ws| self.monitors.get(&monitor_id).map(|m| (ws, m)))
+                                .zip(self.monitors.get(&monitor_id))
                                 .map(|(ws, mon)| {
                                     ws.compute_placements_animated(mon.work_area)
                                         .into_iter()
@@ -460,7 +460,7 @@ impl AppState {
                         let new_placements: Vec<(u64, leopardwm_core_layout::Rect)> =
                             self.workspaces.get(&monitor_id)
                                 .and_then(|v| v.get(ws_idx))
-                                .and_then(|ws| self.monitors.get(&monitor_id).map(|m| (ws, m)))
+                                .zip(self.monitors.get(&monitor_id))
                                 .map(|(ws, mon)| {
                                     ws.compute_placements_animated(mon.work_area)
                                         .into_iter()

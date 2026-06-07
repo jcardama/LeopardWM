@@ -17,7 +17,7 @@ impl AppState {
         self.workspaces
             .get(&monitor)
             .and_then(|v| v.get(ws_idx))
-            .and_then(|ws| self.monitors.get(&monitor).map(|m| (ws, m)))
+            .zip(self.monitors.get(&monitor))
             .map(|(ws, mon)| {
                 ws.compute_placements_animated(mon.work_area)
                     .into_iter()
