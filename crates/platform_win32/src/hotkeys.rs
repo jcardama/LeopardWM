@@ -62,6 +62,12 @@ impl Modifiers {
         }
     }
 
+    /// Pack the four modifier flags into a 0–15 bitfield. Used to derive
+    /// stable hotkey IDs that don't depend on config iteration order.
+    pub fn bits(&self) -> i32 {
+        (self.ctrl as i32) | (self.alt as i32) << 1 | (self.shift as i32) << 2 | (self.win as i32) << 3
+    }
+
     /// Convert to Win32 HOT_KEY_MODIFIERS flags.
     pub fn to_win32(&self) -> HOT_KEY_MODIFIERS {
         let mut mods = MOD_NOREPEAT; // Prevent key repeat
@@ -96,6 +102,21 @@ impl Hotkey {
     /// Create a new hotkey definition.
     pub fn new(id: HotkeyId, modifiers: Modifiers, vk: u32) -> Self {
         Self { id, modifiers, vk }
+    }
+
+    /// Stable ID intrinsic to the `(modifiers, vk)` combo, independent of
+    /// config iteration order. Packs the 4 modifier bits above the 8-bit
+    /// vk: `(mods << 8) | vk`. Range 0..=0xFFF, within the app hotkey
+    /// range (0x0000–0xBFFF).
+    ///
+    /// Why: IDs were previously assigned sequentially while iterating a
+    /// `HashMap`, so a config reload could remap an ID to a different
+    /// command. A `WM_HOTKEY` message already queued under the old ID then
+    /// executed the new command — e.g. an innocent keypress firing
+    /// `panic_revert`. An intrinsic ID always denotes the same physical
+    /// key, so a stale message can only ever run that key's current action.
+    pub fn stable_id(modifiers: Modifiers, vk: u32) -> HotkeyId {
+        (modifiers.bits() << 8) | (vk as i32 & 0xFF)
     }
 }
 
@@ -694,6 +715,40 @@ mod tests {
     use super::*;
 
     static HOTKEY_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn test_stable_id_is_deterministic_and_unique_per_combo() {
+        let ctrl_alt = Modifiers {
+            ctrl: true,
+            alt: true,
+            ..Default::default()
+        };
+        // Same combo -> same id across calls (reload stability).
+        assert_eq!(
+            Hotkey::stable_id(ctrl_alt, 0xBC),
+            Hotkey::stable_id(ctrl_alt, 0xBC)
+        );
+        // Different vk, same mods -> different id.
+        assert_ne!(
+            Hotkey::stable_id(ctrl_alt, 0xBC),
+            Hotkey::stable_id(ctrl_alt, 0xBE)
+        );
+        // Same vk, different mods -> different id.
+        let win = Modifiers::win();
+        assert_ne!(
+            Hotkey::stable_id(ctrl_alt, 0x1B),
+            Hotkey::stable_id(win, 0x1B)
+        );
+        // All ids stay within the app hotkey range (0x0000-0xBFFF).
+        let all_mods = Modifiers {
+            ctrl: true,
+            alt: true,
+            shift: true,
+            win: true,
+        };
+        assert!(Hotkey::stable_id(all_mods, 0xFF) <= 0xBFFF);
+        assert!(Hotkey::stable_id(all_mods, 0xFF) > 0);
+    }
 
     #[test]
     fn test_clear_hotkey_globals_resets_senders() {

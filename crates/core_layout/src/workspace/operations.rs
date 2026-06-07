@@ -379,8 +379,10 @@ impl Workspace {
             return;
         }
 
-        let duration = duration_ms.unwrap_or(DEFAULT_ANIMATION_DURATION_MS);
-        let ease = easing.unwrap_or_default();
+        // Explicit args win; otherwise use this workspace's configured
+        // scroll params (set by the daemon from `[animation]`).
+        let duration = duration_ms.unwrap_or(self.scroll_duration_ms);
+        let ease = easing.unwrap_or(self.scroll_easing);
 
         self.active_animation = Some(ScrollAnimation::new(start, clamped_target, duration, ease));
     }
@@ -502,8 +504,8 @@ impl Workspace {
             self.active_animation = Some(ScrollAnimation::new(
                 start,
                 target,
-                DEFAULT_ANIMATION_DURATION_MS,
-                Easing::default(),
+                self.scroll_duration_ms,
+                self.scroll_easing,
             ));
         } else {
             // Clamped — use the standard scroll animation path

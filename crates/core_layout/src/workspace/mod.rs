@@ -7,7 +7,7 @@ pub mod state;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
-use crate::animation::ScrollAnimation;
+use crate::animation::{Easing, ScrollAnimation, DEFAULT_ANIMATION_DURATION_MS};
 use crate::column::Column;
 use crate::types::*;
 
@@ -116,6 +116,14 @@ pub struct Workspace {
     /// Snap scroll instantly instead of animating (Windows "Show animations" off).
     #[serde(skip)]
     pub(crate) reduce_motion: bool,
+    /// Duration (ms) for scroll animations. Set by the daemon from
+    /// `[animation].scroll_duration_ms`; defaults to the engine default.
+    #[serde(skip)]
+    pub(crate) scroll_duration_ms: u64,
+    /// Easing curve for scroll animations. Set by the daemon from
+    /// `[animation].easing`; defaults to cubic ease-out.
+    #[serde(skip)]
+    pub(crate) scroll_easing: Easing,
     /// Whether center-column can scroll past content edges.
     #[serde(skip)]
     pub(crate) center_past_edges: bool,
@@ -164,6 +172,8 @@ impl Default for Workspace {
             pending_min_size_clears: HashSet::new(),
             float_origin_column: HashMap::new(),
             reduce_motion: false,
+            scroll_duration_ms: DEFAULT_ANIMATION_DURATION_MS,
+            scroll_easing: Easing::default(),
             center_past_edges: false,
             maximized_column: None,
             tab_strip_reserve_px: 0,
@@ -431,6 +441,12 @@ impl Workspace {
     /// Set whether to skip scroll animations (snap instantly).
     pub fn set_reduce_motion(&mut self, reduce: bool) {
         self.reduce_motion = reduce;
+    }
+
+    /// Set scroll animation duration and easing (from `[animation]` config).
+    pub fn set_scroll_animation(&mut self, duration_ms: u64, easing: Easing) {
+        self.scroll_duration_ms = duration_ms;
+        self.scroll_easing = easing;
     }
 
     /// Set whether center-column can scroll past content edges.

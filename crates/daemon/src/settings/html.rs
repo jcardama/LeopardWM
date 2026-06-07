@@ -955,6 +955,34 @@ input[type="range"]::-webkit-slider-thumb {
             </div>
           </div>
         </div>
+        <h3 class="section-subtitle">Animation</h3>
+        <p class="section-desc">Transition timing. Durations in milliseconds; 0 snaps instantly.</p>
+        <div class="card">
+          <div class="field">
+            <div class="field-info"><div class="field-label">Layout duration</div><div class="field-desc">Column move / resize / tab changes (ms)</div></div>
+            <input type="number" id="animation-layout_duration_ms" min="0" max="2000">
+          </div>
+          <div class="field">
+            <div class="field-info"><div class="field-label">Workspace switch duration</div><div class="field-desc">Switching workspaces (ms)</div></div>
+            <input type="number" id="animation-workspace_switch_duration_ms" min="0" max="2000">
+          </div>
+          <div class="field">
+            <div class="field-info"><div class="field-label">Scroll duration</div><div class="field-desc">Scrolling a column into view (ms)</div></div>
+            <input type="number" id="animation-scroll_duration_ms" min="0" max="2000">
+          </div>
+          <div class="field">
+            <div class="field-info"><div class="field-label">Easing</div><div class="field-desc">Acceleration curve for all animations</div></div>
+            <div class="combobox" id="cb-animation-easing">
+              <button class="combobox-trigger" type="button"><span class="combobox-text">Ease out</span><svg class="combobox-chevron" viewBox="0 0 12 12"><path d="M2.15 4.65a.5.5 0 01.7 0L6 7.79l3.15-3.14a.5.5 0 11.7.7l-3.5 3.5a.5.5 0 01-.7 0l-3.5-3.5a.5.5 0 010-.7z"/></svg></button>
+              <div class="combobox-popup">
+                <div class="combobox-option" data-value="linear">Linear</div>
+                <div class="combobox-option" data-value="ease_in">Ease in</div>
+                <div class="combobox-option selected" data-value="ease_out">Ease out</div>
+                <div class="combobox-option" data-value="ease_in_out">Ease in-out</div>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- Hotkeys -->
@@ -1257,6 +1285,12 @@ function init(cfg) {
   setVal('snaphints-duration_ms', cfg.snap_hints.duration_ms);
   setVal('snaphints-opacity', cfg.snap_hints.opacity);
   document.getElementById('opacity-val').textContent = cfg.snap_hints.opacity;
+
+  var anim = cfg.animation || {};
+  setVal('animation-layout_duration_ms', anim.layout_duration_ms != null ? anim.layout_duration_ms : 150);
+  setVal('animation-workspace_switch_duration_ms', anim.workspace_switch_duration_ms != null ? anim.workspace_switch_duration_ms : 200);
+  setVal('animation-scroll_duration_ms', anim.scroll_duration_ms != null ? anim.scroll_duration_ms : 200);
+  setCb('cb-animation-easing', anim.easing || 'ease_out');
 }
 
 /* ── Delete icon (X) ─────────────────────────────────────────────────── */
@@ -1522,6 +1556,12 @@ function readConfig() {
       enabled: checked('snaphints-enabled'),
       duration_ms: num('snaphints-duration_ms'),
       opacity: num('snaphints-opacity')
+    },
+    animation: {
+      layout_duration_ms: num('animation-layout_duration_ms'),
+      workspace_switch_duration_ms: num('animation-workspace_switch_duration_ms'),
+      scroll_duration_ms: num('animation-scroll_duration_ms'),
+      easing: cbVal('cb-animation-easing')
     }
   };
 }

@@ -487,10 +487,12 @@ impl AppState {
                         }
 
                         if !start_rects.is_empty() {
+                            let duration =
+                                self.config.animation.workspace_switch_duration_ms;
                             self.start_workspace_switch_transition(
                                 start_rects,
                                 exit_rects,
-                                crate::state::WORKSPACE_SWITCH_DURATION_MS,
+                                duration,
                             );
                         }
                     }

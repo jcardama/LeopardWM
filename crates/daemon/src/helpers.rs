@@ -174,6 +174,10 @@ impl AppState {
 
                 workspace.set_centering_mode(self.config.layout.centering_mode.into());
                 workspace.set_center_past_edges(self.config.layout.center_past_edges);
+                workspace.set_scroll_animation(
+                    self.config.animation.scroll_duration_ms,
+                    self.config.animation.easing,
+                );
 
                 // Recalculate scroll offset for new gap values so all columns
                 // are positioned correctly (not just the rightmost ones).
@@ -437,6 +441,10 @@ impl AppState {
                         ws.set_centering_mode(self.config.layout.centering_mode.into());
                         ws.set_center_past_edges(self.config.layout.center_past_edges);
                         ws.set_reduce_motion(self.reduce_motion);
+                        ws.set_scroll_animation(
+                            self.config.animation.scroll_duration_ms,
+                            self.config.animation.easing,
+                        );
                         ws_vec.push(ws);
                     }
                     // Restore scroll offset from saved workspace
@@ -605,6 +613,10 @@ impl AppState {
                 workspace.set_centering_mode(self.config.layout.centering_mode.into());
                 workspace.set_center_past_edges(self.config.layout.center_past_edges);
                 workspace.set_reduce_motion(self.reduce_motion);
+                workspace.set_scroll_animation(
+                    self.config.animation.scroll_duration_ms,
+                    self.config.animation.easing,
+                );
                 self.workspaces.insert(monitor.id, vec![workspace]);
                 self.active_workspace.insert(monitor.id, 0);
                 info!("Created workspace for new monitor {}", monitor.id);
@@ -884,8 +896,8 @@ impl AppState {
         if self.reduce_motion {
             return;
         }
-        use crate::state::LAYOUT_TRANSITION_DURATION_MS;
-        self.start_layout_transition_with_duration(start_rects, LAYOUT_TRANSITION_DURATION_MS);
+        let duration = self.config.animation.layout_duration_ms;
+        self.start_layout_transition_with_duration(start_rects, duration);
     }
 
     pub(crate) fn start_layout_transition_with_duration(
@@ -913,6 +925,7 @@ impl AppState {
             exit_rects: HashMap::new(),
             elapsed_ms: 16,
             duration_ms,
+            easing: self.config.animation.easing,
             ghosted_wids,
         });
     }
@@ -940,6 +953,7 @@ impl AppState {
             exit_rects,
             elapsed_ms: 16,
             duration_ms,
+            easing: self.config.animation.easing,
             ghosted_wids: std::collections::HashSet::new(),
         });
     }

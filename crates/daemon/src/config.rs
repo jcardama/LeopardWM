@@ -44,6 +44,9 @@ pub struct Config {
     /// Snap hint configuration.
     #[serde(default)]
     pub snap_hints: SnapHintConfig,
+    /// Animation timing configuration.
+    #[serde(default)]
+    pub animation: AnimationConfig,
 }
 
 /// Layout-related configuration.
@@ -762,6 +765,57 @@ impl Default for SnapHintConfig {
     }
 }
 
+/// Animation timing configuration.
+///
+/// Durations are in milliseconds; 0 means snap instantly (no animation).
+/// Values are clamped to `[0, MAX_ANIMATION_DURATION_MS]` during validation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AnimationConfig {
+    /// Column move / resize / tab-change transitions.
+    #[serde(default = "default_layout_duration")]
+    pub layout_duration_ms: u64,
+
+    /// Workspace switch transitions (intentionally a touch slower).
+    #[serde(default = "default_workspace_switch_duration")]
+    pub workspace_switch_duration_ms: u64,
+
+    /// Scroll animations (column-into-view, center, maximize).
+    #[serde(default = "default_scroll_duration")]
+    pub scroll_duration_ms: u64,
+
+    /// Easing curve applied to all of the above.
+    #[serde(default)]
+    pub easing: leopardwm_core_layout::Easing,
+}
+
+/// Upper bound for any configured animation duration (ms). Guards against
+/// a typo making the WM feel frozen.
+pub const MAX_ANIMATION_DURATION_MS: u64 = 2000;
+
+fn default_layout_duration() -> u64 {
+    150
+}
+
+fn default_workspace_switch_duration() -> u64 {
+    200
+}
+
+fn default_scroll_duration() -> u64 {
+    200
+}
+
+impl Default for AnimationConfig {
+    fn default() -> Self {
+        Self {
+            layout_duration_ms: default_layout_duration(),
+            workspace_switch_duration_ms: default_workspace_switch_duration(),
+            scroll_duration_ms: default_scroll_duration(),
+            easing: leopardwm_core_layout::Easing::default(),
+        }
+    }
+}
+
 /// A warning generated during config validation.
 #[derive(Debug, Clone)]
 pub struct ConfigWarning {
@@ -946,6 +1000,34 @@ impl Config {
     /// Validate configuration values, clamping out-of-range fields and returning warnings.
     pub fn validate(&mut self) -> Vec<ConfigWarning> {
         let mut warnings = Vec::new();
+
+        // animation durations clamped to a sane ceiling so a typo can't
+        // make the WM feel frozen.
+        for (field, val) in [
+            (
+                "animation.layout_duration_ms",
+                &mut self.animation.layout_duration_ms,
+            ),
+            (
+                "animation.workspace_switch_duration_ms",
+                &mut self.animation.workspace_switch_duration_ms,
+            ),
+            (
+                "animation.scroll_duration_ms",
+                &mut self.animation.scroll_duration_ms,
+            ),
+        ] {
+            if *val > MAX_ANIMATION_DURATION_MS {
+                warnings.push(ConfigWarning {
+                    field: field.to_string(),
+                    message: format!(
+                        "{} ({}) exceeds max, clamped to {}",
+                        field, *val, MAX_ANIMATION_DURATION_MS
+                    ),
+                });
+                *val = MAX_ANIMATION_DURATION_MS;
+            }
+        }
 
         // gap must be >= 0
         if self.layout.gap < 0 {
@@ -1384,6 +1466,14 @@ swipe_down = "focus_down"
 enabled = true
 duration_ms = 200
 opacity = 128
+
+[animation]
+# Animation timing. Durations in milliseconds; 0 = snap instantly.
+# easing accepts "linear" | "ease_in" | "ease_out" | "ease_in_out".
+layout_duration_ms = 150            # column move / resize / tab changes
+workspace_switch_duration_ms = 200  # switching workspaces
+scroll_duration_ms = 200            # scrolling a column into view
+easing = "ease_out"
 
 # Built-in example: Firefox / Zen Picture-in-Picture popups draw their own
 # square frame, so we override the focus-border corner style to match. Edit
@@ -2096,6 +2186,42 @@ mod tests {
         let warnings = config.validate();
         assert_eq!(config.snap_hints.duration_ms, 50);
         assert!(warnings.iter().any(|w| w.field == "snap_hints.duration_ms"));
+    }
+
+    #[test]
+    fn test_animation_config_defaults() {
+        let config = Config::default();
+        assert_eq!(config.animation.layout_duration_ms, 150);
+        assert_eq!(config.animation.workspace_switch_duration_ms, 200);
+        assert_eq!(config.animation.scroll_duration_ms, 200);
+        assert_eq!(
+            config.animation.easing,
+            leopardwm_core_layout::Easing::EaseOut
+        );
+    }
+
+    #[test]
+    fn test_validate_animation_duration_clamped() {
+        let mut config = Config::default();
+        config.animation.layout_duration_ms = 99_999;
+        let warnings = config.validate();
+        assert_eq!(config.animation.layout_duration_ms, MAX_ANIMATION_DURATION_MS);
+        assert!(warnings
+            .iter()
+            .any(|w| w.field == "animation.layout_duration_ms"));
+    }
+
+    #[test]
+    fn test_animation_easing_parses_from_toml() {
+        let toml = "[animation]\neasing = \"ease_in_out\"\nlayout_duration_ms = 80\n";
+        let config: Config = toml::from_str(toml).expect("parse");
+        assert_eq!(
+            config.animation.easing,
+            leopardwm_core_layout::Easing::EaseInOut
+        );
+        assert_eq!(config.animation.layout_duration_ms, 80);
+        // Unspecified fields fall back to defaults.
+        assert_eq!(config.animation.scroll_duration_ms, 200);
     }
 
     #[test]

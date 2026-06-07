@@ -165,21 +165,27 @@ async fn reload_config_and_hotkeys(
 fn setup_hotkeys(config: &Config, event_tx: mpsc::Sender<DaemonEvent>) -> HotkeyState {
     let config_hotkeys = &config.hotkeys.bindings;
 
-    // Build hotkey definitions and command mapping
+    // Build hotkey definitions and command mapping. IDs are intrinsic to
+    // each (modifiers, vk) combo via `Hotkey::stable_id`, NOT sequential —
+    // so a config reload can never remap an existing ID to a different
+    // command and have a queued WM_HOTKEY fire the wrong action.
     let mut hotkeys = Vec::new();
     let mut mapping = HashMap::new();
-    let mut next_id: HotkeyId = 1;
 
     for (key_str, cmd_str) in config_hotkeys {
         if let Some((modifiers, vk)) = parse_hotkey_string(key_str) {
             if let Some(cmd) = config::parse_command(cmd_str) {
-                hotkeys.push(Hotkey::new(next_id, modifiers, vk));
-                mapping.insert(next_id, cmd);
-                debug!(
-                    "Configured hotkey {}: {} -> {:?}",
-                    next_id, key_str, cmd_str
-                );
-                next_id += 1;
+                let id = Hotkey::stable_id(modifiers, vk);
+                if mapping.contains_key(&id) {
+                    warn!(
+                        "Duplicate hotkey combo for {} (id {}); ignoring the second binding",
+                        key_str, id
+                    );
+                    continue;
+                }
+                hotkeys.push(Hotkey::new(id, modifiers, vk));
+                mapping.insert(id, cmd);
+                debug!("Configured hotkey {}: {} -> {:?}", id, key_str, cmd_str);
             } else {
                 warn!(
                     "Unknown command in hotkey config: {} -> {}",

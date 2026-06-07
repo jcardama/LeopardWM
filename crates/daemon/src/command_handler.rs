@@ -658,11 +658,8 @@ impl AppState {
                 }
 
                 if !start_rects.is_empty() {
-                    self.start_workspace_switch_transition(
-                        start_rects,
-                        exit_rects,
-                        crate::state::WORKSPACE_SWITCH_DURATION_MS,
-                    );
+                    let duration = self.config.animation.workspace_switch_duration_ms;
+                    self.start_workspace_switch_transition(start_rects, exit_rects, duration);
                 } else {
                     // No windows to animate — hide old immediately
                     for (wid, _) in &old_placements {

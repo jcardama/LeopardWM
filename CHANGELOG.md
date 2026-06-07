@@ -20,6 +20,20 @@ All notable changes to LeopardWM will be documented in this file.
   internal animation step is ever cut short, the affected windows are no
   longer skipped by the smooth-animation path on later moves; the guard
   clears itself within a couple of seconds.
+- **Animation timing is now configurable.** A new `[animation]` section
+  sets the duration of layout transitions, workspace switches, and column
+  scrolls, plus the easing curve (linear / ease in / ease out / ease
+  in-out). Tune them in Settings → Behavior → Animation or in config.
+  Set any duration to 0 to snap instantly.
+
+### Fixes
+
+- **A keypress can no longer trigger the wrong action right after saving
+  settings.** Hotkey IDs were assigned in an unstable order, so reloading
+  the config (e.g. on a settings save) could remap an ID to a different
+  command and let an in-flight keypress fire the wrong one, in the worst
+  case an accidental emergency-restore. IDs are now derived from the key
+  combo itself, so a given key always maps to its own current action.
 
 ## 0.1.17
 

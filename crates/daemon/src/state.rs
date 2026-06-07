@@ -52,12 +52,6 @@ pub(crate) enum DragHintAction {
     Hide,
 }
 
-/// Duration of layout transition animations in milliseconds.
-pub(crate) const LAYOUT_TRANSITION_DURATION_MS: u64 = 150;
-
-/// Duration of workspace switch slide animation in milliseconds.
-pub(crate) const WORKSPACE_SWITCH_DURATION_MS: u64 = 200;
-
 /// Fallback viewport dimensions when no monitor is detected.
 pub(crate) const FALLBACK_VIEWPORT_WIDTH: i32 = 1920;
 pub(crate) const FALLBACK_VIEWPORT_HEIGHT: i32 = 1080;
@@ -134,6 +128,8 @@ pub(crate) struct LayoutTransition {
     pub(crate) elapsed_ms: u64,
     /// Total duration in milliseconds.
     pub(crate) duration_ms: u64,
+    /// Easing curve for this transition (from `[animation].easing`).
+    pub(crate) easing: leopardwm_core_layout::Easing,
     /// Window IDs being driven via a DWM thumbnail "ghost" rather than
     /// per-frame `SetWindowPos` on the live HWND. Pure data — the owning
     /// `ThumbnailHandle`s live in `AppState.ghost_handles`, which decouples
@@ -230,10 +226,9 @@ impl LayoutTransition {
         self.elapsed_ms >= self.duration_ms
     }
 
-    /// Cubic ease-out (matches scroll animation default).
+    /// Eased progress using this transition's configured easing curve.
     pub(crate) fn eased_progress(&self) -> f64 {
-        let t = self.progress();
-        1.0 - (1.0 - t).powi(3)
+        self.easing.apply(self.progress())
     }
 
     pub(crate) fn tick(&mut self, delta_ms: u64) -> bool {
@@ -547,6 +542,10 @@ impl AppState {
             workspace.set_reduce_motion(
                 !leopardwm_platform_win32::are_animations_enabled()
                     || leopardwm_platform_win32::is_on_battery_or_power_saver(),
+            );
+            workspace.set_scroll_animation(
+                config.animation.scroll_duration_ms,
+                config.animation.easing,
             );
 
             if monitor.is_primary {
@@ -911,6 +910,10 @@ impl AppState {
             ws.set_centering_mode(config.layout.centering_mode.into());
             ws.set_center_past_edges(config.layout.center_past_edges);
             ws.set_reduce_motion(self.reduce_motion);
+            ws.set_scroll_animation(
+                config.animation.scroll_duration_ms,
+                config.animation.easing,
+            );
             ws_vec.push(ws);
         }
         ws_vec.get_mut(idx)

@@ -3,7 +3,8 @@
 // ============================================================================
 
 /// Easing function types for animations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Easing {
     /// Linear interpolation (constant speed).
     Linear,

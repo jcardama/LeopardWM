@@ -60,6 +60,7 @@ fn test_partition_for_animation_routes_ghosted_wids_to_ghost_stream() {
         exit_rects: HashMap::new(),
         elapsed_ms: 0,
         duration_ms: 150,
+        easing: leopardwm_core_layout::Easing::default(),
         ghosted_wids,
     };
 
@@ -201,6 +202,7 @@ fn test_partition_for_animation_missing_handle_drops_placement() {
         exit_rects: HashMap::new(),
         elapsed_ms: 0,
         duration_ms: 150,
+        easing: leopardwm_core_layout::Easing::default(),
         ghosted_wids,
     };
 
