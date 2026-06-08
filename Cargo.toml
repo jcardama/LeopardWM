@@ -69,3 +69,11 @@ raw-window-handle = { version = "0.6", features = ["std"] }
 lto = true
 codegen-units = 1
 strip = true
+
+# Cohesion guard (agent-ops Principle 16). Active only where a crate opts in via
+# `[lints]\nworkspace = true`. Threshold is tuned in clippy.toml.
+# NOTE: `/verify` + `/dod` run `cargo clippy -- -D warnings`, so this is effectively a
+# hard gate, not a soft warning — run `cargo clippy --all` on Windows to confirm green
+# and raise the threshold (clippy.toml) above your current worst function if it fails.
+[workspace.lints.clippy]
+too_many_lines = "warn"

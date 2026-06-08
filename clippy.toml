@@ -1,0 +1,7 @@
+# agent-ops Principle 16 — cohesion guard.
+# clippy::too_many_lines default threshold is 100 (too noisy for this codebase).
+# 300 flags genuinely oversized functions worth splitting. Ratchet this DOWN over time
+# as the big files (daemon/helpers.rs, config.rs, the 2k-line main.rs) get decomposed.
+# Because /verify + /dod run `clippy -- -D warnings`, a function over this length fails
+# the gate — raise the number if the current tree doesn't pass, then lower it gradually.
+too-many-lines-threshold = 300

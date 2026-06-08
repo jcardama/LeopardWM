@@ -42,3 +42,6 @@ winresource = "0.1"
 [package.metadata.wix]
 name = "LeopardWM"
 product-name = "LeopardWM"
+
+[lints]
+workspace = true

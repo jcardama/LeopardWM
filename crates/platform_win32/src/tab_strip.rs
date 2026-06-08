@@ -2336,6 +2336,7 @@ pub(crate) unsafe fn create_glyph_bitmap_at_size(
 /// WndProc: handles WM_LBUTTONDOWN to translate clicks into TabActionEvents.
 /// Layered windows with `UpdateLayeredWindow` skip WM_PAINT entirely; we
 /// only care about input here.
+#[allow(clippy::too_many_lines)] // TODO(P15): decompose (~433 lines, grandfathered)
 unsafe extern "system" fn tab_strip_wnd_proc(
     hwnd: HWND,
     msg: u32,

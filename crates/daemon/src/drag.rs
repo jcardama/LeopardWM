@@ -23,6 +23,7 @@ impl AppState {
     /// Compute and show a drag hint overlay.
     /// Default drag = move window between columns (merge mode).
     /// Shift+drag = move entire column (reorder mode).
+    #[allow(clippy::too_many_lines)] // TODO(P15): decompose (~320 lines, grandfathered)
     pub(crate) fn update_drag_hint(&mut self, hwnd: u64) {
         // No drag ghost while tiling is paused.
         if self.paused {

@@ -11,3 +11,6 @@ description = "IPC protocol types for LeopardWM daemon-CLI communication"
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+
+[lints]
+workspace = true

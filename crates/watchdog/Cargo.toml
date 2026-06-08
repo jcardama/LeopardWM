@@ -20,3 +20,6 @@ tracing-subscriber = { workspace = true }
 # notification. These are additive over the workspace's Win32_* features.
 windows = { workspace = true, features = ["UI_Notifications", "Data_Xml_Dom"] }
 winreg = "0.56"
+
+[lints]
+workspace = true

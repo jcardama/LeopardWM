@@ -303,6 +303,7 @@ pub struct ApplyPlacementsResult {
 /// When `cache` is provided, placements whose rect and visibility match the
 /// cached values are skipped, avoiding redundant Win32 calls during animations
 /// where most windows haven't moved.
+#[allow(clippy::too_many_lines)] // TODO(P15): decompose (~337 lines, grandfathered)
 pub fn apply_placements(
     placements: &[WindowPlacement],
     _config: &PlatformConfig,

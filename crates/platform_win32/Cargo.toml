@@ -16,3 +16,6 @@ anyhow = { workspace = true }
 winreg = "0.56"
 
 [dev-dependencies]
+
+[lints]
+workspace = true

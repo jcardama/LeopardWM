@@ -14,6 +14,7 @@ use tracing::{debug, info, warn};
 
 impl AppState {
     /// Handle a window lifecycle event.
+    #[allow(clippy::too_many_lines)] // TODO(P15): decompose (~856 lines, grandfathered)
     pub(crate) fn handle_window_event(&mut self, event: WindowEvent) {
         // Get window_id from event for validation (DisplayChange and MouseEnterWindow have no validation needed)
         let window_id = match &event {
