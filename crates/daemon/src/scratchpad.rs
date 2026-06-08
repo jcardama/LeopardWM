@@ -30,7 +30,7 @@ impl AppState {
     }
 
     /// A centered floating rect on the focused monitor's work area.
-    fn centered_float_rect(&self) -> Rect {
+    pub(crate) fn centered_float_rect(&self) -> Rect {
         let wa = self.focused_viewport();
         let w = 900.min((wa.width - 80).max(200));
         let h = 600.min((wa.height - 80).max(150));

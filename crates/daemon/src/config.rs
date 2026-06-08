@@ -636,6 +636,7 @@ impl Default for HotkeyConfig {
         bindings.insert("Ctrl+Alt+T".to_string(), "toggle_tabbed".to_string());
         bindings.insert("Ctrl+Alt+S".to_string(), "scratchpad_toggle".to_string());
         bindings.insert("Ctrl+Alt+Shift+S".to_string(), "scratchpad_stash".to_string());
+        bindings.insert("Ctrl+Alt+Y".to_string(), "toggle_sticky".to_string());
         bindings.insert("Ctrl+Alt+P".to_string(), "toggle_pause".to_string());
         bindings.insert("Ctrl+Alt+R".to_string(), "refresh".to_string());
         bindings.insert("Ctrl+Alt+Shift+R".to_string(), "reload".to_string());
@@ -940,6 +941,7 @@ pub fn parse_command(cmd: &str) -> Option<leopardwm_ipc::IpcCommand> {
         "toggle_fullscreen" => Some(IpcCommand::ToggleFullscreen),
         "scratchpad_stash" | "scratchpad-stash" => Some(IpcCommand::ScratchpadStash),
         "scratchpad_toggle" | "scratchpad-toggle" => Some(IpcCommand::ScratchpadToggle),
+        "toggle_sticky" | "toggle-sticky" => Some(IpcCommand::ToggleSticky),
         "toggle_tabbed" => Some(IpcCommand::ToggleTabbed),
         "width_third" => Some(IpcCommand::SetColumnWidth { fraction: 0.333 }),
         "width_half" => Some(IpcCommand::SetColumnWidth { fraction: 0.5 }),
@@ -1475,6 +1477,7 @@ focus_follows_mouse = false
 "Ctrl+Alt+T" = "toggle_tabbed"
 "Ctrl+Alt+S" = "scratchpad_toggle"
 "Ctrl+Alt+Shift+S" = "scratchpad_stash"
+"Ctrl+Alt+Y" = "toggle_sticky"
 "Ctrl+Alt+P" = "toggle_pause"
 "Ctrl+Alt+R" = "refresh"
 "Ctrl+Alt+Shift+R" = "reload"
@@ -1615,7 +1618,7 @@ mod tests {
     #[test]
     fn test_hotkey_config_default() {
         let config = HotkeyConfig::default();
-        assert_eq!(config.bindings.len(), 54);
+        assert_eq!(config.bindings.len(), 55);
         assert_eq!(
             config.bindings.get("Ctrl+Alt+T"),
             Some(&"toggle_tabbed".to_string())
@@ -1627,6 +1630,10 @@ mod tests {
         assert_eq!(
             config.bindings.get("Ctrl+Alt+Shift+S"),
             Some(&"scratchpad_stash".to_string())
+        );
+        assert_eq!(
+            config.bindings.get("Ctrl+Alt+Y"),
+            Some(&"toggle_sticky".to_string())
         );
         assert_eq!(
             config.bindings.get("Ctrl+Alt+H"),

@@ -190,6 +190,8 @@ enum Commands {
     ScratchpadStash,
     /// Show the scratchpad (floating, centered) if hidden, or hide it
     ScratchpadToggle,
+    /// Toggle sticky (pinned visible on every workspace) for the focused window
+    ToggleSticky,
     /// Toggle tabbed mode on the focused column (niri-style: only the
     /// active tab is visible, with a tab strip overlay above the column)
     ToggleTabbed,
@@ -411,6 +413,7 @@ fn to_ipc_command(cmd: &Commands) -> IpcCommand {
         Commands::ToggleFullscreen => IpcCommand::ToggleFullscreen,
         Commands::ScratchpadStash => IpcCommand::ScratchpadStash,
         Commands::ScratchpadToggle => IpcCommand::ScratchpadToggle,
+        Commands::ToggleSticky => IpcCommand::ToggleSticky,
         Commands::ToggleTabbed => IpcCommand::ToggleTabbed,
         Commands::SetWidth { fraction } => IpcCommand::SetColumnWidth {
             fraction: *fraction,

@@ -99,9 +99,9 @@ use windows::Win32::Graphics::Dwm::{
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_SHIFT};
 use windows::Win32::UI::WindowsAndMessaging::{
-    BringWindowToTop, GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindow,
-    IsWindowVisible, PostMessageW, SetForegroundWindow, SetWindowPos, ShowWindow, HWND_TOP,
-    SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SW_RESTORE,
+    BringWindowToTop, GetForegroundWindow, GetWindowRect, GetWindowThreadProcessId, IsIconic,
+    IsWindow, IsWindowVisible, PostMessageW, SetForegroundWindow, SetWindowPos, ShowWindow,
+    HWND_TOP, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SW_RESTORE,
 };
 
 /// Query DWM for the window's corner-rounding preference and map to a pixel
@@ -476,6 +476,16 @@ pub fn position_window(window_id: WindowId, rect: Rect) -> Result<(), Win32Error
         })?;
     }
     Ok(())
+}
+
+/// The current OS foreground window as a `WindowId`, if any. This is
+/// authoritative at the moment of the call, unlike the daemon's cached
+/// focus, so callers that must know the truly-focused window at a precise
+/// instant (e.g. recording which window was focused on a workspace before
+/// leaving it) can query it directly.
+pub fn get_foreground_window() -> Option<WindowId> {
+    let hwnd = unsafe { GetForegroundWindow() };
+    (!hwnd.0.is_null()).then_some(hwnd.0 as WindowId)
 }
 
 #[allow(dead_code)]

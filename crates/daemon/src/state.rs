@@ -258,6 +258,10 @@ pub(crate) struct AppState {
     pub(crate) workspaces: HashMap<MonitorId, Vec<Workspace>>,
     /// Active workspace index (0-based) per monitor.
     pub(crate) active_workspace: HashMap<MonitorId, usize>,
+    /// Last-focused floating window per workspace. Tiled focus is already
+    /// restored by the workspace's column state on switch, but floating
+    /// focus is not, so we remember it here and re-focus it on return.
+    pub(crate) floating_focus: HashMap<(MonitorId, usize), u64>,
     /// Monitor info indexed by monitor ID.
     pub(crate) monitors: HashMap<MonitorId, MonitorInfo>,
     /// Currently focused monitor.
@@ -270,6 +274,10 @@ pub(crate) struct AppState {
     pub(crate) compiled_rules: Vec<config::CompiledWindowRule>,
     /// The designated scratchpad window and its shown/hidden state, if any.
     pub(crate) scratchpad: Option<ScratchpadState>,
+    /// Windows pinned visible on every workspace. A sticky window is kept
+    /// floating and re-homed to the active workspace on each switch.
+    /// Session-scoped (HWND-keyed, not persisted across restart).
+    pub(crate) sticky_windows: HashSet<u64>,
     /// Previously focused window for border color tracking.
     pub(crate) previous_focused_hwnd: Option<u64>,
     /// `(monitor, hwnd)` of the most-recently-broadcast
@@ -589,12 +597,14 @@ impl AppState {
         Self {
             workspaces,
             active_workspace: active_workspace_map,
+            floating_focus: HashMap::new(),
             monitors: monitor_map,
             focused_monitor,
             platform_config,
             config,
             compiled_rules,
             scratchpad: None,
+            sticky_windows: HashSet::new(),
             previous_focused_hwnd: None,
             last_broadcast_focused: None,
             last_focus_change_at: None,

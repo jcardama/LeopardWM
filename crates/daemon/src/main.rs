@@ -21,6 +21,7 @@ mod helpers;
 mod ipc_server;
 mod scratchpad;
 mod settings;
+mod sticky;
 mod startup;
 mod state;
 #[cfg(test)]

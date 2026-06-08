@@ -480,6 +480,10 @@ impl AppState {
                 self.scratchpad_toggle();
                 IpcResponse::Ok
             }
+            IpcCommand::ToggleSticky => {
+                self.toggle_sticky();
+                IpcResponse::Ok
+            }
             IpcCommand::ToggleFullscreen => {
                 let resp = self.execute_workspace_command(true, false, |ws, _vw| {
                     let entering = ws.toggle_fullscreen();
@@ -593,6 +597,25 @@ impl AppState {
                     return IpcResponse::Ok;
                 }
 
+                // Remember the floating window focused on the workspace we
+                // are leaving, so returning re-focuses it. If the last focus
+                // was tiled, forget any prior floating focus for it (the
+                // column state already restores tiled focus). Prefer the live
+                // OS foreground over the cached focus so a missed focus event
+                // can't record the wrong window.
+                let leaving_focus = leopardwm_platform_win32::get_foreground_window()
+                    .or(self.previous_focused_hwnd);
+                if let Some(hwnd) = leaving_focus {
+                    if self
+                        .focused_workspace()
+                        .is_some_and(|ws| ws.is_floating(hwnd))
+                    {
+                        self.floating_focus.insert((monitor, current_idx), hwnd);
+                    } else {
+                        self.floating_focus.remove(&(monitor, current_idx));
+                    }
+                }
+
                 // Cancel any in-progress drag: reinsert window if it was
                 // removed from source during live preview, then remove placeholders.
                 // Only reinsert if the window still exists.
@@ -630,7 +653,7 @@ impl AppState {
                 let y_offset = if idx > current_idx { slide_height } else { -slide_height };
 
                 // Snapshot old workspace's current positions (start for exiting windows).
-                let old_placements = self.workspace_placements(monitor, current_idx);
+                let mut old_placements = self.workspace_placements(monitor, current_idx);
 
                 // Ensure target workspace exists (lazy creation)
                 self.ensure_workspace_exists(monitor, idx);
@@ -638,8 +661,17 @@ impl AppState {
                 // Switch active workspace
                 self.active_workspace.insert(monitor, idx);
 
+                // Sticky windows follow the switch: move them onto the
+                // now-active workspace.
+                self.rehome_sticky_windows();
+
                 // Compute new workspace's final placements.
-                let new_placements = self.workspace_placements(monitor, idx);
+                let mut new_placements = self.workspace_placements(monitor, idx);
+
+                // Keep sticky windows out of the slide animation so they sit
+                // still while the rest of the layout scrolls past.
+                old_placements.retain(|(w, _)| !self.sticky_windows.contains(w));
+                new_placements.retain(|(w, _)| !self.sticky_windows.contains(w));
 
                 // Build animation rects:
                 // - Entering windows: start offscreen, end at final position
@@ -680,6 +712,19 @@ impl AppState {
 
                 if let Err(e) = self.apply_layout() {
                     return IpcResponse::error(format!("Failed to apply layout: {}", e));
+                }
+                // Restore the floating window that was focused on this
+                // workspace (if it still floats here) so it regains focus on
+                // return, before syncing the OS foreground.
+                if let Some(&hwnd) = self.floating_focus.get(&(monitor, idx)) {
+                    let still_floating = self
+                        .workspaces
+                        .get(&monitor)
+                        .and_then(|v| v.get(idx))
+                        .is_some_and(|ws| ws.is_floating(hwnd));
+                    if still_floating {
+                        self.previous_focused_hwnd = Some(hwnd);
+                    }
                 }
                 self.sync_foreground_window();
                 // If a summoned scratchpad lives on this workspace, restore

@@ -236,6 +236,10 @@ impl AppState {
                 // from cloaking) should clear its designation.
                 if !is_hidden_event {
                     self.scratchpad_on_window_destroyed(hwnd);
+                    self.sticky_on_window_destroyed(hwnd);
+                    // Forget any remembered floating focus for this window so
+                    // a recycled HWND can't wrongly re-focus on workspace return.
+                    self.floating_focus.retain(|_, &mut h| h != hwnd);
                 }
 
                 // For Hidden events, verify the window is actually gone.

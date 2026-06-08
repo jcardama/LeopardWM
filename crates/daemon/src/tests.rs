@@ -2957,3 +2957,75 @@ fn test_scratchpad_designating_new_releases_old() {
         "new scratchpad is hidden"
     );
 }
+
+#[test]
+fn test_sticky_toggle_pins_and_floats() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .insert_window(100, Some(800))
+        .unwrap();
+    state.focused_workspace_mut().unwrap().focus_window(100).unwrap();
+
+    state.toggle_sticky(); // pin
+    assert!(state.sticky_windows.contains(&100), "pinned into sticky set");
+    assert!(
+        state.focused_workspace().unwrap().is_floating(100),
+        "pinning floats the window"
+    );
+
+    // It is floating now, so the tiled-focus accessor won't report it.
+    state.previous_focused_hwnd = Some(100);
+    state.toggle_sticky(); // un-pin
+    assert!(!state.sticky_windows.contains(&100), "unpinned from sticky set");
+    assert!(
+        state.focused_workspace().unwrap().is_floating(100),
+        "un-pinning leaves it floating in place"
+    );
+}
+
+#[test]
+fn test_sticky_window_follows_workspace_switch() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    let mon = state.focused_monitor;
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .insert_window(100, Some(800))
+        .unwrap();
+    state.focused_workspace_mut().unwrap().focus_window(100).unwrap();
+    state.toggle_sticky(); // 100 floating + sticky on workspace 0
+    assert!(state.sticky_windows.contains(&100));
+
+    // Move to workspace 1 and re-home sticky windows.
+    state.ensure_workspace_exists(mon, 1);
+    state.active_workspace.insert(mon, 1);
+    state.rehome_sticky_windows();
+
+    assert_eq!(state.active_workspace_idx(mon), 1);
+    assert!(
+        state.workspaces.get(&mon).unwrap()[1].is_floating(100),
+        "sticky window re-homed to the active workspace"
+    );
+    assert!(
+        !state.workspaces.get(&mon).unwrap()[0].contains_window(100),
+        "sticky window no longer on the previous workspace"
+    );
+}
+
+#[test]
+fn test_sticky_cleared_when_window_destroyed() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .insert_window(100, Some(800))
+        .unwrap();
+    state.focused_workspace_mut().unwrap().focus_window(100).unwrap();
+    state.toggle_sticky();
+    assert!(state.sticky_windows.contains(&100));
+
+    state.sticky_on_window_destroyed(100);
+    assert!(!state.sticky_windows.contains(&100), "destroyed window unpinned");
+}

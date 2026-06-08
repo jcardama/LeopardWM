@@ -9,12 +9,17 @@ All notable changes to LeopardWM will be documented in this file.
 ### Improvements
 
 - **Scratchpad.** Stash a window into a hidden holding area and summon it
-  back as a floating, centered overlay with a hotkey — handy for a quick
+  back as a floating, centered overlay with a hotkey, handy for a quick
   terminal or notes window. `Ctrl+Alt+Shift+S` designates the focused
   window as the scratchpad and hides it; `Ctrl+Alt+S` toggles it in and
   out. Also available as `lwm scratchpad-stash` / `lwm scratchpad-toggle`.
   The designation lasts for the session (it resets if you restart the
   daemon).
+- **Sticky windows.** Pin a window so it stays visible on every workspace
+  and follows you when you switch. `Ctrl+Alt+Y` toggles it (or `lwm
+  toggle-sticky`). A pinned window floats and re-homes to whichever
+  workspace you move to, sitting still while the rest of the layout
+  scrolls. Toggle it off to unpin; it stays floating. Session-scoped.
 
 ## 0.1.18
 
