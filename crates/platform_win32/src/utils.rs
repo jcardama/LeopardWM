@@ -100,7 +100,7 @@ use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_SHIFT};
 use windows::Win32::UI::WindowsAndMessaging::{
     BringWindowToTop, GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindow,
-    IsWindowVisible, PostMessageW, SetForegroundWindow, SetWindowPos, ShowWindow,
+    IsWindowVisible, PostMessageW, SetForegroundWindow, SetWindowPos, ShowWindow, HWND_TOP,
     SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SW_RESTORE,
 };
 
@@ -447,6 +447,33 @@ pub fn move_window_offscreen(window_id: WindowId) -> Result<(), Win32Error> {
                 window_id, e
             )));
         }
+    }
+    Ok(())
+}
+
+/// Synchronously move and resize a window to `rect` AND raise it to the
+/// top of the normal (non-topmost) window band. No activation, no async.
+///
+/// Raising matters for a freshly-summoned scratchpad: the focus border
+/// tracks the window at its own z-level, so the window must be above the
+/// previously-focused window for the border to be visible. The move is
+/// synchronous so the window's rect is correct immediately (the async
+/// layout pass would otherwise leave it stale).
+pub fn position_window(window_id: WindowId, rect: Rect) -> Result<(), Win32Error> {
+    let hwnd = window_id_to_hwnd(window_id)?;
+    unsafe {
+        SetWindowPos(
+            hwnd,
+            Some(HWND_TOP),
+            rect.x,
+            rect.y,
+            rect.width,
+            rect.height,
+            SWP_NOACTIVATE,
+        )
+        .map_err(|e| {
+            Win32Error::SetPositionFailed(format!("Failed to position window {}: {}", window_id, e))
+        })?;
     }
     Ok(())
 }

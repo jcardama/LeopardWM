@@ -19,6 +19,7 @@ mod event_handler;
 mod events;
 mod helpers;
 mod ipc_server;
+mod scratchpad;
 mod settings;
 mod startup;
 mod state;

@@ -2836,3 +2836,124 @@ fn test_broadcast_focused_window_emits_on_clear() {
     assert!(saw_set && saw_clear, "should emit both set and clear events");
     assert_eq!(state.last_broadcast_focused, Some((1, None)));
 }
+
+#[test]
+fn test_scratchpad_stash_designates_and_removes_window() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .insert_window(100, Some(800))
+        .unwrap();
+    assert_eq!(state.focused_workspace().unwrap().focused_window(), Some(100));
+
+    state.scratchpad_stash();
+
+    let sp = state.scratchpad.expect("scratchpad designated");
+    assert_eq!(sp.window_id, 100);
+    assert!(!sp.shown, "stashed scratchpad starts hidden");
+    assert!(
+        !state.focused_workspace().unwrap().contains_window(100),
+        "stashed window is removed from the workspace"
+    );
+}
+
+#[test]
+fn test_scratchpad_toggle_summons_then_hides() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .insert_window(100, Some(800))
+        .unwrap();
+    state.scratchpad_stash();
+
+    // Summon: floating + shown.
+    state.scratchpad_toggle();
+    assert!(state.scratchpad.unwrap().shown);
+    assert!(
+        state.focused_workspace().unwrap().is_floating(100),
+        "summoned scratchpad is a floating window"
+    );
+
+    // Hide: removed + not shown.
+    state.scratchpad_toggle();
+    assert!(!state.scratchpad.unwrap().shown);
+    assert!(!state.focused_workspace().unwrap().contains_window(100));
+}
+
+#[test]
+fn test_scratchpad_cleared_when_window_destroyed() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .insert_window(100, Some(800))
+        .unwrap();
+    state.scratchpad_stash();
+    assert!(state.scratchpad.is_some());
+
+    state.scratchpad_on_window_destroyed(100);
+    assert!(state.scratchpad.is_none(), "designation cleared on destroy");
+
+    // Unrelated window destroy does not clear a live designation.
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .insert_window(200, Some(800))
+        .unwrap();
+    state.scratchpad_stash();
+    state.scratchpad_on_window_destroyed(999);
+    assert!(state.scratchpad.is_some());
+}
+
+#[test]
+fn test_scratchpad_stash_on_scratchpad_releases_to_tiling() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .insert_window(100, Some(800))
+        .unwrap();
+    state.scratchpad_stash(); // designate + hide 100
+    state.scratchpad_toggle(); // summon (floating, focused)
+    assert!(state.focused_workspace().unwrap().is_floating(100));
+
+    // Simulate the OS foreground landing on the summoned (floating)
+    // scratchpad, as the EVENT_SYSTEM_FOREGROUND handler does in production.
+    state.previous_focused_hwnd = Some(100);
+
+    // Stashing the focused scratchpad releases it back to tiling.
+    state.scratchpad_stash();
+    assert!(state.scratchpad.is_none(), "designation cleared on release");
+    assert!(state.focused_workspace().unwrap().contains_window(100));
+    assert!(
+        !state.focused_workspace().unwrap().is_floating(100),
+        "released as a tiled window, not floating"
+    );
+}
+
+#[test]
+fn test_scratchpad_designating_new_releases_old() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    {
+        let ws = state.focused_workspace_mut().unwrap();
+        ws.insert_window(100, Some(800)).unwrap();
+        ws.insert_window(200, Some(800)).unwrap();
+    }
+    state.focused_workspace_mut().unwrap().focus_window(100).unwrap();
+    state.scratchpad_stash(); // 100 becomes scratchpad (hidden)
+    assert_eq!(state.scratchpad.unwrap().window_id, 100);
+
+    state.focused_workspace_mut().unwrap().focus_window(200).unwrap();
+    state.scratchpad_stash(); // 200 becomes scratchpad; 100 released
+    assert_eq!(state.scratchpad.unwrap().window_id, 200);
+    assert!(
+        state.focused_workspace().unwrap().contains_window(100),
+        "old scratchpad re-tiled, not orphaned"
+    );
+    assert!(
+        !state.focused_workspace().unwrap().contains_window(200),
+        "new scratchpad is hidden"
+    );
+}

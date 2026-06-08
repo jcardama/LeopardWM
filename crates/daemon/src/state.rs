@@ -43,6 +43,21 @@ pub(crate) struct DropTarget {
     pub(crate) window_slot: Option<usize>,
 }
 
+/// The single designated scratchpad window and whether it is currently
+/// summoned. When hidden, the window is removed from all workspaces and
+/// cloaked; when shown, it lives as a floating window on whichever
+/// workspace was active at summon time. Session-scoped (HWND-keyed, not
+/// persisted across daemon restart).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ScratchpadState {
+    pub(crate) window_id: u64,
+    pub(crate) shown: bool,
+    /// Column index the window occupied before being stashed, so releasing
+    /// it returns it to (roughly) its original position rather than
+    /// landing one column over.
+    pub(crate) origin_column: usize,
+}
+
 /// Action to show/hide the drag hint overlay, communicated from event handler to main loop.
 #[derive(Debug, Clone)]
 pub(crate) enum DragHintAction {
@@ -253,6 +268,8 @@ pub(crate) struct AppState {
     pub(crate) config: Config,
     /// Pre-compiled window rules for efficient matching.
     pub(crate) compiled_rules: Vec<config::CompiledWindowRule>,
+    /// The designated scratchpad window and its shown/hidden state, if any.
+    pub(crate) scratchpad: Option<ScratchpadState>,
     /// Previously focused window for border color tracking.
     pub(crate) previous_focused_hwnd: Option<u64>,
     /// `(monitor, hwnd)` of the most-recently-broadcast
@@ -577,6 +594,7 @@ impl AppState {
             platform_config,
             config,
             compiled_rules,
+            scratchpad: None,
             previous_focused_hwnd: None,
             last_broadcast_focused: None,
             last_focus_change_at: None,

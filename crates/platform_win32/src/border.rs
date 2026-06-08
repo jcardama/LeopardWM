@@ -311,22 +311,38 @@ impl BorderFrame {
                 self.render_and_update(x, y, w, h, width, position);
             } else {
                 // Fast path: just move the overlay (bitmap is retained).
-                // Position just above the target in z-order.
-                let insert_after = match GetWindow(target, GW_HWNDPREV) {
-                    Ok(prev) if prev != self.hwnd => Some(prev),
-                    _ => Some(HWND_TOP),
-                };
                 let _ = SetWindowPos(
                     self.hwnd,
-                    insert_after,
+                    None,
                     x,
                     y,
                     0,
                     0,
-                    SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOSIZE,
+                    SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOSIZE,
                 );
-                let _ = ShowWindow(self.hwnd, SW_SHOWNA);
             }
+
+            // Z-order the border just above its target — for BOTH paths.
+            // `render_and_update` positions the overlay via
+            // `UpdateLayeredWindow` but does NOT touch z-order, so without
+            // this the border keeps its previous z-position whenever it
+            // re-renders for a differently-sized window (e.g. the first
+            // summon of the scratchpad), leaving it stuck behind the
+            // previously-focused window.
+            let insert_after = match GetWindow(target, GW_HWNDPREV) {
+                Ok(prev) if prev != self.hwnd => Some(prev),
+                _ => Some(HWND_TOP),
+            };
+            let _ = SetWindowPos(
+                self.hwnd,
+                insert_after,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+            );
+            let _ = ShowWindow(self.hwnd, SW_SHOWNA);
         }
     }
 

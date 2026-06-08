@@ -231,6 +231,13 @@ impl AppState {
                 let is_hidden_event = matches!(event, WindowEvent::Hidden(_));
                 let event_name = if is_hidden_event { "hidden" } else { "destroyed" };
 
+                // A stashed scratchpad window lives outside all workspaces and
+                // is cloaked, so only a real destroy (not a spurious Hidden
+                // from cloaking) should clear its designation.
+                if !is_hidden_event {
+                    self.scratchpad_on_window_destroyed(hwnd);
+                }
+
                 // For Hidden events, verify the window is actually gone.
                 // Electron apps (Slack, Beeper, Obsidian) fire spurious
                 // EVENT_OBJECT_HIDE on their main window during internal

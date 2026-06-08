@@ -390,6 +390,11 @@ pub enum IpcCommand {
     ToggleFloating,
     /// Toggle fullscreen for the focused window.
     ToggleFullscreen,
+    /// Designate the focused window as the scratchpad and hide it.
+    ScratchpadStash,
+    /// Show the scratchpad window (floating, centered) if hidden, or hide
+    /// it if shown.
+    ScratchpadToggle,
     /// Set the focused column width as a fraction of the viewport.
     SetColumnWidth {
         /// Fraction of viewport width (e.g., 0.333, 0.5, 0.667).
@@ -697,6 +702,8 @@ mod tests {
             IpcCommand::CloseWindow,
             IpcCommand::ToggleFloating,
             IpcCommand::ToggleFullscreen,
+            IpcCommand::ScratchpadStash,
+            IpcCommand::ScratchpadToggle,
             IpcCommand::SetColumnWidth { fraction: 0.5 },
             IpcCommand::SetColumnWidth { fraction: 0.333 },
             IpcCommand::EqualizeColumnWidths,

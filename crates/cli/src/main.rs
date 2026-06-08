@@ -186,6 +186,10 @@ enum Commands {
     ToggleFloating,
     /// Toggle fullscreen for the focused window
     ToggleFullscreen,
+    /// Designate the focused window as the scratchpad and hide it
+    ScratchpadStash,
+    /// Show the scratchpad (floating, centered) if hidden, or hide it
+    ScratchpadToggle,
     /// Toggle tabbed mode on the focused column (niri-style: only the
     /// active tab is visible, with a tab strip overlay above the column)
     ToggleTabbed,
@@ -405,6 +409,8 @@ fn to_ipc_command(cmd: &Commands) -> IpcCommand {
         Commands::CloseWindow => IpcCommand::CloseWindow,
         Commands::ToggleFloating => IpcCommand::ToggleFloating,
         Commands::ToggleFullscreen => IpcCommand::ToggleFullscreen,
+        Commands::ScratchpadStash => IpcCommand::ScratchpadStash,
+        Commands::ScratchpadToggle => IpcCommand::ScratchpadToggle,
         Commands::ToggleTabbed => IpcCommand::ToggleTabbed,
         Commands::SetWidth { fraction } => IpcCommand::SetColumnWidth {
             fraction: *fraction,

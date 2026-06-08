@@ -38,7 +38,7 @@ pub use enumeration::{
 };
 pub use event_hooks::{install_event_hooks, EventHookHandle, WindowEvent};
 pub use placement::{
-    apply_placements, clear_inset_cache, drain_ghost_cloaked, dwm_uncloak_all,
+    apply_placements, clear_inset_cache, drain_ghost_cloaked, dwm_cloak_window, dwm_uncloak_all,
     dwm_uncloak_window, get_window_invisible_insets, is_placement_cloaked,
     mark_ghost_cloaked, set_dwm_transitions_disabled, unmark_ghost_cloaked,
     ApplyPlacementsResult, HeightViolation, PlacementCache, WidthViolation,
@@ -55,7 +55,7 @@ pub use utils::{
     is_cursor_on_resize_border, is_move_offscreen_sentinel_position, is_window_maximized,
     is_move_offscreen_sentinel_rect, is_shift_key_pressed, is_valid_window, is_window_shell_cloaked,
     is_window_alive_and_visible, is_window_valid, is_window_visible, move_window_offscreen,
-    ms_since_last_user_input, reset_window_border_color,
+    ms_since_last_user_input, position_window, reset_window_border_color,
     restore_all_windows_moved_offscreen_best_effort,
     restore_window_moved_offscreen, restore_windows_moved_offscreen, set_dpi_awareness,
     set_foreground_window, set_window_border_color, uncloak_all_managed_windows,

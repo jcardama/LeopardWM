@@ -42,6 +42,33 @@ impl Workspace {
         Ok(())
     }
 
+    /// Insert a window as a new single-window column at `index` (clamped to
+    /// the column count), then focus it. Used to restore a window to the
+    /// column it occupied before being moved away (e.g. releasing a window
+    /// from the scratchpad back to its original position).
+    ///
+    /// # Errors
+    ///
+    /// Returns `LayoutError::DuplicateWindow` if the window ID already exists.
+    pub fn insert_window_at_column(
+        &mut self,
+        window_id: WindowId,
+        width: Option<i32>,
+        index: usize,
+    ) -> Result<(), LayoutError> {
+        if self.contains_window(window_id) {
+            return Err(LayoutError::DuplicateWindow(window_id));
+        }
+        let column_width = width
+            .unwrap_or(self.default_column_width)
+            .max(MIN_COLUMN_WIDTH);
+        self.insert_column_at(Column::new(window_id, column_width), index);
+        let clamped = index.min(self.columns.len().saturating_sub(1));
+        self.focused_column = clamped;
+        self.focused_window_in_column = 0;
+        Ok(())
+    }
+
     /// Insert a window without changing the current focus.
     ///
     /// Same as `insert_window`, but preserves `focused_column` and

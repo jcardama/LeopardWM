@@ -472,6 +472,14 @@ impl AppState {
                 self.sync_foreground_window();
                 IpcResponse::Ok
             }
+            IpcCommand::ScratchpadStash => {
+                self.scratchpad_stash();
+                IpcResponse::Ok
+            }
+            IpcCommand::ScratchpadToggle => {
+                self.scratchpad_toggle();
+                IpcResponse::Ok
+            }
             IpcCommand::ToggleFullscreen => {
                 let resp = self.execute_workspace_command(true, false, |ws, _vw| {
                     let entering = ws.toggle_fullscreen();
@@ -674,6 +682,10 @@ impl AppState {
                     return IpcResponse::error(format!("Failed to apply layout: {}", e));
                 }
                 self.sync_foreground_window();
+                // If a summoned scratchpad lives on this workspace, restore
+                // its focus (it would otherwise stay visible but lose focus
+                // to a tiled window on the switch back).
+                self.refocus_scratchpad_if_active();
                 self.broadcast_event(leopardwm_ipc::IpcEvent::WorkspaceChanged {
                     monitor: monitor as i64,
                     old_index: current_idx as u8,

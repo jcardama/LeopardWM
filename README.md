@@ -38,6 +38,7 @@ A few deliberate **non-features**, so you know what you're getting:
 - Touchpad gestures with configurable swipe actions
 - Drag-and-drop column reorder (Shift+drag to merge windows)
 - **Tabbed columns** — toggle a column between vertical-stack and tab-strip mode (`Ctrl+Alt+T`); only the active tab fills the column rect, the rest sit in a clickable strip above
+- **Scratchpad** — stash the focused window out of the layout (`Ctrl+Alt+Shift+S`) and summon it back as a floating, centered overlay on demand (`Ctrl+Alt+S`); stash it again to release it back to tiling
 - Floating and fullscreen toggles
 - Width and height presets with column equalization, maximize-column, center-column
 - Active focus border with auto-detected rounded corners
@@ -123,10 +124,14 @@ Most hotkeys use `Ctrl+Alt` as the base modifier. Layered pattern: base = focus,
 | `Ctrl+Alt+F` | Toggle floating |
 | `Ctrl+Alt+Shift+F` | Toggle fullscreen |
 | `Ctrl+Alt+T` | Toggle tabbed mode on focused column |
+| `Ctrl+Alt+S` | Toggle scratchpad (summon / hide) |
+| `Ctrl+Alt+Shift+S` | Stash focused window to scratchpad (or release it back to tiling) |
 | `Ctrl+Alt+P` | Toggle pause |
 | `Ctrl+Alt+R` | Refresh (re-enumerate windows) |
 | `Ctrl+Alt+Shift+R` | Reload config |
 | `Win+Ctrl+Escape` | Emergency restore + panic-revert |
+
+> The scratchpad is session-scoped: the designation is keyed by window handle and resets when the daemon restarts.
 
 ## Tabbed columns
 
@@ -196,6 +201,8 @@ lwm move-window up | down              # reorder within a column
 lwm workspace 3                        # switch to workspace 3
 lwm toggle-floating
 lwm toggle-fullscreen
+lwm scratchpad-stash                   # stash focused window (or release the scratchpad)
+lwm scratchpad-toggle                  # summon / hide the scratchpad
 ```
 
 ### Autostart (boot with Windows)

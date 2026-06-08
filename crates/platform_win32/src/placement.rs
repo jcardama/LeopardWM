@@ -118,6 +118,23 @@ pub fn drain_ghost_cloaked() -> Vec<WindowId> {
     }
 }
 
+// ---------------------------------------------------------------------
+// DIRECT_CLOAKED — windows cloaked outside the placement system (e.g. a
+// stashed scratchpad window removed from all workspaces). NOT consulted by
+// `apply_cloak_state` or `uncloak_all_tracked`, so normal placement never
+// touches them — but `dwm_uncloak_all` drains it, so shutdown / panic /
+// emergency-uncloak recovery always restores them. Without this set such a
+// window would be cloaked with no recovery path = permanently invisible.
+// ---------------------------------------------------------------------
+
+static DIRECT_CLOAKED: Mutex<Option<HashSet<WindowId>>> = Mutex::new(None);
+
+fn lock_direct_cloaked() -> std::sync::MutexGuard<'static, Option<HashSet<WindowId>>> {
+    DIRECT_CLOAKED
+        .lock()
+        .unwrap_or_else(crate::recover_poisoned_mutex)
+}
+
 /// Disable (or re-enable) DWM-managed visual transitions on a window.
 /// Pass `true` to make subsequent `SetWindowPos` calls land instantly
 /// without DWM's automatic position-interpolation smoothing.
@@ -145,6 +162,21 @@ fn lock_cloaked() -> std::sync::MutexGuard<'static, Option<HashSet<WindowId>>> {
         .unwrap_or_else(crate::recover_poisoned_mutex)
 }
 
+/// Force-cloak a single window directly, without touching either tracking
+/// set. For windows held OUTSIDE normal layout management (e.g. a stashed
+/// scratchpad window that has been removed from its workspace) — nothing
+/// in the placement path will reposition or uncloak it, so a direct cloak
+/// is safe and stays put until the owner uncloaks it.
+pub fn dwm_cloak_window(window_id: WindowId) {
+    {
+        let mut guard = lock_direct_cloaked();
+        guard.get_or_insert_with(HashSet::new).insert(window_id);
+    }
+    if let Ok(hwnd) = window_id_to_hwnd(window_id) {
+        unsafe { dwm_set_cloak(hwnd, true) };
+    }
+}
+
 /// Force-uncloak a window by its WindowId regardless of either tracking
 /// set's membership. Removes from both `GLOBAL_CLOAKED` and
 /// `GHOST_CLOAKED`. Used by shutdown / panic cleanup.
@@ -160,6 +192,12 @@ pub fn dwm_uncloak_window(window_id: WindowId) {
     }
     {
         let mut guard = lock_ghost_cloaked();
+        if let Some(ref mut set) = *guard {
+            set.remove(&window_id);
+        }
+    }
+    {
+        let mut guard = lock_direct_cloaked();
         if let Some(ref mut set) = *guard {
             set.remove(&window_id);
         }
@@ -186,10 +224,22 @@ pub fn dwm_uncloak_all() {
             None => Vec::new(),
         }
     };
+    let direct_ids: Vec<WindowId> = {
+        let mut guard = lock_direct_cloaked();
+        match guard.as_mut() {
+            Some(set) => set.drain().collect(),
+            None => Vec::new(),
+        }
+    };
     // Use a set union so we don't issue redundant DWM calls for windows
-    // present in both. Order doesn't matter — dwm_set_cloak is idempotent.
-    let mut seen: HashSet<WindowId> = HashSet::with_capacity(global_ids.len() + ghost_ids.len());
-    for wid in global_ids.into_iter().chain(ghost_ids) {
+    // present in more than one set. dwm_set_cloak is idempotent.
+    let mut seen: HashSet<WindowId> =
+        HashSet::with_capacity(global_ids.len() + ghost_ids.len() + direct_ids.len());
+    for wid in global_ids
+        .into_iter()
+        .chain(ghost_ids)
+        .chain(direct_ids)
+    {
         if seen.insert(wid) {
             if let Ok(hwnd) = window_id_to_hwnd(wid) {
                 unsafe { dwm_set_cloak(hwnd, false) };
@@ -967,6 +1017,29 @@ pub(crate) fn invisible_border_insets(hwnd: HWND) -> (i32, i32, i32, i32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_direct_cloak_is_tracked_for_recovery() {
+        // A directly-cloaked window (e.g. a stashed scratchpad) must be
+        // tracked in DIRECT_CLOAKED so shutdown/panic recovery can restore
+        // it; otherwise it would be permanently invisible. Uses a unique
+        // wid so it won't collide with parallel tests touching the set.
+        let wid: WindowId = 0x7FFF_FF01;
+        dwm_cloak_window(wid);
+        assert!(
+            lock_direct_cloaked()
+                .as_ref()
+                .is_some_and(|s| s.contains(&wid)),
+            "dwm_cloak_window must record the wid for recovery"
+        );
+        dwm_uncloak_window(wid);
+        assert!(
+            !lock_direct_cloaked()
+                .as_ref()
+                .is_some_and(|s| s.contains(&wid)),
+            "dwm_uncloak_window must clear the recovery record"
+        );
+    }
 
     #[test]
     fn test_apply_placements_empty() {
