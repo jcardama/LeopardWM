@@ -1303,7 +1303,7 @@ impl AppState {
     /// Recalculate layout and apply placements for all monitors.
     /// Uses animated offsets if any workspace has an active animation.
     /// No-op when tiling is paused.
-    #[allow(clippy::too_many_lines)] // TODO(P15): decompose (~303 lines, grandfathered)
+    #[allow(clippy::too_many_lines)] // TODO: decompose (~303 lines, grandfathered)
     pub(crate) fn apply_layout(&mut self) -> Result<()> {
         let reaped_workers = self.reap_finished_pending_apply_workers();
         if reaped_workers > 0 {

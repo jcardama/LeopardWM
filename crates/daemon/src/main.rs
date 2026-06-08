@@ -379,7 +379,7 @@ fn resize_preview_animation_loop(
 }
 
 #[tokio::main]
-#[allow(clippy::too_many_lines)] // TODO(P15): decompose (~1698 lines, grandfathered)
+#[allow(clippy::too_many_lines)] // TODO: decompose (~1698 lines, grandfathered)
 async fn main() -> Result<()> {
     // Parse command-line arguments
     let args = Args::parse();

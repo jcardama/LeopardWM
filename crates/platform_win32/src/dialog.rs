@@ -400,7 +400,7 @@ unsafe fn ctx_from_hwnd(hwnd: HWND) -> Option<&'static mut PopupContext> {
     }
 }
 
-#[allow(clippy::too_many_lines)] // TODO(P15): decompose (~313 lines, grandfathered)
+#[allow(clippy::too_many_lines)] // TODO: decompose (~313 lines, grandfathered)
 unsafe extern "system" fn inline_rename_proc(
     hwnd: HWND,
     msg: u32,

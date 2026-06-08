@@ -61,7 +61,7 @@ impl AppState {
     }
 
     /// Process an IPC command and return a response.
-    #[allow(clippy::too_many_lines)] // TODO(P15): decompose (~729 lines, grandfathered)
+    #[allow(clippy::too_many_lines)] // TODO: decompose (~729 lines, grandfathered)
     pub(crate) fn handle_command(&mut self, cmd: IpcCommand) -> IpcResponse {
         match cmd {
             IpcCommand::FocusLeft => {
