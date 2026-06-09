@@ -298,6 +298,52 @@ impl Workspace {
         self.focused_window_in_column = 0;
     }
 
+    /// Pull the top window of the column to the right into the focused
+    /// column (the inverse of expel). The window is appended to the focused
+    /// column's stack and becomes focused; if the right column empties, it
+    /// is removed. No-op if there is no column to the right.
+    pub fn consume_from_right(&mut self) {
+        let right = self.focused_column + 1;
+        if right >= self.columns.len() {
+            return;
+        }
+        let Some(wid) = self.columns[right].remove_at_index(0) else {
+            return;
+        };
+        if self.columns[right].is_empty() {
+            self.columns.remove(right);
+        }
+        self.columns[self.focused_column].add_window(wid);
+        self.focused_window_in_column = self.columns[self.focused_column].len().saturating_sub(1);
+        // If the focused column is tabbed, make the consumed window the
+        // active (visible) tab rather than leaving the old tab showing.
+        self.sync_active_tab_to_focus();
+    }
+
+    /// Pull the top window of the column to the left into the focused
+    /// column (the inverse of expel). The window is appended to the focused
+    /// column's stack and becomes focused; if the left column empties, it
+    /// is removed and the focus index follows the focused column. No-op if
+    /// there is no column to the left.
+    pub fn consume_from_left(&mut self) {
+        if self.focused_column == 0 {
+            return;
+        }
+        let left = self.focused_column - 1;
+        let Some(wid) = self.columns[left].remove_at_index(0) else {
+            return;
+        };
+        if self.columns[left].is_empty() {
+            self.columns.remove(left);
+            self.focused_column -= 1;
+        }
+        self.columns[self.focused_column].add_window(wid);
+        self.focused_window_in_column = self.columns[self.focused_column].len().saturating_sub(1);
+        // If the focused column is tabbed, make the consumed window the
+        // active (visible) tab rather than leaving the old tab showing.
+        self.sync_active_tab_to_focus();
+    }
+
     /// Swap the focused window with the one above in the same column.
     /// In a Tabbed column, `swap_windows` keeps `active_idx` tracking the
     /// same window (handled inside `Column::swap_windows`).

@@ -160,6 +160,20 @@ impl AppState {
                     info!("Expelled window to right");
                 })
             }
+            IpcCommand::ConsumeFromLeft => {
+                self.execute_workspace_command(true, true, |ws, vw| {
+                    ws.consume_from_left();
+                    ws.ensure_focused_visible_animated(vw);
+                    info!("Consumed window from left");
+                })
+            }
+            IpcCommand::ConsumeFromRight => {
+                self.execute_workspace_command(true, true, |ws, vw| {
+                    ws.consume_from_right();
+                    ws.ensure_focused_visible_animated(vw);
+                    info!("Consumed window from right");
+                })
+            }
             IpcCommand::MoveWindowUp => {
                 self.execute_workspace_command(true, true, |ws, _vw| {
                     ws.move_window_up_in_column();

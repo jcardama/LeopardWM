@@ -646,6 +646,8 @@ impl Default for HotkeyConfig {
         bindings.insert("Ctrl+Alt+Bracket_Right".to_string(), "move_window_right".to_string());
         bindings.insert("Ctrl+Alt+Shift+Bracket_Left".to_string(), "expel_to_left".to_string());
         bindings.insert("Ctrl+Alt+Shift+Bracket_Right".to_string(), "expel_to_right".to_string());
+        bindings.insert("Ctrl+Alt+Comma".to_string(), "consume_from_left".to_string());
+        bindings.insert("Ctrl+Alt+Period".to_string(), "consume_from_right".to_string());
 
         // Move window up/down in column — Ctrl+Alt+Shift + JK
         bindings.insert("Ctrl+Alt+Shift+K".to_string(), "move_window_up".to_string());
@@ -953,6 +955,8 @@ pub fn parse_command(cmd: &str) -> Option<leopardwm_ipc::IpcCommand> {
         "move_window_right" => Some(IpcCommand::MoveWindowRight),
         "expel_to_left" => Some(IpcCommand::ExpelToLeft),
         "expel_to_right" => Some(IpcCommand::ExpelToRight),
+        "consume_from_left" | "consume-from-left" => Some(IpcCommand::ConsumeFromLeft),
+        "consume_from_right" | "consume-from-right" => Some(IpcCommand::ConsumeFromRight),
         "move_window_up" => Some(IpcCommand::MoveWindowUp),
         "move_window_down" => Some(IpcCommand::MoveWindowDown),
         "switch_workspace_1" => Some(IpcCommand::SwitchWorkspace { index: 1 }),
@@ -1452,6 +1456,10 @@ focus_follows_mouse = false
 "Ctrl+Alt+Shift+H" = "move_column_left"
 "Ctrl+Alt+Shift+L" = "move_column_right"
 
+# Stack the neighbor's window into the focused column — Ctrl+Alt + Comma/Period
+"Ctrl+Alt+Comma" = "consume_from_left"
+"Ctrl+Alt+Period" = "consume_from_right"
+
 # Width cycling — Ctrl+Alt + Minus/Equals
 "Ctrl+Alt+Minus" = "cycle_width_down"
 "Ctrl+Alt+Equals" = "cycle_width_up"
@@ -1618,10 +1626,18 @@ mod tests {
     #[test]
     fn test_hotkey_config_default() {
         let config = HotkeyConfig::default();
-        assert_eq!(config.bindings.len(), 55);
+        assert_eq!(config.bindings.len(), 57);
         assert_eq!(
             config.bindings.get("Ctrl+Alt+T"),
             Some(&"toggle_tabbed".to_string())
+        );
+        assert_eq!(
+            config.bindings.get("Ctrl+Alt+Comma"),
+            Some(&"consume_from_left".to_string())
+        );
+        assert_eq!(
+            config.bindings.get("Ctrl+Alt+Period"),
+            Some(&"consume_from_right".to_string())
         );
         assert_eq!(
             config.bindings.get("Ctrl+Alt+S"),

@@ -20,6 +20,11 @@ All notable changes to LeopardWM will be documented in this file.
   toggle-sticky`). A pinned window floats and re-homes to whichever
   workspace you move to, sitting still while the rest of the layout
   scrolls. Toggle it off to unpin; it stays floating. Session-scoped.
+- **Consume window into column.** Pull the neighbouring column's window
+  into the focused column as a stack. `Ctrl+Alt+,` consumes from the left,
+  `Ctrl+Alt+.` from the right (or `lwm consume left` / `lwm consume
+  right`). The inverse of expel; combine with tabbed columns to group
+  windows.
 
 ## 0.1.18
 

@@ -2891,6 +2891,90 @@ mod tests {
     }
 
     #[test]
+    fn test_consume_from_right_merges_neighbor() {
+        let mut ws = Workspace::new();
+        ws.insert_window(1, Some(400)).unwrap(); // col 0: [1]
+        ws.insert_window(2, Some(400)).unwrap(); // col 1: [2]
+        ws.test_set_focus_unchecked(0, 0); // focus col 0
+
+        ws.consume_from_right();
+
+        // col 1's window pulled into col 0; col 1 removed.
+        assert_eq!(ws.column_count(), 1);
+        assert_eq!(ws.columns()[0].windows(), &[1, 2]);
+        assert_eq!(ws.focused_column_index(), 0);
+        assert_eq!(ws.focused_window(), Some(2)); // consumed window focused
+    }
+
+    #[test]
+    fn test_consume_from_right_pulls_top_of_multi() {
+        let mut ws = Workspace::new();
+        ws.insert_window(1, Some(400)).unwrap(); // col 0: [1]
+        ws.insert_window(2, Some(400)).unwrap(); // col 1: [2]
+        ws.insert_window_in_column(3, 1).unwrap(); // col 1: [2, 3]
+        ws.test_set_focus_unchecked(0, 0); // focus col 0
+
+        ws.consume_from_right();
+
+        // Only the top of the right column moves; the column survives.
+        assert_eq!(ws.column_count(), 2);
+        assert_eq!(ws.columns()[0].windows(), &[1, 2]);
+        assert_eq!(ws.columns()[1].windows(), &[3]);
+        assert_eq!(ws.focused_column_index(), 0);
+        assert_eq!(ws.focused_window(), Some(2));
+    }
+
+    #[test]
+    fn test_consume_from_left_merges_neighbor() {
+        let mut ws = Workspace::new();
+        ws.insert_window(1, Some(400)).unwrap(); // col 0: [1]
+        ws.insert_window(2, Some(400)).unwrap(); // col 1: [2]
+        ws.test_set_focus_unchecked(1, 0); // focus col 1
+
+        ws.consume_from_left();
+
+        // col 0's window pulled into col 1; col 0 removed, focus follows.
+        assert_eq!(ws.column_count(), 1);
+        assert_eq!(ws.columns()[0].windows(), &[2, 1]);
+        assert_eq!(ws.focused_column_index(), 0);
+        assert_eq!(ws.focused_window(), Some(1)); // consumed window focused
+    }
+
+    #[test]
+    fn test_consume_noop_without_neighbor() {
+        let mut ws = Workspace::new();
+        ws.insert_window(1, Some(400)).unwrap();
+        ws.test_set_focus_unchecked(0, 0);
+
+        ws.consume_from_right(); // no column to the right
+        assert_eq!(ws.column_count(), 1);
+        assert_eq!(ws.columns()[0].windows(), &[1]);
+
+        ws.consume_from_left(); // no column to the left
+        assert_eq!(ws.column_count(), 1);
+        assert_eq!(ws.columns()[0].windows(), &[1]);
+    }
+
+    #[test]
+    fn test_consume_into_tabbed_column_activates_consumed() {
+        let mut ws = Workspace::new();
+        ws.insert_window(1, Some(400)).unwrap(); // col 0: [1]
+        ws.insert_window_in_column(2, 0).unwrap(); // col 0: [1, 2]
+        ws.insert_window(3, Some(400)).unwrap(); // col 1: [3]
+        ws.set_focus(0, 0).unwrap();
+        ws.toggle_focused_column_tabbed_mode(); // col 0 tabbed
+
+        ws.consume_from_right();
+
+        assert_eq!(ws.column_count(), 1);
+        assert!(ws.columns[0].is_tabbed());
+        assert_eq!(ws.columns[0].windows(), &[1, 2, 3]);
+        // The consumed window is the active (visible) tab, not the old one.
+        assert_eq!(ws.columns[0].active_tab_idx(), Some(2));
+        assert_eq!(ws.focused_window(), Some(3));
+    }
+
+    #[test]
     fn test_move_window_up() {
         let mut ws = Workspace::new();
         ws.insert_window(1, Some(400)).unwrap();

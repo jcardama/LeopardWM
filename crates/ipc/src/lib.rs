@@ -333,6 +333,10 @@ pub enum IpcCommand {
     ExpelToLeft,
     /// Expel the focused window to a new column on the right.
     ExpelToRight,
+    /// Pull the top window of the column to the left into the focused column.
+    ConsumeFromLeft,
+    /// Pull the top window of the column to the right into the focused column.
+    ConsumeFromRight,
     /// Move the focused window up within the column.
     MoveWindowUp,
     /// Move the focused window down within the column.
@@ -683,6 +687,8 @@ mod tests {
             IpcCommand::MoveWindowRight,
             IpcCommand::ExpelToLeft,
             IpcCommand::ExpelToRight,
+            IpcCommand::ConsumeFromLeft,
+            IpcCommand::ConsumeFromRight,
             IpcCommand::MoveWindowUp,
             IpcCommand::MoveWindowDown,
             IpcCommand::FocusMonitorLeft,

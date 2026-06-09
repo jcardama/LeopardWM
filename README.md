@@ -110,6 +110,7 @@ Most hotkeys use `Ctrl+Alt` as the base modifier. Layered pattern: base = focus,
 | `Ctrl+Alt+Shift+J/K` | Move window down / up in column |
 | `Ctrl+Alt+[` / `]` | Move window to left / right column |
 | `Ctrl+Alt+Shift+[` / `]` | Expel window to new column left / right |
+| `Ctrl+Alt+,` / `.` | Consume left / right column's window into the focused column |
 | `Ctrl+Alt+Minus` / `Ctrl+Alt+Equals` | Cycle column width down / up |
 | `Ctrl+Alt+Shift+Minus` / `Ctrl+Alt+Shift+Equals` | Cycle window height down / up |
 | `Ctrl+Alt+0` | Equalize all column widths |

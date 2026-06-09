@@ -112,6 +112,11 @@ enum Commands {
         #[command(subcommand)]
         direction: ExpelDirection,
     },
+    /// Consume the adjacent column's window into the focused column
+    Consume {
+        #[command(subcommand)]
+        direction: ConsumeDirection,
+    },
     /// Resize the focused column
     Resize {
         /// Width delta in pixels (positive to grow, negative to shrink)
@@ -303,6 +308,14 @@ enum ExpelDirection {
     Right,
 }
 
+#[derive(Subcommand, Debug)]
+enum ConsumeDirection {
+    /// Pull the left column's window into the focused column
+    Left,
+    /// Pull the right column's window into the focused column
+    Right,
+}
+
 #[derive(Subcommand)]
 enum MonitorDirection {
     /// Focus/move to the monitor on the left
@@ -391,6 +404,10 @@ fn to_ipc_command(cmd: &Commands) -> IpcCommand {
         Commands::Expel { direction } => match direction {
             ExpelDirection::Left => IpcCommand::ExpelToLeft,
             ExpelDirection::Right => IpcCommand::ExpelToRight,
+        },
+        Commands::Consume { direction } => match direction {
+            ConsumeDirection::Left => IpcCommand::ConsumeFromLeft,
+            ConsumeDirection::Right => IpcCommand::ConsumeFromRight,
         },
         Commands::Resize { delta } => IpcCommand::Resize { delta: *delta },
         Commands::FocusMonitor { direction } => match direction {
