@@ -1510,45 +1510,7 @@ log_level = "info"
 focus_follows_mouse = false
 
 [hotkeys]
-# Navigation (focus) — Ctrl+Alt + HJKL
-"Ctrl+Alt+H" = "focus_left"
-"Ctrl+Alt+L" = "focus_right"
-"Ctrl+Alt+K" = "focus_up"
-"Ctrl+Alt+J" = "focus_down"
-
-# Move column — Ctrl+Alt+Shift
-"Ctrl+Alt+Shift+H" = "move_column_left"
-"Ctrl+Alt+Shift+L" = "move_column_right"
-
-# Resize — Ctrl+Alt + Minus/Equals
-"Ctrl+Alt+Minus" = "resize_shrink"
-"Ctrl+Alt+Equals" = "resize_grow"
-
-# Column width presets
-"Ctrl+Alt+1" = "width_third"
-"Ctrl+Alt+2" = "width_half"
-"Ctrl+Alt+3" = "width_two_thirds"
-"Ctrl+Alt+0" = "equalize_widths"
-
-# Monitor focus — Ctrl+Alt+Win
-"Ctrl+Alt+Win+Comma" = "focus_monitor_left"
-"Ctrl+Alt+Win+Period" = "focus_monitor_right"
-
-# Move to monitor — Ctrl+Alt+Win+Shift
-"Ctrl+Alt+Win+Shift+Comma" = "move_to_monitor_left"
-"Ctrl+Alt+Win+Shift+Period" = "move_to_monitor_right"
-
-# Window management
-"Ctrl+Alt+W" = "close_window"
-"Ctrl+Alt+F" = "toggle_floating"
-"Ctrl+Alt+Shift+F" = "toggle_fullscreen"
-"Ctrl+Alt+P" = "toggle_pause"
-"Ctrl+Alt+R" = "refresh"
-"Ctrl+Alt+Shift+R" = "reload"
-
-# Emergency restore + stop daemon
-"Win+Ctrl+Escape" = "panic_revert"
-
+__HOTKEYS__
 [gestures]
 # Touchpad gesture support
 enabled = true
@@ -1568,7 +1530,10 @@ opacity = 128
 # match_title = ".*DevTools.*"
 # action = "float"
 "#
-    .to_string()
+    .replace(
+        "__HOTKEYS__",
+        &leopardwm_ipc::hotkeys::render_template_block(),
+    )
 }
 
 /// Get the default config file path.
@@ -1652,30 +1617,7 @@ log_level = "info"
 focus_follows_mouse = false
 
 [hotkeys]
-"Ctrl+Alt+H" = "focus_left"
-"Ctrl+Alt+L" = "focus_right"
-"Ctrl+Alt+K" = "focus_up"
-"Ctrl+Alt+J" = "focus_down"
-"Ctrl+Alt+Shift+H" = "move_column_left"
-"Ctrl+Alt+Shift+L" = "move_column_right"
-"Ctrl+Alt+Minus" = "resize_shrink"
-"Ctrl+Alt+Equals" = "resize_grow"
-"Ctrl+Alt+1" = "width_third"
-"Ctrl+Alt+2" = "width_half"
-"Ctrl+Alt+3" = "width_two_thirds"
-"Ctrl+Alt+0" = "equalize_widths"
-"Ctrl+Alt+Win+Comma" = "focus_monitor_left"
-"Ctrl+Alt+Win+Period" = "focus_monitor_right"
-"Ctrl+Alt+Win+Shift+Comma" = "move_to_monitor_left"
-"Ctrl+Alt+Win+Shift+Period" = "move_to_monitor_right"
-"Ctrl+Alt+W" = "close_window"
-"Ctrl+Alt+F" = "toggle_floating"
-"Ctrl+Alt+Shift+F" = "toggle_fullscreen"
-"Ctrl+Alt+P" = "toggle_pause"
-"Ctrl+Alt+R" = "refresh"
-"Ctrl+Alt+Shift+R" = "reload"
-"Win+Ctrl+Escape" = "panic_revert"
-
+__HOTKEYS__
 [gestures]
 enabled = true
 swipe_left = "focus_left"
@@ -1688,6 +1630,10 @@ enabled = true
 duration_ms = 200
 opacity = 128
 "#
+    )
+    .replace(
+        "__HOTKEYS__",
+        &leopardwm_ipc::hotkeys::render_template_block(),
     )
 }
 

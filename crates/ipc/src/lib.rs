@@ -2,6 +2,8 @@
 //!
 //! Shared types for daemon-CLI communication over Windows named pipes.
 
+pub mod hotkeys;
+
 use serde::{Deserialize, Serialize};
 
 fn default_active_workspace() -> u8 {

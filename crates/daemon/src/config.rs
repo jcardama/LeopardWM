@@ -587,94 +587,10 @@ pub struct HotkeyConfig {
 
 impl Default for HotkeyConfig {
     fn default() -> Self {
-        let mut bindings = HashMap::new();
-
-        // Navigation (focus) — Ctrl+Alt + HJKL
-        bindings.insert("Ctrl+Alt+H".to_string(), "focus_left".to_string());
-        bindings.insert("Ctrl+Alt+L".to_string(), "focus_right".to_string());
-        bindings.insert("Ctrl+Alt+K".to_string(), "focus_up".to_string());
-        bindings.insert("Ctrl+Alt+J".to_string(), "focus_down".to_string());
-
-        // Move column — Ctrl+Alt+Shift + HL
-        bindings.insert("Ctrl+Alt+Shift+H".to_string(), "move_column_left".to_string());
-        bindings.insert("Ctrl+Alt+Shift+L".to_string(), "move_column_right".to_string());
-
-        // Width cycling — Ctrl+Alt + Minus/Equals
-        bindings.insert("Ctrl+Alt+Minus".to_string(), "cycle_width_down".to_string());
-        bindings.insert("Ctrl+Alt+Equals".to_string(), "cycle_width_up".to_string());
-        bindings.insert("Ctrl+Alt+0".to_string(), "equalize_widths".to_string());
-
-        // Height cycling — Ctrl+Alt+Shift + Minus/Equals/0
-        bindings.insert("Ctrl+Alt+Shift+Minus".to_string(), "cycle_height_down".to_string());
-        bindings.insert("Ctrl+Alt+Shift+Equals".to_string(), "cycle_height_up".to_string());
-        bindings.insert("Ctrl+Alt+Shift+0".to_string(), "equalize_heights".to_string());
-
-        // Monitor focus — Ctrl+Alt+Win + Comma/Period
-        bindings.insert("Ctrl+Alt+Win+Comma".to_string(), "focus_monitor_left".to_string());
-        bindings.insert("Ctrl+Alt+Win+Period".to_string(), "focus_monitor_right".to_string());
-
-        // Move to monitor — Ctrl+Alt+Win+Shift + Comma/Period
-        bindings.insert(
-            "Ctrl+Alt+Win+Shift+Comma".to_string(),
-            "move_to_monitor_left".to_string(),
-        );
-        bindings.insert(
-            "Ctrl+Alt+Win+Shift+Period".to_string(),
-            "move_to_monitor_right".to_string(),
-        );
-
-        // Center focused column in viewport
-        bindings.insert("Ctrl+Alt+C".to_string(), "center_column".to_string());
-
-        // Maximize focused column to fill viewport width
-        bindings.insert("Ctrl+Alt+M".to_string(), "maximize_column".to_string());
-
-        // Window management
-        bindings.insert("Ctrl+Alt+W".to_string(), "close_window".to_string());
-        bindings.insert("Ctrl+Alt+F".to_string(), "toggle_floating".to_string());
-        bindings.insert("Ctrl+Alt+Shift+F".to_string(), "toggle_fullscreen".to_string());
-        bindings.insert("Ctrl+Alt+T".to_string(), "toggle_tabbed".to_string());
-        bindings.insert("Ctrl+Alt+S".to_string(), "scratchpad_toggle".to_string());
-        bindings.insert("Ctrl+Alt+Shift+S".to_string(), "scratchpad_stash".to_string());
-        bindings.insert("Ctrl+Alt+Y".to_string(), "toggle_sticky".to_string());
-        bindings.insert("Ctrl+Alt+P".to_string(), "toggle_pause".to_string());
-        bindings.insert("Ctrl+Alt+R".to_string(), "refresh".to_string());
-        bindings.insert("Ctrl+Alt+Shift+R".to_string(), "reload".to_string());
-
-        // Move window to adjacent column — Ctrl+Alt + brackets, +Shift = expel to new column
-        bindings.insert("Ctrl+Alt+Bracket_Left".to_string(), "move_window_left".to_string());
-        bindings.insert("Ctrl+Alt+Bracket_Right".to_string(), "move_window_right".to_string());
-        bindings.insert("Ctrl+Alt+Shift+Bracket_Left".to_string(), "expel_to_left".to_string());
-        bindings.insert("Ctrl+Alt+Shift+Bracket_Right".to_string(), "expel_to_right".to_string());
-        bindings.insert("Ctrl+Alt+Comma".to_string(), "consume_from_left".to_string());
-        bindings.insert("Ctrl+Alt+Period".to_string(), "consume_from_right".to_string());
-
-        // Move window up/down in column — Ctrl+Alt+Shift + JK
-        bindings.insert("Ctrl+Alt+Shift+K".to_string(), "move_window_up".to_string());
-        bindings.insert("Ctrl+Alt+Shift+J".to_string(), "move_window_down".to_string());
-
-        // Workspace switching — Ctrl+Alt + 1-9
-        for i in 1..=9u8 {
-            bindings.insert(format!("Ctrl+Alt+{}", i), format!("switch_workspace_{}", i));
-        }
-
-        // Workspace prev/next — Win+Ctrl+Left / Win+Ctrl+Right.
-        // Hijacks Windows' native Virtual Desktop switch shortcut so the
-        // user's muscle memory drives LeopardWM workspaces instead.
-        bindings.insert("Win+Ctrl+Left".to_string(), "workspace_prev".to_string());
-        bindings.insert("Win+Ctrl+Right".to_string(), "workspace_next".to_string());
-
-        // Move window to workspace — Ctrl+Alt+Shift + 1-9
-        for i in 1..=9u8 {
-            bindings.insert(format!("Ctrl+Alt+Shift+{}", i), format!("move_to_workspace_{}", i));
-        }
-
-        // Emergency escape hatch: revert visibility state and stop daemon.
-        bindings.insert("Win+Ctrl+Escape".to_string(), "panic_revert".to_string());
-
         Self {
             scroll_modifier: default_scroll_modifier(),
-            bindings,
+            // Defaults come from the single hotkey catalog in `ipc::hotkeys`.
+            bindings: leopardwm_ipc::hotkeys::default_bindings_map(),
         }
     }
 }
@@ -1446,58 +1362,7 @@ focus_follows_mouse = false
 # swap_chain_ghost_animation = false
 
 [hotkeys]
-# Navigation (focus) — Ctrl+Alt + HJKL
-"Ctrl+Alt+H" = "focus_left"
-"Ctrl+Alt+L" = "focus_right"
-"Ctrl+Alt+K" = "focus_up"
-"Ctrl+Alt+J" = "focus_down"
-
-# Move column — Ctrl+Alt+Shift
-"Ctrl+Alt+Shift+H" = "move_column_left"
-"Ctrl+Alt+Shift+L" = "move_column_right"
-
-# Stack the neighbor's window into the focused column — Ctrl+Alt + Comma/Period
-"Ctrl+Alt+Comma" = "consume_from_left"
-"Ctrl+Alt+Period" = "consume_from_right"
-
-# Width cycling — Ctrl+Alt + Minus/Equals
-"Ctrl+Alt+Minus" = "cycle_width_down"
-"Ctrl+Alt+Equals" = "cycle_width_up"
-"Ctrl+Alt+0" = "equalize_widths"
-
-# Height cycling — Ctrl+Alt+Shift + Minus/Equals/0
-"Ctrl+Alt+Shift+Minus" = "cycle_height_down"
-"Ctrl+Alt+Shift+Equals" = "cycle_height_up"
-"Ctrl+Alt+Shift+0" = "equalize_heights"
-
-# Monitor focus — Ctrl+Alt+Win
-"Ctrl+Alt+Win+Comma" = "focus_monitor_left"
-"Ctrl+Alt+Win+Period" = "focus_monitor_right"
-
-# Move to monitor — Ctrl+Alt+Win+Shift
-"Ctrl+Alt+Win+Shift+Comma" = "move_to_monitor_left"
-"Ctrl+Alt+Win+Shift+Period" = "move_to_monitor_right"
-
-# Window management
-"Ctrl+Alt+W" = "close_window"
-"Ctrl+Alt+F" = "toggle_floating"
-"Ctrl+Alt+Shift+F" = "toggle_fullscreen"
-"Ctrl+Alt+T" = "toggle_tabbed"
-"Ctrl+Alt+S" = "scratchpad_toggle"
-"Ctrl+Alt+Shift+S" = "scratchpad_stash"
-"Ctrl+Alt+Y" = "toggle_sticky"
-"Ctrl+Alt+P" = "toggle_pause"
-"Ctrl+Alt+R" = "refresh"
-"Ctrl+Alt+Shift+R" = "reload"
-
-# Workspace prev/next — hijacks Windows' native Virtual Desktop shortcut so
-# the user's muscle memory drives LeopardWM workspaces instead.
-"Win+Ctrl+Left" = "workspace_prev"
-"Win+Ctrl+Right" = "workspace_next"
-
-# Emergency restore + stop daemon
-"Win+Ctrl+Escape" = "panic_revert"
-
+__HOTKEYS__
 [gestures]
 # Touchpad gesture support
 enabled = true
@@ -1538,7 +1403,10 @@ corner_style = "square"
 # match_title = ".*DevTools.*"
 # action = "float"
 "#
-    .to_string()
+    .replace(
+        "__HOTKEYS__",
+        &leopardwm_ipc::hotkeys::render_template_block(),
+    )
 }
 
 /// Get all possible config file paths in priority order.
@@ -1632,11 +1500,11 @@ mod tests {
             Some(&"toggle_tabbed".to_string())
         );
         assert_eq!(
-            config.bindings.get("Ctrl+Alt+Comma"),
+            config.bindings.get("Ctrl+Alt+,"),
             Some(&"consume_from_left".to_string())
         );
         assert_eq!(
-            config.bindings.get("Ctrl+Alt+Period"),
+            config.bindings.get("Ctrl+Alt+."),
             Some(&"consume_from_right".to_string())
         );
         assert_eq!(
@@ -1664,11 +1532,11 @@ mod tests {
             Some(&"move_column_left".to_string())
         );
         assert_eq!(
-            config.bindings.get("Ctrl+Alt+Minus"),
+            config.bindings.get("Ctrl+Alt+-"),
             Some(&"cycle_width_down".to_string())
         );
         assert_eq!(
-            config.bindings.get("Ctrl+Alt+Win+Comma"),
+            config.bindings.get("Ctrl+Alt+Win+,"),
             Some(&"focus_monitor_left".to_string())
         );
         assert_eq!(
@@ -1790,7 +1658,7 @@ mod tests {
 
         // New commands from defaults are present
         assert_eq!(
-            user.bindings.get("Ctrl+Alt+Bracket_Left"),
+            user.bindings.get("Ctrl+Alt+["),
             Some(&"move_window_left".to_string())
         );
         assert_eq!(

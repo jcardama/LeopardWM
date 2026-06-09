@@ -1314,102 +1314,17 @@ function init(cfg) {
 /* ── Delete icon (X) ─────────────────────────────────────────────────── */
 var deleteIcon = '<svg viewBox="0 0 12 12"><line x1="2" y1="2" x2="10" y2="10"/><line x1="10" y1="2" x2="2" y2="10"/></svg>';
 
-var CMD_LABELS = {
-  focus_left: 'Focus left', focus_right: 'Focus right',
-  focus_up: 'Focus up', focus_down: 'Focus down',
-  focus_next: 'Focus next', focus_prev: 'Focus prev',
-  move_column_left: 'Move column left', move_column_right: 'Move column right',
-  move_window_left: 'Move window left', move_window_right: 'Move window right',
-  expel_to_left: 'Expel to left', expel_to_right: 'Expel to right',
-  consume_from_left: 'Consume from left', consume_from_right: 'Consume from right',
-  move_window_up: 'Move window up', move_window_down: 'Move window down',
-  cycle_width_down: 'Cycle width down', cycle_width_up: 'Cycle width up',
-  equalize_widths: 'Equalize widths', center_column: 'Center column', maximize_column: 'Maximize column',
-  cycle_height_down: 'Cycle height down', cycle_height_up: 'Cycle height up',
-  equalize_heights: 'Equalize heights',
-  focus_monitor_left: 'Focus monitor left', focus_monitor_right: 'Focus monitor right',
-  move_to_monitor_left: 'Move to monitor left', move_to_monitor_right: 'Move to monitor right',
-  close_window: 'Close window', toggle_floating: 'Toggle floating',
-  toggle_fullscreen: 'Toggle fullscreen', toggle_tabbed: 'Toggle tabbed column',
-  scratchpad_toggle: 'Toggle scratchpad', scratchpad_stash: 'Stash to scratchpad',
-  toggle_sticky: 'Toggle sticky',
-  toggle_pause: 'Toggle pause',
-  refresh: 'Refresh', reload: 'Reload config',
-  panic_revert: 'Emergency restore',
-  workspace_prev: 'Previous workspace', workspace_next: 'Next workspace',
-  switch_workspace_1: 'Workspace 1', switch_workspace_2: 'Workspace 2',
-  switch_workspace_3: 'Workspace 3', switch_workspace_4: 'Workspace 4',
-  switch_workspace_5: 'Workspace 5', switch_workspace_6: 'Workspace 6',
-  switch_workspace_7: 'Workspace 7', switch_workspace_8: 'Workspace 8',
-  switch_workspace_9: 'Workspace 9',
-  move_to_workspace_1: 'Move to Workspace 1', move_to_workspace_2: 'Move to Workspace 2',
-  move_to_workspace_3: 'Move to Workspace 3', move_to_workspace_4: 'Move to Workspace 4',
-  move_to_workspace_5: 'Move to Workspace 5', move_to_workspace_6: 'Move to Workspace 6',
-  move_to_workspace_7: 'Move to Workspace 7', move_to_workspace_8: 'Move to Workspace 8',
-  move_to_workspace_9: 'Move to Workspace 9'
-};
-
-/* Defines display order — grouped by category */
-var CMD_ORDER = [
-  'focus_left', 'focus_right', 'focus_up', 'focus_down',
-  'move_column_left', 'move_column_right',
-  'move_window_left', 'move_window_right',
-  'expel_to_left', 'expel_to_right',
-  'consume_from_left', 'consume_from_right',
-  'move_window_up', 'move_window_down',
-  'cycle_width_down', 'cycle_width_up', 'equalize_widths',
-  'cycle_height_down', 'cycle_height_up', 'equalize_heights',
-  'focus_monitor_left', 'focus_monitor_right',
-  'move_to_monitor_left', 'move_to_monitor_right',
-  'center_column', 'maximize_column',
-  'close_window', 'toggle_floating', 'toggle_fullscreen', 'toggle_tabbed',
-  'scratchpad_toggle', 'scratchpad_stash', 'toggle_sticky',
-  'toggle_pause', 'refresh', 'reload',
-  'panic_revert',
-  'workspace_prev', 'workspace_next',
-  'switch_workspace_1', 'switch_workspace_2', 'switch_workspace_3',
-  'switch_workspace_4', 'switch_workspace_5', 'switch_workspace_6',
-  'switch_workspace_7', 'switch_workspace_8', 'switch_workspace_9',
-  'move_to_workspace_1', 'move_to_workspace_2', 'move_to_workspace_3',
-  'move_to_workspace_4', 'move_to_workspace_5', 'move_to_workspace_6',
-  'move_to_workspace_7', 'move_to_workspace_8', 'move_to_workspace_9'
-];
-
-var DEFAULT_HOTKEYS = {
-  "Ctrl+Alt+H": "focus_left", "Ctrl+Alt+L": "focus_right",
-  "Ctrl+Alt+K": "focus_up", "Ctrl+Alt+J": "focus_down",
-  "Ctrl+Alt+Shift+H": "move_column_left", "Ctrl+Alt+Shift+L": "move_column_right",
-  "Ctrl+Alt+Bracket_Left": "move_window_left", "Ctrl+Alt+Bracket_Right": "move_window_right",
-  "Ctrl+Alt+Shift+Bracket_Left": "expel_to_left", "Ctrl+Alt+Shift+Bracket_Right": "expel_to_right",
-  "Ctrl+Alt+Comma": "consume_from_left", "Ctrl+Alt+Period": "consume_from_right",
-  "Ctrl+Alt+Shift+K": "move_window_up", "Ctrl+Alt+Shift+J": "move_window_down",
-  "Ctrl+Alt+Minus": "cycle_width_down", "Ctrl+Alt+Equals": "cycle_width_up",
-  "Ctrl+Alt+0": "equalize_widths",
-  "Ctrl+Alt+Shift+Minus": "cycle_height_down", "Ctrl+Alt+Shift+Equals": "cycle_height_up",
-  "Ctrl+Alt+Shift+0": "equalize_heights",
-  "Ctrl+Alt+Win+Comma": "focus_monitor_left", "Ctrl+Alt+Win+Period": "focus_monitor_right",
-  "Ctrl+Alt+Win+Shift+Comma": "move_to_monitor_left", "Ctrl+Alt+Win+Shift+Period": "move_to_monitor_right",
-  "Ctrl+Alt+C": "center_column",
-  "Ctrl+Alt+M": "maximize_column",
-  "Ctrl+Alt+W": "close_window", "Ctrl+Alt+F": "toggle_floating",
-  "Ctrl+Alt+Shift+F": "toggle_fullscreen", "Ctrl+Alt+T": "toggle_tabbed",
-  "Ctrl+Alt+S": "scratchpad_toggle", "Ctrl+Alt+Shift+S": "scratchpad_stash",
-  "Ctrl+Alt+Y": "toggle_sticky",
-  "Ctrl+Alt+P": "toggle_pause",
-  "Ctrl+Alt+R": "refresh", "Ctrl+Alt+Shift+R": "reload",
-  "Win+Ctrl+Escape": "panic_revert",
-  "Win+Ctrl+Left": "workspace_prev", "Win+Ctrl+Right": "workspace_next",
-  "Ctrl+Alt+1": "switch_workspace_1", "Ctrl+Alt+2": "switch_workspace_2",
-  "Ctrl+Alt+3": "switch_workspace_3", "Ctrl+Alt+4": "switch_workspace_4",
-  "Ctrl+Alt+5": "switch_workspace_5", "Ctrl+Alt+6": "switch_workspace_6",
-  "Ctrl+Alt+7": "switch_workspace_7", "Ctrl+Alt+8": "switch_workspace_8",
-  "Ctrl+Alt+9": "switch_workspace_9",
-  "Ctrl+Alt+Shift+1": "move_to_workspace_1", "Ctrl+Alt+Shift+2": "move_to_workspace_2",
-  "Ctrl+Alt+Shift+3": "move_to_workspace_3", "Ctrl+Alt+Shift+4": "move_to_workspace_4",
-  "Ctrl+Alt+Shift+5": "move_to_workspace_5", "Ctrl+Alt+Shift+6": "move_to_workspace_6",
-  "Ctrl+Alt+Shift+7": "move_to_workspace_7", "Ctrl+Alt+Shift+8": "move_to_workspace_8",
-  "Ctrl+Alt+Shift+9": "move_to_workspace_9"
-};
+/* Hotkey tables derived from the single catalog the host injects
+   (window._hotkeyCatalog). Names, display order, and reset-to-defaults all
+   stay in sync with the Rust ipc::hotkeys catalog with no duplication. */
+var HOTKEY_CATALOG = window._hotkeyCatalog || [];
+var CMD_ORDER = HOTKEY_CATALOG.map(function(a) { return a.id; });
+var CMD_LABELS = {};
+var DEFAULT_HOTKEYS = {};
+HOTKEY_CATALOG.forEach(function(a) {
+  CMD_LABELS[a.id] = a.label;
+  if (a.key) { DEFAULT_HOTKEYS[a.key] = a.id; }
+});
 
 function cmdLabel(cmd) { return CMD_LABELS[cmd] || cmd; }
 
@@ -1437,13 +1352,25 @@ function initGestureCombo(id) {
 }
 ['cb-gestures-swipe_left','cb-gestures-swipe_right','cb-gestures-swipe_up','cb-gestures-swipe_down','cb-gestures-scroll_up','cb-gestures-scroll_down'].forEach(initGestureCombo);
 
+/* Show key chords with friendly symbols (Bracket_Left -> [). Both the
+   token and the symbol alias parse to the same key, and the catalog now
+   ships symbols, so this mainly tidies older token-form configs on display. */
+var KEY_SYMBOLS = { 'BRACKET_LEFT': '[', 'BRACKET_RIGHT': ']', 'COMMA': ',', 'PERIOD': '.', 'MINUS': '-', 'EQUALS': '=' };
+function humanizeKey(chord) {
+  var parts = (chord || '').split('+');
+  var i = parts.length - 1;
+  var sym = KEY_SYMBOLS[(parts[i] || '').trim().toUpperCase()];
+  if (sym) { parts[i] = sym; }
+  return parts.join('+');
+}
+
 function addHotkeyRow(key, cmd) {
   var tbody = document.getElementById('hotkeys-body');
   var tr = document.createElement('tr');
   tr.dataset.cmd = cmd;
   tr.innerHTML =
     '<td class="hk-cmd-label">' + escHtml(cmdLabel(cmd)) + '</td>' +
-    '<td><input type="text" class="hk-key" value="' + escAttr(key) + '" placeholder="e.g. Ctrl+Alt+H"></td>' +
+    '<td><input type="text" class="hk-key" value="' + escAttr(humanizeKey(key)) + '" placeholder="e.g. Ctrl+Alt+H"></td>' +
     '<td><button class="row-delete" title="Reset to default" onclick="resetHotkeyRow(this.closest(\'tr\'))">' + resetIcon + '</button></td>';
   tbody.appendChild(tr);
   wrapAllInputs(tr);

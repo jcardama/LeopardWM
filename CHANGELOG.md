@@ -25,6 +25,12 @@ All notable changes to LeopardWM will be documented in this file.
   `Ctrl+Alt+.` from the right (or `lwm consume left` / `lwm consume
   right`). The inverse of expel; combine with tabbed columns to group
   windows.
+- **Friendlier hotkeys in config and settings.** Key chords now use
+  symbols (`Ctrl+Alt+[` rather than `Ctrl+Alt+Bracket_Left`) in the
+  generated config and the settings window, and you can write either form.
+  The settings hotkey list shows every action with a readable name in a
+  sensible order. `lwm config init` now produces a complete, correct
+  hotkey config.
 
 ## 0.1.18
 
