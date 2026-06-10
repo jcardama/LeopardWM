@@ -84,6 +84,13 @@ impl ScaledLayoutParams {
     }
 }
 
+/// Message sent back from the apply-layout worker thread.
+type ApplyWorkerMsg = (
+    Result<()>,
+    Vec<leopardwm_platform_win32::WidthViolation>,
+    Vec<leopardwm_platform_win32::HeightViolation>,
+);
+
 impl AppState {
     /// Look up window info for a given window handle.
     ///
@@ -1303,7 +1310,6 @@ impl AppState {
     /// Recalculate layout and apply placements for all monitors.
     /// Uses animated offsets if any workspace has an active animation.
     /// No-op when tiling is paused.
-    #[allow(clippy::too_many_lines)] // TODO: decompose (~303 lines, grandfathered)
     pub(crate) fn apply_layout(&mut self) -> Result<()> {
         let reaped_workers = self.reap_finished_pending_apply_workers();
         if reaped_workers > 0 {
@@ -1340,6 +1346,121 @@ impl AppState {
             }
         }
 
+        let mut all_placements = self.collect_apply_placements();
+
+        // Interpolate layout transitions (structural changes like move/expel).
+        if let Some(ref transition) = self.layout_transition {
+            Self::apply_transition_interpolation(transition, &mut all_placements);
+        }
+
+        // Filter out the dragged window and placeholder so SetWindowPos doesn't
+        // fight the OS drag or try to position the sentinel.
+        if let Some(ref drag) = self.drag_state {
+            if drag.is_tiled {
+                all_placements.retain(|p| {
+                    p.window_id != drag.hwnd
+                        && p.window_id != crate::state::DRAG_PLACEHOLDER_HWND
+                });
+            }
+        }
+
+        // Fast path: if every placement matches the last applied rect (and
+        // the visible-set is unchanged), there is nothing to do. Spawning
+        // the worker thread, the BeginDeferWindowPos batch, the DwmFlush,
+        // size-violation queries, and the sticky-compositor nudge each take
+        // tens of milliseconds; under rapid focus presses within the
+        // already-visible range no scroll animation starts (so the caller
+        // does not get to bypass us via `is_animating()`) and these calls
+        // serialize on the daemon mutex, leaving focus events draining for
+        // seconds after the user stops pressing. Returning early lets the
+        // event loop catch up at near-memory speed.
+        let placements_unchanged = self.placements_match_last_applied(&all_placements);
+        // Tests that inject worker behavior need the worker to actually
+        // run, so they opt out of the fast path.
+        #[cfg(test)]
+        let bypass_fast_path = self.injected_apply_placements_behavior.is_some();
+        #[cfg(not(test))]
+        let bypass_fast_path = false;
+        if placements_unchanged && !bypass_fast_path {
+            self.applying_layout = false;
+            return Ok(());
+        }
+
+        self.arm_moved_or_resized_suppression(all_placements.iter().map(|p| p.window_id));
+
+        self.record_last_placed_rects(&all_placements);
+
+        let timeout = self.layout_apply_timeout;
+        let (rx, worker_handle) = self.spawn_apply_worker(all_placements)?;
+
+        let result = match rx.recv_timeout(timeout) {
+            Ok((result, width_violations, height_violations)) => {
+                let _ = worker_handle.join();
+                if result.is_err() {
+                    self.moved_or_resized_suppression.clear();
+                }
+                let constraints_changed = if result.is_ok() {
+                    self.propagate_size_violations(&width_violations, &height_violations)
+                } else {
+                    false
+                };
+                // If any constraint was added, run a single guarded re-apply
+                // so the corrected layout lands on the current frame instead
+                // of waiting for the next user-triggered event. The inner
+                // apply_layout manages its own applying_layout state; we just
+                // need to release our own first so the guard at the top of
+                // the recursive call can re-enter cleanly. If the inner call
+                // fails (e.g. its worker times out and pauses the daemon), we
+                // surface that error in place of the outer Ok — the outer
+                // placements may have already landed, but the daemon state
+                // needs to reflect that the corrective pass didn't complete.
+                if constraints_changed && !self.reapplying_after_violation {
+                    self.reapplying_after_violation = true;
+                    self.applying_layout = false;
+                    let reapply = self.apply_layout();
+                    self.reapplying_after_violation = false;
+                    if let Err(e) = reapply {
+                        warn!("Re-apply after size-violation propagation failed: {}", e);
+                        Err(e)
+                    } else {
+                        result
+                    }
+                } else {
+                    result
+                }
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                self.paused = true;
+                // Invalidate this apply epoch so late-starting workers bail before placement calls.
+                self.apply_epoch.fetch_add(1, Ordering::SeqCst);
+                self.pending_apply_workers.push(worker_handle);
+                self.moved_or_resized_suppression.clear();
+                let msg = layout_apply_timeout_message(timeout);
+                warn!("{}", msg);
+                let managed_window_ids = self.all_managed_window_ids();
+                run_visibility_recovery_pass(&managed_window_ids, "apply-timeout");
+                Err(anyhow!(msg))
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                let _ = worker_handle.join();
+                self.moved_or_resized_suppression.clear();
+                Err(anyhow!(
+                    "Layout worker thread exited without returning a result"
+                ))
+            }
+        };
+        self.applying_layout = false;
+
+        // Reposition border to track the focused window after layout changes
+        if result.is_ok() {
+            self.finalize_layout_success();
+        }
+
+        result
+    }
+
+    /// Collect animated placements for every monitor's active workspace, with debug logging.
+    fn collect_apply_placements(&self) -> Vec<leopardwm_core_layout::WindowPlacement> {
         let mut all_placements = Vec::new();
 
         for (monitor_id, ws_vec) in &self.workspaces {
@@ -1373,33 +1494,15 @@ impl AppState {
             }
         }
 
-        // Interpolate layout transitions (structural changes like move/expel).
-        if let Some(ref transition) = self.layout_transition {
-            Self::apply_transition_interpolation(transition, &mut all_placements);
-        }
+        all_placements
+    }
 
-        // Filter out the dragged window and placeholder so SetWindowPos doesn't
-        // fight the OS drag or try to position the sentinel.
-        if let Some(ref drag) = self.drag_state {
-            if drag.is_tiled {
-                all_placements.retain(|p| {
-                    p.window_id != drag.hwnd
-                        && p.window_id != crate::state::DRAG_PLACEHOLDER_HWND
-                });
-            }
-        }
-
-        // Fast path: if every placement matches the last applied rect (and
-        // the visible-set is unchanged), there is nothing to do. Spawning
-        // the worker thread, the BeginDeferWindowPos batch, the DwmFlush,
-        // size-violation queries, and the sticky-compositor nudge each take
-        // tens of milliseconds; under rapid focus presses within the
-        // already-visible range no scroll animation starts (so the caller
-        // does not get to bypass us via `is_animating()`) and these calls
-        // serialize on the daemon mutex, leaving focus events draining for
-        // seconds after the user stops pressing. Returning early lets the
-        // event loop catch up at near-memory speed.
-        let placements_unchanged = all_placements.iter().all(|p| {
+    /// Fast-path check: every placement matches the last applied rect and the visible-set is unchanged.
+    fn placements_match_last_applied(
+        &self,
+        all_placements: &[leopardwm_core_layout::WindowPlacement],
+    ) -> bool {
+        all_placements.iter().all(|p| {
             let expected = self.last_placed_layout_rects.get(&p.window_id);
             match p.visibility {
                 leopardwm_core_layout::Visibility::Visible => expected == Some(&p.rect),
@@ -1412,20 +1515,14 @@ impl AppState {
                 .last_placed_layout_rects
                 .keys()
                 .any(|id| !current_ids.contains(id))
-        };
-        // Tests that inject worker behavior need the worker to actually
-        // run, so they opt out of the fast path.
-        #[cfg(test)]
-        let bypass_fast_path = self.injected_apply_placements_behavior.is_some();
-        #[cfg(not(test))]
-        let bypass_fast_path = false;
-        if placements_unchanged && !bypass_fast_path {
-            self.applying_layout = false;
-            return Ok(());
         }
+    }
 
-        self.arm_moved_or_resized_suppression(all_placements.iter().map(|p| p.window_id));
-
+    /// Record layout rects for visible placements and drain stale entries.
+    fn record_last_placed_rects(
+        &mut self,
+        all_placements: &[leopardwm_core_layout::WindowPlacement],
+    ) {
         // Record the layout rect the engine chose for each window so the
         // MovedOrResized handler can short-circuit false-positive snap-backs
         // when Windows fires EVENT_OBJECT_LOCATIONCHANGE without an actual
@@ -1443,15 +1540,20 @@ impl AppState {
             all_placements.iter().map(|p| p.window_id).collect();
         self.last_placed_layout_rects
             .retain(|id, _| active_ids.contains(id));
-        for p in &all_placements {
+        for p in all_placements {
             if matches!(p.visibility, leopardwm_core_layout::Visibility::Visible) {
                 self.last_placed_layout_rects.insert(p.window_id, p.rect);
             } else {
                 self.last_placed_layout_rects.remove(&p.window_id);
             }
         }
+    }
 
-        let timeout = self.layout_apply_timeout;
+    /// Spawn the apply-layout worker thread; returns its result channel and join handle.
+    fn spawn_apply_worker(
+        &mut self,
+        all_placements: Vec<leopardwm_core_layout::WindowPlacement>,
+    ) -> Result<(std::sync::mpsc::Receiver<ApplyWorkerMsg>, std::thread::JoinHandle<()>)> {
         let platform_config = self.platform_config.clone();
         let apply_worker_cancelled = self.apply_worker_cancelled.clone();
         let apply_epoch_ref = self.apply_epoch.clone();
@@ -1468,11 +1570,7 @@ impl AppState {
         #[cfg(test)]
         let late_worker_recovery_count = self.late_worker_recovery_count.clone();
 
-        let (tx, rx) = std::sync::mpsc::channel::<(
-            Result<()>,
-            Vec<leopardwm_platform_win32::WidthViolation>,
-            Vec<leopardwm_platform_win32::HeightViolation>,
-        )>();
+        let (tx, rx) = std::sync::mpsc::channel::<ApplyWorkerMsg>();
         let spawn_result = std::thread::Builder::new()
             .name("leopardwm-apply-layout".to_string())
             .spawn(move || {
@@ -1535,158 +1633,112 @@ impl AppState {
                 let _ = tx.send((result, width_violations, height_violations));
             });
 
-        let worker_handle = match spawn_result {
-            Ok(handle) => handle,
+        match spawn_result {
+            Ok(handle) => Ok((rx, handle)),
             Err(e) => {
                 self.applying_layout = false;
-                return Err(anyhow!("Failed to spawn layout worker thread: {}", e));
-            }
-        };
-
-        let result = match rx.recv_timeout(timeout) {
-            Ok((result, width_violations, height_violations)) => {
-                let _ = worker_handle.join();
-                if result.is_err() {
-                    self.moved_or_resized_suppression.clear();
-                }
-                // Feed width/height violations back to the layout engine.
-                // Skip violations where min_width/min_height >= viewport size —
-                // the window is temporarily fullscreen/maximized by the app
-                // itself, not genuinely enforcing a minimum that large.
-                let mut constraints_changed = false;
-                if result.is_ok() && !width_violations.is_empty() {
-                    for v in &width_violations {
-                        let vw = self.find_window_workspace(v.window_id)
-                            .map(|(mid, _)| self.viewport_width_for(mid))
-                            .unwrap_or(i32::MAX);
-                        if v.min_width >= vw {
-                            debug!(
-                                "Ignoring viewport-sized width violation for window {} ({}px >= {}px viewport)",
-                                v.window_id, v.min_width, vw
-                            );
-                            continue;
-                        }
-                        for ws_vec in self.workspaces.values_mut() {
-                            for ws in ws_vec.iter_mut() {
-                                if ws.contains_window(v.window_id) {
-                                    ws.set_window_min_width(v.window_id, v.min_width);
-                                    constraints_changed = true;
-                                }
-                            }
-                        }
-                    }
-                    for ws_vec in self.workspaces.values_mut() {
-                        for ws in ws_vec.iter_mut() {
-                            if ws.apply_min_width_constraints() {
-                                constraints_changed = true;
-                            }
-                        }
-                    }
-                }
-                if result.is_ok() && !height_violations.is_empty() {
-                    for v in &height_violations {
-                        let vh = self.find_window_workspace(v.window_id)
-                            .and_then(|(mid, _)| self.monitors.get(&mid).map(|m| m.work_area.height))
-                            .unwrap_or(i32::MAX);
-                        if v.min_height >= vh {
-                            debug!(
-                                "Ignoring viewport-sized height violation for window {} ({}px >= {}px viewport)",
-                                v.window_id, v.min_height, vh
-                            );
-                            continue;
-                        }
-                        for ws_vec in self.workspaces.values_mut() {
-                            for ws in ws_vec.iter_mut() {
-                                if ws.contains_window(v.window_id) {
-                                    ws.set_window_min_height(v.window_id, v.min_height);
-                                    constraints_changed = true;
-                                }
-                            }
-                        }
-                    }
-                }
-                // If any constraint was added, run a single guarded re-apply
-                // so the corrected layout lands on the current frame instead
-                // of waiting for the next user-triggered event. The inner
-                // apply_layout manages its own applying_layout state; we just
-                // need to release our own first so the guard at the top of
-                // the recursive call can re-enter cleanly. If the inner call
-                // fails (e.g. its worker times out and pauses the daemon), we
-                // surface that error in place of the outer Ok — the outer
-                // placements may have already landed, but the daemon state
-                // needs to reflect that the corrective pass didn't complete.
-                if constraints_changed && !self.reapplying_after_violation {
-                    self.reapplying_after_violation = true;
-                    self.applying_layout = false;
-                    let reapply = self.apply_layout();
-                    self.reapplying_after_violation = false;
-                    if let Err(e) = reapply {
-                        warn!("Re-apply after size-violation propagation failed: {}", e);
-                        Err(e)
-                    } else {
-                        result
-                    }
-                } else {
-                    result
-                }
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                self.paused = true;
-                // Invalidate this apply epoch so late-starting workers bail before placement calls.
-                self.apply_epoch.fetch_add(1, Ordering::SeqCst);
-                self.pending_apply_workers.push(worker_handle);
-                self.moved_or_resized_suppression.clear();
-                let msg = layout_apply_timeout_message(timeout);
-                warn!("{}", msg);
-                let managed_window_ids = self.all_managed_window_ids();
-                run_visibility_recovery_pass(&managed_window_ids, "apply-timeout");
-                Err(anyhow!(msg))
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                let _ = worker_handle.join();
-                self.moved_or_resized_suppression.clear();
-                Err(anyhow!(
-                    "Layout worker thread exited without returning a result"
-                ))
-            }
-        };
-        self.applying_layout = false;
-
-        // Reposition border to track the focused window after layout changes
-        if result.is_ok() {
-            if let Some(hwnd) = self.previous_focused_hwnd {
-                if self.config.appearance.active_border {
-                    self.show_border(hwnd);
-                }
-            }
-            // Reposition tab strip overlay (mirror border lifecycle).
-            self.update_tab_strip();
-
-            // LayoutChanged broadcast with signature dedup. Animation
-            // frames between two settled layouts produce identical
-            // signatures so the dedup check suppresses them; only
-            // structural changes (column added/removed/reordered, width
-            // changed, focus moved between columns) emit.
-            let sig = self.focused_layout_signature();
-            if self.last_emitted_layout_sig != Some(sig) {
-                self.last_emitted_layout_sig = Some(sig);
-                let monitor = self.focused_monitor;
-                let workspace_index = self.active_workspace_idx(monitor);
-                let focused_column = self
-                    .workspaces
-                    .get(&monitor)
-                    .and_then(|list| list.get(workspace_index))
-                    .map(|ws| ws.focused_column_index());
-                self.broadcast_event(leopardwm_ipc::IpcEvent::LayoutChanged {
-                    monitor: monitor as i64,
-                    workspace_index: workspace_index as u8,
-                    focused_column,
-                    columns: self.focused_layout_columns(),
-                });
+                Err(anyhow!("Failed to spawn layout worker thread: {}", e))
             }
         }
+    }
 
-        result
+    /// Feed worker-reported size violations back to the layout engine; returns whether constraints changed.
+    fn propagate_size_violations(
+        &mut self,
+        width_violations: &[leopardwm_platform_win32::WidthViolation],
+        height_violations: &[leopardwm_platform_win32::HeightViolation],
+    ) -> bool {
+        // Feed width/height violations back to the layout engine.
+        // Skip violations where min_width/min_height >= viewport size —
+        // the window is temporarily fullscreen/maximized by the app
+        // itself, not genuinely enforcing a minimum that large.
+        let mut constraints_changed = false;
+        if !width_violations.is_empty() {
+            for v in width_violations {
+                let vw = self.find_window_workspace(v.window_id)
+                    .map(|(mid, _)| self.viewport_width_for(mid))
+                    .unwrap_or(i32::MAX);
+                if v.min_width >= vw {
+                    debug!(
+                        "Ignoring viewport-sized width violation for window {} ({}px >= {}px viewport)",
+                        v.window_id, v.min_width, vw
+                    );
+                    continue;
+                }
+                for ws_vec in self.workspaces.values_mut() {
+                    for ws in ws_vec.iter_mut() {
+                        if ws.contains_window(v.window_id) {
+                            ws.set_window_min_width(v.window_id, v.min_width);
+                            constraints_changed = true;
+                        }
+                    }
+                }
+            }
+            for ws_vec in self.workspaces.values_mut() {
+                for ws in ws_vec.iter_mut() {
+                    if ws.apply_min_width_constraints() {
+                        constraints_changed = true;
+                    }
+                }
+            }
+        }
+        if !height_violations.is_empty() {
+            for v in height_violations {
+                let vh = self.find_window_workspace(v.window_id)
+                    .and_then(|(mid, _)| self.monitors.get(&mid).map(|m| m.work_area.height))
+                    .unwrap_or(i32::MAX);
+                if v.min_height >= vh {
+                    debug!(
+                        "Ignoring viewport-sized height violation for window {} ({}px >= {}px viewport)",
+                        v.window_id, v.min_height, vh
+                    );
+                    continue;
+                }
+                for ws_vec in self.workspaces.values_mut() {
+                    for ws in ws_vec.iter_mut() {
+                        if ws.contains_window(v.window_id) {
+                            ws.set_window_min_height(v.window_id, v.min_height);
+                            constraints_changed = true;
+                        }
+                    }
+                }
+            }
+        }
+        constraints_changed
+    }
+
+    /// Post-success bookkeeping: border, tab strip, and deduped LayoutChanged broadcast.
+    fn finalize_layout_success(&mut self) {
+        if let Some(hwnd) = self.previous_focused_hwnd {
+            if self.config.appearance.active_border {
+                self.show_border(hwnd);
+            }
+        }
+        // Reposition tab strip overlay (mirror border lifecycle).
+        self.update_tab_strip();
+
+        // LayoutChanged broadcast with signature dedup. Animation
+        // frames between two settled layouts produce identical
+        // signatures so the dedup check suppresses them; only
+        // structural changes (column added/removed/reordered, width
+        // changed, focus moved between columns) emit.
+        let sig = self.focused_layout_signature();
+        if self.last_emitted_layout_sig != Some(sig) {
+            self.last_emitted_layout_sig = Some(sig);
+            let monitor = self.focused_monitor;
+            let workspace_index = self.active_workspace_idx(monitor);
+            let focused_column = self
+                .workspaces
+                .get(&monitor)
+                .and_then(|list| list.get(workspace_index))
+                .map(|ws| ws.focused_column_index());
+            self.broadcast_event(leopardwm_ipc::IpcEvent::LayoutChanged {
+                monitor: monitor as i64,
+                workspace_index: workspace_index as u8,
+                focused_column,
+                columns: self.focused_layout_columns(),
+            });
+        }
     }
 
     /// Convert the config border color (hex RGB string) to BGR u32 for Win32.

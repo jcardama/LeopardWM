@@ -23,7 +23,6 @@ impl AppState {
     /// Compute and show a drag hint overlay.
     /// Default drag = move window between columns (merge mode).
     /// Shift+drag = move entire column (reorder mode).
-    #[allow(clippy::too_many_lines)] // TODO: decompose (~320 lines, grandfathered)
     pub(crate) fn update_drag_hint(&mut self, hwnd: u64) {
         // No drag ghost while tiling is paused.
         if self.paused {
@@ -71,87 +70,9 @@ impl AppState {
             // --- Shift+drag: column reorder mode ---
             // Only live-reorder on the source monitor; cross-monitor happens on drop.
             if target_monitor_id != source_monitor {
-                // Show ghost at the edge of the target monitor.
-                let viewport = match self.monitors.get(&target_monitor_id) {
-                    Some(m) => m.work_area,
-                    None => return,
-                };
-                let ws_idx = self.active_workspace_idx(target_monitor_id);
-                let Some(workspace) = self.workspaces.get(&target_monitor_id).and_then(|v| v.get(ws_idx)) else {
-                    return;
-                };
-                let column_bounds = column_bounds_from_placements(workspace, viewport);
-                let insert_index = compute_insertion_index(&column_bounds, cursor_x);
-                let drop_target = DropTarget {
-                    monitor: target_monitor_id,
-                    insert_index,
-                    window_slot: None,
-                };
-                if let Some(ref mut drag) = self.drag_state {
-                    if drag.last_drop_target == Some(drop_target) {
-                        return;
-                    }
-                    drag.last_drop_target = Some(drop_target);
-                }
-                let gap = workspace.gap();
-                let hint_x = compute_insertion_hint_x(&column_bounds, insert_index, gap);
-                self.pending_drag_hint = Some(DragHintAction::ShowGhost {
-                    rect: Rect::new(hint_x - 2, viewport.y, 4, viewport.height),
-                });
-                return;
-            }
-
-            let viewport = match self.monitors.get(&source_monitor) {
-                Some(m) => m.work_area,
-                None => return,
-            };
-            let Some(workspace) = self.workspaces.get(&source_monitor).and_then(|v| v.get(source_ws_idx)) else {
-                return;
-            };
-
-            let column_bounds = column_bounds_from_placements(workspace, viewport);
-            // Trigger reorder when cursor enters another column's area.
-            let target_idx = match compute_target_column_index(&column_bounds, cursor_x) {
-                Some(idx) => idx,
-                None => {
-                    // Cursor is in the gap between columns — keep current position.
-                    // Still show the ghost at the current column.
-                    if let Some(rect) = compute_column_rect(workspace, viewport, current_col) {
-                        self.pending_drag_hint = Some(DragHintAction::ShowGhost { rect });
-                    }
-                    return;
-                }
-            };
-
-            if target_idx != current_col {
-                debug!(
-                    "Live drag reorder: column {} → {} on monitor {}",
-                    current_col, target_idx, source_monitor
-                );
-                let snapshot = self.snapshot_layout();
-                if let Some(workspace) = self.workspaces.get_mut(&source_monitor).and_then(|v| v.get_mut(source_ws_idx)) {
-                    workspace.reorder_column(current_col, target_idx);
-                }
-                if let Some(ref mut drag) = self.drag_state {
-                    drag.current_column_index = target_idx;
-                }
-                self.start_layout_transition(snapshot);
-                if let Err(e) = self.apply_layout() {
-                    warn!("Failed to apply layout during live drag reorder: {}", e);
-                }
-            }
-
-            // Show ghost at the dragged column's new position.
-            let workspace = match self.workspaces.get(&source_monitor).and_then(|v| v.get(source_ws_idx)) {
-                Some(ws) => ws,
-                None => return,
-            };
-            let new_col_idx = match self.drag_state {
-                Some(ref d) => d.current_column_index,
-                None => return,
-            };
-            if let Some(rect) = compute_column_rect(workspace, viewport, new_col_idx) {
-                self.pending_drag_hint = Some(DragHintAction::ShowGhost { rect });
+                self.shift_drag_cross_monitor_hint(cursor_x, target_monitor_id);
+            } else {
+                self.shift_drag_reorder_hint(cursor_x, source_monitor, source_ws_idx, current_col);
             }
         } else {
             // --- Default drag: window merge mode with live preview ---
@@ -276,96 +197,22 @@ impl AppState {
             }
 
             if is_same_column {
-                // Same column: reorder the window within its column.
-                let current_location = workspace.find_window_location(hwnd);
-                let needs_move = match current_location {
-                    Some((_, cur_win_idx)) => cur_win_idx != window_slot,
-                    None => false,
-                };
-                if needs_move {
-                    let snapshot = self.snapshot_layout();
-                    let idx = self.active_workspace_idx(target_monitor_id);
-                    if let Some(ws) = self.workspaces.get_mut(&target_monitor_id).and_then(|v| v.get_mut(idx)) {
-                        let _ = ws.remove_window(hwnd);
-                        let _ = ws.insert_window_in_column_at(hwnd, target_col, window_slot);
-                    }
-                    self.start_layout_transition(snapshot);
-                    if let Err(e) = self.apply_layout() {
-                        warn!("Failed to apply layout during live drag reorder: {}", e);
-                    }
-                }
+                self.merge_reorder_same_column(hwnd, target_monitor_id, target_col, window_slot);
             } else {
                 // Different column: remove window from multi-window source so
                 // remaining windows expand, then insert placeholder at target.
                 let snapshot = self.snapshot_layout();
 
-                let already_removed = self
-                    .drag_state
-                    .as_ref()
-                    .is_some_and(|d| d.removed_from_source);
-                if !already_removed {
-                    // Remove window from multi-window source columns so remaining
-                    // windows expand. Single-window columns keep the window to
-                    // preserve column space until drop.
-                    let should_remove = self
-                        .workspaces
-                        .get(&source_monitor)
-                        .and_then(|v| v.get(source_ws_idx))
-                        .and_then(|ws| {
-                            let (col, _) = ws.find_window_location(hwnd)?;
-                            Some(ws.column(col)?.len() > 1)
-                        })
-                        .unwrap_or(false);
-                    if should_remove {
-                        if let Some(ws) = self.workspaces.get_mut(&source_monitor).and_then(|v| v.get_mut(source_ws_idx)) {
-                            let _ = ws.remove_window(hwnd);
-                        }
-                        if let Some(ref mut drag) = self.drag_state {
-                            drag.removed_from_source = true;
-                        }
-                    }
-                }
+                self.remove_drag_window_from_source(hwnd, source_monitor, source_ws_idx);
 
-                // Insert placeholder at target to shift target windows.
-                // Recompute target_col since removing from source may have shifted indices.
-                let adj_target_col = if self
-                    .drag_state
-                    .as_ref()
-                    .is_some_and(|d| d.removed_from_source)
-                {
-                    // Re-derive from updated layout.
-                    let tgt_idx = self.active_workspace_idx(target_monitor_id);
-                    let ws = match self.workspaces.get(&target_monitor_id).and_then(|v| v.get(tgt_idx)) {
-                        Some(ws) => ws,
-                        None => return,
-                    };
-                    let bounds = column_bounds_from_placements(ws, viewport);
-                    match compute_target_column_index(&bounds, cursor_x) {
-                        Some(idx) => idx,
-                        None => return,
-                    }
-                } else {
-                    target_col
-                };
-
-                let tgt_idx = self.active_workspace_idx(target_monitor_id);
-                let target_is_tabbed_final = if let Some(ws) =
-                    self.workspaces.get_mut(&target_monitor_id).and_then(|v| v.get_mut(tgt_idx))
-                {
-                    let it = adj_target_col < ws.column_count()
-                        && ws.column(adj_target_col).is_some_and(|c| c.is_tabbed());
-                    if adj_target_col < ws.column_count() {
-                        let _ = ws.insert_window_in_column_at(
-                            DRAG_PLACEHOLDER_HWND,
-                            adj_target_col,
-                            window_slot,
-                        );
-                    } else {
-                        let _ = ws.insert_window(DRAG_PLACEHOLDER_HWND, None);
-                    }
-                    it
-                } else {
-                    false
+                let Some(target_is_tabbed_final) = self.insert_drag_placeholder_at_target(
+                    viewport,
+                    cursor_x,
+                    target_col,
+                    window_slot,
+                    target_monitor_id,
+                ) else {
+                    return;
                 };
                 // Skip the live-preview transition for Tabbed targets.
                 // Tabbed columns hide non-active tabs off-screen, so the
@@ -387,70 +234,289 @@ impl AppState {
             }
 
             // Show ghost at the target slot position (recompute from updated layout).
-            let ws_idx = self.active_workspace_idx(target_monitor_id);
-            let workspace = match self.workspaces.get(&target_monitor_id).and_then(|v| v.get(ws_idx)) {
-                Some(ws) => ws,
-                None => return,
-            };
+            self.show_merge_drop_ghost(hwnd, is_same_column, target_monitor_id, viewport);
+        }
+    }
 
-            // For cross-column, ghost at the placeholder position; for same-column, at the window.
-            let ghost_id = if is_same_column {
-                hwnd
-            } else {
-                DRAG_PLACEHOLDER_HWND
-            };
-            if let Some((ghost_col, ghost_slot)) = workspace.find_window_location(ghost_id) {
-                if let Some(ghost_col_rect) =
-                    compute_column_rect(workspace, viewport, ghost_col)
-                {
-                    let ghost_col_is_tabbed = workspace
-                        .column(ghost_col)
-                        .is_some_and(|c| c.is_tabbed());
-                    let ghost = if ghost_col_is_tabbed {
-                        // Tabbed targets drop-as-tab (Chrome semantics —
-                        // always append rightmost), so the ghost should
-                        // communicate "this whole column is the target,"
-                        // not "this specific Y-slot." A slot-sized ghost
-                        // reads as vertical-stack semantics and misleads
-                        // the user about where the window will actually
-                        // land.
-                        ghost_col_rect
-                    } else {
-                        // Count only visible (non-minimized) windows and
-                        // convert the raw slot index to a visible-window
-                        // index so the ghost position is correct when
-                        // minimized windows precede it.
-                        let (ghost_n, visible_slot) = workspace
-                            .column(ghost_col)
-                            .map(|c| {
-                                let mut vis_count = 0usize;
-                                let mut vis_slot = 0usize;
-                                for (i, w) in c.windows().iter().enumerate() {
-                                    if !workspace.is_minimized(*w) {
-                                        if i < ghost_slot {
-                                            vis_slot += 1;
-                                        }
-                                        vis_count += 1;
-                                    }
-                                }
-                                (vis_count, vis_slot)
-                            })
-                            .unwrap_or((1, 0));
-                        let gap = workspace.gap();
-                        let total_gaps = (ghost_n as i32 - 1) * gap;
-                        let usable_height = ghost_col_rect.height - total_gaps;
-                        let slot_height = usable_height / ghost_n as i32;
-                        let slot_y =
-                            ghost_col_rect.y + visible_slot as i32 * (slot_height + gap);
-                        Rect::new(
-                            ghost_col_rect.x,
-                            slot_y,
-                            ghost_col_rect.width,
-                            slot_height,
-                        )
-                    };
-                    self.pending_drag_hint = Some(DragHintAction::ShowGhost { rect: ghost });
+    /// Show the column-reorder ghost at the insertion edge on a non-source monitor.
+    fn shift_drag_cross_monitor_hint(&mut self, cursor_x: i32, target_monitor_id: MonitorId) {
+        // Show ghost at the edge of the target monitor.
+        let viewport = match self.monitors.get(&target_monitor_id) {
+            Some(m) => m.work_area,
+            None => return,
+        };
+        let ws_idx = self.active_workspace_idx(target_monitor_id);
+        let Some(workspace) = self.workspaces.get(&target_monitor_id).and_then(|v| v.get(ws_idx)) else {
+            return;
+        };
+        let column_bounds = column_bounds_from_placements(workspace, viewport);
+        let insert_index = compute_insertion_index(&column_bounds, cursor_x);
+        let drop_target = DropTarget {
+            monitor: target_monitor_id,
+            insert_index,
+            window_slot: None,
+        };
+        if let Some(ref mut drag) = self.drag_state {
+            if drag.last_drop_target == Some(drop_target) {
+                return;
+            }
+            drag.last_drop_target = Some(drop_target);
+        }
+        let gap = workspace.gap();
+        let hint_x = compute_insertion_hint_x(&column_bounds, insert_index, gap);
+        self.pending_drag_hint = Some(DragHintAction::ShowGhost {
+            rect: Rect::new(hint_x - 2, viewport.y, 4, viewport.height),
+        });
+    }
+
+    /// Live-reorder the dragged column on the source monitor and show its ghost.
+    fn shift_drag_reorder_hint(
+        &mut self,
+        cursor_x: i32,
+        source_monitor: MonitorId,
+        source_ws_idx: usize,
+        current_col: usize,
+    ) {
+        let viewport = match self.monitors.get(&source_monitor) {
+            Some(m) => m.work_area,
+            None => return,
+        };
+        let Some(workspace) = self.workspaces.get(&source_monitor).and_then(|v| v.get(source_ws_idx)) else {
+            return;
+        };
+
+        let column_bounds = column_bounds_from_placements(workspace, viewport);
+        // Trigger reorder when cursor enters another column's area.
+        let target_idx = match compute_target_column_index(&column_bounds, cursor_x) {
+            Some(idx) => idx,
+            None => {
+                // Cursor is in the gap between columns — keep current position.
+                // Still show the ghost at the current column.
+                if let Some(rect) = compute_column_rect(workspace, viewport, current_col) {
+                    self.pending_drag_hint = Some(DragHintAction::ShowGhost { rect });
                 }
+                return;
+            }
+        };
+
+        if target_idx != current_col {
+            debug!(
+                "Live drag reorder: column {} → {} on monitor {}",
+                current_col, target_idx, source_monitor
+            );
+            let snapshot = self.snapshot_layout();
+            if let Some(workspace) = self.workspaces.get_mut(&source_monitor).and_then(|v| v.get_mut(source_ws_idx)) {
+                workspace.reorder_column(current_col, target_idx);
+            }
+            if let Some(ref mut drag) = self.drag_state {
+                drag.current_column_index = target_idx;
+            }
+            self.start_layout_transition(snapshot);
+            if let Err(e) = self.apply_layout() {
+                warn!("Failed to apply layout during live drag reorder: {}", e);
+            }
+        }
+
+        // Show ghost at the dragged column's new position.
+        let workspace = match self.workspaces.get(&source_monitor).and_then(|v| v.get(source_ws_idx)) {
+            Some(ws) => ws,
+            None => return,
+        };
+        let new_col_idx = match self.drag_state {
+            Some(ref d) => d.current_column_index,
+            None => return,
+        };
+        if let Some(rect) = compute_column_rect(workspace, viewport, new_col_idx) {
+            self.pending_drag_hint = Some(DragHintAction::ShowGhost { rect });
+        }
+    }
+
+    /// Reorder the dragged window to the cursor's slot within its own column.
+    fn merge_reorder_same_column(
+        &mut self,
+        hwnd: u64,
+        target_monitor_id: MonitorId,
+        target_col: usize,
+        window_slot: usize,
+    ) {
+        // Same column: reorder the window within its column.
+        let ws_idx = self.active_workspace_idx(target_monitor_id);
+        let current_location = self
+            .workspaces
+            .get(&target_monitor_id)
+            .and_then(|v| v.get(ws_idx))
+            .and_then(|ws| ws.find_window_location(hwnd));
+        let needs_move = match current_location {
+            Some((_, cur_win_idx)) => cur_win_idx != window_slot,
+            None => false,
+        };
+        if needs_move {
+            let snapshot = self.snapshot_layout();
+            let idx = self.active_workspace_idx(target_monitor_id);
+            if let Some(ws) = self.workspaces.get_mut(&target_monitor_id).and_then(|v| v.get_mut(idx)) {
+                let _ = ws.remove_window(hwnd);
+                let _ = ws.insert_window_in_column_at(hwnd, target_col, window_slot);
+            }
+            self.start_layout_transition(snapshot);
+            if let Err(e) = self.apply_layout() {
+                warn!("Failed to apply layout during live drag reorder: {}", e);
+            }
+        }
+    }
+
+    /// Remove the dragged window from a multi-window source column (once per drag).
+    fn remove_drag_window_from_source(
+        &mut self,
+        hwnd: u64,
+        source_monitor: MonitorId,
+        source_ws_idx: usize,
+    ) {
+        let already_removed = self
+            .drag_state
+            .as_ref()
+            .is_some_and(|d| d.removed_from_source);
+        if !already_removed {
+            // Remove window from multi-window source columns so remaining
+            // windows expand. Single-window columns keep the window to
+            // preserve column space until drop.
+            let should_remove = self
+                .workspaces
+                .get(&source_monitor)
+                .and_then(|v| v.get(source_ws_idx))
+                .and_then(|ws| {
+                    let (col, _) = ws.find_window_location(hwnd)?;
+                    Some(ws.column(col)?.len() > 1)
+                })
+                .unwrap_or(false);
+            if should_remove {
+                if let Some(ws) = self.workspaces.get_mut(&source_monitor).and_then(|v| v.get_mut(source_ws_idx)) {
+                    let _ = ws.remove_window(hwnd);
+                }
+                if let Some(ref mut drag) = self.drag_state {
+                    drag.removed_from_source = true;
+                }
+            }
+        }
+    }
+
+    /// Insert the drag placeholder at the target column; returns whether the target is tabbed, or `None` to abort the hint.
+    fn insert_drag_placeholder_at_target(
+        &mut self,
+        viewport: Rect,
+        cursor_x: i32,
+        target_col: usize,
+        window_slot: usize,
+        target_monitor_id: MonitorId,
+    ) -> Option<bool> {
+        // Insert placeholder at target to shift target windows.
+        // Recompute target_col since removing from source may have shifted indices.
+        let adj_target_col = if self
+            .drag_state
+            .as_ref()
+            .is_some_and(|d| d.removed_from_source)
+        {
+            // Re-derive from updated layout.
+            let tgt_idx = self.active_workspace_idx(target_monitor_id);
+            let ws = self.workspaces.get(&target_monitor_id).and_then(|v| v.get(tgt_idx))?;
+            let bounds = column_bounds_from_placements(ws, viewport);
+            compute_target_column_index(&bounds, cursor_x)?
+        } else {
+            target_col
+        };
+
+        let tgt_idx = self.active_workspace_idx(target_monitor_id);
+        let target_is_tabbed_final = if let Some(ws) =
+            self.workspaces.get_mut(&target_monitor_id).and_then(|v| v.get_mut(tgt_idx))
+        {
+            let it = adj_target_col < ws.column_count()
+                && ws.column(adj_target_col).is_some_and(|c| c.is_tabbed());
+            if adj_target_col < ws.column_count() {
+                let _ = ws.insert_window_in_column_at(
+                    DRAG_PLACEHOLDER_HWND,
+                    adj_target_col,
+                    window_slot,
+                );
+            } else {
+                let _ = ws.insert_window(DRAG_PLACEHOLDER_HWND, None);
+            }
+            it
+        } else {
+            false
+        };
+        Some(target_is_tabbed_final)
+    }
+
+    /// Show the drop ghost at the dragged window's (or placeholder's) slot in the target column.
+    fn show_merge_drop_ghost(
+        &mut self,
+        hwnd: u64,
+        is_same_column: bool,
+        target_monitor_id: MonitorId,
+        viewport: Rect,
+    ) {
+        let ws_idx = self.active_workspace_idx(target_monitor_id);
+        let workspace = match self.workspaces.get(&target_monitor_id).and_then(|v| v.get(ws_idx)) {
+            Some(ws) => ws,
+            None => return,
+        };
+
+        // For cross-column, ghost at the placeholder position; for same-column, at the window.
+        let ghost_id = if is_same_column {
+            hwnd
+        } else {
+            DRAG_PLACEHOLDER_HWND
+        };
+        if let Some((ghost_col, ghost_slot)) = workspace.find_window_location(ghost_id) {
+            if let Some(ghost_col_rect) =
+                compute_column_rect(workspace, viewport, ghost_col)
+            {
+                let ghost_col_is_tabbed = workspace
+                    .column(ghost_col)
+                    .is_some_and(|c| c.is_tabbed());
+                let ghost = if ghost_col_is_tabbed {
+                    // Tabbed targets drop-as-tab (Chrome semantics —
+                    // always append rightmost), so the ghost should
+                    // communicate "this whole column is the target,"
+                    // not "this specific Y-slot." A slot-sized ghost
+                    // reads as vertical-stack semantics and misleads
+                    // the user about where the window will actually
+                    // land.
+                    ghost_col_rect
+                } else {
+                    // Count only visible (non-minimized) windows and
+                    // convert the raw slot index to a visible-window
+                    // index so the ghost position is correct when
+                    // minimized windows precede it.
+                    let (ghost_n, visible_slot) = workspace
+                        .column(ghost_col)
+                        .map(|c| {
+                            let mut vis_count = 0usize;
+                            let mut vis_slot = 0usize;
+                            for (i, w) in c.windows().iter().enumerate() {
+                                if !workspace.is_minimized(*w) {
+                                    if i < ghost_slot {
+                                        vis_slot += 1;
+                                    }
+                                    vis_count += 1;
+                                }
+                            }
+                            (vis_count, vis_slot)
+                        })
+                        .unwrap_or((1, 0));
+                    let gap = workspace.gap();
+                    let total_gaps = (ghost_n as i32 - 1) * gap;
+                    let usable_height = ghost_col_rect.height - total_gaps;
+                    let slot_height = usable_height / ghost_n as i32;
+                    let slot_y =
+                        ghost_col_rect.y + visible_slot as i32 * (slot_height + gap);
+                    Rect::new(
+                        ghost_col_rect.x,
+                        slot_y,
+                        ghost_col_rect.width,
+                        slot_height,
+                    )
+                };
+                self.pending_drag_hint = Some(DragHintAction::ShowGhost { rect: ghost });
             }
         }
     }

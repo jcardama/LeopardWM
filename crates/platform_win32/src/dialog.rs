@@ -400,156 +400,14 @@ unsafe fn ctx_from_hwnd(hwnd: HWND) -> Option<&'static mut PopupContext> {
     }
 }
 
-#[allow(clippy::too_many_lines)] // TODO: decompose (~313 lines, grandfathered)
 unsafe extern "system" fn inline_rename_proc(
     hwnd: HWND,
     msg: u32,
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    use windows::Win32::UI::WindowsAndMessaging::CREATESTRUCTW;
-
     if msg == WM_CREATE {
-        let cs = lparam.0 as *const CREATESTRUCTW;
-        let ctx_ptr = (*cs).lpCreateParams as isize;
-        let _ = SetWindowLongPtrW(hwnd, GWLP_USERDATA, ctx_ptr);
-
-        let ctx = &mut *(ctx_ptr as *mut PopupContext);
-
-        // Font + EDIT geometry: char height matches the strip's tab
-        // title (same `0.43 * strip_h` ratio, floor 8) so the rename
-        // text is pixel-for-pixel the same size as a live tab title.
-        // Single-line Win32 EDIT controls do NOT auto-center text
-        // vertically — they render text starting at `edit_top +
-        // internal_top_pad` (the pad is ~2 px). Position the EDIT so
-        // the rendered cell sits centered: cell center at client_h/2.
-        // Visual left pad set to match top/bottom for balance.
-        let mut client = RECT::default();
-        let _ = windows::Win32::UI::WindowsAndMessaging::GetClientRect(hwnd, &mut client);
-        let client_h = (client.bottom - client.top).max(1);
-        let font_char = ((ctx.strip_h as f32 * 0.43).round() as i32).max(8);
-        let cell_h = (font_char * 14 / 10).max(font_char + 2);
-        // Visible text occupies the font's ascent (≈ `font_char`) — the
-        // descender area below the baseline is empty for most glyphs.
-        // Center the ASCENT, not the full cell, so the visible text
-        // sits at the popup's true vertical midpoint.
-        let edit_internal_top_pad = 2;
-        let ascent = font_char;
-        let edit_top = ((client_h / 2) - (ascent / 2) - edit_internal_top_pad).max(0);
-        let edit_height = (client_h - edit_top - 1).max(cell_h + 2);
-        let visual_pad = ((client_h - cell_h) / 2).max(3);
-        // Reserve space for the icon on the left if one was supplied —
-        // same `0.57 * strip_h` recipe `render_strip_inner` uses so the
-        // icon position matches the live tab pixel-for-pixel.
-        let icon_size = ((ctx.strip_h as f32 * 0.57).round() as i32).max(10);
-        let icon_inside_pad = (ctx.strip_h / 6).max(4);
-        let edit_left = if ctx.icon.is_some() {
-            visual_pad + icon_size + icon_inside_pad
-        } else {
-            visual_pad
-        };
-        let edit_right = ctx.check_rect.left - visual_pad;
-
-        let edit_class: Vec<u16> = "EDIT\0".encode_utf16().collect();
-        let edit = CreateWindowExW(
-            WINDOW_EX_STYLE(0),
-            windows::core::PCWSTR(edit_class.as_ptr()),
-            windows::core::PCWSTR(std::ptr::null()),
-            WS_CHILD | WS_VISIBLE | WINDOW_STYLE(ES_AUTOHSCROLL as u32),
-            edit_left,
-            edit_top,
-            (edit_right - edit_left).max(20),
-            edit_height,
-            Some(hwnd),
-            Some(HMENU(ID_EDIT as *mut c_void)),
-            None,
-            None,
-        );
-
-        if let Ok(edit) = edit {
-            ctx.edit_hwnd = edit;
-            // Subclass the EDIT control so we can intercept Esc/Enter
-            // (which the default proc would otherwise consume as a beep
-            // and as a "no-op input" respectively).
-            let original = SetWindowLongPtrW(
-                edit,
-                GWLP_WNDPROC,
-                edit_subclass_proc as *const () as isize,
-            );
-            if original != 0 {
-                ctx.original_edit_proc = Some(std::mem::transmute::<
-                    isize,
-                    unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT,
-                >(original));
-            }
-            let _ = SetWindowTextW(edit, windows::core::PCWSTR(ctx.initial.as_ptr()));
-            // Match the strip's tab title font: Segoe UI, char height
-            // = `0.43 * strip_h` (≈ 12 px at default DPI) floor 8 —
-            // identical to `render_strip_inner`. Pixel-for-pixel match
-            // with a live tab title.
-            let face: Vec<u16> = "Segoe UI\0".encode_utf16().collect();
-            let height = -(((ctx.strip_h as f32 * 0.43).round() as i32).max(8));
-            let font = windows::Win32::Graphics::Gdi::CreateFontW(
-                height,
-                0,
-                0,
-                0,
-                400, // FW_NORMAL
-                0,
-                0,
-                0,
-                windows::Win32::Graphics::Gdi::DEFAULT_CHARSET,
-                windows::Win32::Graphics::Gdi::OUT_DEFAULT_PRECIS,
-                windows::Win32::Graphics::Gdi::CLIP_DEFAULT_PRECIS,
-                windows::Win32::Graphics::Gdi::CLEARTYPE_QUALITY,
-                0,
-                windows::core::PCWSTR(face.as_ptr()),
-            );
-            if !font.is_invalid() {
-                SendMessageW(
-                    edit,
-                    windows::Win32::UI::WindowsAndMessaging::WM_SETFONT,
-                    Some(WPARAM(font.0 as usize)),
-                    Some(LPARAM(1)),
-                );
-                ctx.edit_font = font;
-            }
-            // Zero the EDIT control's internal left/right text margins
-            // (default is a few px) so the visual padding inside the
-            // pill matches the geometric `edit_left` / `edit_right`
-            // exactly — otherwise the text appears shifted right.
-            use windows::Win32::UI::Controls::EM_SETMARGINS;
-            use windows::Win32::UI::WindowsAndMessaging::{EC_LEFTMARGIN, EC_RIGHTMARGIN};
-            SendMessageW(
-                edit,
-                EM_SETMARGINS,
-                Some(WPARAM((EC_LEFTMARGIN | EC_RIGHTMARGIN) as usize)),
-                Some(LPARAM(0)),
-            );
-            let _ = SetFocus(Some(edit));
-            // Select-all so typing replaces the seeded text immediately.
-            SendMessageW(edit, EM_SETSEL, Some(WPARAM(0)), Some(LPARAM(-1)));
-        }
-
-        // Pre-render the check glyph using Segoe Fluent Icons "Accept"
-        // (E73E) at the check rect's exact pixel size — avoids the
-        // double-rescale (render-at-16-then-stretch) that produced a
-        // visibly fuzzy result. Same supersample pipeline as the menu
-        // icons, just sized for *this* tab's check button.
-        let check_size = (ctx.check_rect.right - ctx.check_rect.left)
-            .min(ctx.check_rect.bottom - ctx.check_rect.top);
-        ctx.check_bitmap =
-            crate::tab_strip::create_glyph_bitmap_at_size(0xE73E, ctx.text_color, check_size);
-
-        // Pre-create the tooltip popup so hover-show can just position
-        // + render + ShowWindow without paying class-register or
-        // window-create cost on every hover entry.
-        let tt = create_check_tooltip_popup();
-        if !tt.is_invalid() {
-            ctx.check_tooltip_hwnd = tt.0 as isize;
-        }
-
-        return LRESULT(0);
+        return on_create(hwnd, lparam);
     }
 
     if msg == WM_ERASEBKGND {
@@ -561,194 +419,33 @@ unsafe extern "system" fn inline_rename_proc(
     // check button. Default IDC_IBEAM was set on the popup class for
     // the text-edit area, so we override only when over the check.
     if msg == WM_SETCURSOR {
-        let mut pt = windows::Win32::Foundation::POINT { x: 0, y: 0 };
-        let _ = windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut pt);
-        let _ = windows::Win32::Graphics::Gdi::ScreenToClient(hwnd, &mut pt);
-        if let Some(ctx) = ctx_from_hwnd(hwnd) {
-            let cr = ctx.check_rect;
-            if pt.x >= cr.left && pt.x < cr.right && pt.y >= cr.top && pt.y < cr.bottom {
-                if let Ok(arrow) = LoadCursorW(None, IDC_ARROW) {
-                    let _ = SetCursor(Some(arrow));
-                    return LRESULT(1);
-                }
-            }
+        if let Some(handled) = on_set_cursor(hwnd) {
+            return handled;
         }
     }
 
     if msg == WM_PAINT {
-        let mut ps = PAINTSTRUCT::default();
-        let hdc = BeginPaint(hwnd, &mut ps);
-        if let Some(ctx) = ctx_from_hwnd(hwnd) {
-            let mut client = RECT::default();
-            let _ = windows::Win32::UI::WindowsAndMessaging::GetClientRect(
-                hwnd, &mut client,
-            );
-            // Fill the whole popup with the tab bg. DWM clips the
-            // visible region to a rounded shape so the corners outside
-            // the rounded area are never painted to screen.
-            let _ = FillRect(hdc, &client, ctx.bg_brush);
-            // Tab icon — drawn at the same position as the live strip
-            // so the transition tab → rename feels in-place. Geometry
-            // mirrors `render_strip_inner`'s icon block.
-            if let Some(icon_handle) = ctx.icon {
-                if icon_handle != 0 {
-                    let client_h = (client.bottom - client.top).max(1);
-                    let icon_size =
-                        ((ctx.strip_h as f32 * 0.57).round() as i32).max(10);
-                    let cell_h_local = {
-                        let fc = ((ctx.strip_h as f32 * 0.43).round() as i32).max(8);
-                        (fc * 14 / 10).max(fc + 2)
-                    };
-                    let visual_pad_local = ((client_h - cell_h_local) / 2).max(3);
-                    let icon_left = visual_pad_local;
-                    let icon_top = (client_h - icon_size) / 2;
-                    let hicon = windows::Win32::UI::WindowsAndMessaging::HICON(
-                        icon_handle as *mut c_void,
-                    );
-                    let _ = windows::Win32::UI::WindowsAndMessaging::DrawIconEx(
-                        hdc,
-                        icon_left,
-                        icon_top,
-                        hicon,
-                        icon_size,
-                        icon_size,
-                        0,
-                        None,
-                        windows::Win32::UI::WindowsAndMessaging::DI_NORMAL,
-                    );
-                }
-            }
-            // Hover pill + check glyph — AA-rendered into a temp DIB
-            // and composited via AlphaBlend so the glyph treatment
-            // matches the close-X in the strip.
-            paint_check_glyph(hdc, ctx);
-        }
-        let _ = EndPaint(hwnd, &ps);
-        return LRESULT(0);
+        return on_paint(hwnd);
     }
 
     if msg == WM_MOUSEMOVE {
-        if let Some(ctx) = ctx_from_hwnd(hwnd) {
-            if !ctx.mouse_tracking_armed {
-                let mut tme = TRACKMOUSEEVENT {
-                    cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
-                    dwFlags: TME_LEAVE,
-                    hwndTrack: hwnd,
-                    dwHoverTime: 0,
-                };
-                let _ = TrackMouseEvent(&mut tme);
-                ctx.mouse_tracking_armed = true;
-            }
-            let raw = lparam.0 as u32;
-            let mx = (raw & 0xFFFF) as i16 as i32;
-            let my = ((raw >> 16) & 0xFFFF) as i16 as i32;
-            let cr = ctx.check_rect;
-            let over = mx >= cr.left && mx < cr.right && my >= cr.top && my < cr.bottom;
-            if over != ctx.check_hovered {
-                ctx.check_hovered = over;
-                let _ = InvalidateRect(Some(hwnd), Some(&cr), false);
-                // Show tooltip on hover-in, hide on hover-out. Same
-                // visual style as the close-X tooltip (rendered via
-                // the strip's shared tooltip pipeline).
-                if ctx.check_tooltip_hwnd != 0 {
-                    let tt = HWND(ctx.check_tooltip_hwnd as *mut c_void);
-                    if over && !ctx.check_tooltip_visible {
-                        show_check_tooltip(tt, hwnd, cr, CHECK_TOOLTIP_TEXT);
-                        ctx.check_tooltip_visible = true;
-                    } else if !over && ctx.check_tooltip_visible {
-                        hide_check_tooltip(tt);
-                        ctx.check_tooltip_visible = false;
-                    }
-                }
-            }
-        }
-        return DefWindowProcW(hwnd, msg, wparam, lparam);
+        return on_mouse_move(hwnd, msg, wparam, lparam);
     }
 
     if msg == WM_MOUSELEAVE {
-        if let Some(ctx) = ctx_from_hwnd(hwnd) {
-            ctx.mouse_tracking_armed = false;
-            if ctx.check_hovered {
-                ctx.check_hovered = false;
-                let cr = ctx.check_rect;
-                let _ = InvalidateRect(Some(hwnd), Some(&cr), false);
-            }
-            if ctx.check_tooltip_visible && ctx.check_tooltip_hwnd != 0 {
-                hide_check_tooltip(HWND(ctx.check_tooltip_hwnd as *mut c_void));
-                ctx.check_tooltip_visible = false;
-            }
-        }
-        return LRESULT(0);
+        return on_mouse_leave(hwnd);
     }
 
     if msg == WM_TIMER && wparam.0 == FADE_TIMER_ID {
-        if let Some(ctx) = ctx_from_hwnd(hwnd) {
-            let elapsed = ctx.fade_start.elapsed().as_millis() as u64;
-            let t = (elapsed.min(FADE_DURATION_MS) as f32) / FADE_DURATION_MS as f32;
-            // Ease-out cubic — matches the tooltip's fade curve.
-            let eased = 1.0 - (1.0 - t).powi(3);
-            let alpha = (eased * 255.0).round().clamp(0.0, 255.0) as u8;
-            let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), alpha, LWA_ALPHA);
-            if elapsed >= FADE_DURATION_MS {
-                let _ = KillTimer(Some(hwnd), FADE_TIMER_ID);
-            }
-        } else {
-            let _ = KillTimer(Some(hwnd), FADE_TIMER_ID);
-        }
-        return LRESULT(0);
+        return on_fade_timer(hwnd);
     }
 
     if msg == WM_LBUTTONDOWN {
-        let raw = lparam.0 as u32;
-        let cx = (raw & 0xFFFF) as i16 as i32;
-        let cy = ((raw >> 16) & 0xFFFF) as i16 as i32;
-        if let Some(ctx) = ctx_from_hwnd(hwnd) {
-            let cr = ctx.check_rect;
-            if cx >= cr.left && cx < cr.right && cy >= cr.top && cy < cr.bottom {
-                let _ = PostMessageW(
-                    Some(hwnd),
-                    WM_INLINE_RENAME_COMMIT,
-                    WPARAM(0),
-                    LPARAM(0),
-                );
-                return LRESULT(0);
-            }
-        }
-        return LRESULT(0);
+        return on_lbutton_down(hwnd, lparam);
     }
 
     if msg == WM_ACTIVATE {
-        // WA_INACTIVE = 0; any non-zero state means we're activating.
-        let activation = (wparam.0 & 0xFFFF) as u32;
-        if let Some(ctx) = ctx_from_hwnd(hwnd) {
-            if activation != 0 {
-                ctx.activated = true;
-                // Make sure focus is on the EDIT once we're active —
-                // SetFocus during WM_CREATE doesn't always stick if
-                // the popup wasn't foreground at creation time.
-                if !ctx.edit_hwnd.is_invalid() {
-                    let _ = SetFocus(Some(ctx.edit_hwnd));
-                    SendMessageW(
-                        ctx.edit_hwnd,
-                        EM_SETSEL,
-                        Some(WPARAM(0)),
-                        Some(LPARAM(-1)),
-                    );
-                }
-            } else if ctx.activated && !ctx.finishing {
-                // Lost activation after being active → user clicked
-                // elsewhere. Discard. Guard against the initial
-                // creation WA_INACTIVE that fires before WA_ACTIVE on
-                // some Win32 paths.
-                let _ = PostMessageW(
-                    Some(hwnd),
-                    WM_INLINE_RENAME_CANCEL,
-                    WPARAM(0),
-                    LPARAM(0),
-                );
-            }
-        }
-        return DefWindowProcW(hwnd, msg, wparam, lparam);
+        return on_activate(hwnd, msg, wparam, lparam);
     }
 
     // EDIT control bg + text color routing. WM_CTLCOLOREDIT lets the
@@ -764,24 +461,7 @@ unsafe extern "system" fn inline_rename_proc(
     }
 
     if msg == WM_INLINE_RENAME_COMMIT {
-        if let Some(ctx) = ctx_from_hwnd(hwnd) {
-            let text = read_edit_text(ctx.edit_hwnd);
-            if text.len() > TAB_TITLE_MAX_BYTES {
-                // Reject and re-select so the user can edit down.
-                SendMessageW(
-                    ctx.edit_hwnd,
-                    EM_SETSEL,
-                    Some(WPARAM(0)),
-                    Some(LPARAM(-1)),
-                );
-                let _ = SetFocus(Some(ctx.edit_hwnd));
-                return LRESULT(0);
-            }
-            ctx.result = Some(text);
-            ctx.finishing = true;
-        }
-        let _ = DestroyWindow(hwnd);
-        return LRESULT(0);
+        return on_commit(hwnd);
     }
 
     if msg == WM_INLINE_RENAME_CANCEL {
@@ -806,6 +486,373 @@ unsafe extern "system" fn inline_rename_proc(
     }
 
     DefWindowProcW(hwnd, msg, wparam, lparam)
+}
+
+/// Handles `WM_CREATE`: builds the EDIT control, check glyph, and tooltip.
+unsafe fn on_create(hwnd: HWND, lparam: LPARAM) -> LRESULT {
+    use windows::Win32::UI::WindowsAndMessaging::CREATESTRUCTW;
+
+    let cs = lparam.0 as *const CREATESTRUCTW;
+    let ctx_ptr = (*cs).lpCreateParams as isize;
+    let _ = SetWindowLongPtrW(hwnd, GWLP_USERDATA, ctx_ptr);
+
+    let ctx = &mut *(ctx_ptr as *mut PopupContext);
+
+    // Font + EDIT geometry: char height matches the strip's tab
+    // title (same `0.43 * strip_h` ratio, floor 8) so the rename
+    // text is pixel-for-pixel the same size as a live tab title.
+    // Single-line Win32 EDIT controls do NOT auto-center text
+    // vertically — they render text starting at `edit_top +
+    // internal_top_pad` (the pad is ~2 px). Position the EDIT so
+    // the rendered cell sits centered: cell center at client_h/2.
+    // Visual left pad set to match top/bottom for balance.
+    let mut client = RECT::default();
+    let _ = windows::Win32::UI::WindowsAndMessaging::GetClientRect(hwnd, &mut client);
+    let client_h = (client.bottom - client.top).max(1);
+    let font_char = ((ctx.strip_h as f32 * 0.43).round() as i32).max(8);
+    let cell_h = (font_char * 14 / 10).max(font_char + 2);
+    // Visible text occupies the font's ascent (≈ `font_char`) — the
+    // descender area below the baseline is empty for most glyphs.
+    // Center the ASCENT, not the full cell, so the visible text
+    // sits at the popup's true vertical midpoint.
+    let edit_internal_top_pad = 2;
+    let ascent = font_char;
+    let edit_top = ((client_h / 2) - (ascent / 2) - edit_internal_top_pad).max(0);
+    let edit_height = (client_h - edit_top - 1).max(cell_h + 2);
+    let visual_pad = ((client_h - cell_h) / 2).max(3);
+    // Reserve space for the icon on the left if one was supplied —
+    // same `0.57 * strip_h` recipe `render_strip_inner` uses so the
+    // icon position matches the live tab pixel-for-pixel.
+    let icon_size = ((ctx.strip_h as f32 * 0.57).round() as i32).max(10);
+    let icon_inside_pad = (ctx.strip_h / 6).max(4);
+    let edit_left = if ctx.icon.is_some() {
+        visual_pad + icon_size + icon_inside_pad
+    } else {
+        visual_pad
+    };
+    let edit_right = ctx.check_rect.left - visual_pad;
+
+    let edit_class: Vec<u16> = "EDIT\0".encode_utf16().collect();
+    let edit = CreateWindowExW(
+        WINDOW_EX_STYLE(0),
+        windows::core::PCWSTR(edit_class.as_ptr()),
+        windows::core::PCWSTR(std::ptr::null()),
+        WS_CHILD | WS_VISIBLE | WINDOW_STYLE(ES_AUTOHSCROLL as u32),
+        edit_left,
+        edit_top,
+        (edit_right - edit_left).max(20),
+        edit_height,
+        Some(hwnd),
+        Some(HMENU(ID_EDIT as *mut c_void)),
+        None,
+        None,
+    );
+
+    if let Ok(edit) = edit {
+        ctx.edit_hwnd = edit;
+        // Subclass the EDIT control so we can intercept Esc/Enter
+        // (which the default proc would otherwise consume as a beep
+        // and as a "no-op input" respectively).
+        let original = SetWindowLongPtrW(
+            edit,
+            GWLP_WNDPROC,
+            edit_subclass_proc as *const () as isize,
+        );
+        if original != 0 {
+            ctx.original_edit_proc = Some(std::mem::transmute::<
+                isize,
+                unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT,
+            >(original));
+        }
+        let _ = SetWindowTextW(edit, windows::core::PCWSTR(ctx.initial.as_ptr()));
+        // Match the strip's tab title font: Segoe UI, char height
+        // = `0.43 * strip_h` (≈ 12 px at default DPI) floor 8 —
+        // identical to `render_strip_inner`. Pixel-for-pixel match
+        // with a live tab title.
+        let face: Vec<u16> = "Segoe UI\0".encode_utf16().collect();
+        let height = -(((ctx.strip_h as f32 * 0.43).round() as i32).max(8));
+        let font = windows::Win32::Graphics::Gdi::CreateFontW(
+            height,
+            0,
+            0,
+            0,
+            400, // FW_NORMAL
+            0,
+            0,
+            0,
+            windows::Win32::Graphics::Gdi::DEFAULT_CHARSET,
+            windows::Win32::Graphics::Gdi::OUT_DEFAULT_PRECIS,
+            windows::Win32::Graphics::Gdi::CLIP_DEFAULT_PRECIS,
+            windows::Win32::Graphics::Gdi::CLEARTYPE_QUALITY,
+            0,
+            windows::core::PCWSTR(face.as_ptr()),
+        );
+        if !font.is_invalid() {
+            SendMessageW(
+                edit,
+                windows::Win32::UI::WindowsAndMessaging::WM_SETFONT,
+                Some(WPARAM(font.0 as usize)),
+                Some(LPARAM(1)),
+            );
+            ctx.edit_font = font;
+        }
+        // Zero the EDIT control's internal left/right text margins
+        // (default is a few px) so the visual padding inside the
+        // pill matches the geometric `edit_left` / `edit_right`
+        // exactly — otherwise the text appears shifted right.
+        use windows::Win32::UI::Controls::EM_SETMARGINS;
+        use windows::Win32::UI::WindowsAndMessaging::{EC_LEFTMARGIN, EC_RIGHTMARGIN};
+        SendMessageW(
+            edit,
+            EM_SETMARGINS,
+            Some(WPARAM((EC_LEFTMARGIN | EC_RIGHTMARGIN) as usize)),
+            Some(LPARAM(0)),
+        );
+        let _ = SetFocus(Some(edit));
+        // Select-all so typing replaces the seeded text immediately.
+        SendMessageW(edit, EM_SETSEL, Some(WPARAM(0)), Some(LPARAM(-1)));
+    }
+
+    // Pre-render the check glyph using Segoe Fluent Icons "Accept"
+    // (E73E) at the check rect's exact pixel size — avoids the
+    // double-rescale (render-at-16-then-stretch) that produced a
+    // visibly fuzzy result. Same supersample pipeline as the menu
+    // icons, just sized for *this* tab's check button.
+    let check_size = (ctx.check_rect.right - ctx.check_rect.left)
+        .min(ctx.check_rect.bottom - ctx.check_rect.top);
+    ctx.check_bitmap =
+        crate::tab_strip::create_glyph_bitmap_at_size(0xE73E, ctx.text_color, check_size);
+
+    // Pre-create the tooltip popup so hover-show can just position
+    // + render + ShowWindow without paying class-register or
+    // window-create cost on every hover entry.
+    let tt = create_check_tooltip_popup();
+    if !tt.is_invalid() {
+        ctx.check_tooltip_hwnd = tt.0 as isize;
+    }
+
+    LRESULT(0)
+}
+
+/// Returns `Some` (cursor set to arrow) when the mouse is over the check button.
+unsafe fn on_set_cursor(hwnd: HWND) -> Option<LRESULT> {
+    let mut pt = windows::Win32::Foundation::POINT { x: 0, y: 0 };
+    let _ = windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut pt);
+    let _ = windows::Win32::Graphics::Gdi::ScreenToClient(hwnd, &mut pt);
+    if let Some(ctx) = ctx_from_hwnd(hwnd) {
+        let cr = ctx.check_rect;
+        if pt.x >= cr.left && pt.x < cr.right && pt.y >= cr.top && pt.y < cr.bottom {
+            if let Ok(arrow) = LoadCursorW(None, IDC_ARROW) {
+                let _ = SetCursor(Some(arrow));
+                return Some(LRESULT(1));
+            }
+        }
+    }
+    None
+}
+
+/// Handles `WM_PAINT`: bg fill, tab icon, hover pill + check glyph.
+unsafe fn on_paint(hwnd: HWND) -> LRESULT {
+    let mut ps = PAINTSTRUCT::default();
+    let hdc = BeginPaint(hwnd, &mut ps);
+    if let Some(ctx) = ctx_from_hwnd(hwnd) {
+        let mut client = RECT::default();
+        let _ = windows::Win32::UI::WindowsAndMessaging::GetClientRect(
+            hwnd, &mut client,
+        );
+        // Fill the whole popup with the tab bg. DWM clips the
+        // visible region to a rounded shape so the corners outside
+        // the rounded area are never painted to screen.
+        let _ = FillRect(hdc, &client, ctx.bg_brush);
+        // Tab icon — drawn at the same position as the live strip
+        // so the transition tab → rename feels in-place. Geometry
+        // mirrors `render_strip_inner`'s icon block.
+        if let Some(icon_handle) = ctx.icon {
+            if icon_handle != 0 {
+                let client_h = (client.bottom - client.top).max(1);
+                let icon_size =
+                    ((ctx.strip_h as f32 * 0.57).round() as i32).max(10);
+                let cell_h_local = {
+                    let fc = ((ctx.strip_h as f32 * 0.43).round() as i32).max(8);
+                    (fc * 14 / 10).max(fc + 2)
+                };
+                let visual_pad_local = ((client_h - cell_h_local) / 2).max(3);
+                let icon_left = visual_pad_local;
+                let icon_top = (client_h - icon_size) / 2;
+                let hicon = windows::Win32::UI::WindowsAndMessaging::HICON(
+                    icon_handle as *mut c_void,
+                );
+                let _ = windows::Win32::UI::WindowsAndMessaging::DrawIconEx(
+                    hdc,
+                    icon_left,
+                    icon_top,
+                    hicon,
+                    icon_size,
+                    icon_size,
+                    0,
+                    None,
+                    windows::Win32::UI::WindowsAndMessaging::DI_NORMAL,
+                );
+            }
+        }
+        // Hover pill + check glyph — AA-rendered into a temp DIB
+        // and composited via AlphaBlend so the glyph treatment
+        // matches the close-X in the strip.
+        paint_check_glyph(hdc, ctx);
+    }
+    let _ = EndPaint(hwnd, &ps);
+    LRESULT(0)
+}
+
+/// Handles `WM_MOUSEMOVE`: check-button hover state + tooltip show/hide.
+unsafe fn on_mouse_move(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if let Some(ctx) = ctx_from_hwnd(hwnd) {
+        if !ctx.mouse_tracking_armed {
+            let mut tme = TRACKMOUSEEVENT {
+                cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+                dwFlags: TME_LEAVE,
+                hwndTrack: hwnd,
+                dwHoverTime: 0,
+            };
+            let _ = TrackMouseEvent(&mut tme);
+            ctx.mouse_tracking_armed = true;
+        }
+        let raw = lparam.0 as u32;
+        let mx = (raw & 0xFFFF) as i16 as i32;
+        let my = ((raw >> 16) & 0xFFFF) as i16 as i32;
+        let cr = ctx.check_rect;
+        let over = mx >= cr.left && mx < cr.right && my >= cr.top && my < cr.bottom;
+        if over != ctx.check_hovered {
+            ctx.check_hovered = over;
+            let _ = InvalidateRect(Some(hwnd), Some(&cr), false);
+            // Show tooltip on hover-in, hide on hover-out. Same
+            // visual style as the close-X tooltip (rendered via
+            // the strip's shared tooltip pipeline).
+            if ctx.check_tooltip_hwnd != 0 {
+                let tt = HWND(ctx.check_tooltip_hwnd as *mut c_void);
+                if over && !ctx.check_tooltip_visible {
+                    show_check_tooltip(tt, hwnd, cr, CHECK_TOOLTIP_TEXT);
+                    ctx.check_tooltip_visible = true;
+                } else if !over && ctx.check_tooltip_visible {
+                    hide_check_tooltip(tt);
+                    ctx.check_tooltip_visible = false;
+                }
+            }
+        }
+    }
+    DefWindowProcW(hwnd, msg, wparam, lparam)
+}
+
+/// Handles `WM_MOUSELEAVE`: clears hover state and hides the tooltip.
+unsafe fn on_mouse_leave(hwnd: HWND) -> LRESULT {
+    if let Some(ctx) = ctx_from_hwnd(hwnd) {
+        ctx.mouse_tracking_armed = false;
+        if ctx.check_hovered {
+            ctx.check_hovered = false;
+            let cr = ctx.check_rect;
+            let _ = InvalidateRect(Some(hwnd), Some(&cr), false);
+        }
+        if ctx.check_tooltip_visible && ctx.check_tooltip_hwnd != 0 {
+            hide_check_tooltip(HWND(ctx.check_tooltip_hwnd as *mut c_void));
+            ctx.check_tooltip_visible = false;
+        }
+    }
+    LRESULT(0)
+}
+
+/// Handles the fade-in `WM_TIMER` tick: eased alpha ramp, kills timer at end.
+unsafe fn on_fade_timer(hwnd: HWND) -> LRESULT {
+    if let Some(ctx) = ctx_from_hwnd(hwnd) {
+        let elapsed = ctx.fade_start.elapsed().as_millis() as u64;
+        let t = (elapsed.min(FADE_DURATION_MS) as f32) / FADE_DURATION_MS as f32;
+        // Ease-out cubic — matches the tooltip's fade curve.
+        let eased = 1.0 - (1.0 - t).powi(3);
+        let alpha = (eased * 255.0).round().clamp(0.0, 255.0) as u8;
+        let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), alpha, LWA_ALPHA);
+        if elapsed >= FADE_DURATION_MS {
+            let _ = KillTimer(Some(hwnd), FADE_TIMER_ID);
+        }
+    } else {
+        let _ = KillTimer(Some(hwnd), FADE_TIMER_ID);
+    }
+    LRESULT(0)
+}
+
+/// Handles `WM_LBUTTONDOWN`: commit when the click lands on the check button.
+unsafe fn on_lbutton_down(hwnd: HWND, lparam: LPARAM) -> LRESULT {
+    let raw = lparam.0 as u32;
+    let cx = (raw & 0xFFFF) as i16 as i32;
+    let cy = ((raw >> 16) & 0xFFFF) as i16 as i32;
+    if let Some(ctx) = ctx_from_hwnd(hwnd) {
+        let cr = ctx.check_rect;
+        if cx >= cr.left && cx < cr.right && cy >= cr.top && cy < cr.bottom {
+            let _ = PostMessageW(
+                Some(hwnd),
+                WM_INLINE_RENAME_COMMIT,
+                WPARAM(0),
+                LPARAM(0),
+            );
+            return LRESULT(0);
+        }
+    }
+    LRESULT(0)
+}
+
+/// Handles `WM_ACTIVATE`: refocus EDIT on activate, cancel on click-away.
+unsafe fn on_activate(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    // WA_INACTIVE = 0; any non-zero state means we're activating.
+    let activation = (wparam.0 & 0xFFFF) as u32;
+    if let Some(ctx) = ctx_from_hwnd(hwnd) {
+        if activation != 0 {
+            ctx.activated = true;
+            // Make sure focus is on the EDIT once we're active —
+            // SetFocus during WM_CREATE doesn't always stick if
+            // the popup wasn't foreground at creation time.
+            if !ctx.edit_hwnd.is_invalid() {
+                let _ = SetFocus(Some(ctx.edit_hwnd));
+                SendMessageW(
+                    ctx.edit_hwnd,
+                    EM_SETSEL,
+                    Some(WPARAM(0)),
+                    Some(LPARAM(-1)),
+                );
+            }
+        } else if ctx.activated && !ctx.finishing {
+            // Lost activation after being active → user clicked
+            // elsewhere. Discard. Guard against the initial
+            // creation WA_INACTIVE that fires before WA_ACTIVE on
+            // some Win32 paths.
+            let _ = PostMessageW(
+                Some(hwnd),
+                WM_INLINE_RENAME_CANCEL,
+                WPARAM(0),
+                LPARAM(0),
+            );
+        }
+    }
+    DefWindowProcW(hwnd, msg, wparam, lparam)
+}
+
+/// Handles commit: validates length, stores the result, destroys the popup.
+unsafe fn on_commit(hwnd: HWND) -> LRESULT {
+    if let Some(ctx) = ctx_from_hwnd(hwnd) {
+        let text = read_edit_text(ctx.edit_hwnd);
+        if text.len() > TAB_TITLE_MAX_BYTES {
+            // Reject and re-select so the user can edit down.
+            SendMessageW(
+                ctx.edit_hwnd,
+                EM_SETSEL,
+                Some(WPARAM(0)),
+                Some(LPARAM(-1)),
+            );
+            let _ = SetFocus(Some(ctx.edit_hwnd));
+            return LRESULT(0);
+        }
+        ctx.result = Some(text);
+        ctx.finishing = true;
+    }
+    let _ = DestroyWindow(hwnd);
+    LRESULT(0)
 }
 
 /// Subclassed EDIT proc. Intercepts Esc/Enter and routes them back to

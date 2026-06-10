@@ -345,6 +345,27 @@ pub struct ApplyPlacementsResult {
     pub height_violations: Vec<HeightViolation>,
 }
 
+// Collect all (hwnd, adjusted_rect, flags) entries for deferred positioning.
+// Pre-compute border insets and cache checks before the batch to minimize
+// time between BeginDeferWindowPos and EndDeferWindowPos.
+struct DeferEntry {
+    hwnd: HWND,
+    window_id: u64,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    /// Layout-coordinate width requested by the layout engine (pre-insets).
+    /// Used for size-violation detection, which compares DWM visible bounds
+    /// directly and is immune to stale cached border insets.
+    layout_w: i32,
+    /// Layout-coordinate height requested by the layout engine (pre-insets).
+    layout_h: i32,
+    visibility: Visibility,
+    flags: windows::Win32::UI::WindowsAndMessaging::SET_WINDOW_POS_FLAGS,
+    column_index: usize,
+}
+
 /// Apply window placements from the layout engine.
 ///
 /// Visible windows are positioned immediately via SetWindowPos.
@@ -353,7 +374,6 @@ pub struct ApplyPlacementsResult {
 /// When `cache` is provided, placements whose rect and visibility match the
 /// cached values are skipped, avoiding redundant Win32 calls during animations
 /// where most windows haven't moved.
-#[allow(clippy::too_many_lines)] // TODO: decompose (~337 lines, grandfathered)
 pub fn apply_placements(
     placements: &[WindowPlacement],
     _config: &PlatformConfig,
@@ -383,31 +403,6 @@ pub fn apply_placements(
         SET_WINDOW_POS_FLAGS(0)
     };
 
-    let mut applied = 0u32;
-    let mut skipped = 0u32;
-
-    // Collect all (hwnd, adjusted_rect, flags) entries for deferred positioning.
-    // Pre-compute border insets and cache checks before the batch to minimize
-    // time between BeginDeferWindowPos and EndDeferWindowPos.
-    struct DeferEntry {
-        hwnd: HWND,
-        window_id: u64,
-        x: i32,
-        y: i32,
-        w: i32,
-        h: i32,
-        /// Layout-coordinate width requested by the layout engine (pre-insets).
-        /// Used for size-violation detection, which compares DWM visible bounds
-        /// directly and is immune to stale cached border insets.
-        layout_w: i32,
-        /// Layout-coordinate height requested by the layout engine (pre-insets).
-        layout_h: i32,
-        visibility: Visibility,
-        flags: windows::Win32::UI::WindowsAndMessaging::SET_WINDOW_POS_FLAGS,
-        column_index: usize,
-    }
-    let mut entries: Vec<DeferEntry> = Vec::with_capacity(placements.len());
-
     // Prepare all window entries — visible and off-screen alike.
     // All windows get full position + size with border inset adjustment.
     // Off-screen windows are kept at their layout-flow position; DWM cloaking
@@ -419,82 +414,7 @@ pub fn apply_placements(
     // overlap and the layout gaps disappear.  Zero the insets to keep correct spacing.
     let high_contrast = crate::is_high_contrast_enabled();
 
-    for placement in placements {
-        if let Some(ref cache) = cache {
-            if cache.positions.get(&placement.window_id) == Some(&(placement.rect, placement.visibility)) {
-                skipped += 1;
-                continue;
-            }
-        }
-        let Ok(hwnd) = window_id_to_hwnd(placement.window_id) else { continue };
-        unsafe {
-            if !IsWindow(Some(hwnd)).as_bool() || IsIconic(hwnd).as_bool() {
-                continue;
-            }
-            // Restore maximized tiled windows before positioning — WS_MAXIMIZE
-            // causes some windows to ignore SetWindowPos size changes.
-            // Only for tiled windows (column_index != MAX); floating windows
-            // may be intentionally maximized by the user.
-            if placement.visibility == Visibility::Visible
-                && placement.column_index != usize::MAX
-                && IsZoomed(hwnd).as_bool()
-            {
-                let _ = ShowWindow(hwnd, SW_RESTORE);
-            }
-        }
-
-        let (inset_l, inset_t, inset_r, inset_b) = if high_contrast {
-            (0, 0, 0, 0)
-        } else {
-            cached_border_insets(hwnd, placement.window_id, cache.as_deref_mut())
-        };
-        let frame_w = placement.rect.width + inset_l + inset_r;
-        let frame_h = placement.rect.height + inset_t + inset_b;
-
-        if placement.visibility == Visibility::Visible {
-            let mut flags = SWP_NOZORDER | SWP_NOACTIVATE | async_flag;
-            // Only send SWP_FRAMECHANGED (expensive WM_NCCALCSIZE) on first
-            // frame or landing pass — not every animation frame.
-            let needs_frame_changed = if let Some(ref cache) = cache {
-                !cache.positions.contains_key(&placement.window_id)
-            } else {
-                true
-            };
-            if needs_frame_changed {
-                flags |= SWP_FRAMECHANGED;
-            }
-            entries.push(DeferEntry {
-                hwnd,
-                window_id: placement.window_id,
-                x: placement.rect.x - inset_l,
-                y: placement.rect.y - inset_t,
-                w: frame_w,
-                h: frame_h,
-                layout_w: placement.rect.width,
-                layout_h: placement.rect.height,
-                visibility: placement.visibility,
-                flags,
-                column_index: placement.column_index,
-            });
-        } else {
-            // Off-screen: SWP_NOSIZE keeps current size (no resize side-effects).
-            // w stores estimated frame width for clamping only — SetWindowPos
-            // ignores it due to SWP_NOSIZE.
-            entries.push(DeferEntry {
-                hwnd,
-                window_id: placement.window_id,
-                x: placement.rect.x - inset_l,
-                y: placement.rect.y - inset_t,
-                w: frame_w,
-                h: 0,
-                layout_w: placement.rect.width,
-                layout_h: placement.rect.height,
-                visibility: placement.visibility,
-                flags: SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | async_flag,
-                column_index: placement.column_index,
-            });
-        }
-    }
+    let (entries, skipped) = build_defer_entries(placements, &mut cache, async_flag, high_contrast);
 
     // Uncloak windows that are becoming visible BEFORE positioning,
     // so DWM starts compositing them at the correct location on this frame.
@@ -505,94 +425,9 @@ pub fn apply_placements(
     // `GHOST_CLOAKED` (e.g. scrolling off-screen → on-screen with ghost
     // animation in flight) stays cloaked until the ghost path also
     // releases it.
-    {
-        let to_consider: Vec<WindowId> = {
-            let mut cloaked = lock_cloaked();
-            if let Some(ref mut set) = *cloaked {
-                entries
-                    .iter()
-                    .filter(|e| e.visibility == Visibility::Visible && set.remove(&e.window_id))
-                    .map(|e| e.window_id)
-                    .collect()
-            } else {
-                Vec::new()
-            }
-        };
-        for wid in to_consider {
-            apply_cloak_state(wid);
-        }
-    }
+    uncloak_becoming_visible(&entries);
 
-    // Track windows that failed positioning (excluded from cache).
-    let mut failed_window_ids: std::collections::HashSet<u64> = std::collections::HashSet::new();
-
-    // Batch all SetWindowPos calls via DeferWindowPos for atomic repositioning.
-    if !entries.is_empty() {
-        unsafe {
-            match BeginDeferWindowPos(entries.len() as i32) {
-            Err(_) => {
-                // Fallback: apply individually if batching fails
-                for entry in &entries {
-                    if SetWindowPos(
-                        entry.hwnd, None,
-                        entry.x, entry.y, entry.w, entry.h,
-                        entry.flags,
-                    ).is_err() {
-                        failed_window_ids.insert(entry.window_id);
-                    }
-                }
-                applied = (entries.len() - failed_window_ids.len()) as u32;
-            }
-            Ok(initial_hdwp) => {
-                let mut hdwp = initial_hdwp;
-                let mut batch_ok = true;
-                for entry in &entries {
-                    match DeferWindowPos(
-                        hdwp, entry.hwnd, None,
-                        entry.x, entry.y, entry.w, entry.h,
-                        entry.flags,
-                    ) {
-                        Ok(new_hdwp) => hdwp = new_hdwp,
-                        Err(_) => {
-                            batch_ok = false;
-                            break;
-                        }
-                    }
-                }
-                if batch_ok {
-                    if EndDeferWindowPos(hdwp).is_err() {
-                        // EndDeferWindowPos failed — fall back to individual calls
-                        for entry in &entries {
-                            if SetWindowPos(
-                                entry.hwnd, None,
-                                entry.x, entry.y, entry.w, entry.h,
-                                entry.flags,
-                            ).is_err() {
-                                failed_window_ids.insert(entry.window_id);
-                            }
-                        }
-                        applied = (entries.len() - failed_window_ids.len()) as u32;
-                    } else {
-                        applied = entries.len() as u32;
-                    }
-                } else {
-                    // DeferWindowPos failed — HDWP is already freed by Win32.
-                    // Fall back to individual SetWindowPos calls.
-                    for entry in &entries {
-                        if SetWindowPos(
-                            entry.hwnd, None,
-                            entry.x, entry.y, entry.w, entry.h,
-                            entry.flags,
-                        ).is_err() {
-                            failed_window_ids.insert(entry.window_id);
-                        }
-                    }
-                    applied = (entries.len() - failed_window_ids.len()) as u32;
-                }
-            }
-            }
-        }
-    }
+    let (applied, failed_window_ids) = position_entries(&entries);
 
     // Detect size violations by comparing the DWM extended frame bounds
     // (the window's actual visible content area) against the layout rect the
@@ -609,120 +444,11 @@ pub fn apply_placements(
     // bounds which would create false constraints that prevent columns from
     // shrinking. The synchronous landing pass detects real violations
     // authoritatively.
-    let mut width_violations = Vec::new();
-    let mut height_violations = Vec::new();
-    if async_flag == SET_WINDOW_POS_FLAGS(0) {
-        // Wait for the compositor to composite a frame before reading DWM
-        // bounds. Sync SetWindowPos only guarantees the target thread received
-        // WM_WINDOWPOSCHANGED — it does NOT wait for the target to process and
-        // re-render. Under CPU pressure (e.g. a background `cargo test` build),
-        // the target thread can lag behind: we'd read PRE-shrink bounds,
-        // interpret the oversized rect as a min-size violation, and record a
-        // bogus constraint that breaks subsequent layouts (e.g. a 50/50 column
-        // turning into 75/50 because one window's min_height got inflated).
-        //
-        // DwmFlush blocks for ~one vsync (~16ms) until the compositor has
-        // presented a frame incorporating our just-applied positions. Cheap
-        // on the landing pass (runs once per settle, not per frame).
-        unsafe {
-            let _ = DwmFlush();
-        }
-        for entry in &entries {
-            if entry.column_index == usize::MAX
-                || entry.visibility != Visibility::Visible
-                || failed_window_ids.contains(&entry.window_id)
-            {
-                continue;
-            }
-            // Query DWM for the current visible bounds. This ignores any
-            // invisible-border metrics and reports what the user actually sees.
-            let (visible_w, visible_h) = unsafe {
-                let mut ext = RECT::default();
-                if DwmGetWindowAttribute(
-                    entry.hwnd,
-                    DWMWA_EXTENDED_FRAME_BOUNDS,
-                    &mut ext as *mut RECT as *mut _,
-                    std::mem::size_of::<RECT>() as u32,
-                )
-                .is_err()
-                {
-                    continue;
-                }
-                (ext.right - ext.left, ext.bottom - ext.top)
-            };
-
-            // Sanity cap — a genuine min-size violation has the window just
-            // barely larger than requested (tens of pixels at most). If DWM
-            // reports bounds >1.5x the requested size, the target thread is
-            // almost certainly lagging behind our just-applied resize under
-            // CPU pressure (despite the DwmFlush above this can still happen
-            // for extremely unresponsive apps). Recording these as real
-            // constraints would permanently inflate future layouts. Skip them
-            // and let the next landing pass re-measure authoritatively.
-            const STALE_BOUNDS_RATIO: i32 = 3; // visible > requested * 3/2 → skip
-            let looks_stale_w = entry.layout_w > 0
-                && visible_w * 2 > entry.layout_w * STALE_BOUNDS_RATIO;
-            let looks_stale_h = entry.layout_h > 0
-                && visible_h * 2 > entry.layout_h * STALE_BOUNDS_RATIO;
-
-            let mut mismatched = false;
-            if visible_w > entry.layout_w + 2 && !looks_stale_w {
-                tracing::debug!(
-                    "Width violation: {:?} requested {}px, visible {}px",
-                    entry.hwnd, entry.layout_w, visible_w,
-                );
-                width_violations.push(WidthViolation {
-                    window_id: entry.window_id,
-                    min_width: visible_w,
-                });
-                mismatched = true;
-            } else if visible_w > entry.layout_w + 2 && looks_stale_w {
-                tracing::warn!(
-                    "Skipping suspect width violation (stale DWM bounds?): {:?} \
-                     requested {}px, visible {}px ({}x reported)",
-                    entry.hwnd,
-                    entry.layout_w,
-                    visible_w,
-                    visible_w as f32 / entry.layout_w.max(1) as f32,
-                );
-            }
-            if visible_h > entry.layout_h + 2 && !looks_stale_h {
-                tracing::debug!(
-                    "Height violation: {:?} requested {}px, visible {}px",
-                    entry.hwnd, entry.layout_h, visible_h,
-                );
-                height_violations.push(HeightViolation {
-                    window_id: entry.window_id,
-                    min_height: visible_h,
-                });
-                mismatched = true;
-            } else if visible_h > entry.layout_h + 2 && looks_stale_h {
-                tracing::warn!(
-                    "Skipping suspect height violation (stale DWM bounds?): {:?} \
-                     requested {}px, visible {}px ({}x reported)",
-                    entry.hwnd,
-                    entry.layout_h,
-                    visible_h,
-                    visible_h as f32 / entry.layout_h.max(1) as f32,
-                );
-            }
-
-            // On any mismatch, invalidate the cached border insets for this
-            // window. Stale insets are the most likely reason a prior frame
-            // sized the frame incorrectly, and the next SetWindowPos should
-            // re-query DWM for fresh values.
-            if mismatched {
-                if let Some(ref mut cache) = cache {
-                    cache.insets.remove(&entry.window_id);
-                }
-                if let Ok(mut global) = GLOBAL_INSET_CACHE.lock() {
-                    if let Some(ref mut m) = *global {
-                        m.remove(&entry.window_id);
-                    }
-                }
-            }
-        }
-    } // end: skip size violation detection during async frames
+    let (width_violations, height_violations) = if async_flag == SET_WINDOW_POS_FLAGS(0) {
+        detect_size_violations(&entries, &failed_window_ids, &mut cache)
+    } else {
+        (Vec::new(), Vec::new())
+    }; // end: skip size violation detection during async frames
 
     // Update cache: remove stale entries (windows no longer in placements),
     // update positioned entries, and keep skipped-unchanged entries intact.
@@ -753,39 +479,7 @@ pub fn apply_placements(
     // Routed through `apply_cloak_state` so a window that's also in
     // `GHOST_CLOAKED` stays cloaked even if we remove it from
     // `GLOBAL_CLOAKED` during pruning.
-    {
-        let (to_cloak, to_uncloak): (Vec<WindowId>, Vec<WindowId>) = {
-            let mut cloaked = lock_cloaked();
-            let set = cloaked.get_or_insert_with(HashSet::new);
-
-            let cloak: Vec<WindowId> = entries
-                .iter()
-                .filter(|e| {
-                    !failed_window_ids.contains(&e.window_id)
-                        && e.visibility != Visibility::Visible
-                        && set.insert(e.window_id)
-                })
-                .map(|e| e.window_id)
-                .collect();
-
-            // Prune windows no longer in the layout (e.g., workspace switch).
-            let current_ids: HashSet<u64> = placements.iter().map(|p| p.window_id).collect();
-            let uncloak: Vec<WindowId> = set
-                .iter()
-                .filter(|id| !current_ids.contains(id))
-                .copied()
-                .collect();
-            set.retain(|id| current_ids.contains(id));
-
-            (cloak, uncloak)
-        };
-        for wid in to_cloak {
-            apply_cloak_state(wid);
-        }
-        for wid in to_uncloak {
-            apply_cloak_state(wid);
-        }
-    }
+    sync_cloak_state(&entries, placements, &failed_window_ids);
 
     // DirectComposition swap-chain repair.
     //
@@ -827,6 +521,353 @@ pub fn apply_placements(
         width_violations,
         height_violations,
     })
+}
+
+/// Build the defer-entry list for all placements, skipping cache-unchanged windows.
+fn build_defer_entries(
+    placements: &[WindowPlacement],
+    cache: &mut Option<&mut PlacementCache>,
+    async_flag: SET_WINDOW_POS_FLAGS,
+    high_contrast: bool,
+) -> (Vec<DeferEntry>, u32) {
+    let mut skipped = 0u32;
+    let mut entries: Vec<DeferEntry> = Vec::with_capacity(placements.len());
+
+    for placement in placements {
+        if let Some(ref cache) = *cache {
+            if cache.positions.get(&placement.window_id) == Some(&(placement.rect, placement.visibility)) {
+                skipped += 1;
+                continue;
+            }
+        }
+        let Ok(hwnd) = window_id_to_hwnd(placement.window_id) else { continue };
+        unsafe {
+            if !IsWindow(Some(hwnd)).as_bool() || IsIconic(hwnd).as_bool() {
+                continue;
+            }
+            // Restore maximized tiled windows before positioning — WS_MAXIMIZE
+            // causes some windows to ignore SetWindowPos size changes.
+            // Only for tiled windows (column_index != MAX); floating windows
+            // may be intentionally maximized by the user.
+            if placement.visibility == Visibility::Visible
+                && placement.column_index != usize::MAX
+                && IsZoomed(hwnd).as_bool()
+            {
+                let _ = ShowWindow(hwnd, SW_RESTORE);
+            }
+        }
+
+        let (inset_l, inset_t, inset_r, inset_b) = if high_contrast {
+            (0, 0, 0, 0)
+        } else {
+            cached_border_insets(hwnd, placement.window_id, cache.as_deref_mut())
+        };
+        let frame_w = placement.rect.width + inset_l + inset_r;
+        let frame_h = placement.rect.height + inset_t + inset_b;
+
+        if placement.visibility == Visibility::Visible {
+            let mut flags = SWP_NOZORDER | SWP_NOACTIVATE | async_flag;
+            // Only send SWP_FRAMECHANGED (expensive WM_NCCALCSIZE) on first
+            // frame or landing pass — not every animation frame.
+            let needs_frame_changed = if let Some(ref cache) = *cache {
+                !cache.positions.contains_key(&placement.window_id)
+            } else {
+                true
+            };
+            if needs_frame_changed {
+                flags |= SWP_FRAMECHANGED;
+            }
+            entries.push(DeferEntry {
+                hwnd,
+                window_id: placement.window_id,
+                x: placement.rect.x - inset_l,
+                y: placement.rect.y - inset_t,
+                w: frame_w,
+                h: frame_h,
+                layout_w: placement.rect.width,
+                layout_h: placement.rect.height,
+                visibility: placement.visibility,
+                flags,
+                column_index: placement.column_index,
+            });
+        } else {
+            // Off-screen: SWP_NOSIZE keeps current size (no resize side-effects).
+            // w stores estimated frame width for clamping only — SetWindowPos
+            // ignores it due to SWP_NOSIZE.
+            entries.push(DeferEntry {
+                hwnd,
+                window_id: placement.window_id,
+                x: placement.rect.x - inset_l,
+                y: placement.rect.y - inset_t,
+                w: frame_w,
+                h: 0,
+                layout_w: placement.rect.width,
+                layout_h: placement.rect.height,
+                visibility: placement.visibility,
+                flags: SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | async_flag,
+                column_index: placement.column_index,
+            });
+        }
+    }
+
+    (entries, skipped)
+}
+
+/// Uncloak entries becoming visible and drop them from the tracking set.
+fn uncloak_becoming_visible(entries: &[DeferEntry]) {
+    let to_consider: Vec<WindowId> = {
+        let mut cloaked = lock_cloaked();
+        if let Some(ref mut set) = *cloaked {
+            entries
+                .iter()
+                .filter(|e| e.visibility == Visibility::Visible && set.remove(&e.window_id))
+                .map(|e| e.window_id)
+                .collect()
+        } else {
+            Vec::new()
+        }
+    };
+    for wid in to_consider {
+        apply_cloak_state(wid);
+    }
+}
+
+/// Position all entries in one DeferWindowPos batch; returns (applied, failed ids).
+fn position_entries(entries: &[DeferEntry]) -> (u32, HashSet<u64>) {
+    let mut applied = 0u32;
+
+    // Track windows that failed positioning (excluded from cache).
+    let mut failed_window_ids: std::collections::HashSet<u64> = std::collections::HashSet::new();
+
+    // Batch all SetWindowPos calls via DeferWindowPos for atomic repositioning.
+    if !entries.is_empty() {
+        unsafe {
+            match BeginDeferWindowPos(entries.len() as i32) {
+            Err(_) => {
+                // Fallback: apply individually if batching fails
+                for entry in entries {
+                    if SetWindowPos(
+                        entry.hwnd, None,
+                        entry.x, entry.y, entry.w, entry.h,
+                        entry.flags,
+                    ).is_err() {
+                        failed_window_ids.insert(entry.window_id);
+                    }
+                }
+                applied = (entries.len() - failed_window_ids.len()) as u32;
+            }
+            Ok(initial_hdwp) => {
+                let mut hdwp = initial_hdwp;
+                let mut batch_ok = true;
+                for entry in entries {
+                    match DeferWindowPos(
+                        hdwp, entry.hwnd, None,
+                        entry.x, entry.y, entry.w, entry.h,
+                        entry.flags,
+                    ) {
+                        Ok(new_hdwp) => hdwp = new_hdwp,
+                        Err(_) => {
+                            batch_ok = false;
+                            break;
+                        }
+                    }
+                }
+                if batch_ok {
+                    if EndDeferWindowPos(hdwp).is_err() {
+                        // EndDeferWindowPos failed — fall back to individual calls
+                        for entry in entries {
+                            if SetWindowPos(
+                                entry.hwnd, None,
+                                entry.x, entry.y, entry.w, entry.h,
+                                entry.flags,
+                            ).is_err() {
+                                failed_window_ids.insert(entry.window_id);
+                            }
+                        }
+                        applied = (entries.len() - failed_window_ids.len()) as u32;
+                    } else {
+                        applied = entries.len() as u32;
+                    }
+                } else {
+                    // DeferWindowPos failed — HDWP is already freed by Win32.
+                    // Fall back to individual SetWindowPos calls.
+                    for entry in entries {
+                        if SetWindowPos(
+                            entry.hwnd, None,
+                            entry.x, entry.y, entry.w, entry.h,
+                            entry.flags,
+                        ).is_err() {
+                            failed_window_ids.insert(entry.window_id);
+                        }
+                    }
+                    applied = (entries.len() - failed_window_ids.len()) as u32;
+                }
+            }
+            }
+        }
+    }
+
+    (applied, failed_window_ids)
+}
+
+/// Detect min-size violations on the landing pass via DWM visible bounds.
+fn detect_size_violations(
+    entries: &[DeferEntry],
+    failed_window_ids: &HashSet<u64>,
+    cache: &mut Option<&mut PlacementCache>,
+) -> (Vec<WidthViolation>, Vec<HeightViolation>) {
+    let mut width_violations = Vec::new();
+    let mut height_violations = Vec::new();
+    // Wait for the compositor to composite a frame before reading DWM
+    // bounds. Sync SetWindowPos only guarantees the target thread received
+    // WM_WINDOWPOSCHANGED — it does NOT wait for the target to process and
+    // re-render. Under CPU pressure (e.g. a background `cargo test` build),
+    // the target thread can lag behind: we'd read PRE-shrink bounds,
+    // interpret the oversized rect as a min-size violation, and record a
+    // bogus constraint that breaks subsequent layouts (e.g. a 50/50 column
+    // turning into 75/50 because one window's min_height got inflated).
+    //
+    // DwmFlush blocks for ~one vsync (~16ms) until the compositor has
+    // presented a frame incorporating our just-applied positions. Cheap
+    // on the landing pass (runs once per settle, not per frame).
+    unsafe {
+        let _ = DwmFlush();
+    }
+    for entry in entries {
+        if entry.column_index == usize::MAX
+            || entry.visibility != Visibility::Visible
+            || failed_window_ids.contains(&entry.window_id)
+        {
+            continue;
+        }
+        // Query DWM for the current visible bounds. This ignores any
+        // invisible-border metrics and reports what the user actually sees.
+        let (visible_w, visible_h) = unsafe {
+            let mut ext = RECT::default();
+            if DwmGetWindowAttribute(
+                entry.hwnd,
+                DWMWA_EXTENDED_FRAME_BOUNDS,
+                &mut ext as *mut RECT as *mut _,
+                std::mem::size_of::<RECT>() as u32,
+            )
+            .is_err()
+            {
+                continue;
+            }
+            (ext.right - ext.left, ext.bottom - ext.top)
+        };
+
+        // Sanity cap — a genuine min-size violation has the window just
+        // barely larger than requested (tens of pixels at most). If DWM
+        // reports bounds >1.5x the requested size, the target thread is
+        // almost certainly lagging behind our just-applied resize under
+        // CPU pressure (despite the DwmFlush above this can still happen
+        // for extremely unresponsive apps). Recording these as real
+        // constraints would permanently inflate future layouts. Skip them
+        // and let the next landing pass re-measure authoritatively.
+        const STALE_BOUNDS_RATIO: i32 = 3; // visible > requested * 3/2 → skip
+        let looks_stale_w = entry.layout_w > 0
+            && visible_w * 2 > entry.layout_w * STALE_BOUNDS_RATIO;
+        let looks_stale_h = entry.layout_h > 0
+            && visible_h * 2 > entry.layout_h * STALE_BOUNDS_RATIO;
+
+        let mut mismatched = false;
+        if visible_w > entry.layout_w + 2 && !looks_stale_w {
+            tracing::debug!(
+                "Width violation: {:?} requested {}px, visible {}px",
+                entry.hwnd, entry.layout_w, visible_w,
+            );
+            width_violations.push(WidthViolation {
+                window_id: entry.window_id,
+                min_width: visible_w,
+            });
+            mismatched = true;
+        } else if visible_w > entry.layout_w + 2 && looks_stale_w {
+            tracing::warn!(
+                "Skipping suspect width violation (stale DWM bounds?): {:?} \
+                 requested {}px, visible {}px ({}x reported)",
+                entry.hwnd,
+                entry.layout_w,
+                visible_w,
+                visible_w as f32 / entry.layout_w.max(1) as f32,
+            );
+        }
+        if visible_h > entry.layout_h + 2 && !looks_stale_h {
+            tracing::debug!(
+                "Height violation: {:?} requested {}px, visible {}px",
+                entry.hwnd, entry.layout_h, visible_h,
+            );
+            height_violations.push(HeightViolation {
+                window_id: entry.window_id,
+                min_height: visible_h,
+            });
+            mismatched = true;
+        } else if visible_h > entry.layout_h + 2 && looks_stale_h {
+            tracing::warn!(
+                "Skipping suspect height violation (stale DWM bounds?): {:?} \
+                 requested {}px, visible {}px ({}x reported)",
+                entry.hwnd,
+                entry.layout_h,
+                visible_h,
+                visible_h as f32 / entry.layout_h.max(1) as f32,
+            );
+        }
+
+        // On any mismatch, invalidate the cached border insets for this
+        // window. Stale insets are the most likely reason a prior frame
+        // sized the frame incorrectly, and the next SetWindowPos should
+        // re-query DWM for fresh values.
+        if mismatched {
+            if let Some(ref mut cache) = *cache {
+                cache.insets.remove(&entry.window_id);
+            }
+            if let Ok(mut global) = GLOBAL_INSET_CACHE.lock() {
+                if let Some(ref mut m) = *global {
+                    m.remove(&entry.window_id);
+                }
+            }
+        }
+    }
+    (width_violations, height_violations)
+}
+
+/// Cloak newly off-screen entries and prune cloaks for windows no longer in the layout.
+fn sync_cloak_state(
+    entries: &[DeferEntry],
+    placements: &[WindowPlacement],
+    failed_window_ids: &HashSet<u64>,
+) {
+    let (to_cloak, to_uncloak): (Vec<WindowId>, Vec<WindowId>) = {
+        let mut cloaked = lock_cloaked();
+        let set = cloaked.get_or_insert_with(HashSet::new);
+
+        let cloak: Vec<WindowId> = entries
+            .iter()
+            .filter(|e| {
+                !failed_window_ids.contains(&e.window_id)
+                    && e.visibility != Visibility::Visible
+                    && set.insert(e.window_id)
+            })
+            .map(|e| e.window_id)
+            .collect();
+
+        // Prune windows no longer in the layout (e.g., workspace switch).
+        let current_ids: HashSet<u64> = placements.iter().map(|p| p.window_id).collect();
+        let uncloak: Vec<WindowId> = set
+            .iter()
+            .filter(|id| !current_ids.contains(id))
+            .copied()
+            .collect();
+        set.retain(|id| current_ids.contains(id));
+
+        (cloak, uncloak)
+    };
+    for wid in to_cloak {
+        apply_cloak_state(wid);
+    }
+    for wid in to_uncloak {
+        apply_cloak_state(wid);
+    }
 }
 
 /// Window classes whose compositor (DirectComposition / swap-chain based)

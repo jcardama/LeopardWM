@@ -364,6 +364,7 @@ impl TabStripOverlay {
     /// Create the tab strip overlay on a background thread.
     /// `action_tx` receives `TabActionEvent` whenever the user invokes a
     /// tab action (click, middle-click, right-click menu, etc.).
+    #[cfg_attr(test, allow(unused_variables))] // the cfg(test) panic makes the param unused
     pub fn new(action_tx: mpsc::Sender<TabActionEvent>) -> Result<Self, Win32Error> {
         #[cfg(test)]
         panic!("TabStripOverlay::new spawns a layered DWM window; gate the call behind cfg(test)");
@@ -2333,10 +2334,506 @@ pub(crate) unsafe fn create_glyph_bitmap_at_size(
     hbitmap
 }
 
+// Highlight slide animation tick. Re-renders the strip with the
+// interpolated highlight position; clears the transition (and kills
+// the timer) when the slide reaches its target.
+/// Handles the highlight slide-animation `WM_TIMER` tick.
+unsafe fn on_highlight_anim_tick(hwnd: HWND) -> LRESULT {
+    let (strip_x, strip_y, strip_w, strip_h, finished) = {
+        let mut reg = registry();
+        let Some(state) = reg.states.get_mut(&(hwnd.0 as isize)) else {
+            return LRESULT(0);
+        };
+        let finished = state.transition.is_none_or(|t| {
+            t.started_at.elapsed().as_millis() as u64 >= HIGHLIGHT_ANIM_MS
+        });
+        if finished {
+            state.transition = None;
+        }
+        (
+            state.strip_screen_x,
+            state.strip_screen_y,
+            state.strip_w,
+            state.strip_h,
+            finished,
+        )
+    };
+    render_strip_now(hwnd, strip_x, strip_y, strip_w, strip_h);
+    if finished {
+        let _ = KillTimer(Some(hwnd), HIGHLIGHT_ANIM_TIMER_ID);
+    }
+    LRESULT(0)
+}
+
+// Hover tracking. Windows clears the TME_LEAVE subscription each
+// time it fires WM_MOUSELEAVE, so re-arm on the next mouse entry.
+/// Handles `WM_MOUSEMOVE`: hover tracking and tooltip-delay arming.
+unsafe fn on_strip_mouse_move(hwnd: HWND, lparam: LPARAM) -> LRESULT {
+    let raw = lparam.0 as u32;
+    let mouse_x = (raw & 0xFFFF) as i16 as i32;
+    let mouse_y = ((raw >> 16) & 0xFFFF) as i16 as i32;
+    let mut needs_repaint = false;
+    let (strip_x, strip_y, strip_w, strip_h, close_hover_changed, now_over_close) = {
+        let mut reg = registry();
+        let Some(state) = reg.states.get_mut(&(hwnd.0 as isize)) else {
+            return LRESULT(0);
+        };
+        if !state.mouse_tracking_armed {
+            let mut tme = TRACKMOUSEEVENT {
+                cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+                dwFlags: TME_LEAVE,
+                hwndTrack: hwnd,
+                dwHoverTime: 0,
+            };
+            let _ = TrackMouseEvent(&mut tme);
+            state.mouse_tracking_armed = true;
+        }
+        let new_hover = state.hit_rects.iter().enumerate().find_map(|(i, r)| {
+            if mouse_x >= r.left
+                && mouse_x < r.right
+                && mouse_y >= r.top
+                && mouse_y < r.bottom
+            {
+                Some(i)
+            } else {
+                None
+            }
+        });
+        // Whether the mouse is over a close-X glyph specifically.
+        // Drives the button-style hover bg behind the X — so the X
+        // reads as a clickable button when targeted, plain when the
+        // user is just hovering the tab body.
+        let new_close_hover =
+            state.close_hit_rects.iter().enumerate().find_map(|(i, r)| {
+                if mouse_x >= r.left
+                    && mouse_x < r.right
+                    && mouse_y >= r.top
+                    && mouse_y < r.bottom
+                {
+                    Some(i)
+                } else {
+                    None
+                }
+            });
+        if state.hovered_tab_idx != new_hover {
+            state.hovered_tab_idx = new_hover;
+            needs_repaint = true;
+        }
+        let close_hover_changed = state.hovered_close_idx != new_close_hover;
+        if close_hover_changed {
+            state.hovered_close_idx = new_close_hover;
+            state.tooltip_pending_tab = new_close_hover;
+            needs_repaint = true;
+        }
+        (
+            state.strip_screen_x,
+            state.strip_screen_y,
+            state.strip_w,
+            state.strip_h,
+            close_hover_changed,
+            new_close_hover.is_some(),
+        )
+    };
+    if needs_repaint {
+        render_strip_now(hwnd, strip_x, strip_y, strip_w, strip_h);
+    }
+    // Tooltip-delay timer: on every close-X hover transition,
+    // (1) hide any currently-showing tooltip so it doesn't linger
+    //     on the wrong X, (2) kill any pending one-shot, (3) start
+    //     a fresh one-shot if we're now over a close-X.
+    if close_hover_changed {
+        let _ = KillTimer(Some(hwnd), TOOLTIP_DELAY_TIMER_ID);
+        hide_tooltip_popup(hwnd);
+        if now_over_close {
+            let _ = SetTimer(
+                Some(hwnd),
+                TOOLTIP_DELAY_TIMER_ID,
+                TOOLTIP_DELAY_MS,
+                None,
+            );
+        }
+    }
+    LRESULT(0)
+}
+
+/// Handles `WM_MOUSELEAVE`: clears hover state and hides the tooltip.
+unsafe fn on_strip_mouse_leave(hwnd: HWND) -> LRESULT {
+    let (strip_x, strip_y, strip_w, strip_h, had_hover) = {
+        let mut reg = registry();
+        let Some(state) = reg.states.get_mut(&(hwnd.0 as isize)) else {
+            return LRESULT(0);
+        };
+        let had_hover = state.hovered_tab_idx.is_some()
+            || state.hovered_close_idx.is_some();
+        state.hovered_tab_idx = None;
+        state.hovered_close_idx = None;
+        state.tooltip_pending_tab = None;
+        state.mouse_tracking_armed = false;
+        (
+            state.strip_screen_x,
+            state.strip_screen_y,
+            state.strip_w,
+            state.strip_h,
+            had_hover,
+        )
+    };
+    let _ = KillTimer(Some(hwnd), TOOLTIP_DELAY_TIMER_ID);
+    hide_tooltip_popup(hwnd);
+    if had_hover {
+        render_strip_now(hwnd, strip_x, strip_y, strip_w, strip_h);
+    }
+    LRESULT(0)
+}
+
+// Tooltip-delay one-shot. Fires `TOOLTIP_DELAY_MS` after the user
+// first enters a close-X; shows the popup if they're still parked
+// on the same X.
+/// Handles the tooltip-delay `WM_TIMER` one-shot.
+unsafe fn on_tooltip_delay_fired(hwnd: HWND) -> LRESULT {
+    let _ = KillTimer(Some(hwnd), TOOLTIP_DELAY_TIMER_ID);
+    // Snapshot what we need to position the popup, then drop the
+    // lock before SetWindowPos calls.
+    let snapshot = {
+        let reg = registry();
+        let Some(state) = reg.states.get(&(hwnd.0 as isize)) else {
+            return LRESULT(0);
+        };
+        // Verify the user is still over the same close-X we armed
+        // the timer for. If pending was cleared or hover diverged,
+        // bail without showing.
+        let idx = match state.tooltip_pending_tab {
+            Some(i) if state.hovered_close_idx == Some(i) => i,
+            _ => return LRESULT(0),
+        };
+        let rect = match state.close_hit_rects.get(idx) {
+            Some(r) => *r,
+            None => return LRESULT(0),
+        };
+        let screen_rect = RECT {
+            left: state.strip_screen_x + rect.left,
+            top: state.strip_screen_y + rect.top,
+            right: state.strip_screen_x + rect.right,
+            bottom: state.strip_screen_y + rect.bottom,
+        };
+        (tooltip_text_for(state.close_action).to_string(), screen_rect)
+    };
+    let (text, screen_rect) = snapshot;
+    show_tooltip_popup(hwnd, &text, screen_rect);
+    LRESULT(0)
+}
+
+/// Handles `WM_LBUTTONDOWN`: activates a tab or triggers its close-X.
+unsafe fn on_tab_left_click(hwnd: HWND, lparam: LPARAM) -> LRESULT {
+    // LPARAM low word = x, high word = y, both window-relative.
+    let raw = lparam.0 as u32;
+    let click_x = (raw & 0xFFFF) as i16 as i32;
+    let click_y = ((raw >> 16) & 0xFFFF) as i16 as i32;
+    // Decide what to dispatch under the lock, then drop it before
+    // calling helpers that re-acquire the registry.
+    enum LClick {
+        Close { ev: TabActionEvent },
+        Activate { ev: TabActionEvent },
+    }
+    let decision: Option<LClick> = {
+        let reg = registry();
+        let Some(state) = reg.states.get(&(hwnd.0 as isize)) else {
+            return LRESULT(0);
+        };
+        let mut hit: Option<LClick> = None;
+        for (idx, rect) in state.close_hit_rects.iter().enumerate() {
+            if click_x >= rect.left
+                && click_x < rect.right
+                && click_y >= rect.top
+                && click_y < rect.bottom
+            {
+                let action = match state.close_action {
+                    TabCloseAction::CloseWindow => TabAction::Close,
+                    TabCloseAction::Untab => TabAction::Untab,
+                };
+                hit = Some(LClick::Close {
+                    ev: TabActionEvent {
+                        monitor: state.target_monitor,
+                        workspace_idx: state.target_workspace_idx,
+                        column_idx: state.target_column_idx,
+                        tab_idx: idx,
+                        action,
+                    },
+                });
+                break;
+            }
+        }
+        if hit.is_none() {
+            for (idx, rect) in state.hit_rects.iter().enumerate() {
+                if click_x >= rect.left
+                    && click_x < rect.right
+                    && click_y >= rect.top
+                    && click_y < rect.bottom
+                {
+                    hit = Some(LClick::Activate {
+                        ev: TabActionEvent {
+                            monitor: state.target_monitor,
+                            workspace_idx: state.target_workspace_idx,
+                            column_idx: state.target_column_idx,
+                            tab_idx: idx,
+                            action: TabAction::Activate,
+                        },
+                    });
+                    break;
+                }
+            }
+        }
+        // Send via channel while we still hold a borrow of state.tx.
+        if let Some(ref h) = hit {
+            let ev = match h {
+                LClick::Close { ev, .. } => *ev,
+                LClick::Activate { ev } => *ev,
+            };
+            if let Some(tx) = &state.action_tx {
+                let _ = tx.send(ev);
+            }
+        }
+        hit
+    };
+    if matches!(decision, Some(LClick::Close { .. })) {
+        let _ = KillTimer(Some(hwnd), TOOLTIP_DELAY_TIMER_ID);
+        hide_tooltip_popup(hwnd);
+    }
+    LRESULT(0)
+}
+
+/// Handles `WM_LBUTTONDBLCLK`: renames the double-clicked tab.
+unsafe fn on_tab_double_click(hwnd: HWND, lparam: LPARAM) -> LRESULT {
+    // Double-click on a tab title → rename. Ignore double-clicks on
+    // the close-X (single-click already closes/untabs there); ignore
+    // double-clicks outside any tab hit rect.
+    let raw = lparam.0 as u32;
+    let click_x = (raw & 0xFFFF) as i16 as i32;
+    let click_y = ((raw >> 16) & 0xFFFF) as i16 as i32;
+    let reg = registry();
+    if let Some(state) = reg.states.get(&(hwnd.0 as isize)) {
+        // Skip if the click landed in any close-X hit rect.
+        for rect in state.close_hit_rects.iter() {
+            if click_x >= rect.left
+                && click_x < rect.right
+                && click_y >= rect.top
+                && click_y < rect.bottom
+            {
+                return LRESULT(0);
+            }
+        }
+        for (idx, rect) in state.hit_rects.iter().enumerate() {
+            if click_x >= rect.left
+                && click_x < rect.right
+                && click_y >= rect.top
+                && click_y < rect.bottom
+            {
+                if let Some(tx) = &state.action_tx {
+                    let _ = tx.send(TabActionEvent {
+                        monitor: state.target_monitor,
+                        workspace_idx: state.target_workspace_idx,
+                        column_idx: state.target_column_idx,
+                        tab_idx: idx,
+                        action: TabAction::Rename,
+                    });
+                }
+                return LRESULT(0);
+            }
+        }
+    }
+    LRESULT(0)
+}
+
+/// Handles `WM_MBUTTONUP`: closes/untabs the middle-clicked tab.
+unsafe fn on_tab_middle_click(hwnd: HWND, lparam: LPARAM) -> LRESULT {
+    let raw = lparam.0 as u32;
+    let click_x = (raw & 0xFFFF) as i16 as i32;
+    let click_y = ((raw >> 16) & 0xFFFF) as i16 as i32;
+    let reg = registry();
+    if let Some(state) = reg.states.get(&(hwnd.0 as isize)) {
+        for (idx, rect) in state.hit_rects.iter().enumerate() {
+            if click_x >= rect.left
+                && click_x < rect.right
+                && click_y >= rect.top
+                && click_y < rect.bottom
+            {
+                if let Some(tx) = &state.action_tx {
+                    let action = match state.close_action {
+                        TabCloseAction::CloseWindow => TabAction::Close,
+                        TabCloseAction::Untab => TabAction::Untab,
+                    };
+                    let _ = tx.send(TabActionEvent {
+                        monitor: state.target_monitor,
+                        workspace_idx: state.target_workspace_idx,
+                        column_idx: state.target_column_idx,
+                        tab_idx: idx,
+                        action,
+                    });
+                }
+                return LRESULT(0);
+            }
+        }
+    }
+    LRESULT(0)
+}
+
+/// Handles `WM_RBUTTONUP`: shows the tab context menu and dispatches the result.
+unsafe fn on_tab_context_menu(hwnd: HWND, lparam: LPARAM) -> LRESULT {
+    let raw = lparam.0 as u32;
+    let click_x = (raw & 0xFFFF) as i16 as i32;
+    let click_y = ((raw >> 16) & 0xFFFF) as i16 as i32;
+
+    // Resolve the target tab index + identity under one lock, drop
+    // before TrackPopupMenu (which runs a nested modal loop and may
+    // re-enter the WndProc for WM_TIMER).
+    let (target_idx, monitor, ws_idx, col_idx) = {
+        let reg = registry();
+        let Some(state) = reg.states.get(&(hwnd.0 as isize)) else {
+            return LRESULT(0);
+        };
+        let idx = state.hit_rects.iter().enumerate().find_map(|(i, r)| {
+            if click_x >= r.left
+                && click_x < r.right
+                && click_y >= r.top
+                && click_y < r.bottom
+            {
+                Some(i)
+            } else {
+                None
+            }
+        });
+        (
+            idx,
+            state.target_monitor,
+            state.target_workspace_idx,
+            state.target_column_idx,
+        )
+    };
+    let Some(idx) = target_idx else {
+        return LRESULT(0);
+    };
+
+    // Plain `AppendMenuW` so Win11's modern Fluent compositor takes
+    // over (rounded corners, themed chrome, hover animations). Icon
+    // gutter gets filled below via `MIIM_BITMAP` with properly
+    // rendered Segoe Fluent Icons glyphs (greyscale AA → PARGB).
+    let menu = match CreatePopupMenu() {
+        Ok(m) => m,
+        Err(_) => return LRESULT(0),
+    };
+    let close_text: Vec<u16> = "Close window\0".encode_utf16().collect();
+    let untab_text: Vec<u16> = "Untab this window\0".encode_utf16().collect();
+    let rename_text: Vec<u16> = "Rename tab…\0".encode_utf16().collect();
+    let _ = AppendMenuW(
+        menu,
+        MF_STRING,
+        MENU_ID_CLOSE,
+        windows::core::PCWSTR(close_text.as_ptr()),
+    );
+    let _ = AppendMenuW(
+        menu,
+        MF_STRING,
+        MENU_ID_UNTAB,
+        windows::core::PCWSTR(untab_text.as_ptr()),
+    );
+    let _ = AppendMenuW(
+        menu,
+        MF_SEPARATOR,
+        0,
+        windows::core::PCWSTR(std::ptr::null()),
+    );
+    let _ = AppendMenuW(
+        menu,
+        MF_STRING,
+        MENU_ID_RENAME,
+        windows::core::PCWSTR(rename_text.as_ptr()),
+    );
+
+    // Attach PARGB icon bitmaps via `MIIM_BITMAP`. Glyph codepoints
+    // verified from `microsoft/terminal` (Tab.cpp::_CreateContextMenu):
+    //   E711 Cancel        → Close (Terminal: closeSymbol)
+    //   E8A7 OpenInNewWin  → Untab (Terminal: moveTabToNewWindowTabSymbol)
+    //   E8AC Rename        → Rename (Terminal: renameTabSymbol)
+    let glyph_color = if crate::is_high_contrast_enabled() {
+        sys_color_bgr(windows::Win32::Graphics::Gdi::COLOR_MENUTEXT)
+    } else if is_dark_mode() {
+        0xE6E6E6
+    } else {
+        0x1C1C1C
+    };
+    let icon_close = create_menu_glyph_bitmap(0xE711, glyph_color);
+    let icon_untab = create_menu_glyph_bitmap(0xE8A7, glyph_color);
+    let icon_rename = create_menu_glyph_bitmap(0xE8AC, glyph_color);
+    for (id, hbmp) in [
+        (MENU_ID_CLOSE, icon_close),
+        (MENU_ID_UNTAB, icon_untab),
+        (MENU_ID_RENAME, icon_rename),
+    ] {
+        if hbmp.is_invalid() {
+            continue;
+        }
+        let mii = MENUITEMINFOW {
+            cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
+            fMask: MIIM_BITMAP,
+            hbmpItem: hbmp,
+            ..Default::default()
+        };
+        let _ = SetMenuItemInfoW(menu, id as u32, false, &mii);
+    }
+
+    let mut screen_pt = POINT {
+        x: click_x,
+        y: click_y,
+    };
+    let _ = ClientToScreen(hwnd, &mut screen_pt);
+
+    // MSDN-documented workaround: without SetForegroundWindow the
+    // first click outside the menu may not dismiss it.
+    let _ = SetForegroundWindow(hwnd);
+
+    let cmd = TrackPopupMenu(
+        menu,
+        TPM_RETURNCMD | TPM_RIGHTBUTTON,
+        screen_pt.x,
+        screen_pt.y,
+        None,
+        hwnd,
+        None,
+    );
+    let _ = DestroyMenu(menu);
+    // Bitmaps must outlive `TrackPopupMenu`; safe to delete now.
+    for hbmp in [icon_close, icon_untab, icon_rename] {
+        if !hbmp.is_invalid() {
+            let _ = DeleteObject(hbmp.into());
+        }
+    }
+
+    let action = match cmd.0 as usize {
+        MENU_ID_CLOSE => Some(TabAction::Close),
+        MENU_ID_UNTAB => Some(TabAction::Untab),
+        MENU_ID_RENAME => Some(TabAction::Rename),
+        _ => None,
+    };
+
+    if let Some(action) = action {
+        let reg = registry();
+        if let Some(state) = reg.states.get(&(hwnd.0 as isize)) {
+            if let Some(tx) = &state.action_tx {
+                let _ = tx.send(TabActionEvent {
+                    monitor,
+                    workspace_idx: ws_idx,
+                    column_idx: col_idx,
+                    tab_idx: idx,
+                    action,
+                });
+            }
+        }
+    }
+    LRESULT(0)
+}
+
 /// WndProc: handles WM_LBUTTONDOWN to translate clicks into TabActionEvents.
 /// Layered windows with `UpdateLayeredWindow` skip WM_PAINT entirely; we
 /// only care about input here.
-#[allow(clippy::too_many_lines)] // TODO: decompose (~433 lines, grandfathered)
 unsafe extern "system" fn tab_strip_wnd_proc(
     hwnd: HWND,
     msg: u32,
@@ -2349,486 +2846,29 @@ unsafe extern "system" fn tab_strip_wnd_proc(
     if msg == WM_MOUSEACTIVATE {
         return LRESULT(MA_NOACTIVATE as isize);
     }
-    // Highlight slide animation tick. Re-renders the strip with the
-    // interpolated highlight position; clears the transition (and kills
-    // the timer) when the slide reaches its target.
     if msg == WM_TIMER && wparam.0 == HIGHLIGHT_ANIM_TIMER_ID {
-        let (strip_x, strip_y, strip_w, strip_h, finished) = {
-            let mut reg = registry();
-            let Some(state) = reg.states.get_mut(&(hwnd.0 as isize)) else {
-                return LRESULT(0);
-            };
-            let finished = state.transition.is_none_or(|t| {
-                t.started_at.elapsed().as_millis() as u64 >= HIGHLIGHT_ANIM_MS
-            });
-            if finished {
-                state.transition = None;
-            }
-            (
-                state.strip_screen_x,
-                state.strip_screen_y,
-                state.strip_w,
-                state.strip_h,
-                finished,
-            )
-        };
-        render_strip_now(hwnd, strip_x, strip_y, strip_w, strip_h);
-        if finished {
-            let _ = KillTimer(Some(hwnd), HIGHLIGHT_ANIM_TIMER_ID);
-        }
-        return LRESULT(0);
+        return on_highlight_anim_tick(hwnd);
     }
-    // Hover tracking. Windows clears the TME_LEAVE subscription each
-    // time it fires WM_MOUSELEAVE, so re-arm on the next mouse entry.
     if msg == WM_MOUSEMOVE {
-        let raw = lparam.0 as u32;
-        let mouse_x = (raw & 0xFFFF) as i16 as i32;
-        let mouse_y = ((raw >> 16) & 0xFFFF) as i16 as i32;
-        let mut needs_repaint = false;
-        let (strip_x, strip_y, strip_w, strip_h, close_hover_changed, now_over_close) = {
-            let mut reg = registry();
-            let Some(state) = reg.states.get_mut(&(hwnd.0 as isize)) else {
-                return LRESULT(0);
-            };
-            if !state.mouse_tracking_armed {
-                let mut tme = TRACKMOUSEEVENT {
-                    cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
-                    dwFlags: TME_LEAVE,
-                    hwndTrack: hwnd,
-                    dwHoverTime: 0,
-                };
-                let _ = TrackMouseEvent(&mut tme);
-                state.mouse_tracking_armed = true;
-            }
-            let new_hover = state.hit_rects.iter().enumerate().find_map(|(i, r)| {
-                if mouse_x >= r.left
-                    && mouse_x < r.right
-                    && mouse_y >= r.top
-                    && mouse_y < r.bottom
-                {
-                    Some(i)
-                } else {
-                    None
-                }
-            });
-            // Whether the mouse is over a close-X glyph specifically.
-            // Drives the button-style hover bg behind the X — so the X
-            // reads as a clickable button when targeted, plain when the
-            // user is just hovering the tab body.
-            let new_close_hover =
-                state.close_hit_rects.iter().enumerate().find_map(|(i, r)| {
-                    if mouse_x >= r.left
-                        && mouse_x < r.right
-                        && mouse_y >= r.top
-                        && mouse_y < r.bottom
-                    {
-                        Some(i)
-                    } else {
-                        None
-                    }
-                });
-            if state.hovered_tab_idx != new_hover {
-                state.hovered_tab_idx = new_hover;
-                needs_repaint = true;
-            }
-            let close_hover_changed = state.hovered_close_idx != new_close_hover;
-            if close_hover_changed {
-                state.hovered_close_idx = new_close_hover;
-                state.tooltip_pending_tab = new_close_hover;
-                needs_repaint = true;
-            }
-            (
-                state.strip_screen_x,
-                state.strip_screen_y,
-                state.strip_w,
-                state.strip_h,
-                close_hover_changed,
-                new_close_hover.is_some(),
-            )
-        };
-        if needs_repaint {
-            render_strip_now(hwnd, strip_x, strip_y, strip_w, strip_h);
-        }
-        // Tooltip-delay timer: on every close-X hover transition,
-        // (1) hide any currently-showing tooltip so it doesn't linger
-        //     on the wrong X, (2) kill any pending one-shot, (3) start
-        //     a fresh one-shot if we're now over a close-X.
-        if close_hover_changed {
-            let _ = KillTimer(Some(hwnd), TOOLTIP_DELAY_TIMER_ID);
-            hide_tooltip_popup(hwnd);
-            if now_over_close {
-                let _ = SetTimer(
-                    Some(hwnd),
-                    TOOLTIP_DELAY_TIMER_ID,
-                    TOOLTIP_DELAY_MS,
-                    None,
-                );
-            }
-        }
-        return LRESULT(0);
+        return on_strip_mouse_move(hwnd, lparam);
     }
     if msg == WM_MOUSELEAVE {
-        let (strip_x, strip_y, strip_w, strip_h, had_hover) = {
-            let mut reg = registry();
-            let Some(state) = reg.states.get_mut(&(hwnd.0 as isize)) else {
-                return LRESULT(0);
-            };
-            let had_hover = state.hovered_tab_idx.is_some()
-                || state.hovered_close_idx.is_some();
-            state.hovered_tab_idx = None;
-            state.hovered_close_idx = None;
-            state.tooltip_pending_tab = None;
-            state.mouse_tracking_armed = false;
-            (
-                state.strip_screen_x,
-                state.strip_screen_y,
-                state.strip_w,
-                state.strip_h,
-                had_hover,
-            )
-        };
-        let _ = KillTimer(Some(hwnd), TOOLTIP_DELAY_TIMER_ID);
-        hide_tooltip_popup(hwnd);
-        if had_hover {
-            render_strip_now(hwnd, strip_x, strip_y, strip_w, strip_h);
-        }
-        return LRESULT(0);
+        return on_strip_mouse_leave(hwnd);
     }
-    // Tooltip-delay one-shot. Fires `TOOLTIP_DELAY_MS` after the user
-    // first enters a close-X; shows the popup if they're still parked
-    // on the same X.
     if msg == WM_TIMER && wparam.0 == TOOLTIP_DELAY_TIMER_ID {
-        let _ = KillTimer(Some(hwnd), TOOLTIP_DELAY_TIMER_ID);
-        // Snapshot what we need to position the popup, then drop the
-        // lock before SetWindowPos calls.
-        let snapshot = {
-            let reg = registry();
-            let Some(state) = reg.states.get(&(hwnd.0 as isize)) else {
-                return LRESULT(0);
-            };
-            // Verify the user is still over the same close-X we armed
-            // the timer for. If pending was cleared or hover diverged,
-            // bail without showing.
-            let idx = match state.tooltip_pending_tab {
-                Some(i) if state.hovered_close_idx == Some(i) => i,
-                _ => return LRESULT(0),
-            };
-            let rect = match state.close_hit_rects.get(idx) {
-                Some(r) => *r,
-                None => return LRESULT(0),
-            };
-            let screen_rect = RECT {
-                left: state.strip_screen_x + rect.left,
-                top: state.strip_screen_y + rect.top,
-                right: state.strip_screen_x + rect.right,
-                bottom: state.strip_screen_y + rect.bottom,
-            };
-            (tooltip_text_for(state.close_action).to_string(), screen_rect)
-        };
-        let (text, screen_rect) = snapshot;
-        show_tooltip_popup(hwnd, &text, screen_rect);
-        return LRESULT(0);
+        return on_tooltip_delay_fired(hwnd);
     }
     if msg == WM_LBUTTONDOWN {
-        // LPARAM low word = x, high word = y, both window-relative.
-        let raw = lparam.0 as u32;
-        let click_x = (raw & 0xFFFF) as i16 as i32;
-        let click_y = ((raw >> 16) & 0xFFFF) as i16 as i32;
-        // Decide what to dispatch under the lock, then drop it before
-        // calling helpers that re-acquire the registry.
-        enum LClick {
-            Close { ev: TabActionEvent },
-            Activate { ev: TabActionEvent },
-        }
-        let decision: Option<LClick> = {
-            let reg = registry();
-            let Some(state) = reg.states.get(&(hwnd.0 as isize)) else {
-                return LRESULT(0);
-            };
-            let mut hit: Option<LClick> = None;
-            for (idx, rect) in state.close_hit_rects.iter().enumerate() {
-                if click_x >= rect.left
-                    && click_x < rect.right
-                    && click_y >= rect.top
-                    && click_y < rect.bottom
-                {
-                    let action = match state.close_action {
-                        TabCloseAction::CloseWindow => TabAction::Close,
-                        TabCloseAction::Untab => TabAction::Untab,
-                    };
-                    hit = Some(LClick::Close {
-                        ev: TabActionEvent {
-                            monitor: state.target_monitor,
-                            workspace_idx: state.target_workspace_idx,
-                            column_idx: state.target_column_idx,
-                            tab_idx: idx,
-                            action,
-                        },
-                    });
-                    break;
-                }
-            }
-            if hit.is_none() {
-                for (idx, rect) in state.hit_rects.iter().enumerate() {
-                    if click_x >= rect.left
-                        && click_x < rect.right
-                        && click_y >= rect.top
-                        && click_y < rect.bottom
-                    {
-                        hit = Some(LClick::Activate {
-                            ev: TabActionEvent {
-                                monitor: state.target_monitor,
-                                workspace_idx: state.target_workspace_idx,
-                                column_idx: state.target_column_idx,
-                                tab_idx: idx,
-                                action: TabAction::Activate,
-                            },
-                        });
-                        break;
-                    }
-                }
-            }
-            // Send via channel while we still hold a borrow of state.tx.
-            if let Some(ref h) = hit {
-                let ev = match h {
-                    LClick::Close { ev, .. } => *ev,
-                    LClick::Activate { ev } => *ev,
-                };
-                if let Some(tx) = &state.action_tx {
-                    let _ = tx.send(ev);
-                }
-            }
-            hit
-        };
-        if matches!(decision, Some(LClick::Close { .. })) {
-            let _ = KillTimer(Some(hwnd), TOOLTIP_DELAY_TIMER_ID);
-            hide_tooltip_popup(hwnd);
-        }
-        return LRESULT(0);
+        return on_tab_left_click(hwnd, lparam);
     }
     if msg == WM_LBUTTONDBLCLK {
-        // Double-click on a tab title → rename. Ignore double-clicks on
-        // the close-X (single-click already closes/untabs there); ignore
-        // double-clicks outside any tab hit rect.
-        let raw = lparam.0 as u32;
-        let click_x = (raw & 0xFFFF) as i16 as i32;
-        let click_y = ((raw >> 16) & 0xFFFF) as i16 as i32;
-        let reg = registry();
-        if let Some(state) = reg.states.get(&(hwnd.0 as isize)) {
-            // Skip if the click landed in any close-X hit rect.
-            for rect in state.close_hit_rects.iter() {
-                if click_x >= rect.left
-                    && click_x < rect.right
-                    && click_y >= rect.top
-                    && click_y < rect.bottom
-                {
-                    return LRESULT(0);
-                }
-            }
-            for (idx, rect) in state.hit_rects.iter().enumerate() {
-                if click_x >= rect.left
-                    && click_x < rect.right
-                    && click_y >= rect.top
-                    && click_y < rect.bottom
-                {
-                    if let Some(tx) = &state.action_tx {
-                        let _ = tx.send(TabActionEvent {
-                            monitor: state.target_monitor,
-                            workspace_idx: state.target_workspace_idx,
-                            column_idx: state.target_column_idx,
-                            tab_idx: idx,
-                            action: TabAction::Rename,
-                        });
-                    }
-                    return LRESULT(0);
-                }
-            }
-        }
-        return LRESULT(0);
+        return on_tab_double_click(hwnd, lparam);
     }
     if msg == WM_MBUTTONUP {
-        let raw = lparam.0 as u32;
-        let click_x = (raw & 0xFFFF) as i16 as i32;
-        let click_y = ((raw >> 16) & 0xFFFF) as i16 as i32;
-        let reg = registry();
-        if let Some(state) = reg.states.get(&(hwnd.0 as isize)) {
-            for (idx, rect) in state.hit_rects.iter().enumerate() {
-                if click_x >= rect.left
-                    && click_x < rect.right
-                    && click_y >= rect.top
-                    && click_y < rect.bottom
-                {
-                    if let Some(tx) = &state.action_tx {
-                        let action = match state.close_action {
-                            TabCloseAction::CloseWindow => TabAction::Close,
-                            TabCloseAction::Untab => TabAction::Untab,
-                        };
-                        let _ = tx.send(TabActionEvent {
-                            monitor: state.target_monitor,
-                            workspace_idx: state.target_workspace_idx,
-                            column_idx: state.target_column_idx,
-                            tab_idx: idx,
-                            action,
-                        });
-                    }
-                    return LRESULT(0);
-                }
-            }
-        }
-        return LRESULT(0);
+        return on_tab_middle_click(hwnd, lparam);
     }
     if msg == WM_RBUTTONUP {
-        let raw = lparam.0 as u32;
-        let click_x = (raw & 0xFFFF) as i16 as i32;
-        let click_y = ((raw >> 16) & 0xFFFF) as i16 as i32;
-
-        // Resolve the target tab index + identity under one lock, drop
-        // before TrackPopupMenu (which runs a nested modal loop and may
-        // re-enter the WndProc for WM_TIMER).
-        let (target_idx, monitor, ws_idx, col_idx) = {
-            let reg = registry();
-            let Some(state) = reg.states.get(&(hwnd.0 as isize)) else {
-                return LRESULT(0);
-            };
-            let idx = state.hit_rects.iter().enumerate().find_map(|(i, r)| {
-                if click_x >= r.left
-                    && click_x < r.right
-                    && click_y >= r.top
-                    && click_y < r.bottom
-                {
-                    Some(i)
-                } else {
-                    None
-                }
-            });
-            (
-                idx,
-                state.target_monitor,
-                state.target_workspace_idx,
-                state.target_column_idx,
-            )
-        };
-        let Some(idx) = target_idx else {
-            return LRESULT(0);
-        };
-
-        // Plain `AppendMenuW` so Win11's modern Fluent compositor takes
-        // over (rounded corners, themed chrome, hover animations). Icon
-        // gutter gets filled below via `MIIM_BITMAP` with properly
-        // rendered Segoe Fluent Icons glyphs (greyscale AA → PARGB).
-        let menu = match CreatePopupMenu() {
-            Ok(m) => m,
-            Err(_) => return LRESULT(0),
-        };
-        let close_text: Vec<u16> = "Close window\0".encode_utf16().collect();
-        let untab_text: Vec<u16> = "Untab this window\0".encode_utf16().collect();
-        let rename_text: Vec<u16> = "Rename tab…\0".encode_utf16().collect();
-        let _ = AppendMenuW(
-            menu,
-            MF_STRING,
-            MENU_ID_CLOSE,
-            windows::core::PCWSTR(close_text.as_ptr()),
-        );
-        let _ = AppendMenuW(
-            menu,
-            MF_STRING,
-            MENU_ID_UNTAB,
-            windows::core::PCWSTR(untab_text.as_ptr()),
-        );
-        let _ = AppendMenuW(
-            menu,
-            MF_SEPARATOR,
-            0,
-            windows::core::PCWSTR(std::ptr::null()),
-        );
-        let _ = AppendMenuW(
-            menu,
-            MF_STRING,
-            MENU_ID_RENAME,
-            windows::core::PCWSTR(rename_text.as_ptr()),
-        );
-
-        // Attach PARGB icon bitmaps via `MIIM_BITMAP`. Glyph codepoints
-        // verified from `microsoft/terminal` (Tab.cpp::_CreateContextMenu):
-        //   E711 Cancel        → Close (Terminal: closeSymbol)
-        //   E8A7 OpenInNewWin  → Untab (Terminal: moveTabToNewWindowTabSymbol)
-        //   E8AC Rename        → Rename (Terminal: renameTabSymbol)
-        let glyph_color = if crate::is_high_contrast_enabled() {
-            sys_color_bgr(windows::Win32::Graphics::Gdi::COLOR_MENUTEXT)
-        } else if is_dark_mode() {
-            0xE6E6E6
-        } else {
-            0x1C1C1C
-        };
-        let icon_close = create_menu_glyph_bitmap(0xE711, glyph_color);
-        let icon_untab = create_menu_glyph_bitmap(0xE8A7, glyph_color);
-        let icon_rename = create_menu_glyph_bitmap(0xE8AC, glyph_color);
-        for (id, hbmp) in [
-            (MENU_ID_CLOSE, icon_close),
-            (MENU_ID_UNTAB, icon_untab),
-            (MENU_ID_RENAME, icon_rename),
-        ] {
-            if hbmp.is_invalid() {
-                continue;
-            }
-            let mii = MENUITEMINFOW {
-                cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
-                fMask: MIIM_BITMAP,
-                hbmpItem: hbmp,
-                ..Default::default()
-            };
-            let _ = SetMenuItemInfoW(menu, id as u32, false, &mii);
-        }
-
-        let mut screen_pt = POINT {
-            x: click_x,
-            y: click_y,
-        };
-        let _ = ClientToScreen(hwnd, &mut screen_pt);
-
-        // MSDN-documented workaround: without SetForegroundWindow the
-        // first click outside the menu may not dismiss it.
-        let _ = SetForegroundWindow(hwnd);
-
-        let cmd = TrackPopupMenu(
-            menu,
-            TPM_RETURNCMD | TPM_RIGHTBUTTON,
-            screen_pt.x,
-            screen_pt.y,
-            None,
-            hwnd,
-            None,
-        );
-        let _ = DestroyMenu(menu);
-        // Bitmaps must outlive `TrackPopupMenu`; safe to delete now.
-        for hbmp in [icon_close, icon_untab, icon_rename] {
-            if !hbmp.is_invalid() {
-                let _ = DeleteObject(hbmp.into());
-            }
-        }
-
-        let action = match cmd.0 as usize {
-            MENU_ID_CLOSE => Some(TabAction::Close),
-            MENU_ID_UNTAB => Some(TabAction::Untab),
-            MENU_ID_RENAME => Some(TabAction::Rename),
-            _ => None,
-        };
-
-        if let Some(action) = action {
-            let reg = registry();
-            if let Some(state) = reg.states.get(&(hwnd.0 as isize)) {
-                if let Some(tx) = &state.action_tx {
-                    let _ = tx.send(TabActionEvent {
-                        monitor,
-                        workspace_idx: ws_idx,
-                        column_idx: col_idx,
-                        tab_idx: idx,
-                        action,
-                    });
-                }
-            }
-        }
-        return LRESULT(0);
+        return on_tab_context_menu(hwnd, lparam);
     }
     DefWindowProcW(hwnd, msg, wparam, lparam)
 }
