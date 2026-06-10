@@ -404,6 +404,9 @@ pub enum IpcCommand {
     /// Toggle "sticky" (pinned visible on every workspace) for the focused
     /// window.
     ToggleSticky,
+    /// Toggle where new windows open: their own new column or stacked into
+    /// the focused column.
+    ToggleNewWindowPlacement,
     /// Set the focused column width as a fraction of the viewport.
     SetColumnWidth {
         /// Fraction of viewport width (e.g., 0.333, 0.5, 0.667).
@@ -716,6 +719,7 @@ mod tests {
             IpcCommand::ScratchpadStash,
             IpcCommand::ScratchpadToggle,
             IpcCommand::ToggleSticky,
+            IpcCommand::ToggleNewWindowPlacement,
             IpcCommand::SetColumnWidth { fraction: 0.5 },
             IpcCommand::SetColumnWidth { fraction: 0.333 },
             IpcCommand::EqualizeColumnWidths,

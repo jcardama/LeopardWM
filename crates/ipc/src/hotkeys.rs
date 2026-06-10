@@ -122,6 +122,12 @@ pub fn hotkey_catalog() -> Vec<HotkeyAction> {
         action("scratchpad_toggle", Some("Ctrl+Alt+S"), "Toggle scratchpad", "Window"),
         action("scratchpad_stash", Some("Ctrl+Alt+Shift+S"), "Stash to scratchpad", "Window"),
         action("toggle_sticky", Some("Ctrl+Alt+Y"), "Toggle sticky", "Window"),
+        action(
+            "toggle_new_window_placement",
+            None,
+            "Toggle new-window placement (new column / in column)",
+            "Window",
+        ),
         action("toggle_pause", Some("Ctrl+Alt+P"), "Toggle pause", "Session"),
         action("refresh", Some("Ctrl+Alt+R"), "Refresh", "Session"),
         action("reload", Some("Ctrl+Alt+Shift+R"), "Reload config", "Session"),

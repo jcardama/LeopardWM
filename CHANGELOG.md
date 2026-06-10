@@ -35,6 +35,12 @@ All notable changes to LeopardWM will be documented in this file.
   the focused column only when it is wider than the viewport; columns that
   fit scroll just into view. Selectable in Settings and the tray menu
   alongside the existing center and just_in_view modes.
+- **New-window placement mode.** Choose where newly opened windows go:
+  their own new column (default) or stacked into the focused column,
+  directly below the focused window. Set `new_window_placement =
+  "in_column"` in config, pick it in Settings or the tray menu, or flip it
+  on the fly with `lwm toggle-new-window-placement` (bindable as
+  `toggle_new_window_placement`).
 
 ## 0.1.18
 

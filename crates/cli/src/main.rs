@@ -197,6 +197,8 @@ enum Commands {
     ScratchpadToggle,
     /// Toggle sticky (pinned visible on every workspace) for the focused window
     ToggleSticky,
+    /// Toggle where new windows open: their own new column or stacked into the focused column
+    ToggleNewWindowPlacement,
     /// Toggle tabbed mode on the focused column (niri-style: only the
     /// active tab is visible, with a tab strip overlay above the column)
     ToggleTabbed,
@@ -431,6 +433,7 @@ fn to_ipc_command(cmd: &Commands) -> IpcCommand {
         Commands::ScratchpadStash => IpcCommand::ScratchpadStash,
         Commands::ScratchpadToggle => IpcCommand::ScratchpadToggle,
         Commands::ToggleSticky => IpcCommand::ToggleSticky,
+        Commands::ToggleNewWindowPlacement => IpcCommand::ToggleNewWindowPlacement,
         Commands::ToggleTabbed => IpcCommand::ToggleTabbed,
         Commands::SetWidth { fraction } => IpcCommand::SetColumnWidth {
             fraction: *fraction,
@@ -1509,6 +1512,9 @@ log_level = "info"
 
 # Focus follows mouse (hover to focus)
 focus_follows_mouse = false
+
+# Where newly opened windows go: "new_column" (default) or "in_column"
+# new_window_placement = "new_column"
 
 [hotkeys]
 __HOTKEYS__

@@ -498,6 +498,17 @@ impl AppState {
                 self.toggle_sticky();
                 IpcResponse::Ok
             }
+            IpcCommand::ToggleNewWindowPlacement => {
+                use crate::config::NewWindowPlacement;
+                let next = match self.config.behavior.new_window_placement {
+                    NewWindowPlacement::NewColumn => NewWindowPlacement::InColumn,
+                    NewWindowPlacement::InColumn => NewWindowPlacement::NewColumn,
+                };
+                self.config.behavior.new_window_placement = next;
+                let _ = self.config.save();
+                info!("New-window placement set to {:?}", next);
+                IpcResponse::Ok
+            }
             IpcCommand::ToggleFullscreen => {
                 let resp = self.execute_workspace_command(true, false, |ws, _vw| {
                     let entering = ws.toggle_fullscreen();

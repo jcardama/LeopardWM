@@ -366,6 +366,23 @@ pub struct BehaviorConfig {
     /// v0.1.18.
     #[serde(default = "default_true")]
     pub swap_chain_ghost_animation: bool,
+
+    /// Where newly opened windows go: their own new column (default) or
+    /// stacked into the focused column.
+    #[serde(default)]
+    pub new_window_placement: NewWindowPlacement,
+}
+
+/// Placement for newly opened tiled windows.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NewWindowPlacement {
+    /// Each new window opens as its own column to the right of the focused
+    /// column (scroll-tiling default; never resizes neighbors).
+    #[default]
+    NewColumn,
+    /// New windows stack into the focused column.
+    InColumn,
 }
 
 impl Default for BehaviorConfig {
@@ -380,6 +397,7 @@ impl Default for BehaviorConfig {
             check_for_updates: true,
             tab_close_action: TabCloseAction::default(),
             swap_chain_ghost_animation: true,
+            new_window_placement: NewWindowPlacement::default(),
         }
     }
 }
@@ -864,6 +882,9 @@ pub fn parse_command(cmd: &str) -> Option<leopardwm_ipc::IpcCommand> {
         "scratchpad_stash" | "scratchpad-stash" => Some(IpcCommand::ScratchpadStash),
         "scratchpad_toggle" | "scratchpad-toggle" => Some(IpcCommand::ScratchpadToggle),
         "toggle_sticky" | "toggle-sticky" => Some(IpcCommand::ToggleSticky),
+        "toggle_new_window_placement" | "toggle-new-window-placement" => {
+            Some(IpcCommand::ToggleNewWindowPlacement)
+        }
         "toggle_tabbed" => Some(IpcCommand::ToggleTabbed),
         "width_third" => Some(IpcCommand::SetColumnWidth { fraction: 0.333 }),
         "width_half" => Some(IpcCommand::SetColumnWidth { fraction: 0.5 }),
@@ -1256,6 +1277,11 @@ impl Config {
     /// Serializes the config to TOML and writes to `config_paths()[0]`.
     /// Creates parent directories if they don't exist.
     pub fn save(&self) -> Result<()> {
+        // Unit tests exercise command handlers that persist config; never
+        // let them overwrite the developer's real config file.
+        if cfg!(test) {
+            return Ok(());
+        }
         let paths = config_paths();
         let path = paths
             .first()
@@ -1365,6 +1391,10 @@ focus_follows_mouse = false
 # Default on since v0.1.18. Set to false to fall back to the legacy
 # per-frame SetWindowPos path.
 # swap_chain_ghost_animation = false
+
+# Where newly opened windows go: "new_column" (default, own column to the
+# right) or "in_column" (stacked into the focused column).
+# new_window_placement = "new_column"
 
 [hotkeys]
 __HOTKEYS__

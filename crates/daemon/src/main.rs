@@ -139,6 +139,10 @@ fn sync_tray_toggles(tray_manager: &Option<tray::TrayManager>, config: &Config) 
                 config::CenteringModeConfig::JustInView => tray::CENTERING_JUST_IN_VIEW,
                 config::CenteringModeConfig::OnOverflow => tray::CENTERING_ON_OVERFLOW,
             },
+            match config.behavior.new_window_placement {
+                config::NewWindowPlacement::NewColumn => tray::PLACEMENT_NEW_COLUMN,
+                config::NewWindowPlacement::InColumn => tray::PLACEMENT_IN_COLUMN,
+            },
         );
     }
 }
@@ -912,6 +916,10 @@ async fn main() -> Result<()> {
                 config::CenteringModeConfig::Center => tray::CENTERING_CENTER,
                 config::CenteringModeConfig::JustInView => tray::CENTERING_JUST_IN_VIEW,
                 config::CenteringModeConfig::OnOverflow => tray::CENTERING_ON_OVERFLOW,
+            },
+            placement_mode: match config.behavior.new_window_placement {
+                config::NewWindowPlacement::NewColumn => tray::PLACEMENT_NEW_COLUMN,
+                config::NewWindowPlacement::InColumn => tray::PLACEMENT_IN_COLUMN,
             },
         };
         match tray::TrayManager::new(tray_sync_tx, initial_toggles) {
@@ -1692,26 +1700,8 @@ async fn main() -> Result<()> {
                             ),
                             Err(e) => warn!("Tray: failed to update auto-start: {}", e),
                         }
-                        let actual = autostart::get_autostart().unwrap_or(current);
                         let state_guard = state.lock().await;
-                        if let Some(ref mgr) = tray_manager {
-                            let centering = match state_guard.config.layout.centering_mode {
-                                config::CenteringModeConfig::Center => tray::CENTERING_CENTER,
-                                config::CenteringModeConfig::JustInView => {
-                                    tray::CENTERING_JUST_IN_VIEW
-                                }
-                                config::CenteringModeConfig::OnOverflow => {
-                                    tray::CENTERING_ON_OVERFLOW
-                                }
-                            };
-                            mgr.update_quick_toggles(
-                                state_guard.config.appearance.active_border,
-                                state_guard.config.behavior.focus_new_windows,
-                                state_guard.config.behavior.focus_follows_mouse,
-                                actual,
-                                centering,
-                            );
-                        }
+                        sync_tray_toggles(&tray_manager, &state_guard.config);
                     }
                     tray::TrayEvent::SetCenteringCenter => {
                         let mut state = state.lock().await;
@@ -1728,18 +1718,7 @@ async fn main() -> Result<()> {
                             }
                             let _ = state.config.save();
                         }
-                        if let Some(ref mgr) = tray_manager {
-                            let auto_start =
-                                leopardwm_platform_win32::autostart::get_autostart()
-                                    .unwrap_or(false);
-                            mgr.update_quick_toggles(
-                                state.config.appearance.active_border,
-                                state.config.behavior.focus_new_windows,
-                                state.config.behavior.focus_follows_mouse,
-                                auto_start,
-                                tray::CENTERING_CENTER,
-                            );
-                        }
+                        sync_tray_toggles(&tray_manager, &state.config);
                     }
                     tray::TrayEvent::OpenReleasesPage => {
                         info!("Tray: opening releases page");
@@ -1765,18 +1744,7 @@ async fn main() -> Result<()> {
                             }
                             let _ = state.config.save();
                         }
-                        if let Some(ref mgr) = tray_manager {
-                            let auto_start =
-                                leopardwm_platform_win32::autostart::get_autostart()
-                                    .unwrap_or(false);
-                            mgr.update_quick_toggles(
-                                state.config.appearance.active_border,
-                                state.config.behavior.focus_new_windows,
-                                state.config.behavior.focus_follows_mouse,
-                                auto_start,
-                                tray::CENTERING_JUST_IN_VIEW,
-                            );
-                        }
+                        sync_tray_toggles(&tray_manager, &state.config);
                     }
                     tray::TrayEvent::SetCenteringOnOverflow => {
                         let mut state = state.lock().await;
@@ -1793,18 +1761,31 @@ async fn main() -> Result<()> {
                             }
                             let _ = state.config.save();
                         }
-                        if let Some(ref mgr) = tray_manager {
-                            let auto_start =
-                                leopardwm_platform_win32::autostart::get_autostart()
-                                    .unwrap_or(false);
-                            mgr.update_quick_toggles(
-                                state.config.appearance.active_border,
-                                state.config.behavior.focus_new_windows,
-                                state.config.behavior.focus_follows_mouse,
-                                auto_start,
-                                tray::CENTERING_ON_OVERFLOW,
-                            );
+                        sync_tray_toggles(&tray_manager, &state.config);
+                    }
+                    tray::TrayEvent::SetPlacementNewColumn => {
+                        let mut state = state.lock().await;
+                        if state.config.behavior.new_window_placement
+                            != config::NewWindowPlacement::NewColumn
+                        {
+                            state.config.behavior.new_window_placement =
+                                config::NewWindowPlacement::NewColumn;
+                            info!("Tray: New-window placement set to NewColumn");
+                            let _ = state.config.save();
                         }
+                        sync_tray_toggles(&tray_manager, &state.config);
+                    }
+                    tray::TrayEvent::SetPlacementInColumn => {
+                        let mut state = state.lock().await;
+                        if state.config.behavior.new_window_placement
+                            != config::NewWindowPlacement::InColumn
+                        {
+                            state.config.behavior.new_window_placement =
+                                config::NewWindowPlacement::InColumn;
+                            info!("Tray: New-window placement set to InColumn");
+                            let _ = state.config.save();
+                        }
+                        sync_tray_toggles(&tray_manager, &state.config);
                     }
                 }
             }

@@ -186,7 +186,29 @@ impl AppState {
                                 workspace.add_floating(hwnd, rect).is_ok()
                             }
                             config::WindowAction::Tile => {
-                                if self.config.behavior.focus_new_windows {
+                                let in_column = self.config.behavior.new_window_placement
+                                    == config::NewWindowPlacement::InColumn
+                                    && workspace.column_count() > 0;
+                                if in_column {
+                                    // Stack into the focused column, directly
+                                    // below the focused window (matches
+                                    // hyprscroller's column mode rather than
+                                    // appending at the bottom of the stack).
+                                    let col = workspace.focused_column_index();
+                                    let row = workspace.focused_window_index_in_column() + 1;
+                                    let ok = workspace
+                                        .insert_window_in_column_at(hwnd, col, row)
+                                        .is_ok();
+                                    if ok && self.config.behavior.focus_new_windows {
+                                        if let Err(e) = workspace.focus_window(hwnd) {
+                                            warn!(
+                                                "Focusing new in-column window {} failed: {:?}",
+                                                hwnd, e
+                                            );
+                                        }
+                                    }
+                                    ok
+                                } else if self.config.behavior.focus_new_windows {
                                     workspace.insert_window(hwnd, None).is_ok()
                                 } else {
                                     workspace.insert_window_no_focus(hwnd, None).is_ok()

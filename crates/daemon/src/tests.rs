@@ -3029,3 +3029,39 @@ fn test_sticky_cleared_when_window_destroyed() {
     state.sticky_on_window_destroyed(100);
     assert!(!state.sticky_windows.contains(&100), "destroyed window unpinned");
 }
+
+#[test]
+fn test_new_window_placement_config() {
+    // Default is new_column.
+    assert_eq!(
+        Config::default().behavior.new_window_placement,
+        crate::config::NewWindowPlacement::NewColumn
+    );
+    // Parses in_column.
+    let cfg: Config =
+        toml::from_str("[behavior]\nnew_window_placement = \"in_column\"\n").unwrap();
+    assert_eq!(
+        cfg.behavior.new_window_placement,
+        crate::config::NewWindowPlacement::InColumn
+    );
+}
+
+#[test]
+fn test_toggle_new_window_placement_command() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    assert_eq!(
+        state.config.behavior.new_window_placement,
+        crate::config::NewWindowPlacement::NewColumn
+    );
+    let resp = state.handle_command(IpcCommand::ToggleNewWindowPlacement);
+    assert_eq!(resp, IpcResponse::Ok);
+    assert_eq!(
+        state.config.behavior.new_window_placement,
+        crate::config::NewWindowPlacement::InColumn
+    );
+    state.handle_command(IpcCommand::ToggleNewWindowPlacement);
+    assert_eq!(
+        state.config.behavior.new_window_placement,
+        crate::config::NewWindowPlacement::NewColumn
+    );
+}

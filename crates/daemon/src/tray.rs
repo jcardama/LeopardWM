@@ -92,6 +92,8 @@ mod menu_ids {
     pub const CENTERING_CENTER: &str = "centering_center";
     pub const CENTERING_JUST_IN_VIEW: &str = "centering_just_in_view";
     pub const CENTERING_ON_OVERFLOW: &str = "centering_on_overflow";
+    pub const PLACEMENT_NEW_COLUMN: &str = "placement_new_column";
+    pub const PLACEMENT_IN_COLUMN: &str = "placement_in_column";
     pub const CHECK_UPDATES: &str = "check_updates";
 }
 
@@ -130,6 +132,10 @@ pub enum TrayEvent {
     SetCenteringJustInView,
     /// User selected "On Overflow" centering mode.
     SetCenteringOnOverflow,
+    /// User selected "New Column" new-window placement.
+    SetPlacementNewColumn,
+    /// User selected "In Focused Column" new-window placement.
+    SetPlacementInColumn,
     /// User clicked "Check for Updates" / "Update available" menu item.
     OpenReleasesPage,
 }
@@ -138,6 +144,8 @@ pub enum TrayEvent {
 pub const CENTERING_CENTER: u8 = 0;
 pub const CENTERING_JUST_IN_VIEW: u8 = 1;
 pub const CENTERING_ON_OVERFLOW: u8 = 2;
+pub const PLACEMENT_NEW_COLUMN: u8 = 0;
+pub const PLACEMENT_IN_COLUMN: u8 = 1;
 
 /// Shared state between the caller and the message-loop thread.
 ///
@@ -152,6 +160,7 @@ struct SharedState {
     focus_follows_mouse: AtomicBool,
     auto_start: AtomicBool,
     centering_mode: AtomicU8,
+    placement_mode: AtomicU8,
     /// `Some(tag)` when a newer release has been observed; `None` otherwise.
     available_update: Mutex<Option<String>>,
 }
@@ -166,6 +175,8 @@ struct TrayItems {
     centering_center_item: CheckMenuItem,
     centering_just_in_view_item: CheckMenuItem,
     centering_on_overflow_item: CheckMenuItem,
+    placement_new_column_item: CheckMenuItem,
+    placement_in_column_item: CheckMenuItem,
     update_item: MenuItem,
 }
 
@@ -175,8 +186,10 @@ pub struct QuickToggleState {
     pub focus_new_windows: bool,
     pub focus_follows_mouse: bool,
     pub auto_start: bool,
-    /// 0 = Center, 1 = JustInView
+    /// 0 = Center, 1 = JustInView, 2 = OnOverflow
     pub centering_mode: u8,
+    /// 0 = NewColumn, 1 = InColumn
+    pub placement_mode: u8,
 }
 
 /// Manages the system tray icon and context menu.
@@ -212,6 +225,7 @@ impl TrayManager {
             focus_follows_mouse: AtomicBool::new(initial.focus_follows_mouse),
             auto_start: AtomicBool::new(initial.auto_start),
             centering_mode: AtomicU8::new(initial.centering_mode),
+            placement_mode: AtomicU8::new(initial.placement_mode),
             available_update: Mutex::new(None),
         });
         let shared_for_thread = shared.clone();
@@ -269,6 +283,7 @@ impl TrayManager {
     }
 
     /// Sync quick-toggle check marks with the current config state.
+    #[allow(clippy::too_many_arguments)]
     pub fn update_quick_toggles(
         &self,
         active_border: bool,
@@ -276,6 +291,7 @@ impl TrayManager {
         focus_follows_mouse: bool,
         auto_start: bool,
         centering_mode: u8,
+        placement_mode: u8,
     ) {
         self.shared
             .active_border
@@ -292,6 +308,9 @@ impl TrayManager {
         self.shared
             .centering_mode
             .store(centering_mode, Ordering::Relaxed);
+        self.shared
+            .placement_mode
+            .store(placement_mode, Ordering::Relaxed);
         unsafe {
             win32_msg::PostThreadMessageW(
                 self.msg_thread_id,
@@ -497,6 +516,13 @@ fn run_tray_thread(
                         items
                             .centering_on_overflow_item
                             .set_checked(cm == CENTERING_ON_OVERFLOW);
+                        let pm = shared.placement_mode.load(Ordering::Relaxed);
+                        items
+                            .placement_new_column_item
+                            .set_checked(pm == PLACEMENT_NEW_COLUMN);
+                        items
+                            .placement_in_column_item
+                            .set_checked(pm == PLACEMENT_IN_COLUMN);
                         continue;
                     }
                     win32_msg::WM_APP_UPDATE_RELEASE_INFO => {
@@ -622,6 +648,30 @@ fn build_tray(
         .append(&centering_on_overflow_item)
         .map_err(|e| TrayError::Menu(e.to_string()))?;
     append(&centering_sub)?;
+
+    // New Window Placement submenu
+    let placement_sub = Submenu::new("New Window Placement", true);
+    let placement_new_column_item = CheckMenuItem::with_id(
+        menu_ids::PLACEMENT_NEW_COLUMN,
+        "New Column",
+        true,
+        initial.placement_mode == PLACEMENT_NEW_COLUMN,
+        None,
+    );
+    let placement_in_column_item = CheckMenuItem::with_id(
+        menu_ids::PLACEMENT_IN_COLUMN,
+        "In Focused Column",
+        true,
+        initial.placement_mode == PLACEMENT_IN_COLUMN,
+        None,
+    );
+    placement_sub
+        .append(&placement_new_column_item)
+        .map_err(|e| TrayError::Menu(e.to_string()))?;
+    placement_sub
+        .append(&placement_in_column_item)
+        .map_err(|e| TrayError::Menu(e.to_string()))?;
+    append(&placement_sub)?;
     append(&PredefinedMenuItem::separator())?;
 
     // Update checker — relabels itself when a newer release is detected.
@@ -706,6 +756,8 @@ fn build_tray(
         centering_center_item,
         centering_just_in_view_item,
         centering_on_overflow_item,
+        placement_new_column_item,
+        placement_in_column_item,
         update_item,
     };
 
@@ -730,6 +782,8 @@ fn map_menu_id_to_event(menu_id: &str) -> Option<TrayEvent> {
         menu_ids::CENTERING_CENTER => Some(TrayEvent::SetCenteringCenter),
         menu_ids::CENTERING_JUST_IN_VIEW => Some(TrayEvent::SetCenteringJustInView),
         menu_ids::CENTERING_ON_OVERFLOW => Some(TrayEvent::SetCenteringOnOverflow),
+        menu_ids::PLACEMENT_NEW_COLUMN => Some(TrayEvent::SetPlacementNewColumn),
+        menu_ids::PLACEMENT_IN_COLUMN => Some(TrayEvent::SetPlacementInColumn),
         menu_ids::CHECK_UPDATES => Some(TrayEvent::OpenReleasesPage),
         _ => None,
     }
