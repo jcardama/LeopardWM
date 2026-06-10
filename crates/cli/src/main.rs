@@ -1479,76 +1479,7 @@ fn print_response(response: &IpcResponse) {
 
 /// Generate default configuration content.
 fn generate_default_config() -> String {
-    r#"# LeopardWM Configuration
-# https://github.com/jcardama/LeopardWM
-
-[layout]
-# Gap between columns in pixels
-gap = 10
-
-# Outer gaps at the edges of the viewport in pixels
-outer_gap_left = 10
-outer_gap_right = 10
-outer_gap_top = 10
-outer_gap_bottom = 10
-
-# Centering mode: "center", "just_in_view", or "on_overflow"
-# - center: Always center the focused column
-# - just_in_view: Only scroll if focused column would be outside viewport
-# - on_overflow: Center only when the column is wider than the viewport
-centering_mode = "center"
-
-[appearance]
-
-[behavior]
-# Automatically focus new windows when they appear
-focus_new_windows = true
-
-# Track focus changes from Windows (sync with Alt-Tab, etc.)
-track_focus_changes = true
-
-# Log level: trace, debug, info, warn, error
-log_level = "info"
-
-# Focus follows mouse (hover to focus)
-focus_follows_mouse = false
-
-# Where newly opened windows go: "new_column" (default) or "in_column"
-# new_window_placement = "new_column"
-
-[hotkeys]
-__HOTKEYS__
-[gestures]
-# Touchpad gesture support
-enabled = true
-swipe_left = "focus_left"
-swipe_right = "focus_right"
-swipe_up = "focus_up"
-swipe_down = "focus_down"
-
-[snap_hints]
-# Visual snap hint overlays during resize
-enabled = true
-duration_ms = 200
-opacity = 128
-
-# [[window_rules]]
-# match_class = "Chrome_WidgetWin_1"
-# match_title = ".*DevTools.*"
-# action = "float"
-
-# Per-app open behavior: open on a workspace (1-9), set the initial column
-# width (viewport fraction), or open with the column maximized.
-# [[window_rules]]
-# match_executable = "spotify.exe"
-# open_on_workspace = 5
-# column_width = 0.5
-# open_maximized = false
-"#
-    .replace(
-        "__HOTKEYS__",
-        &leopardwm_ipc::hotkeys::render_template_block(),
-    )
+    leopardwm_ipc::config_template::render_default_config()
 }
 
 /// Get the default config file path.
@@ -1604,52 +1535,21 @@ fn handle_init(output: Option<PathBuf>, force: bool, profile: Option<String>) ->
 
 /// Generate config content for a named profile.
 fn generate_profile_config(profile: &str) -> String {
-    let (gap, outer_gap, centering) = match profile {
-        "laptop" => (6, 6, "center"),
-        "ultrawide" => (12, 16, "just_in_view"),
-        "developer" => (10, 10, "center"),
-        _ => (10, 10, "center"),
+    use leopardwm_ipc::config_template::{render_config, TemplateOverrides};
+
+    let (gap, outer_gap, centering, name) = match profile {
+        "laptop" => (6, 6, "center", Some("laptop")),
+        "ultrawide" => (12, 16, "just_in_view", Some("ultrawide")),
+        "developer" => (10, 10, "center", Some("developer")),
+        _ => (10, 10, "center", None),
     };
 
-    format!(
-        r#"# LeopardWM Configuration — {profile} profile
-# https://github.com/jcardama/LeopardWM
-
-[layout]
-gap = {gap}
-outer_gap_left = {outer_gap}
-outer_gap_right = {outer_gap}
-outer_gap_top = {outer_gap}
-outer_gap_bottom = {outer_gap}
-centering_mode = "{centering}"
-
-[appearance]
-
-[behavior]
-focus_new_windows = true
-track_focus_changes = true
-log_level = "info"
-focus_follows_mouse = false
-
-[hotkeys]
-__HOTKEYS__
-[gestures]
-enabled = true
-swipe_left = "focus_left"
-swipe_right = "focus_right"
-swipe_up = "focus_up"
-swipe_down = "focus_down"
-
-[snap_hints]
-enabled = true
-duration_ms = 200
-opacity = 128
-"#
-    )
-    .replace(
-        "__HOTKEYS__",
-        &leopardwm_ipc::hotkeys::render_template_block(),
-    )
+    render_config(&TemplateOverrides {
+        gap: Some(gap),
+        outer_gap: Some(outer_gap),
+        centering_mode: Some(centering),
+        profile_name: name,
+    })
 }
 
 /// Result of a single diagnostic check.

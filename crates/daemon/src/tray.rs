@@ -302,34 +302,25 @@ impl TrayManager {
     }
 
     /// Sync quick-toggle check marks with the current config state.
-    #[allow(clippy::too_many_arguments)]
-    pub fn update_quick_toggles(
-        &self,
-        active_border: bool,
-        focus_new_windows: bool,
-        focus_follows_mouse: bool,
-        auto_start: bool,
-        centering_mode: u8,
-        placement_mode: u8,
-    ) {
+    pub fn update_quick_toggles(&self, toggles: &QuickToggleState) {
         self.shared
             .active_border
-            .store(active_border, Ordering::Relaxed);
+            .store(toggles.active_border, Ordering::Relaxed);
         self.shared
             .focus_new_windows
-            .store(focus_new_windows, Ordering::Relaxed);
+            .store(toggles.focus_new_windows, Ordering::Relaxed);
         self.shared
             .focus_follows_mouse
-            .store(focus_follows_mouse, Ordering::Relaxed);
+            .store(toggles.focus_follows_mouse, Ordering::Relaxed);
         self.shared
             .auto_start
-            .store(auto_start, Ordering::Relaxed);
+            .store(toggles.auto_start, Ordering::Relaxed);
         self.shared
             .centering_mode
-            .store(centering_mode, Ordering::Relaxed);
+            .store(toggles.centering_mode, Ordering::Relaxed);
         self.shared
             .placement_mode
-            .store(placement_mode, Ordering::Relaxed);
+            .store(toggles.placement_mode, Ordering::Relaxed);
         unsafe {
             win32_msg::PostThreadMessageW(
                 self.msg_thread_id,

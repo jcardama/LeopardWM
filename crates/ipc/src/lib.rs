@@ -2,6 +2,7 @@
 //!
 //! Shared types for daemon-CLI communication over Windows named pipes.
 
+pub mod config_template;
 pub mod hotkeys;
 
 use serde::{Deserialize, Serialize};

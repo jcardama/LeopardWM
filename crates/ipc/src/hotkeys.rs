@@ -163,6 +163,77 @@ pub fn default_bindings_map() -> HashMap<String, String> {
         .collect()
 }
 
+/// Map a normalized (lowercase, underscored) action id to its `IpcCommand`.
+/// Covers every catalog id plus non-catalog command aliases (gestures,
+/// renames, deprecated width presets) accepted in config files.
+pub fn command_for_action(id: &str) -> Option<crate::IpcCommand> {
+    use crate::IpcCommand;
+
+    if let Some(suffix) = id.strip_prefix("switch_workspace_") {
+        let index: u8 = suffix.parse().ok()?;
+        return (1..=9)
+            .contains(&index)
+            .then_some(IpcCommand::SwitchWorkspace { index });
+    }
+    if let Some(suffix) = id.strip_prefix("move_to_workspace_") {
+        let index: u8 = suffix.parse().ok()?;
+        return (1..=9)
+            .contains(&index)
+            .then_some(IpcCommand::MoveToWorkspace { index });
+    }
+
+    Some(match id {
+        "focus_left" => IpcCommand::FocusLeft,
+        "focus_right" => IpcCommand::FocusRight,
+        "focus_up" => IpcCommand::FocusUp,
+        "focus_down" => IpcCommand::FocusDown,
+        "focus_next" => IpcCommand::FocusNext,
+        "focus_prev" => IpcCommand::FocusPrev,
+        "move_column_left" => IpcCommand::MoveColumnLeft,
+        "move_column_right" => IpcCommand::MoveColumnRight,
+        "focus_monitor_left" => IpcCommand::FocusMonitorLeft,
+        "focus_monitor_right" => IpcCommand::FocusMonitorRight,
+        "move_to_monitor_left" => IpcCommand::MoveWindowToMonitorLeft,
+        "move_to_monitor_right" => IpcCommand::MoveWindowToMonitorRight,
+        "cycle_width_up" | "resize_grow" => IpcCommand::CycleWidthUp,
+        "cycle_width_down" | "resize_shrink" => IpcCommand::CycleWidthDown,
+        "cycle_height_up" => IpcCommand::CycleHeightUp,
+        "cycle_height_down" => IpcCommand::CycleHeightDown,
+        "equalize_heights" => IpcCommand::EqualizeColumnHeights,
+        "scroll_left" => IpcCommand::Scroll { delta: -100.0 },
+        "scroll_right" => IpcCommand::Scroll { delta: 100.0 },
+        "refresh" => IpcCommand::Refresh,
+        "reload" => IpcCommand::Reload,
+        "panic_revert" => IpcCommand::PanicRevert,
+        "toggle_pause" => IpcCommand::TogglePause,
+        "close_window" => IpcCommand::CloseWindow,
+        "toggle_floating" => IpcCommand::ToggleFloating,
+        "toggle_fullscreen" => IpcCommand::ToggleFullscreen,
+        "scratchpad_stash" => IpcCommand::ScratchpadStash,
+        "scratchpad_toggle" => IpcCommand::ScratchpadToggle,
+        "toggle_sticky" => IpcCommand::ToggleSticky,
+        "toggle_new_window_placement" => IpcCommand::ToggleNewWindowPlacement,
+        "toggle_tabbed" => IpcCommand::ToggleTabbed,
+        "width_third" => IpcCommand::SetColumnWidth { fraction: 0.333 },
+        "width_half" => IpcCommand::SetColumnWidth { fraction: 0.5 },
+        "width_two_thirds" => IpcCommand::SetColumnWidth { fraction: 0.667 },
+        "center_column" => IpcCommand::CenterColumn,
+        "maximize_column" => IpcCommand::MaximizeColumn,
+        "equalize_widths" => IpcCommand::EqualizeColumnWidths,
+        "move_window_left" => IpcCommand::MoveWindowLeft,
+        "move_window_right" => IpcCommand::MoveWindowRight,
+        "expel_to_left" => IpcCommand::ExpelToLeft,
+        "expel_to_right" => IpcCommand::ExpelToRight,
+        "consume_from_left" => IpcCommand::ConsumeFromLeft,
+        "consume_from_right" => IpcCommand::ConsumeFromRight,
+        "move_window_up" => IpcCommand::MoveWindowUp,
+        "move_window_down" => IpcCommand::MoveWindowDown,
+        "workspace_prev" => IpcCommand::WorkspacePrev,
+        "workspace_next" => IpcCommand::WorkspaceNext,
+        _ => return None,
+    })
+}
+
 /// Render the `[hotkeys]` binding lines for the generated config template,
 /// grouped with a `# <group>` comment before each section. Does not emit
 /// the `[hotkeys]` header or `scroll_modifier` line.
@@ -283,6 +354,35 @@ mod tests {
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
         assert_eq!(default_bindings_map(), expected_map);
+    }
+
+    #[test]
+    fn test_every_catalog_action_has_command_mapping() {
+        // Drift guard: a new catalog row without a command_for_action
+        // mapping fails here instead of silently parsing to None.
+        for a in hotkey_catalog() {
+            assert!(
+                command_for_action(&a.id).is_some(),
+                "catalog action '{}' has no command_for_action mapping",
+                a.id
+            );
+        }
+    }
+
+    #[test]
+    fn test_command_for_action_workspace_suffixes() {
+        use crate::IpcCommand;
+        assert_eq!(
+            command_for_action("switch_workspace_5"),
+            Some(IpcCommand::SwitchWorkspace { index: 5 })
+        );
+        assert_eq!(
+            command_for_action("move_to_workspace_9"),
+            Some(IpcCommand::MoveToWorkspace { index: 9 })
+        );
+        assert_eq!(command_for_action("switch_workspace_0"), None);
+        assert_eq!(command_for_action("switch_workspace_10"), None);
+        assert_eq!(command_for_action("move_to_workspace_x"), None);
     }
 
     #[test]

@@ -124,26 +124,29 @@ struct HotkeyState {
 /// Register hotkeys from config and return state.
 ///
 /// This function is called both at startup and on config reload.
+/// Build the tray quick-toggle state from config (reads autostart from the registry).
+fn quick_toggle_state(config: &Config) -> tray::QuickToggleState {
+    tray::QuickToggleState {
+        active_border: config.appearance.active_border,
+        focus_new_windows: config.behavior.focus_new_windows,
+        focus_follows_mouse: config.behavior.focus_follows_mouse,
+        auto_start: leopardwm_platform_win32::autostart::get_autostart().unwrap_or(false),
+        centering_mode: match config.layout.centering_mode {
+            config::CenteringModeConfig::Center => tray::CENTERING_CENTER,
+            config::CenteringModeConfig::JustInView => tray::CENTERING_JUST_IN_VIEW,
+            config::CenteringModeConfig::OnOverflow => tray::CENTERING_ON_OVERFLOW,
+        },
+        placement_mode: match config.behavior.new_window_placement {
+            config::NewWindowPlacement::NewColumn => tray::PLACEMENT_NEW_COLUMN,
+            config::NewWindowPlacement::InColumn => tray::PLACEMENT_IN_COLUMN,
+        },
+    }
+}
+
 /// Sync tray quick-toggle check marks with the current config.
 fn sync_tray_toggles(tray_manager: &Option<tray::TrayManager>, config: &Config) {
     if let Some(ref mgr) = tray_manager {
-        let auto_start =
-            leopardwm_platform_win32::autostart::get_autostart().unwrap_or(false);
-        mgr.update_quick_toggles(
-            config.appearance.active_border,
-            config.behavior.focus_new_windows,
-            config.behavior.focus_follows_mouse,
-            auto_start,
-            match config.layout.centering_mode {
-                config::CenteringModeConfig::Center => tray::CENTERING_CENTER,
-                config::CenteringModeConfig::JustInView => tray::CENTERING_JUST_IN_VIEW,
-                config::CenteringModeConfig::OnOverflow => tray::CENTERING_ON_OVERFLOW,
-            },
-            match config.behavior.new_window_placement {
-                config::NewWindowPlacement::NewColumn => tray::PLACEMENT_NEW_COLUMN,
-                config::NewWindowPlacement::InColumn => tray::PLACEMENT_IN_COLUMN,
-            },
-        );
+        mgr.update_quick_toggles(&quick_toggle_state(config));
     }
 }
 
@@ -888,21 +891,7 @@ fn setup_tray(
         Err(e) => warn!("{}", e),
     }
 
-    let initial_toggles = tray::QuickToggleState {
-        active_border: config.appearance.active_border,
-        focus_new_windows: config.behavior.focus_new_windows,
-        focus_follows_mouse: config.behavior.focus_follows_mouse,
-        auto_start: leopardwm_platform_win32::autostart::get_autostart().unwrap_or(false),
-        centering_mode: match config.layout.centering_mode {
-            config::CenteringModeConfig::Center => tray::CENTERING_CENTER,
-            config::CenteringModeConfig::JustInView => tray::CENTERING_JUST_IN_VIEW,
-            config::CenteringModeConfig::OnOverflow => tray::CENTERING_ON_OVERFLOW,
-        },
-        placement_mode: match config.behavior.new_window_placement {
-            config::NewWindowPlacement::NewColumn => tray::PLACEMENT_NEW_COLUMN,
-            config::NewWindowPlacement::InColumn => tray::PLACEMENT_IN_COLUMN,
-        },
-    };
+    let initial_toggles = quick_toggle_state(config);
     match tray::TrayManager::new(tray_sync_tx, initial_toggles) {
         Ok(manager) => {
             info!("System tray icon initialized");

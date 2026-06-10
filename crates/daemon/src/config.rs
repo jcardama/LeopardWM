@@ -867,80 +867,12 @@ impl CompiledWindowRule {
 
 /// Parse a command string into an IpcCommand.
 ///
-/// Returns None if the command is not recognized.
+/// Returns None if the command is not recognized. Accepts hyphenated
+/// variants (e.g. "panic-revert") by normalizing to underscores before
+/// the shared catalog lookup.
 pub fn parse_command(cmd: &str) -> Option<leopardwm_ipc::IpcCommand> {
-    use leopardwm_ipc::IpcCommand;
-
-    match cmd.to_lowercase().as_str() {
-        "focus_left" => Some(IpcCommand::FocusLeft),
-        "focus_right" => Some(IpcCommand::FocusRight),
-        "focus_up" => Some(IpcCommand::FocusUp),
-        "focus_down" => Some(IpcCommand::FocusDown),
-        "focus_next" => Some(IpcCommand::FocusNext),
-        "focus_prev" => Some(IpcCommand::FocusPrev),
-        "move_column_left" => Some(IpcCommand::MoveColumnLeft),
-        "move_column_right" => Some(IpcCommand::MoveColumnRight),
-        "focus_monitor_left" => Some(IpcCommand::FocusMonitorLeft),
-        "focus_monitor_right" => Some(IpcCommand::FocusMonitorRight),
-        "move_to_monitor_left" => Some(IpcCommand::MoveWindowToMonitorLeft),
-        "move_to_monitor_right" => Some(IpcCommand::MoveWindowToMonitorRight),
-        "cycle_width_up" | "resize_grow" => Some(IpcCommand::CycleWidthUp),
-        "cycle_width_down" | "resize_shrink" => Some(IpcCommand::CycleWidthDown),
-        "cycle_height_up" => Some(IpcCommand::CycleHeightUp),
-        "cycle_height_down" => Some(IpcCommand::CycleHeightDown),
-        "equalize_heights" => Some(IpcCommand::EqualizeColumnHeights),
-        "scroll_left" => Some(IpcCommand::Scroll { delta: -100.0 }),
-        "scroll_right" => Some(IpcCommand::Scroll { delta: 100.0 }),
-        "refresh" => Some(IpcCommand::Refresh),
-        "reload" => Some(IpcCommand::Reload),
-        "panic_revert" | "panic-revert" => Some(IpcCommand::PanicRevert),
-        "toggle_pause" | "toggle-pause" => Some(IpcCommand::TogglePause),
-        "close_window" => Some(IpcCommand::CloseWindow),
-        "toggle_floating" => Some(IpcCommand::ToggleFloating),
-        "toggle_fullscreen" => Some(IpcCommand::ToggleFullscreen),
-        "scratchpad_stash" | "scratchpad-stash" => Some(IpcCommand::ScratchpadStash),
-        "scratchpad_toggle" | "scratchpad-toggle" => Some(IpcCommand::ScratchpadToggle),
-        "toggle_sticky" | "toggle-sticky" => Some(IpcCommand::ToggleSticky),
-        "toggle_new_window_placement" | "toggle-new-window-placement" => {
-            Some(IpcCommand::ToggleNewWindowPlacement)
-        }
-        "toggle_tabbed" => Some(IpcCommand::ToggleTabbed),
-        "width_third" => Some(IpcCommand::SetColumnWidth { fraction: 0.333 }),
-        "width_half" => Some(IpcCommand::SetColumnWidth { fraction: 0.5 }),
-        "width_two_thirds" => Some(IpcCommand::SetColumnWidth { fraction: 0.667 }),
-        "center_column" => Some(IpcCommand::CenterColumn),
-        "maximize_column" => Some(IpcCommand::MaximizeColumn),
-        "equalize_widths" => Some(IpcCommand::EqualizeColumnWidths),
-        "move_window_left" => Some(IpcCommand::MoveWindowLeft),
-        "move_window_right" => Some(IpcCommand::MoveWindowRight),
-        "expel_to_left" => Some(IpcCommand::ExpelToLeft),
-        "expel_to_right" => Some(IpcCommand::ExpelToRight),
-        "consume_from_left" | "consume-from-left" => Some(IpcCommand::ConsumeFromLeft),
-        "consume_from_right" | "consume-from-right" => Some(IpcCommand::ConsumeFromRight),
-        "move_window_up" => Some(IpcCommand::MoveWindowUp),
-        "move_window_down" => Some(IpcCommand::MoveWindowDown),
-        "switch_workspace_1" => Some(IpcCommand::SwitchWorkspace { index: 1 }),
-        "switch_workspace_2" => Some(IpcCommand::SwitchWorkspace { index: 2 }),
-        "switch_workspace_3" => Some(IpcCommand::SwitchWorkspace { index: 3 }),
-        "switch_workspace_4" => Some(IpcCommand::SwitchWorkspace { index: 4 }),
-        "switch_workspace_5" => Some(IpcCommand::SwitchWorkspace { index: 5 }),
-        "switch_workspace_6" => Some(IpcCommand::SwitchWorkspace { index: 6 }),
-        "switch_workspace_7" => Some(IpcCommand::SwitchWorkspace { index: 7 }),
-        "switch_workspace_8" => Some(IpcCommand::SwitchWorkspace { index: 8 }),
-        "switch_workspace_9" => Some(IpcCommand::SwitchWorkspace { index: 9 }),
-        "workspace_prev" => Some(IpcCommand::WorkspacePrev),
-        "workspace_next" => Some(IpcCommand::WorkspaceNext),
-        "move_to_workspace_1" => Some(IpcCommand::MoveToWorkspace { index: 1 }),
-        "move_to_workspace_2" => Some(IpcCommand::MoveToWorkspace { index: 2 }),
-        "move_to_workspace_3" => Some(IpcCommand::MoveToWorkspace { index: 3 }),
-        "move_to_workspace_4" => Some(IpcCommand::MoveToWorkspace { index: 4 }),
-        "move_to_workspace_5" => Some(IpcCommand::MoveToWorkspace { index: 5 }),
-        "move_to_workspace_6" => Some(IpcCommand::MoveToWorkspace { index: 6 }),
-        "move_to_workspace_7" => Some(IpcCommand::MoveToWorkspace { index: 7 }),
-        "move_to_workspace_8" => Some(IpcCommand::MoveToWorkspace { index: 8 }),
-        "move_to_workspace_9" => Some(IpcCommand::MoveToWorkspace { index: 9 }),
-        _ => None,
-    }
+    let normalized = cmd.to_lowercase().replace('-', "_");
+    leopardwm_ipc::hotkeys::command_for_action(&normalized)
 }
 
 /// Deprecated hotkey command names that should be removed during migration.
@@ -1383,123 +1315,8 @@ pub fn ensure_config_on_disk() -> Result<Option<PathBuf>> {
 }
 
 /// Generate commented default config content for hand-editing.
-///
-/// Keep in sync with cli/src/main.rs:generate_default_config()
 fn generate_default_config_content() -> String {
-    r#"# LeopardWM Configuration
-# https://github.com/jcardama/LeopardWM
-
-[layout]
-# Gap between columns in pixels
-gap = 10
-
-# Outer gaps at the edges of the viewport in pixels
-outer_gap_left = 10
-outer_gap_right = 10
-outer_gap_top = 10
-outer_gap_bottom = 10
-
-# Width presets (fractions of usable viewport width).
-# First preset is used as the default width for new columns.
-width_presets = [0.333, 0.5, 0.667]
-
-# Height presets (fractions of column height / weight).
-height_presets = [0.333, 0.5, 0.667]
-
-# Centering mode: "center", "just_in_view", or "on_overflow"
-# - center: Always center the focused column
-# - just_in_view: Only scroll if focused column would be outside viewport
-# - on_overflow: Center only when the column is wider than the viewport
-centering_mode = "center"
-
-[appearance]
-
-[behavior]
-# Automatically focus new windows when they appear
-focus_new_windows = true
-
-# Track focus changes from Windows (sync with Alt-Tab, etc.)
-track_focus_changes = true
-
-# Log level: trace, debug, info, warn, error
-log_level = "info"
-
-# Focus follows mouse (hover to focus)
-focus_follows_mouse = false
-
-# Disable Windows 11 Snap Layouts for tiled windows (also disables maximize button)
-# disable_snap_layouts = false
-
-# Check GitHub Releases once a day for a newer version. One anonymous HTTPS GET to
-# api.github.com on startup + every 24h. Disable to skip entirely.
-# check_for_updates = false
-
-# Animate Chromium / Electron / Mozilla / Cascadia windows via DWM thumbnails
-# instead of per-frame SetWindowPos during column scrolls. Eliminates the
-# 1px wobble and renderer stutter on swap-chain-sensitive apps (Chrome,
-# Edge, Slack, Discord, Beeper, Spotify, VS Code, Firefox, Windows Terminal).
-# Default on since v0.1.18. Set to false to fall back to the legacy
-# per-frame SetWindowPos path.
-# swap_chain_ghost_animation = false
-
-# Where newly opened windows go: "new_column" (default, own column to the
-# right) or "in_column" (stacked into the focused column).
-# new_window_placement = "new_column"
-
-[hotkeys]
-__HOTKEYS__
-[gestures]
-# Touchpad gesture support
-enabled = true
-swipe_left = "focus_left"
-swipe_right = "focus_right"
-swipe_up = "focus_up"
-swipe_down = "focus_down"
-
-[snap_hints]
-# Visual snap hint overlays during resize
-enabled = true
-duration_ms = 200
-opacity = 128
-
-[animation]
-# Animation timing. Durations in milliseconds; 0 = snap instantly.
-# easing accepts "linear" | "ease_in" | "ease_out" | "ease_in_out".
-layout_duration_ms = 150            # column move / resize / tab changes
-workspace_switch_duration_ms = 200  # switching workspaces
-scroll_duration_ms = 200            # scrolling a column into view
-easing = "ease_out"
-
-[workspaces]
-# Optional display names for workspaces 1-9, by position. Shown in
-# `lwm query workspace` and pushed to bars over IPC. Leave an entry empty
-# ("") to keep that workspace's number. Omit the list to name nothing.
-# names = ["web", "code", "chat", "media"]
-
-# Built-in example: Firefox / Zen Picture-in-Picture popups draw their own
-# square frame, so we override the focus-border corner style to match. Edit
-# or remove freely — corner_style accepts "square" | "rounded" | "small_rounded".
-[[window_rules]]
-match_class = "MozillaDialogClass"
-corner_style = "square"
-
-# [[window_rules]]
-# match_class = "Chrome_WidgetWin_1"
-# match_title = ".*DevTools.*"
-# action = "float"
-
-# Per-app open behavior: open on a workspace (1-9), set the initial column
-# width (viewport fraction), or open with the column maximized.
-# [[window_rules]]
-# match_executable = "spotify.exe"
-# open_on_workspace = 5
-# column_width = 0.5
-# open_maximized = false
-"#
-    .replace(
-        "__HOTKEYS__",
-        &leopardwm_ipc::hotkeys::render_template_block(),
-    )
+    leopardwm_ipc::config_template::render_default_config()
 }
 
 /// Get all possible config file paths in priority order.
