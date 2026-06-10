@@ -22,9 +22,13 @@ pub use tab_strip::{TabAction, TabActionEvent, TabCloseAction};
 
 mod enumeration;
 mod event_hooks;
+mod focus;
 mod placement;
+mod system;
 mod types;
-mod utils;
+mod visibility;
+mod window_query;
+mod window_style;
 
 pub use gestures::*;
 pub use hotkeys::*;
@@ -45,21 +49,28 @@ pub use placement::{
 };
 pub use placement::apply_cloak_state;
 pub use types::{MonitorId, MonitorInfo, PlatformConfig, Win32Error, WindowInfo};
-pub use utils::{
-    are_animations_enabled, cascade_windows, close_window, get_cursor_pos,
-    get_window_corner_radius, get_window_icon, is_on_battery_or_power_saver,
-    remove_maximizebox, restore_maximizebox, restore_maximizebox_all,
-    restore_maximizebox_panic_recovery, scale_px,
-    get_system_highlight_color_bgr, get_window_chrome_rect, get_window_visible_rect,
-    is_high_contrast_enabled,
-    is_cursor_on_resize_border, is_move_offscreen_sentinel_position, is_window_maximized,
-    is_move_offscreen_sentinel_rect, is_shift_key_pressed, is_valid_window, is_window_shell_cloaked,
-    get_foreground_window, is_window_alive_and_visible, is_window_valid, is_window_visible,
-    move_window_offscreen, ms_since_last_user_input, position_window, reset_window_border_color,
-    restore_all_windows_moved_offscreen_best_effort,
-    restore_window_moved_offscreen, restore_windows_moved_offscreen, set_dpi_awareness,
-    set_foreground_window, set_window_border_color, uncloak_all_managed_windows,
+pub use focus::{
+    close_window, get_foreground_window, ms_since_last_user_input, set_foreground_window,
+};
+pub use system::{
+    are_animations_enabled, get_system_highlight_color_bgr, is_high_contrast_enabled,
+    is_on_battery_or_power_saver, scale_px, set_dpi_awareness,
+};
+pub use visibility::{
+    cascade_windows, is_move_offscreen_sentinel_position, is_move_offscreen_sentinel_rect,
+    move_window_offscreen, position_window, restore_all_windows_moved_offscreen_best_effort,
+    restore_window_moved_offscreen, restore_windows_moved_offscreen, uncloak_all_managed_windows,
     uncloak_all_visible_windows,
+};
+pub use window_query::{
+    get_cursor_pos, get_window_chrome_rect, get_window_corner_radius, get_window_icon,
+    get_window_visible_rect, is_cursor_on_resize_border, is_shift_key_pressed, is_valid_window,
+    is_window_alive_and_visible, is_window_maximized, is_window_shell_cloaked, is_window_valid,
+    is_window_visible,
+};
+pub use window_style::{
+    remove_maximizebox, reset_window_border_color, restore_maximizebox, restore_maximizebox_all,
+    restore_maximizebox_panic_recovery, set_window_border_color,
 };
 
 use leopardwm_core_layout::WindowId;

@@ -19,6 +19,9 @@ mod event_handler;
 mod events;
 mod helpers;
 mod ipc_server;
+mod layout_apply;
+mod monitors;
+mod persistence;
 mod scratchpad;
 mod settings;
 mod sticky;
@@ -26,8 +29,11 @@ mod startup;
 mod state;
 #[cfg(test)]
 mod tests;
+mod transitions;
 mod tray;
+mod ui_sync;
 mod update_check;
+mod window_rules;
 
 use ipc_server::*;
 use startup::*;

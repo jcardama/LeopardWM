@@ -538,7 +538,7 @@ fn hotkey_window_proc_inner(
         }
         WM_POWERBROADCAST => {
             if wparam.0 == PBT_POWERSETTINGCHANGE {
-                let on_battery_or_saver = crate::utils::is_on_battery_or_power_saver();
+                let on_battery_or_saver = crate::system::is_on_battery_or_power_saver();
                 tracing::debug!("Power state changed: on_battery_or_saver={}", on_battery_or_saver);
 
                 let sender_guard = POWER_STATE_SENDER
