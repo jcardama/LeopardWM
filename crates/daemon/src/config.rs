@@ -209,6 +209,9 @@ pub enum CenteringModeConfig {
     Center,
     /// Only scroll if the focused column would be outside the viewport.
     JustInView,
+    /// Center only when the focused column is wider than the viewport;
+    /// otherwise behave like `JustInView`.
+    OnOverflow,
 }
 
 impl From<CenteringModeConfig> for CenteringMode {
@@ -216,6 +219,7 @@ impl From<CenteringModeConfig> for CenteringMode {
         match config {
             CenteringModeConfig::Center => CenteringMode::Center,
             CenteringModeConfig::JustInView => CenteringMode::JustInView,
+            CenteringModeConfig::OnOverflow => CenteringMode::OnOverflow,
         }
     }
 }
@@ -1326,9 +1330,10 @@ width_presets = [0.333, 0.5, 0.667]
 # Height presets (fractions of column height / weight).
 height_presets = [0.333, 0.5, 0.667]
 
-# Centering mode: "center" or "just_in_view"
+# Centering mode: "center", "just_in_view", or "on_overflow"
 # - center: Always center the focused column
 # - just_in_view: Only scroll if focused column would be outside viewport
+# - on_overflow: Center only when the column is wider than the viewport
 centering_mode = "center"
 
 [appearance]

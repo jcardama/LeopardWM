@@ -48,6 +48,17 @@ impl Workspace {
             .max(0)
     }
 
+    /// Whether the focused column should be centered under the current
+    /// centering mode. `OnOverflow` centers only when the column is wider
+    /// than the visible area (it cannot fit otherwise).
+    fn should_center(&self, col_width: i32, vis_w: i32) -> bool {
+        match self.centering_mode {
+            CenteringMode::Center => true,
+            CenteringMode::JustInView => false,
+            CenteringMode::OnOverflow => col_width > vis_w,
+        }
+    }
+
     /// Ensure the focused column is visible in the viewport.
     /// Adjusts scroll_offset according to the centering mode.
     ///
@@ -64,21 +75,18 @@ impl Workspace {
         // Outer gaps are viewport padding — visible strip area is smaller.
         let vis_w = self.visible_width(viewport_width);
 
-        match self.centering_mode {
-            CenteringMode::Center => {
-                let col_center = col_x.saturating_add(col_width / 2);
-                self.scroll_offset = (col_center.saturating_sub(vis_w / 2)) as f64;
-            }
-            CenteringMode::JustInView => {
-                let scroll_left = self.scroll_offset.round() as i32;
-                let scroll_right = scroll_left.saturating_add(vis_w);
-                let col_right = col_x.saturating_add(col_width);
+        if self.should_center(col_width, vis_w) {
+            let col_center = col_x.saturating_add(col_width / 2);
+            self.scroll_offset = (col_center.saturating_sub(vis_w / 2)) as f64;
+        } else {
+            let scroll_left = self.scroll_offset.round() as i32;
+            let scroll_right = scroll_left.saturating_add(vis_w);
+            let col_right = col_x.saturating_add(col_width);
 
-                if col_x < scroll_left {
-                    self.scroll_offset = col_x as f64;
-                } else if col_right > scroll_right {
-                    self.scroll_offset = col_right.saturating_sub(vis_w) as f64;
-                }
+            if col_x < scroll_left {
+                self.scroll_offset = col_x as f64;
+            } else if col_right > scroll_right {
+                self.scroll_offset = col_right.saturating_sub(vis_w) as f64;
             }
         }
 
@@ -485,30 +493,27 @@ impl Workspace {
 
         let vis_w = self.visible_width(viewport_width);
 
-        let target_offset = match self.centering_mode {
-            CenteringMode::Center => {
-                let col_center = col_x.saturating_add(col_width / 2);
-                (col_center.saturating_sub(vis_w / 2)) as f64
-            }
-            CenteringMode::JustInView => {
-                let current = self.effective_scroll_offset();
-                let scroll_left = current.round() as i32;
-                let scroll_right = scroll_left.saturating_add(vis_w);
-                let col_right = col_x.saturating_add(col_width);
+        let target_offset = if self.should_center(col_width, vis_w) {
+            let col_center = col_x.saturating_add(col_width / 2);
+            (col_center.saturating_sub(vis_w / 2)) as f64
+        } else {
+            let current = self.effective_scroll_offset();
+            let scroll_left = current.round() as i32;
+            let scroll_right = scroll_left.saturating_add(vis_w);
+            let col_right = col_x.saturating_add(col_width);
 
-                if col_x < scroll_left {
-                    col_x as f64
-                } else if col_right > scroll_right {
-                    col_right.saturating_sub(vis_w) as f64
+            if col_x < scroll_left {
+                col_x as f64
+            } else if col_right > scroll_right {
+                col_right.saturating_sub(vis_w) as f64
+            } else {
+                let max_scroll = (self.total_width() - vis_w).max(0) as f64;
+                if current < -0.5 {
+                    0.0
+                } else if current > max_scroll + 0.5 {
+                    max_scroll
                 } else {
-                    let max_scroll = (self.total_width() - vis_w).max(0) as f64;
-                    if current < -0.5 {
-                        0.0
-                    } else if current > max_scroll + 0.5 {
-                        max_scroll
-                    } else {
-                        return;
-                    }
+                    return;
                 }
             }
         };

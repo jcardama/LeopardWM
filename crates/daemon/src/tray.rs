@@ -91,6 +91,7 @@ mod menu_ids {
     pub const TOGGLE_AUTO_START: &str = "toggle_auto_start";
     pub const CENTERING_CENTER: &str = "centering_center";
     pub const CENTERING_JUST_IN_VIEW: &str = "centering_just_in_view";
+    pub const CENTERING_ON_OVERFLOW: &str = "centering_on_overflow";
     pub const CHECK_UPDATES: &str = "check_updates";
 }
 
@@ -127,6 +128,8 @@ pub enum TrayEvent {
     SetCenteringCenter,
     /// User selected "Just in View" centering mode.
     SetCenteringJustInView,
+    /// User selected "On Overflow" centering mode.
+    SetCenteringOnOverflow,
     /// User clicked "Check for Updates" / "Update available" menu item.
     OpenReleasesPage,
 }
@@ -134,6 +137,7 @@ pub enum TrayEvent {
 /// Centering mode values for atomic storage.
 pub const CENTERING_CENTER: u8 = 0;
 pub const CENTERING_JUST_IN_VIEW: u8 = 1;
+pub const CENTERING_ON_OVERFLOW: u8 = 2;
 
 /// Shared state between the caller and the message-loop thread.
 ///
@@ -161,6 +165,7 @@ struct TrayItems {
     auto_start_item: CheckMenuItem,
     centering_center_item: CheckMenuItem,
     centering_just_in_view_item: CheckMenuItem,
+    centering_on_overflow_item: CheckMenuItem,
     update_item: MenuItem,
 }
 
@@ -489,6 +494,9 @@ fn run_tray_thread(
                         items
                             .centering_just_in_view_item
                             .set_checked(cm == CENTERING_JUST_IN_VIEW);
+                        items
+                            .centering_on_overflow_item
+                            .set_checked(cm == CENTERING_ON_OVERFLOW);
                         continue;
                     }
                     win32_msg::WM_APP_UPDATE_RELEASE_INFO => {
@@ -597,11 +605,21 @@ fn build_tray(
         initial.centering_mode == CENTERING_JUST_IN_VIEW,
         None,
     );
+    let centering_on_overflow_item = CheckMenuItem::with_id(
+        menu_ids::CENTERING_ON_OVERFLOW,
+        "On Overflow",
+        true,
+        initial.centering_mode == CENTERING_ON_OVERFLOW,
+        None,
+    );
     centering_sub
         .append(&centering_center_item)
         .map_err(|e| TrayError::Menu(e.to_string()))?;
     centering_sub
         .append(&centering_just_in_view_item)
+        .map_err(|e| TrayError::Menu(e.to_string()))?;
+    centering_sub
+        .append(&centering_on_overflow_item)
         .map_err(|e| TrayError::Menu(e.to_string()))?;
     append(&centering_sub)?;
     append(&PredefinedMenuItem::separator())?;
@@ -687,6 +705,7 @@ fn build_tray(
         auto_start_item,
         centering_center_item,
         centering_just_in_view_item,
+        centering_on_overflow_item,
         update_item,
     };
 
@@ -710,6 +729,7 @@ fn map_menu_id_to_event(menu_id: &str) -> Option<TrayEvent> {
         menu_ids::TOGGLE_AUTO_START => Some(TrayEvent::ToggleAutoStart),
         menu_ids::CENTERING_CENTER => Some(TrayEvent::SetCenteringCenter),
         menu_ids::CENTERING_JUST_IN_VIEW => Some(TrayEvent::SetCenteringJustInView),
+        menu_ids::CENTERING_ON_OVERFLOW => Some(TrayEvent::SetCenteringOnOverflow),
         menu_ids::CHECK_UPDATES => Some(TrayEvent::OpenReleasesPage),
         _ => None,
     }

@@ -808,6 +808,7 @@ input[type="range"]::-webkit-slider-thumb {
               <div class="combobox-popup">
                 <div class="combobox-option selected" data-value="center">Center</div>
                 <div class="combobox-option" data-value="just_in_view">Just in view</div>
+                <div class="combobox-option" data-value="on_overflow">On overflow</div>
               </div>
             </div>
           </div>

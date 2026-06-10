@@ -137,6 +137,7 @@ fn sync_tray_toggles(tray_manager: &Option<tray::TrayManager>, config: &Config) 
             match config.layout.centering_mode {
                 config::CenteringModeConfig::Center => tray::CENTERING_CENTER,
                 config::CenteringModeConfig::JustInView => tray::CENTERING_JUST_IN_VIEW,
+                config::CenteringModeConfig::OnOverflow => tray::CENTERING_ON_OVERFLOW,
             },
         );
     }
@@ -910,6 +911,7 @@ async fn main() -> Result<()> {
             centering_mode: match config.layout.centering_mode {
                 config::CenteringModeConfig::Center => tray::CENTERING_CENTER,
                 config::CenteringModeConfig::JustInView => tray::CENTERING_JUST_IN_VIEW,
+                config::CenteringModeConfig::OnOverflow => tray::CENTERING_ON_OVERFLOW,
             },
         };
         match tray::TrayManager::new(tray_sync_tx, initial_toggles) {
@@ -1698,6 +1700,9 @@ async fn main() -> Result<()> {
                                 config::CenteringModeConfig::JustInView => {
                                     tray::CENTERING_JUST_IN_VIEW
                                 }
+                                config::CenteringModeConfig::OnOverflow => {
+                                    tray::CENTERING_ON_OVERFLOW
+                                }
                             };
                             mgr.update_quick_toggles(
                                 state_guard.config.appearance.active_border,
@@ -1770,6 +1775,34 @@ async fn main() -> Result<()> {
                                 state.config.behavior.focus_follows_mouse,
                                 auto_start,
                                 tray::CENTERING_JUST_IN_VIEW,
+                            );
+                        }
+                    }
+                    tray::TrayEvent::SetCenteringOnOverflow => {
+                        let mut state = state.lock().await;
+                        if state.config.layout.centering_mode
+                            != config::CenteringModeConfig::OnOverflow
+                        {
+                            state.config.layout.centering_mode =
+                                config::CenteringModeConfig::OnOverflow;
+                            info!("Tray: Centering mode set to OnOverflow");
+                            let cfg = state.config.clone();
+                            state.apply_config(cfg);
+                            if let Err(e) = state.apply_layout() {
+                                warn!("Layout apply after centering change failed: {}", e);
+                            }
+                            let _ = state.config.save();
+                        }
+                        if let Some(ref mgr) = tray_manager {
+                            let auto_start =
+                                leopardwm_platform_win32::autostart::get_autostart()
+                                    .unwrap_or(false);
+                            mgr.update_quick_toggles(
+                                state.config.appearance.active_border,
+                                state.config.behavior.focus_new_windows,
+                                state.config.behavior.focus_follows_mouse,
+                                auto_start,
+                                tray::CENTERING_ON_OVERFLOW,
                             );
                         }
                     }

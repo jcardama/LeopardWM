@@ -403,6 +403,46 @@ mod tests {
     }
 
     #[test]
+    fn test_on_overflow_narrow_column_behaves_just_in_view() {
+        // A column that fits in the viewport: on_overflow must match
+        // just_in_view exactly (scroll into view, not center).
+        let offset_for = |mode| {
+            let mut ws = Workspace::with_gaps(10, 10);
+            ws.set_centering_mode(mode);
+            ws.insert_window(1, Some(200)).unwrap();
+            ws.insert_window(2, Some(200)).unwrap();
+            ws.insert_window(3, Some(200)).unwrap();
+            // Middle column, already fully in view at offset 0: just_in_view
+            // leaves it put, center would move it — so the modes differ here.
+            ws.test_set_focus_unchecked(1, 0);
+            ws.set_scroll_offset(0.0);
+            ws.ensure_focused_visible(500);
+            ws.scroll_offset()
+        };
+        assert_eq!(
+            offset_for(CenteringMode::OnOverflow),
+            offset_for(CenteringMode::JustInView)
+        );
+        assert_ne!(
+            offset_for(CenteringMode::OnOverflow),
+            offset_for(CenteringMode::Center)
+        );
+    }
+
+    #[test]
+    fn test_on_overflow_centers_wide_column() {
+        let mut ws = Workspace::with_gaps(0, 0);
+        ws.set_centering_mode(CenteringMode::OnOverflow);
+        ws.insert_window(1, Some(1500)).unwrap(); // wider than the viewport
+        ws.test_set_focus_unchecked(0, 0);
+
+        // 1500px column does not fit in the 1000px viewport, so on_overflow
+        // centers it: center(750) - vis/2(500) = 250.
+        ws.ensure_focused_visible(1000);
+        assert_eq!(ws.scroll_offset(), 250.0);
+    }
+
+    #[test]
     fn test_compute_placements_tight_viewport() {
         let mut ws = Workspace::with_gaps(10, 50); // Large outer_gap
         ws.insert_window(1, Some(400)).unwrap();

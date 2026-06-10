@@ -20,6 +20,9 @@ pub enum CenteringMode {
     Center,
     /// Only scroll if the focused column would be outside the viewport.
     JustInView,
+    /// Center only when the focused column is wider than the viewport (so it
+    /// cannot fit otherwise); behave like `JustInView` for columns that fit.
+    OnOverflow,
 }
 
 /// A floating window that is not part of the tiling layout.

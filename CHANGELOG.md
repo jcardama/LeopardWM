@@ -31,6 +31,10 @@ All notable changes to LeopardWM will be documented in this file.
   The settings hotkey list shows every action with a readable name in a
   sensible order. `lwm config init` now produces a complete, correct
   hotkey config.
+- **On-overflow centering mode.** `centering_mode = "on_overflow"` centers
+  the focused column only when it is wider than the viewport; columns that
+  fit scroll just into view. Selectable in Settings and the tray menu
+  alongside the existing center and just_in_view modes.
 
 ## 0.1.18
 

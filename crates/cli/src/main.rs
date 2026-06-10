@@ -1489,9 +1489,10 @@ outer_gap_right = 10
 outer_gap_top = 10
 outer_gap_bottom = 10
 
-# Centering mode: "center" or "just_in_view"
+# Centering mode: "center", "just_in_view", or "on_overflow"
 # - center: Always center the focused column
 # - just_in_view: Only scroll if focused column would be outside viewport
+# - on_overflow: Center only when the column is wider than the viewport
 centering_mode = "center"
 
 [appearance]
