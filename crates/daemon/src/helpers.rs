@@ -2299,12 +2299,21 @@ impl AppState {
         title: &str,
         executable: &str,
     ) -> config::WindowAction {
-        for rule in &self.compiled_rules {
-            if rule.matches(class_name, title, executable) {
-                return rule.action;
-            }
-        }
-        config::WindowAction::Tile // Default
+        self.matched_rule(class_name, title, executable)
+            .map(|r| r.action)
+            .unwrap_or(config::WindowAction::Tile)
+    }
+
+    /// The first window rule matching this window, if any (first match wins).
+    pub(crate) fn matched_rule(
+        &self,
+        class_name: &str,
+        title: &str,
+        executable: &str,
+    ) -> Option<&config::CompiledWindowRule> {
+        self.compiled_rules
+            .iter()
+            .find(|rule| rule.matches(class_name, title, executable))
     }
 
     /// Get the floating rect for a window based on rules.

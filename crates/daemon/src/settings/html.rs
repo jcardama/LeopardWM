@@ -414,6 +414,9 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 2px; }
   display: inline-block;
   min-width: 140px;
 }
+/* Narrow variant for table cells holding a single digit (rules WS column) */
+.combobox.compact { min-width: 52px; }
+.combobox.compact .combobox-trigger { padding: 5px 6px 6px 8px; gap: 4px; }
 .combobox-trigger {
   display: flex;
   align-items: center;
@@ -491,6 +494,10 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 2px; }
 /* ── Toggle Switch (40x20, WinUI 3) ──────────────────────────────── */
 .toggle {
   position: relative;
+  /* inline-block so the fixed size also applies outside flex rows (e.g.
+     inside a table cell); flex containers blockify it the same as before */
+  display: inline-block;
+  vertical-align: middle;
   width: 40px;
   height: 20px;
   cursor: pointer;
@@ -1016,7 +1023,7 @@ input[type="range"]::-webkit-slider-thumb {
         <h2 class="section-title">Window rules</h2>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Class</th><th>Title</th><th>Executable</th><th>Action</th><th>Corners</th><th style="width:36px"></th></tr></thead>
+            <thead><tr><th>Class</th><th>Title</th><th>Executable</th><th>Action</th><th>Corners</th><th title="Open on workspace 1-9" style="width:52px">WS</th><th title="Maximize the column on open" style="width:58px;text-align:center;padding-left:10px">Max</th><th style="width:36px"></th></tr></thead>
             <tbody id="rules-body"></tbody>
           </table>
         </div>
@@ -1442,6 +1449,9 @@ function resetHotkeys() {
 function addRuleRow(r) {
   var tbody = document.getElementById('rules-body');
   var tr = document.createElement('tr');
+  /* Keep the original rule object so fields without a table column
+     (width, height, column_width, future keys) survive a settings save. */
+  tr._rule = r || {};
   var action = r.action || 'tile';
   var actionLabel = action.charAt(0).toUpperCase() + action.slice(1);
   var corner = r.corner_style || 'auto';
@@ -1453,6 +1463,11 @@ function addRuleRow(r) {
   }).join('');
   var cornerOpts = ['auto','square','rounded','small_rounded'].map(function(c) {
     return '<div class="combobox-option' + (c === corner ? ' selected' : '') + '" data-value="' + c + '">' + cornerLabels[c] + '</div>';
+  }).join('');
+  var ws = (r.open_on_workspace >= 1 && r.open_on_workspace <= 9) ? String(r.open_on_workspace) : '';
+  var wsOpts = ['','1','2','3','4','5','6','7','8','9'].map(function(w) {
+    var label = w === '' ? '-' : w;
+    return '<div class="combobox-option' + (w === ws ? ' selected' : '') + '" data-value="' + w + '">' + label + '</div>';
   }).join('');
   tr.innerHTML =
     '<td><input type="text" class="rule-class" value="' + escAttr(r.match_class||'') + '" placeholder="regex"></td>' +
@@ -1466,6 +1481,11 @@ function addRuleRow(r) {
       '<button class="combobox-trigger" type="button"><span class="combobox-text">' + cornerLabels[corner] + '</span>' + chevron + '</button>' +
       '<div class="combobox-popup">' + cornerOpts + '</div>' +
     '</div></td>' +
+    '<td><div class="combobox compact rule-workspace" data-value="' + ws + '" title="Open on workspace 1-9">' +
+      '<button class="combobox-trigger" type="button"><span class="combobox-text">' + (ws === '' ? '-' : ws) + '</span>' + chevron + '</button>' +
+      '<div class="combobox-popup">' + wsOpts + '</div>' +
+    '</div></td>' +
+    '<td style="text-align:center;padding-left:10px"><label class="toggle" title="Maximize the column on open"><input type="checkbox" class="rule-maximized"' + (r.open_maximized ? ' checked' : '') + '><span class="track"></span><span class="thumb"></span></label></td>' +
     '<td><button class="row-delete" onclick="this.closest(\'tr\').remove();autoSave(0)">' + deleteIcon + '</button></td>';
   tbody.appendChild(tr);
   wrapAllInputs(tr);
@@ -1570,7 +1590,12 @@ function readScrollModifier() {
 function readRules() {
   var rules = [];
   document.querySelectorAll('#rules-body tr').forEach(function(tr) {
-    var r = {};
+    /* Start from the stashed original so fields without a table column
+       (width, height, column_width, future keys) are preserved; the
+       displayed fields are then re-read from the inputs. */
+    var r = Object.assign({}, tr._rule || {});
+    delete r.match_class; delete r.match_title; delete r.match_executable;
+    delete r.corner_style; delete r.open_on_workspace; delete r.open_maximized;
     var cls = tr.querySelector('.rule-class').value.trim();
     var title = tr.querySelector('.rule-title').value.trim();
     var exe = tr.querySelector('.rule-exe').value.trim();
@@ -1582,6 +1607,11 @@ function readRules() {
     if (title) r.match_title = title;
     if (exe) r.match_executable = exe;
     if (corner !== 'auto') r.corner_style = corner;
+    var wsEl = tr.querySelector('.rule-workspace');
+    var wsv = wsEl ? parseInt(wsEl.dataset.value, 10) : NaN;
+    if (wsv >= 1 && wsv <= 9) r.open_on_workspace = wsv;
+    var maxEl = tr.querySelector('.rule-maximized');
+    if (maxEl && maxEl.checked) r.open_maximized = true;
     if (cls || title || exe) rules.push(r);
   });
   return rules;

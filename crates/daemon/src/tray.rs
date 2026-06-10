@@ -244,6 +244,7 @@ impl TrayManager {
             .map_err(|_| TrayError::Build("Tray thread exited during init".into()))??;
 
         // Spawn thread to listen for menu events and forward them.
+        let menu_sender = event_sender.clone();
         std::thread::Builder::new()
             .name("tray-menu-events".into())
             .spawn(move || {
@@ -253,7 +254,25 @@ impl TrayManager {
                         debug!("Unknown menu item clicked: {}", event.id.0);
                         continue;
                     };
-                    if event_sender.send(tray_event).is_err() {
+                    if menu_sender.send(tray_event).is_err() {
+                        break;
+                    }
+                }
+            })
+            .ok();
+
+        // Spawn thread for tray-icon clicks: double-click opens Settings
+        // (single/right click keep showing the context menu).
+        // TrayIconEvent::receiver() is one process-global stream; this must
+        // stay the only consumer or readers would compete for events.
+        std::thread::Builder::new()
+            .name("tray-icon-events".into())
+            .spawn(move || {
+                let rx = tray_icon::TrayIconEvent::receiver();
+                while let Ok(event) = rx.recv() {
+                    if matches!(event, tray_icon::TrayIconEvent::DoubleClick { .. })
+                        && event_sender.send(TrayEvent::OpenConfig).is_err()
+                    {
                         break;
                     }
                 }

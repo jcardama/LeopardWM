@@ -488,6 +488,19 @@ pub struct WindowRule {
     /// `None` = auto-detect from DWM corner preference.
     #[serde(default)]
     pub corner_style: Option<CornerStyle>,
+
+    /// Open the window on this workspace (1-9) instead of the active one.
+    #[serde(default)]
+    pub open_on_workspace: Option<u8>,
+
+    /// Maximize the window's column to the viewport width after opening.
+    #[serde(default)]
+    pub open_maximized: bool,
+
+    /// Initial column width as a fraction of the viewport (0.05 to 1.0)
+    /// for tiled windows.
+    #[serde(default)]
+    pub column_width: Option<f64>,
 }
 
 /// Action to take for a matching window.
@@ -811,6 +824,12 @@ pub struct CompiledWindowRule {
     pub height: Option<i32>,
     /// Optional corner-style override for the focus border.
     pub corner_style: Option<CornerStyle>,
+    /// Open on this workspace (0-based index) instead of the active one.
+    pub open_on_workspace: Option<usize>,
+    /// Maximize the window's column after opening.
+    pub open_maximized: bool,
+    /// Initial column width as a viewport fraction for tiled windows.
+    pub column_width: Option<f64>,
 }
 
 impl CompiledWindowRule {
@@ -1217,6 +1236,31 @@ impl Config {
                 None => None,
             };
 
+            // Validate the open placement extras; warn and drop just the
+            // invalid property rather than the whole rule.
+            let open_on_workspace = match rule.open_on_workspace {
+                Some(n) if (1..=9).contains(&n) => Some((n - 1) as usize),
+                Some(n) => {
+                    tracing::warn!(
+                        "Window rule open_on_workspace = {} is out of range (1-9); ignoring",
+                        n
+                    );
+                    None
+                }
+                None => None,
+            };
+            let column_width = match rule.column_width {
+                Some(f) if (0.05..=1.0).contains(&f) => Some(f),
+                Some(f) => {
+                    tracing::warn!(
+                        "Window rule column_width = {} is out of range (0.05-1.0); ignoring",
+                        f
+                    );
+                    None
+                }
+                None => None,
+            };
+
             compiled.push(CompiledWindowRule {
                 class_regex,
                 title_regex,
@@ -1225,6 +1269,9 @@ impl Config {
                 width: rule.width,
                 height: rule.height,
                 corner_style: rule.corner_style,
+                open_on_workspace,
+                open_maximized: rule.open_maximized,
+                column_width,
             });
         }
 
@@ -1238,6 +1285,9 @@ impl Config {
                 width: None,
                 height: None,
                 corner_style: None,
+                open_on_workspace: None,
+                open_maximized: false,
+                column_width: None,
             });
         }
 
@@ -1437,6 +1487,14 @@ corner_style = "square"
 # match_class = "Chrome_WidgetWin_1"
 # match_title = ".*DevTools.*"
 # action = "float"
+
+# Per-app open behavior: open on a workspace (1-9), set the initial column
+# width (viewport fraction), or open with the column maximized.
+# [[window_rules]]
+# match_executable = "spotify.exe"
+# open_on_workspace = 5
+# column_width = 0.5
+# open_maximized = false
 "#
     .replace(
         "__HOTKEYS__",
@@ -1729,6 +1787,9 @@ mod tests {
             width: None,
             height: None,
             corner_style: None,
+            open_on_workspace: None,
+            open_maximized: false,
+            column_width: None,
         };
 
         assert!(rule.matches("Notepad", "Untitled - Notepad", "notepad.exe"));
@@ -1745,6 +1806,9 @@ mod tests {
             width: Some(800),
             height: Some(600),
             corner_style: None,
+            open_on_workspace: None,
+            open_maximized: false,
+            column_width: None,
         };
 
         assert!(rule.matches(
@@ -1766,6 +1830,9 @@ mod tests {
             width: None,
             height: None,
             corner_style: None,
+            open_on_workspace: None,
+            open_maximized: false,
+            column_width: None,
         };
 
         assert!(rule.matches("SpotifyClass", "Spotify - Song Title", "spotify.exe"));
@@ -1783,6 +1850,9 @@ mod tests {
             width: None,
             height: None,
             corner_style: None,
+            open_on_workspace: None,
+            open_maximized: false,
+            column_width: None,
         };
 
         // Both patterns must match
@@ -1806,6 +1876,9 @@ mod tests {
             width: None,
             height: None,
             corner_style: None,
+            open_on_workspace: None,
+            open_maximized: false,
+            column_width: None,
         };
 
         assert!(!rule.matches("AnyClass", "Any Title", "any.exe"));
@@ -1915,6 +1988,9 @@ mod tests {
                 width: Some(800),
                 height: Some(600),
                 corner_style: None,
+                open_on_workspace: None,
+                open_maximized: false,
+                column_width: None,
             },
             WindowRule {
                 match_class: Some("Notepad".to_string()),
@@ -1924,6 +2000,9 @@ mod tests {
                 width: None,
                 height: None,
                 corner_style: None,
+                open_on_workspace: None,
+                open_maximized: false,
+                column_width: None,
             },
         ];
 
@@ -1949,6 +2028,9 @@ mod tests {
             width: None,
             height: None,
             corner_style: None,
+            open_on_workspace: None,
+            open_maximized: false,
+            column_width: None,
         };
 
         assert!(rule.matches("AnyClass", "[DEBUG] Application started", "app.exe"));
@@ -1966,6 +2048,9 @@ mod tests {
             width: None,
             height: None,
             corner_style: None,
+            open_on_workspace: None,
+            open_maximized: false,
+            column_width: None,
         };
 
         assert!(rule.matches("AnyClass", "Error Dialog", "app.exe"));
@@ -1983,6 +2068,9 @@ mod tests {
             width: None,
             height: None,
             corner_style: None,
+            open_on_workspace: None,
+            open_maximized: false,
+            column_width: None,
         };
 
         assert!(rule.matches("AnyClass", "Error Dialog", "app.exe"));
@@ -2001,6 +2089,9 @@ mod tests {
             width: None,
             height: None,
             corner_style: None,
+            open_on_workspace: None,
+            open_maximized: false,
+            column_width: None,
         };
 
         assert!(rule.matches("MyClass", "Any Title", "any.exe"));
@@ -2019,6 +2110,9 @@ mod tests {
             width: None,
             height: None,
             corner_style: None,
+            open_on_workspace: None,
+            open_maximized: false,
+            column_width: None,
         };
 
         assert!(rule.matches("AnyClass", "App Settings", "any.exe"));
@@ -2037,6 +2131,9 @@ mod tests {
             width: None,
             height: None,
             corner_style: None,
+            open_on_workspace: None,
+            open_maximized: false,
+            column_width: None,
         };
 
         assert!(rule.matches("AnyClass", "Any Title", "notepad.exe"));
@@ -2055,6 +2152,9 @@ mod tests {
             width: None,
             height: None,
             corner_style: None,
+            open_on_workspace: None,
+            open_maximized: false,
+            column_width: None,
         };
 
         // Should return false because regex is invalid
@@ -2072,6 +2172,9 @@ mod tests {
             width: None,
             height: None,
             corner_style: None,
+            open_on_workspace: None,
+            open_maximized: false,
+            column_width: None,
         };
 
         assert!(rule.matches("", "Title", "app.exe")); // Empty class matches .*
@@ -2268,6 +2371,9 @@ mod tests {
                     width: Some(1024),
                     height: Some(768),
                     corner_style: None,
+                    open_on_workspace: None,
+                    open_maximized: false,
+                    column_width: None,
                 },
                 WindowRule {
                     match_class: None,
@@ -2277,6 +2383,9 @@ mod tests {
                     width: None,
                     height: None,
                     corner_style: None,
+                    open_on_workspace: None,
+                    open_maximized: false,
+                    column_width: None,
                 },
             ],
             ..Default::default()
@@ -2315,6 +2424,9 @@ mod tests {
                     width: None,
                     height: None,
                     corner_style: None,
+                    open_on_workspace: None,
+                    open_maximized: false,
+                    column_width: None,
                 },
                 WindowRule {
                     match_class: Some("ValidClass".to_string()),
@@ -2324,6 +2436,9 @@ mod tests {
                     width: None,
                     height: None,
                     corner_style: None,
+                    open_on_workspace: None,
+                    open_maximized: false,
+                    column_width: None,
                 },
             ],
             ..Default::default()

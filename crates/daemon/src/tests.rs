@@ -246,6 +246,9 @@ fn test_window_rule_matching_class() {
             width: Some(800),
             height: Some(600),
             corner_style: None,
+            open_on_workspace: None,
+            open_maximized: false,
+            column_width: None,
         }],
         ..Default::default()
     };
@@ -265,6 +268,9 @@ fn test_window_rule_matching_title() {
             width: None,
             height: None,
             corner_style: None,
+            open_on_workspace: None,
+            open_maximized: false,
+            column_width: None,
         }],
         ..Default::default()
     };
@@ -284,6 +290,9 @@ fn test_window_rule_matching_executable() {
             width: None,
             height: None,
             corner_style: None,
+            open_on_workspace: None,
+            open_maximized: false,
+            column_width: None,
         }],
         ..Default::default()
     };
@@ -310,6 +319,9 @@ fn test_floating_rect_uses_rule_dimensions() {
             width: Some(1024),
             height: Some(768),
             corner_style: None,
+            open_on_workspace: None,
+            open_maximized: false,
+            column_width: None,
         }],
         ..Default::default()
     };
@@ -332,6 +344,9 @@ fn test_floating_rect_preserves_original_if_no_dimensions() {
             width: None,
             height: None,
             corner_style: None,
+            open_on_workspace: None,
+            open_maximized: false,
+            column_width: None,
         }],
         ..Default::default()
     };
@@ -3064,4 +3079,70 @@ fn test_toggle_new_window_placement_command() {
         state.config.behavior.new_window_placement,
         crate::config::NewWindowPlacement::NewColumn
     );
+}
+
+#[test]
+fn test_window_rule_open_extras_parse_and_compile() {
+    let toml_str = r#"
+        [[window_rules]]
+        match_executable = "spotify.exe"
+        open_on_workspace = 5
+        open_maximized = true
+        column_width = 0.5
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    let compiled = cfg.compile_window_rules();
+    let rule = compiled
+        .iter()
+        .find(|r| r.match_executable.as_deref() == Some("spotify.exe"))
+        .expect("rule compiled");
+    // 1-based config index becomes 0-based workspace index.
+    assert_eq!(rule.open_on_workspace, Some(4));
+    assert!(rule.open_maximized);
+    assert_eq!(rule.column_width, Some(0.5));
+}
+
+#[test]
+fn test_window_rule_open_extras_validation_drops_invalid() {
+    let toml_str = r#"
+        [[window_rules]]
+        match_executable = "a.exe"
+        open_on_workspace = 12
+        column_width = 1.5
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    let compiled = cfg.compile_window_rules();
+    let rule = compiled
+        .iter()
+        .find(|r| r.match_executable.as_deref() == Some("a.exe"))
+        .expect("rule compiled");
+    // Out-of-range values are dropped, not fatal.
+    assert_eq!(rule.open_on_workspace, None);
+    assert_eq!(rule.column_width, None);
+    assert!(!rule.open_maximized);
+}
+
+#[test]
+fn test_matched_rule_returns_first_match_extras() {
+    let mut config = test_config();
+    config.window_rules = vec![crate::config::WindowRule {
+        match_class: None,
+        match_title: None,
+        match_executable: Some("code.exe".to_string()),
+        action: crate::config::WindowAction::Tile,
+        width: None,
+        height: None,
+        corner_style: None,
+        open_on_workspace: Some(3),
+        open_maximized: false,
+        column_width: Some(0.25),
+    }];
+    let state = AppState::new_with_config(config, test_monitors());
+    let rule = state
+        .matched_rule("SomeClass", "Editor", "code.exe")
+        .expect("matches");
+    assert_eq!(rule.open_on_workspace, Some(2));
+    assert_eq!(rule.column_width, Some(0.25));
+    assert!(state.matched_rule("SomeClass", "Editor", "other.exe").is_none() ||
+        state.matched_rule("SomeClass", "Editor", "other.exe").unwrap().match_executable.as_deref() != Some("code.exe"));
 }

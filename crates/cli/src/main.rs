@@ -1536,6 +1536,14 @@ opacity = 128
 # match_class = "Chrome_WidgetWin_1"
 # match_title = ".*DevTools.*"
 # action = "float"
+
+# Per-app open behavior: open on a workspace (1-9), set the initial column
+# width (viewport fraction), or open with the column maximized.
+# [[window_rules]]
+# match_executable = "spotify.exe"
+# open_on_workspace = 5
+# column_width = 0.5
+# open_maximized = false
 "#
     .replace(
         "__HOTKEYS__",

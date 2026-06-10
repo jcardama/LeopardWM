@@ -40,6 +40,7 @@ A few deliberate **non-features**, so you know what you're getting:
 - **Tabbed columns** — toggle a column between vertical-stack and tab-strip mode (`Ctrl+Alt+T`); only the active tab fills the column rect, the rest sit in a clickable strip above
 - **Scratchpad** — stash the focused window out of the layout (`Ctrl+Alt+Shift+S`) and summon it back as a floating, centered overlay on demand (`Ctrl+Alt+S`); stash it again to release it back to tiling
 - **Sticky windows** — pin a window (`Ctrl+Alt+Y`) so it stays visible on every workspace and follows you as you switch
+- **Per-app window rules** — float, ignore, or tile by class/title/executable, plus per-app open behavior: target workspace, initial column width, open maximized
 - Floating and fullscreen toggles
 - Width and height presets with column equalization, maximize-column, center-column
 - Active focus border with auto-detected rounded corners

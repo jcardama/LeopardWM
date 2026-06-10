@@ -41,6 +41,14 @@ All notable changes to LeopardWM will be documented in this file.
   "in_column"` in config, pick it in Settings or the tray menu, or flip it
   on the fly with `lwm toggle-new-window-placement` (bindable as
   `toggle_new_window_placement`).
+- **Tray double-click opens Settings.** Double-click the tray icon to open
+  the settings window; single and right click keep showing the menu.
+- **Per-app open rules.** Window rules can now control how an app opens:
+  `open_on_workspace = 5` opens it on that workspace in the background,
+  `column_width = 0.5` sets the initial column width as a viewport
+  fraction, and `open_maximized = true` opens the column maximized. The
+  settings rules table gained workspace and maximize columns, and saving
+  from Settings no longer drops rule fields the table does not show.
 
 ## 0.1.18
 

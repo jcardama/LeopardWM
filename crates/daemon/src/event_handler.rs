@@ -120,6 +120,11 @@ impl AppState {
                         &win_info.title,
                         &executable,
                     );
+                    // Per-app open extras from the same (first-match) rule.
+                    let (rule_workspace, rule_maximized, rule_column_width) = self
+                        .matched_rule(&win_info.class_name, &win_info.title, &executable)
+                        .map(|r| (r.open_on_workspace, r.open_maximized, r.column_width))
+                        .unwrap_or((None, false, None));
 
                     // Skip ignored windows
                     if action == config::WindowAction::Ignore {
@@ -151,15 +156,31 @@ impl AppState {
 
                     let viewport_width = self.viewport_width_for(monitor_id);
 
-                    // Snapshot before structural change for tiled window animation.
-                    let snapshot = if action == config::WindowAction::Tile {
+                    // A rule can target a different workspace; the window then
+                    // opens in the background (no focus steal, hidden until
+                    // that workspace is activated).
+                    let active_idx = self.active_workspace_idx(monitor_id);
+                    let target_idx = rule_workspace.unwrap_or(active_idx);
+                    let opens_in_background = target_idx != active_idx;
+                    if opens_in_background {
+                        self.ensure_workspace_exists(monitor_id, target_idx);
+                    }
+
+                    // Snapshot before structural change for tiled window
+                    // animation. A background open doesn't change the active
+                    // layout, so no transition is needed.
+                    let snapshot = if action == config::WindowAction::Tile && !opens_in_background
+                    {
                         Some(self.snapshot_layout())
                     } else {
                         None
                     };
 
-                    let active_idx = self.active_workspace_idx(monitor_id);
-                    if let Some(workspace) = self.workspaces.get_mut(&monitor_id).and_then(|v| v.get_mut(active_idx)) {
+                    // Per-app initial column width (viewport fraction -> px).
+                    let rule_width_px = rule_column_width
+                        .map(|f| ((f * f64::from(viewport_width)).round() as i32).max(100));
+
+                    if let Some(workspace) = self.workspaces.get_mut(&monitor_id).and_then(|v| v.get_mut(target_idx)) {
                         let added = match action {
                             config::WindowAction::Float => {
                                 // Use rule dimensions or default to centered 800x600 window
@@ -189,7 +210,7 @@ impl AppState {
                                 let in_column = self.config.behavior.new_window_placement
                                     == config::NewWindowPlacement::InColumn
                                     && workspace.column_count() > 0;
-                                if in_column {
+                                let ok = if in_column {
                                     // Stack into the focused column, directly
                                     // below the focused window (matches
                                     // hyprscroller's column mode rather than
@@ -208,11 +229,29 @@ impl AppState {
                                         }
                                     }
                                     ok
-                                } else if self.config.behavior.focus_new_windows {
-                                    workspace.insert_window(hwnd, None).is_ok()
+                                } else if self.config.behavior.focus_new_windows
+                                    || opens_in_background
+                                {
+                                    // A background open still takes the target
+                                    // workspace's local focus (so it's focused
+                                    // when that workspace is activated); OS
+                                    // focus is never touched for it.
+                                    workspace.insert_window(hwnd, rule_width_px).is_ok()
                                 } else {
-                                    workspace.insert_window_no_focus(hwnd, None).is_ok()
+                                    workspace
+                                        .insert_window_no_focus(hwnd, rule_width_px)
+                                        .is_ok()
+                                };
+                                // Per-app open_maximized: only when the new
+                                // window's column is the focused one (always
+                                // true for the focused new-column path).
+                                if ok
+                                    && rule_maximized
+                                    && workspace.focused_window() == Some(hwnd)
+                                {
+                                    workspace.maximize_focused_column(viewport_width);
                                 }
+                                ok
                             }
                             config::WindowAction::Ignore => unreachable!(),
                         };
@@ -220,15 +259,24 @@ impl AppState {
                         if added {
                             self.window_managed_at.insert(hwnd, std::time::Instant::now());
                             info!(
-                                "Window created: {} ({}) - added to monitor {} as {:?}",
-                                win_info.title, win_info.class_name, monitor_id, action
+                                "Window created: {} ({}) - added to monitor {} workspace {} as {:?}",
+                                win_info.title,
+                                win_info.class_name,
+                                monitor_id,
+                                target_idx + 1,
+                                action
                             );
-                            if self.config.behavior.focus_new_windows {
+                            if self.config.behavior.focus_new_windows && !opens_in_background {
                                 self.focused_monitor = monitor_id;
                                 if matches!(action, config::WindowAction::Float) {
                                     self.previous_focused_hwnd = Some(hwnd);
                                 }
                                 workspace.ensure_focused_visible_animated(viewport_width);
+                            }
+                            if opens_in_background {
+                                // Target workspace is not active: hide the
+                                // window until that workspace is switched to.
+                                let _ = leopardwm_platform_win32::move_window_offscreen(hwnd);
                             }
                             if let Some(snapshot) = snapshot {
                                 self.start_layout_transition(snapshot);
@@ -240,7 +288,7 @@ impl AppState {
                             if let Err(e) = self.apply_layout() {
                                 warn!("Failed to apply layout after window create: {}", e);
                             }
-                            if self.config.behavior.focus_new_windows {
+                            if self.config.behavior.focus_new_windows && !opens_in_background {
                                 self.sync_foreground_window();
                             }
                         } else {

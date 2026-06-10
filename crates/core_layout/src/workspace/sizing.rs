@@ -106,6 +106,16 @@ impl Workspace {
     // Column Width Presets
     // ========================================================================
 
+    /// Maximize the focused column unconditionally (restoring any other
+    /// maximized column first). Unlike the toggle, this never un-maximizes
+    /// the focused column; used by per-app open rules.
+    pub fn maximize_focused_column(&mut self, viewport_width: i32) {
+        if self.maximized_column.is_some() {
+            self.toggle_maximize_column(viewport_width);
+        }
+        self.toggle_maximize_column(viewport_width);
+    }
+
     /// Toggle maximize on the focused column.
     ///
     /// If currently maximized (and the sentinel window is still in the same column),
