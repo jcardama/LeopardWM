@@ -2239,8 +2239,17 @@ async fn handle_animation_frame_applied(
             // EVENT_SYSTEM_FOREGROUND events that override
             // focused_column. This re-asserts the correct focus
             // after the animation has settled.
+            let pending_sticky = state.pending_sticky_refocus.take();
             if !state.paused {
                 state.sync_foreground_window();
+                // A workspace switch left a focused pinned window behind
+                // it: those same spurious foreground events can have
+                // clobbered previous_focused_hwnd mid-slide, making the
+                // sync above land on the destination's tiled focus.
+                // Re-assert the pinned window's focus.
+                if let Some(wid) = pending_sticky {
+                    state.refocus_sticky_window(wid);
+                }
             }
         }
         debug!("All animations complete");

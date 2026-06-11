@@ -26,6 +26,11 @@ impl AppState {
 
         if self.sticky_windows.remove(&wid) {
             // Un-pin: stop following workspaces, but leave it floating.
+            if let Some((mon, ws_idx)) = self.find_window_workspace(wid) {
+                if let Some(ws) = self.workspaces.get_mut(&mon).and_then(|v| v.get_mut(ws_idx)) {
+                    ws.set_floating_pinned(wid, false);
+                }
+            }
             info!("Sticky: unpinned window {}", wid);
             return;
         }
@@ -45,7 +50,11 @@ impl AppState {
                 let _ = ws.focus_window(wid);
                 let _ = ws.toggle_floating(viewport);
             }
-            ws.is_floating(wid)
+            let ok = ws.is_floating(wid);
+            if ok {
+                ws.set_floating_pinned(wid, true);
+            }
+            ok
         } else {
             false
         };
@@ -95,7 +104,13 @@ impl AppState {
                 .workspaces
                 .get_mut(&monitor)
                 .and_then(|v| v.get_mut(active))
-                .map(|ws| ws.add_floating(wid, rect).is_ok())
+                .map(|ws| {
+                    let ok = ws.add_floating(wid, rect).is_ok();
+                    if ok {
+                        ws.set_floating_pinned(wid, true);
+                    }
+                    ok
+                })
                 .unwrap_or(false);
             if !added {
                 warn!("Sticky: could not re-home window {}; left on its workspace", wid);
@@ -117,6 +132,37 @@ impl AppState {
                 }
             }
         }
+    }
+
+    /// Re-assert focus on a sticky window after a workspace switch, when
+    /// the user was focused on it before the switch (mirrors
+    /// `refocus_scratchpad_if_active`). The pin follows the switch, so
+    /// focus must too. Both `sync_foreground_window` passes (immediate and
+    /// animation-landing) prefer `previous_focused_hwnd` when it floats on
+    /// the active workspace, so setting it here holds focus across both.
+    /// Returns `true` if the refocus applied; no-op (`false`) unless the
+    /// window is still sticky and floating on the now-active workspace.
+    pub(crate) fn refocus_sticky_window(&mut self, wid: u64) -> bool {
+        if !self.sticky_windows.contains(&wid) {
+            return false;
+        }
+        let monitor = self.focused_monitor;
+        let active = self.active_workspace_idx(monitor);
+        let floating_here = self
+            .workspaces
+            .get(&monitor)
+            .and_then(|v| v.get(active))
+            .is_some_and(|ws| ws.is_floating(wid));
+        if !floating_here {
+            return false;
+        }
+        self.previous_focused_hwnd = Some(wid);
+        self.show_border(wid);
+        #[cfg(not(test))]
+        {
+            let _ = leopardwm_platform_win32::set_foreground_window(wid);
+        }
+        true
     }
 
     /// Drop a window from the sticky set when it is destroyed.

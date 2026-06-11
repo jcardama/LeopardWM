@@ -3030,6 +3030,62 @@ fn test_sticky_window_follows_workspace_switch() {
 }
 
 #[test]
+fn test_sticky_toggle_sets_floating_pinned() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .insert_window(100, Some(800))
+        .unwrap();
+    state.focused_workspace_mut().unwrap().focus_window(100).unwrap();
+
+    state.toggle_sticky(); // pin
+    let pinned = state
+        .focused_workspace()
+        .unwrap()
+        .floating_windows()
+        .iter()
+        .find(|f| f.id == 100)
+        .map(|f| f.pinned);
+    assert_eq!(pinned, Some(true), "pinning marks the floating entry pinned");
+
+    state.previous_focused_hwnd = Some(100);
+    state.toggle_sticky(); // un-pin
+    let pinned = state
+        .focused_workspace()
+        .unwrap()
+        .floating_windows()
+        .iter()
+        .find(|f| f.id == 100)
+        .map(|f| f.pinned);
+    assert_eq!(pinned, Some(false), "un-pinning clears the pinned flag");
+}
+
+#[test]
+fn test_sticky_rehome_preserves_pinned() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    let mon = state.focused_monitor;
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .insert_window(100, Some(800))
+        .unwrap();
+    state.focused_workspace_mut().unwrap().focus_window(100).unwrap();
+    state.toggle_sticky(); // 100 floating + sticky + pinned on workspace 0
+
+    state.ensure_workspace_exists(mon, 1);
+    state.active_workspace.insert(mon, 1);
+    state.rehome_sticky_windows();
+
+    let pinned = state.workspaces.get(&mon).unwrap()[1]
+        .floating_windows()
+        .iter()
+        .find(|f| f.id == 100)
+        .map(|f| f.pinned);
+    assert_eq!(pinned, Some(true), "re-homed sticky window stays pinned");
+}
+
+#[test]
 fn test_sticky_cleared_when_window_destroyed() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
     state
@@ -3043,6 +3099,117 @@ fn test_sticky_cleared_when_window_destroyed() {
 
     state.sticky_on_window_destroyed(100);
     assert!(!state.sticky_windows.contains(&100), "destroyed window unpinned");
+}
+
+/// Pinned window focused + workspace switch: build the state, run the
+/// switch through the full IPC path, and return it for assertions.
+fn switch_with_focused_sticky() -> AppState {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    let mon = state.focused_monitor;
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .insert_window(100, Some(800))
+        .unwrap();
+    state.focused_workspace_mut().unwrap().focus_window(100).unwrap();
+    state.toggle_sticky(); // 100 floating + sticky on workspace 0
+    // Destination workspace has its own tiled window (focus magnet).
+    state.ensure_workspace_exists(mon, 1);
+    state.workspaces.get_mut(&mon).unwrap()[1]
+        .insert_window(200, Some(800))
+        .unwrap();
+    // OS focus is on the pinned window before the switch (the Focused
+    // handler would have recorded it).
+    state.previous_focused_hwnd = Some(100);
+    // Force the slide transition so the landing-pass path is armed.
+    state.reduce_motion = false;
+
+    let resp = state.handle_command(IpcCommand::SwitchWorkspace { index: 2 });
+    assert!(matches!(resp, IpcResponse::Ok));
+    state
+}
+
+#[test]
+fn test_sticky_window_keeps_focus_across_workspace_switch() {
+    let state = switch_with_focused_sticky();
+    let mon = state.focused_monitor;
+    assert!(
+        state.workspaces.get(&mon).unwrap()[1].is_floating(100),
+        "sticky window re-homed to the destination workspace"
+    );
+    assert_eq!(
+        state.previous_focused_hwnd,
+        Some(100),
+        "focus stays on the pinned window after the switch"
+    );
+    assert_eq!(
+        state.pending_sticky_refocus,
+        Some(100),
+        "landing-pass refocus armed while the slide transition runs"
+    );
+}
+
+#[test]
+fn test_sticky_refocus_reasserts_after_landing_clobber() {
+    let mut state = switch_with_focused_sticky();
+    // Mid-slide, the destination's tiled window fires a spurious
+    // foreground event and clobbers the tracked focus.
+    state.handle_window_event(WindowEvent::Focused(200));
+    assert_eq!(state.previous_focused_hwnd, Some(200));
+
+    // Animation landing pass (mirrors handle_animation_frame_applied):
+    // re-sync, then consume the pending sticky refocus.
+    let pending = state.pending_sticky_refocus.take();
+    state.sync_foreground_window();
+    if let Some(wid) = pending {
+        state.refocus_sticky_window(wid);
+    }
+    assert_eq!(
+        state.previous_focused_hwnd,
+        Some(100),
+        "landing pass re-asserts focus on the pinned window"
+    );
+    assert_eq!(state.pending_sticky_refocus, None, "one-shot consumed");
+}
+
+#[test]
+fn test_sticky_window_not_focused_does_not_steal_focus_on_switch() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    let mon = state.focused_monitor;
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .insert_window(100, Some(800))
+        .unwrap();
+    state.focused_workspace_mut().unwrap().focus_window(100).unwrap();
+    state.toggle_sticky(); // 100 floating + sticky on workspace 0
+    // User is focused on a TILED window, not the pin.
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .insert_window(150, Some(800))
+        .unwrap();
+    state.focused_workspace_mut().unwrap().focus_window(150).unwrap();
+    state.previous_focused_hwnd = Some(150);
+    state.ensure_workspace_exists(mon, 1);
+    state.workspaces.get_mut(&mon).unwrap()[1]
+        .insert_window(200, Some(800))
+        .unwrap();
+    state.reduce_motion = false;
+
+    let resp = state.handle_command(IpcCommand::SwitchWorkspace { index: 2 });
+    assert!(matches!(resp, IpcResponse::Ok));
+
+    assert_eq!(
+        state.previous_focused_hwnd,
+        Some(200),
+        "focus goes to the destination's tiled window, not the pin"
+    );
+    assert_eq!(
+        state.pending_sticky_refocus,
+        None,
+        "no landing refocus armed when the pin was not focused"
+    );
 }
 
 #[test]

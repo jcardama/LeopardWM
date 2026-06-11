@@ -50,6 +50,16 @@ All notable changes to LeopardWM will be documented in this file.
   settings rules table gained workspace and maximize columns, and saving
   from Settings no longer drops rule fields the table does not show.
 
+### Fixes
+
+- **Pinned windows stay visible and focused over fullscreen.** A sticky
+  window now remains at its position above a fullscreen window instead of
+  being hidden, and keeps focus when you switch to that workspace while
+  focused on it.
+- **Hidden windows no longer jump to the top-left corner.** Entering
+  fullscreen parked every other window at the screen origin; they now keep
+  their real positions while hidden and reappear exactly where they were.
+
 ## 0.1.18
 
 ### Improvements

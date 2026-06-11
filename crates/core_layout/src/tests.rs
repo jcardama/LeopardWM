@@ -1940,6 +1940,60 @@ mod tests {
     }
 
     #[test]
+    fn test_fullscreen_placements_keep_real_rects() {
+        let mut ws = Workspace::with_gaps(10, 10);
+        let viewport = Rect::new(0, 0, 1920, 1080);
+        let float_rect = Rect::new(50, 60, 300, 200);
+
+        ws.insert_window(1, Some(400)).unwrap();
+        ws.insert_window(2, Some(400)).unwrap();
+        ws.add_floating(10, float_rect).unwrap();
+
+        let _ = ws.focus_window(1);
+        ws.toggle_fullscreen();
+        assert_eq!(ws.fullscreen_window_id(), Some(1));
+
+        let placements = ws.compute_placements(viewport);
+
+        // Fullscreen window covers the viewport.
+        let fs = placements.iter().find(|p| p.window_id == 1).unwrap();
+        assert_eq!(fs.rect, viewport);
+        assert_eq!(fs.visibility, Visibility::Visible);
+
+        // Hidden tiled window keeps its real (nonzero) layout rect.
+        let w2 = placements.iter().find(|p| p.window_id == 2).unwrap();
+        assert_ne!(w2.visibility, Visibility::Visible);
+        assert!(w2.rect.width > 0, "tiled rect width stays real, got {:?}", w2.rect);
+        assert!(w2.rect.height > 0, "tiled rect height stays real, got {:?}", w2.rect);
+
+        // Hidden floating window keeps its real rect.
+        let fl = placements.iter().find(|p| p.window_id == 10).unwrap();
+        assert_ne!(fl.visibility, Visibility::Visible);
+        assert_eq!(fl.rect, float_rect, "floating rect stays real");
+    }
+
+    #[test]
+    fn test_pinned_floating_stays_visible_under_fullscreen() {
+        let mut ws = Workspace::with_gaps(10, 10);
+        let viewport = Rect::new(0, 0, 1920, 1080);
+        let float_rect = Rect::new(50, 60, 300, 200);
+
+        ws.insert_window(1, Some(400)).unwrap();
+        ws.insert_window(2, Some(400)).unwrap();
+        ws.add_floating(10, float_rect).unwrap();
+        assert!(ws.set_floating_pinned(10, true));
+
+        let _ = ws.focus_window(1);
+        ws.toggle_fullscreen();
+        assert_eq!(ws.fullscreen_window_id(), Some(1));
+
+        let placements = ws.compute_placements(viewport);
+        let fl = placements.iter().find(|p| p.window_id == 10).unwrap();
+        assert_eq!(fl.visibility, Visibility::Visible, "pinned floating stays visible");
+        assert_eq!(fl.rect, float_rect, "pinned floating keeps its rect");
+    }
+
+    #[test]
     fn test_fullscreen_animated_placements() {
         let mut ws = Workspace::with_gaps(10, 10);
         let viewport = Rect::new(0, 0, 1920, 1080);

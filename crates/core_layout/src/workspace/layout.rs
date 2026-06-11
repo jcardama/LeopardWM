@@ -317,7 +317,12 @@ impl Workspace {
     }
 
     /// Compute placements when a window is fullscreen.
-    /// The fullscreen window gets the full viewport; all others are marked off-screen.
+    ///
+    /// The fullscreen window gets the full viewport; all others are marked
+    /// off-screen but KEEP their real layout rects — cloaking hides them, and
+    /// the platform layer moves off-screen windows with `SWP_NOSIZE`, so a
+    /// zeroed rect would visibly snap them to the top-left corner. Pinned
+    /// floating windows stay Visible at their floating rect, above fullscreen.
     fn compute_fullscreen_placements(
         &self,
         fs_wid: WindowId,
@@ -329,50 +334,21 @@ impl Workspace {
             return self.compute_non_fullscreen_placements(viewport, viewport_left);
         }
 
-        let mut placements = Vec::new();
+        let mut placements = self.compute_non_fullscreen_placements(viewport, viewport_left);
 
-        for (col_idx, column) in self.columns.iter().enumerate() {
-            for &window_id in column.windows() {
-                if self.minimized_windows.contains(&window_id) {
-                    continue;
-                }
-                if window_id == fs_wid {
-                    placements.push(WindowPlacement {
-                        window_id,
-                        rect: viewport,
-                        visibility: Visibility::Visible,
-                        column_index: col_idx,
-                    });
-                } else {
-                    placements.push(WindowPlacement {
-                        window_id,
-                        rect: Rect::new(0, 0, 0, 0),
-                        visibility: Visibility::OffScreenLeft,
-                        column_index: col_idx,
-                    });
-                }
-            }
-        }
-
-        // Floating windows are also hidden during fullscreen
-        for floating in &self.floating_windows {
-            if self.minimized_windows.contains(&floating.id) {
-                continue;
-            }
-            if floating.id == fs_wid {
-                placements.push(WindowPlacement {
-                    window_id: floating.id,
-                    rect: viewport,
-                    visibility: Visibility::Visible,
-                    column_index: usize::MAX,
-                });
+        for placement in &mut placements {
+            if placement.window_id == fs_wid {
+                placement.rect = viewport;
+                placement.visibility = Visibility::Visible;
+            } else if placement.column_index == usize::MAX
+                && self
+                    .floating_windows
+                    .iter()
+                    .any(|f| f.id == placement.window_id && f.pinned)
+            {
+                // Pinned floating window: stays exactly as computed.
             } else {
-                placements.push(WindowPlacement {
-                    window_id: floating.id,
-                    rect: Rect::new(0, 0, 0, 0),
-                    visibility: Visibility::OffScreenLeft,
-                    column_index: usize::MAX,
-                });
+                placement.visibility = Visibility::OffScreenLeft;
             }
         }
 

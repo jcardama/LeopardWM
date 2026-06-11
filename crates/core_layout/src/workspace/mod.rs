@@ -35,6 +35,9 @@ pub struct FloatingWindow {
     pub id: WindowId,
     /// The position and size of the floating window.
     pub rect: Rect,
+    /// Whether the window stays visible above a fullscreen window.
+    #[serde(default)]
+    pub pinned: bool,
 }
 
 /// The scrollable workspace.
@@ -262,8 +265,21 @@ impl Workspace {
         self.floating_windows.push(FloatingWindow {
             id: window_id,
             rect,
+            pinned: false,
         });
         Ok(())
+    }
+
+    /// Set whether a floating window stays visible above a fullscreen window.
+    ///
+    /// Returns true if the window was found, false otherwise.
+    pub fn set_floating_pinned(&mut self, window_id: WindowId, pinned: bool) -> bool {
+        if let Some(floating) = self.floating_windows.iter_mut().find(|f| f.id == window_id) {
+            floating.pinned = pinned;
+            true
+        } else {
+            false
+        }
     }
 
     /// Remove a floating window from the workspace.

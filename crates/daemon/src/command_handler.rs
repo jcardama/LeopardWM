@@ -712,9 +712,19 @@ impl AppState {
         // was tiled, forget any prior floating focus for it (the
         // column state already restores tiled focus). Prefer the live
         // OS foreground over the cached focus so a missed focus event
-        // can't record the wrong window.
+        // can't record the wrong window. Under cfg(test) there is no
+        // meaningful OS foreground; tests drive previous_focused_hwnd.
+        #[cfg(not(test))]
         let leaving_focus = leopardwm_platform_win32::get_foreground_window()
             .or(self.previous_focused_hwnd);
+        #[cfg(test)]
+        let leaving_focus = self.previous_focused_hwnd;
+        // A focused sticky (pinned) window keeps focus across the switch:
+        // capture that BEFORE the workspace changes. Any stale pending
+        // refocus from a previous (aborted) switch is dropped here.
+        self.pending_sticky_refocus = None;
+        let sticky_focus =
+            leaving_focus.filter(|hwnd| self.sticky_windows.contains(hwnd));
         if let Some(hwnd) = leaving_focus {
             if self
                 .focused_workspace()
@@ -841,6 +851,17 @@ impl AppState {
         // its focus (it would otherwise stay visible but lose focus
         // to a tiled window on the switch back).
         self.refocus_scratchpad_if_active();
+        // The user was focused on a pinned window: it followed the switch
+        // (re-homed above), so focus stays on it. Re-assert again at the
+        // animation landing — a spurious foreground event from the
+        // destination's windows mid-slide (e.g. a fullscreen window
+        // activating) can clobber previous_focused_hwnd before the
+        // landing re-sync.
+        if let Some(hwnd) = sticky_focus {
+            if self.refocus_sticky_window(hwnd) && self.layout_transition.is_some() {
+                self.pending_sticky_refocus = Some(hwnd);
+            }
+        }
         self.broadcast_event(leopardwm_ipc::IpcEvent::WorkspaceChanged {
             monitor: monitor as i64,
             old_index: current_idx as u8,

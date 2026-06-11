@@ -278,6 +278,11 @@ pub(crate) struct AppState {
     /// floating and re-homed to the active workspace on each switch.
     /// Session-scoped (HWND-keyed, not persisted across restart).
     pub(crate) sticky_windows: HashSet<u64>,
+    /// One-shot: sticky window to re-focus at the workspace-switch
+    /// animation landing pass. Spurious foreground events from the
+    /// destination's windows mid-slide can clobber `previous_focused_hwnd`,
+    /// so the landing re-sync must re-assert the pinned window's focus.
+    pub(crate) pending_sticky_refocus: Option<u64>,
     /// Previously focused window for border color tracking.
     pub(crate) previous_focused_hwnd: Option<u64>,
     /// `(monitor, hwnd)` of the most-recently-broadcast
@@ -605,6 +610,7 @@ impl AppState {
             compiled_rules,
             scratchpad: None,
             sticky_windows: HashSet::new(),
+            pending_sticky_refocus: None,
             previous_focused_hwnd: None,
             last_broadcast_focused: None,
             last_focus_change_at: None,
