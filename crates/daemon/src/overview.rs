@@ -158,10 +158,14 @@ impl AppState {
         let ws_vec = self.workspaces.get(&monitor)?;
         let active_idx = self.active_workspace_idx(monitor);
 
+        // Only windows that yield cards count: a workspace whose every
+        // window is minimized would render an empty ghost row.
         let non_empty: Vec<usize> = ws_vec
             .iter()
             .enumerate()
-            .filter(|(_, ws)| ws.window_count() + ws.floating_count() > 0)
+            .filter(|(_, ws)| {
+                ws.all_window_ids().iter().any(|&wid| !ws.is_minimized(wid))
+            })
             .map(|(i, _)| i)
             .collect();
         if non_empty.is_empty() {
@@ -287,6 +291,9 @@ impl AppState {
                 })
                 .collect();
             for f in ws.floating_windows() {
+                if ws.is_minimized(f.id) {
+                    continue; // matches the tiled path's visibility filter
+                }
                 sources.push((
                     f.id,
                     Rect::new(
@@ -369,6 +376,11 @@ impl AppState {
             xform.offset_x += boundary_gap;
         }
 
+        // Live previews unless config says placeholder. A window already
+        // ghost-animating holds a DWM thumbnail registration; a second
+        // registration of the same source breaks on some builds, so those
+        // cards stay placeholders until the ghost handle is gone.
+        let live_previews = self.config.overview.render == crate::config::OverviewRender::Live;
         let cards = sources
             .into_iter()
             .map(|(wid, r, tab_count)| {
@@ -384,6 +396,7 @@ impl AppState {
                     rect: inset_card(&rect),
                     tab_count,
                     selected: Some(wid) == selected_wid,
+                    live: live_previews && !self.ghost_handles.contains_key(&wid),
                 }
             })
             .collect();
@@ -420,17 +433,24 @@ impl AppState {
     /// the overlay lazily on first use (skipped when no event sender is
     /// installed — tests and headless runs).
     pub(crate) fn show_overview(&mut self) {
+        // No ghost animation should keep playing beneath the overlay.
+        // Aborting BEFORE the model build also clears `ghost_handles`, so
+        // those windows get live preview cards instead of placeholders.
+        self.abort_active_ghost_transition();
         let Some((overlay_rect, model)) = self.build_overview_model() else {
             info!("Overview not shown: no non-empty workspaces on the focused monitor");
             return;
         };
-        // No ghost animation should keep playing beneath the overlay.
-        self.abort_active_ghost_transition();
         if self.overview_overlay.is_none() {
             if let Some(tx) = self.overview_event_tx.clone() {
                 match OverviewOverlay::new(tx) {
                     Ok(overlay) => self.overview_overlay = Some(overlay),
-                    Err(e) => warn!("Failed to create overview overlay: {}", e),
+                    Err(e) => {
+                        // Don't mark the overview open: refresh loops must
+                        // never run against a missing overlay.
+                        warn!("Failed to create overview overlay: {}", e);
+                        return;
+                    }
                 }
             }
         }
@@ -440,12 +460,18 @@ impl AppState {
         self.overview_open = true;
     }
 
-    /// Hide the overview overlay.
+    /// Hide the overview overlay. When it actually closes an open
+    /// overview, hand the OS foreground (held by the overlay) back to
+    /// the workspace's focused window.
     pub(crate) fn hide_overview(&mut self) {
+        let was_open = self.overview_open;
         if let Some(overlay) = &self.overview_overlay {
             overlay.hide();
         }
         self.overview_open = false;
+        if was_open {
+            self.sync_foreground_window();
+        }
     }
 
     /// Rebuild and push a fresh model while the overview is open (a
@@ -1169,5 +1195,129 @@ mod tests {
             .unwrap();
         state.refresh_overview_model();
         assert!(!state.overview_open);
+    }
+
+    #[test]
+    fn test_minimized_floating_window_gets_no_card() {
+        let mut state = test_state();
+        add_windows(&mut state, 0, &[101]);
+        {
+            let ws = state.workspaces.get_mut(&1).unwrap().get_mut(0).unwrap();
+            ws.add_floating(301, Rect::new(100, 100, 400, 300)).unwrap();
+            ws.add_floating(302, Rect::new(200, 200, 400, 300)).unwrap();
+            assert!(ws.mark_minimized(301));
+        }
+
+        let (_, model) = state.build_overview_model().expect("model");
+        let wids: Vec<u64> = model.rows[0].cards.iter().map(|c| c.window_id).collect();
+        assert!(!wids.contains(&301), "minimized float must not get a card");
+        assert!(wids.contains(&302), "visible float keeps its card");
+        assert!(wids.contains(&101), "tiled window keeps its card");
+    }
+
+    #[test]
+    fn test_all_minimized_workspace_produces_no_row() {
+        let mut state = test_state();
+        add_windows(&mut state, 0, &[101]);
+        add_windows(&mut state, 1, &[201, 202]);
+        {
+            let ws = state.workspaces.get_mut(&1).unwrap().get_mut(1).unwrap();
+            assert!(ws.mark_minimized(201));
+            assert!(ws.mark_minimized(202));
+        }
+        // Workspace 2: a lone minimized floating window.
+        {
+            let ws = state.ensure_workspace_exists(1, 2).unwrap();
+            ws.add_floating(301, Rect::new(100, 100, 400, 300)).unwrap();
+            assert!(ws.mark_minimized(301));
+        }
+
+        let (_, model) = state.build_overview_model().expect("model");
+        let indices: Vec<usize> = model.rows.iter().map(|r| r.workspace_index).collect();
+        assert_eq!(
+            indices,
+            vec![0],
+            "all-minimized workspaces must not produce ghost rows"
+        );
+    }
+
+    #[test]
+    fn test_model_none_when_every_window_minimized() {
+        let mut state = test_state();
+        add_windows(&mut state, 0, &[101]);
+        assert!(state.workspaces.get_mut(&1).unwrap()[0].mark_minimized(101));
+        assert!(state.build_overview_model().is_none());
+    }
+
+    // Overlay-creation failure (show_overview leaving overview_open false)
+    // is not unit-testable: OverviewOverlay::new is only reached when an
+    // overview_event_tx is installed, and constructing one spawns a real
+    // top-level window — never done under cfg(test). Verified by
+    // inspection: the Err arm warns and returns before the flag is set.
+
+    #[test]
+    fn test_hide_overview_restores_foreground_focus() {
+        let mut state = test_state();
+        add_windows(&mut state, 0, &[101]);
+        state.toggle_overview();
+        assert!(state.overview_open);
+        // Simulate the overlay having taken the OS foreground.
+        state.previous_focused_hwnd = None;
+        state.toggle_overview();
+        assert!(!state.overview_open);
+        assert_eq!(
+            state.previous_focused_hwnd,
+            Some(101),
+            "hide_overview must sync focus back to the workspace's focused window"
+        );
+    }
+
+    #[test]
+    fn test_cards_live_by_default() {
+        let mut state = test_state();
+        add_windows(&mut state, 0, &[101, 102]);
+
+        let (_, model) = state.build_overview_model().expect("model");
+        assert!(
+            model.rows[0].cards.iter().all(|c| c.live),
+            "default config: every card requests a live preview"
+        );
+    }
+
+    #[test]
+    fn test_cards_not_live_when_config_placeholder() {
+        let mut state = test_state();
+        state.config.overview.render = crate::config::OverviewRender::Placeholder;
+        add_windows(&mut state, 0, &[101, 102]);
+
+        let (_, model) = state.build_overview_model().expect("model");
+        assert!(
+            model.rows[0].cards.iter().all(|c| !c.live),
+            "render = placeholder disables live previews"
+        );
+    }
+
+    #[test]
+    fn test_ghost_handled_window_excluded_from_live_previews() {
+        let mut state = test_state();
+        add_windows(&mut state, 0, &[101, 102]);
+        // 101 already holds a DWM thumbnail registration (ghost
+        // animation); a second registration of the same source breaks on
+        // some builds. handle_isize = 0 keeps Drop a no-op in tests.
+        state.ghost_handles.insert(
+            101,
+            crate::state::GhostEntry::new(0, "Chrome_WidgetWin_1".into(), Rect::new(0, 0, 8, 8)),
+        );
+
+        let (_, model) = state.build_overview_model().expect("model");
+        let card = |wid: u64| {
+            model.rows[0]
+                .cards
+                .iter()
+                .find(|c| c.window_id == wid)
+                .unwrap()
+        };
+        assert!(!card(101).live, "ghost-handled window stays placeholder");
+        assert!(card(102).live, "other windows stay live");
     }
 }

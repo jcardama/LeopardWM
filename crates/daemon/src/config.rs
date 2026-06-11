@@ -50,6 +50,30 @@ pub struct Config {
     /// Per-workspace display names.
     #[serde(default)]
     pub workspaces: WorkspacesConfig,
+    /// Overview-mode configuration.
+    #[serde(default)]
+    pub overview: OverviewConfig,
+}
+
+/// Overview-mode configuration.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OverviewConfig {
+    /// How overview cards render their body.
+    pub render: OverviewRender,
+}
+
+/// How overview cards render their body: live DWM thumbnails of the
+/// windows, or the static icon placeholder.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OverviewRender {
+    /// Live DWM thumbnail previews (last frame for windows on hidden
+    /// workspaces).
+    #[default]
+    Live,
+    /// Static placeholder bodies (app icon only).
+    Placeholder,
 }
 
 /// Workspace configuration.
@@ -2145,6 +2169,24 @@ mod tests {
         let config: Config = toml::from_str(toml).expect("parse");
         assert_eq!(config.workspaces.name_for(0).as_deref(), Some("web"));
         assert_eq!(config.workspaces.name_for(2).as_deref(), Some("chat"));
+    }
+
+    #[test]
+    fn test_overview_render_defaults_to_live() {
+        let config: Config = toml::from_str("").expect("parse");
+        assert_eq!(config.overview.render, OverviewRender::Live);
+        assert_eq!(Config::default().overview.render, OverviewRender::Live);
+    }
+
+    #[test]
+    fn test_overview_render_parses_placeholder() {
+        let toml = "[overview]\nrender = \"placeholder\"\n";
+        let config: Config = toml::from_str(toml).expect("parse");
+        assert_eq!(config.overview.render, OverviewRender::Placeholder);
+
+        let toml = "[overview]\nrender = \"live\"\n";
+        let config: Config = toml::from_str(toml).expect("parse");
+        assert_eq!(config.overview.render, OverviewRender::Live);
     }
 
     #[test]

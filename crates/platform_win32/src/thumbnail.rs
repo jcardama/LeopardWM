@@ -19,8 +19,9 @@ use tracing::warn;
 use windows::core::BOOL;
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Dwm::{
-    DwmRegisterThumbnail, DwmUnregisterThumbnail, DwmUpdateThumbnailProperties,
-    DWM_THUMBNAIL_PROPERTIES, DWM_TNP_OPACITY, DWM_TNP_RECTDESTINATION, DWM_TNP_VISIBLE,
+    DwmQueryThumbnailSourceSize, DwmRegisterThumbnail, DwmUnregisterThumbnail,
+    DwmUpdateThumbnailProperties, DWM_THUMBNAIL_PROPERTIES, DWM_TNP_OPACITY,
+    DWM_TNP_RECTDESTINATION, DWM_TNP_VISIBLE,
 };
 use windows::Win32::Graphics::Gdi::{
     CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, HBITMAP, BITMAPINFO,
@@ -116,14 +117,34 @@ impl ThumbnailHandle {
 /// Register a DWM thumbnail of `source` against the singleton host window.
 /// On success, returns an owning handle whose `Drop` unregisters.
 pub fn register(wid: WindowId) -> Result<ThumbnailHandle, Win32Error> {
-    let source = window_id_to_hwnd(wid)?;
     let host_hwnd = host().hwnd();
     if host_hwnd.0.is_null() {
         return Err(Win32Error::SetPositionFailed(
             "thumbnail host unavailable".into(),
         ));
     }
-    let raw = unsafe { DwmRegisterThumbnail(host_hwnd, source) }.map_err(|e| {
+    register_to(host_hwnd, wid)
+}
+
+/// Register a DWM thumbnail of `source_wid` against an arbitrary top-level
+/// window of THIS process (e.g. the overview overlay). Shares the same
+/// `REGISTER_BALANCE` accounting and host z-order invariant as [`register`]
+/// (the balance counts every handle we own, wherever it is composited).
+pub fn register_for_window(
+    dest_hwnd_raw: isize,
+    source_wid: WindowId,
+) -> Result<ThumbnailHandle, Win32Error> {
+    if dest_hwnd_raw == 0 {
+        return Err(Win32Error::SetPositionFailed(
+            "thumbnail destination hwnd is null".into(),
+        ));
+    }
+    register_to(HWND(dest_hwnd_raw as *mut c_void), source_wid)
+}
+
+fn register_to(dest: HWND, wid: WindowId) -> Result<ThumbnailHandle, Win32Error> {
+    let source = window_id_to_hwnd(wid)?;
+    let raw = unsafe { DwmRegisterThumbnail(dest, source) }.map_err(|e| {
         Win32Error::SetPositionFailed(format!("DwmRegisterThumbnail({:?}): {}", source.0, e))
     })?;
     if raw == 0 {
@@ -154,10 +175,13 @@ pub fn register(wid: WindowId) -> Result<ThumbnailHandle, Win32Error> {
 
 /// Update the destination rect, opacity, and visibility of a registered
 /// thumbnail. Safe to call from any thread (the worker thread does this
-/// per animation frame).
+/// per animation frame). Destination-agnostic: only the `HTHUMBNAIL` is
+/// needed, whatever window the registration targeted.
 ///
-/// `dest_client_rect` is in CLIENT coordinates of the host window, NOT
-/// screen coordinates. Convert via [`screen_to_host_client`] first.
+/// `dest_client_rect` is in CLIENT coordinates of the thumbnail's
+/// DESTINATION window, NOT screen coordinates. For host-bound thumbnails
+/// convert via [`screen_to_host_client`] first; overview thumbnails pass
+/// overlay client coordinates directly.
 pub fn update(
     handle: isize,
     dest_client_rect: Rect,
@@ -190,6 +214,19 @@ pub fn update(
         )));
     }
     Ok(())
+}
+
+/// Source window's true size for a registered thumbnail, used for
+/// aspect-fit destination rects. `None` on null handles or DWM failure.
+pub fn source_size(handle: isize) -> Option<(i32, i32)> {
+    if handle == 0 {
+        return None;
+    }
+    let size = unsafe { DwmQueryThumbnailSourceSize(handle) }.ok()?;
+    if size.cx <= 0 || size.cy <= 0 {
+        return None;
+    }
+    Some((size.cx, size.cy))
 }
 
 /// Unregister a thumbnail by raw `HTHUMBNAIL` value. Used by the worker

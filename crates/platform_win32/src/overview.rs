@@ -23,6 +23,7 @@
 //! (client-coordinate rects); the overlay only draws and hit-tests it,
 //! reporting user intent back through [`OverviewEvent`]s.
 
+use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
 use std::sync::{mpsc, LazyLock, Mutex, MutexGuard};
 
@@ -39,6 +40,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use crate::border::{clamp, rounded_rect_sdf};
+use crate::thumbnail::{self, ThumbnailHandle};
 use crate::Win32Error;
 
 /// User intent reported by the overlay back to the daemon.
@@ -67,6 +69,10 @@ pub struct OverviewCard {
     /// holding `n > 1` windows; the overlay draws a small count pill.
     pub tab_count: Option<usize>,
     pub selected: bool,
+    /// Whether the overlay may register a live DWM thumbnail for this
+    /// card's body. The daemon clears it when the window already has a
+    /// thumbnail registration (ghost animation) or config says placeholder.
+    pub live: bool,
 }
 
 /// One workspace row: a rounded panel with a label strip across the top
@@ -141,6 +147,9 @@ const PANEL_BORDER: u32 = 0x003A3A3A;
 const CARD_BG: u32 = 0x003C3C3C;
 const CARD_HOVER_BG: u32 = 0x004A4A4A;
 const CARD_TITLE_BG: u32 = 0x002E2E2E;
+/// Hovered title strip: DWM composites live thumbnails over the card
+/// BODY, so the hover highlight must also show on the (uncovered) strip.
+const CARD_TITLE_HOVER_BG: u32 = 0x003C3C3C;
 const CARD_BORDER: u32 = 0x00585858;
 const TEXT_PRIMARY: u32 = 0x00E6E6E6;
 const TEXT_SECONDARY: u32 = 0x00A0A0A0;
@@ -170,6 +179,10 @@ const TITLED_MIN_W: i32 = 72;
 /// Public so the daemon's row layout reserves clearance for the
 /// active-panel ring.
 pub const SELECT_PAD: i32 = 4;
+
+/// Inset between a card's body edges and its live-thumbnail dest rect,
+/// keeping a sliver of the painted body visible as the thumbnail's frame.
+const THUMB_INSET: i32 = 1;
 
 // Per-region alpha. Cards are fully opaque; the backdrop and row panels
 // let the (blurred) desktop show through.
@@ -218,6 +231,10 @@ struct OverviewState {
     mouse_tracking_armed: bool,
     backdrop: BackdropMode,
     event_tx: Option<mpsc::Sender<OverviewEvent>>,
+    /// Live DWM thumbnails composited over card bodies, keyed by source
+    /// window id. RAII: dropping an entry unregisters its thumbnail.
+    /// Cleared on hide and overlay drop; re-diffed on every model push.
+    thumbnails: HashMap<u64, ThumbnailHandle>,
 }
 
 static STATE: LazyLock<Mutex<OverviewState>> = LazyLock::new(|| {
@@ -230,6 +247,7 @@ static STATE: LazyLock<Mutex<OverviewState>> = LazyLock::new(|| {
         mouse_tracking_armed: false,
         backdrop: BackdropMode::AlphaDim,
         event_tx: None,
+        thumbnails: HashMap::new(),
     })
 });
 
@@ -458,6 +476,7 @@ impl OverviewOverlay {
                 SWP_SHOWWINDOW,
             );
         }
+        sync_thumbnails(self.hwnd);
         render_overlay(self.hwnd);
         // Foreground (with the platform helper's focus-stealing fallbacks)
         // so Esc/arrows land in the overlay without an extra click.
@@ -483,6 +502,7 @@ impl OverviewOverlay {
             s.model = model;
             s.hovered = None;
         }
+        sync_thumbnails(self.hwnd);
         render_overlay(self.hwnd);
     }
 
@@ -490,14 +510,25 @@ impl OverviewOverlay {
     /// resulting WM_KILLFOCUS doesn't emit a spurious `Dismissed`.
     pub fn hide(&self) {
         state().visible = false;
+        drop_all_thumbnails();
         unsafe {
             let _ = ShowWindow(self.hwnd, SW_HIDE);
         }
     }
 }
 
+/// Unregister every live thumbnail (each `ThumbnailHandle` drop calls
+/// `unregister_raw`). DWM calls happen outside the state lock.
+fn drop_all_thumbnails() {
+    let handles = std::mem::take(&mut state().thumbnails);
+    drop(handles);
+}
+
 impl Drop for OverviewOverlay {
     fn drop(&mut self) {
+        // Unregister thumbnails BEFORE destroying their destination window
+        // so DwmUnregisterThumbnail releases valid handles.
+        drop_all_thumbnails();
         // Wake the UI thread out of its message loop, then join. Mirrors
         // TabStripOverlay::drop (PostThreadMessageW fallback included).
         let posted_via_window = unsafe {
@@ -518,6 +549,78 @@ impl Drop for OverviewOverlay {
             let _ = thread.join();
         }
     }
+}
+
+// --- Live thumbnails ------------------------------------------------------
+//
+// DWM composites registered thumbnails ON TOP of the window's painted
+// content within their dest rects, so the painted card body stays as the
+// backing and the title strip / selection ring (drawn outside the card)
+// remain visible. Per-pixel-alpha UpdateLayeredWindow destinations don't
+// reliably composite thumbnails, so the AlphaDim fallback skips them and
+// keeps the placeholder bodies.
+
+/// The thumbnail dest rect for a card: the body below the title strip,
+/// inset by [`THUMB_INSET`]. `None` for compact (untitled) cards — a
+/// thumbnail there would cover the card's only title/icon row.
+fn thumb_body(card_rect: &Rect) -> Option<Rect> {
+    if !card_is_titled(card_rect) {
+        return None;
+    }
+    let body = Rect::new(
+        card_rect.x + THUMB_INSET,
+        card_rect.y + CARD_TITLE_H + THUMB_INSET,
+        card_rect.width - 2 * THUMB_INSET,
+        card_rect.height - CARD_TITLE_H - 2 * THUMB_INSET,
+    );
+    (body.width > 0 && body.height > 0).then_some(body)
+}
+
+/// Diff the registered thumbnails against the current model: register
+/// new live cards, retarget surviving ones via `update`, drop removed
+/// ones. All DWM calls happen outside the state lock.
+fn sync_thumbnails(hwnd: HWND) {
+    let (mode, targets) = {
+        let s = state();
+        let targets: Vec<(u64, Rect)> = s
+            .model
+            .rows
+            .iter()
+            .flat_map(|row| row.cards.iter())
+            .filter(|c| c.live)
+            .filter_map(|c| thumb_body(&c.rect).map(|body| (c.window_id, body)))
+            .collect();
+        (s.backdrop, targets)
+    };
+    let mut existing = std::mem::take(&mut state().thumbnails);
+    if mode == BackdropMode::AlphaDim {
+        drop(existing); // layered fallback: no thumbnails, placeholder bodies
+        return;
+    }
+    let mut next: HashMap<u64, ThumbnailHandle> = HashMap::with_capacity(targets.len());
+    for (wid, body) in targets {
+        let handle = match existing.remove(&wid) {
+            Some(h) => h,
+            None => match thumbnail::register_for_window(hwnd.0 as isize, wid) {
+                Ok(h) => h,
+                Err(e) => {
+                    tracing::warn!("overview thumbnail register({wid}) failed: {e}");
+                    continue;
+                }
+            },
+        };
+        // Fill the whole body: DWM stretches the source to rcDestination,
+        // and a filled card reads better than a letterboxed one even when
+        // the aspect ratio is off.
+        let dest = body;
+        if let Err(e) = thumbnail::update(handle.as_isize(), dest, 255, true) {
+            tracing::warn!("overview thumbnail update({wid}) failed: {e}");
+            continue; // handle drops here -> unregistered
+        }
+        next.insert(wid, handle);
+    }
+    drop(existing); // windows gone from the model: unregister
+    state().thumbnails = next;
 }
 
 impl OverviewState {
@@ -806,6 +909,7 @@ unsafe fn build_frame_dib(
     hovered: Option<(usize, usize)>,
     selected: Option<(usize, usize)>,
     mode: BackdropMode,
+    thumb_wids: &HashSet<u64>,
 ) -> Option<FrameDib> {
     let bmi = BITMAPINFO {
         bmiHeader: BITMAPINFOHEADER {
@@ -844,7 +948,7 @@ unsafe fn build_frame_dib(
     }
 
     // 3. Text + icons via GDI, flushed before the alpha finish below.
-    draw_content(mem_dc, model);
+    draw_content(mem_dc, model, thumb_wids);
     let _ = GdiFlush();
 
     // 4. Label-text opacity fix-up + premultiply.
@@ -872,7 +976,7 @@ unsafe fn release_frame_dib(dib: FrameDib) {
 unsafe fn paint_frame(hwnd: HWND) {
     let mut ps = PAINTSTRUCT::default();
     let hdc = BeginPaint(hwnd, &mut ps);
-    let (model, hovered, selected, rect, mode, visible) = {
+    let (model, hovered, selected, rect, mode, visible, thumb_wids) = {
         let s = state();
         (
             s.model.clone(),
@@ -881,11 +985,19 @@ unsafe fn paint_frame(hwnd: HWND) {
             s.window_rect,
             s.backdrop,
             s.visible,
+            s.thumbnails.keys().copied().collect::<HashSet<u64>>(),
         )
     };
     if visible && mode != BackdropMode::AlphaDim && rect.width > 0 && rect.height > 0 {
-        if let Some(dib) = build_frame_dib(rect.width, rect.height, &model, hovered, selected, mode)
-        {
+        if let Some(dib) = build_frame_dib(
+            rect.width,
+            rect.height,
+            &model,
+            hovered,
+            selected,
+            mode,
+            &thumb_wids,
+        ) {
             let _ = BitBlt(
                 hdc,
                 0,
@@ -912,7 +1024,12 @@ unsafe fn render_and_update(
     selected: Option<(usize, usize)>,
 ) {
     let (w, h) = (rect.width, rect.height);
-    let Some(dib) = build_frame_dib(w, h, model, hovered, selected, BackdropMode::AlphaDim) else {
+    // AlphaDim never registers thumbnails: pass an empty set so every
+    // card keeps its placeholder body icon.
+    let no_thumbs = HashSet::new();
+    let Some(dib) =
+        build_frame_dib(w, h, model, hovered, selected, BackdropMode::AlphaDim, &no_thumbs)
+    else {
         return;
     };
     let pt_dst = POINT {
@@ -1141,10 +1258,13 @@ fn draw_card_shape(
     let r = &card.rect;
     let radius = card_radius(r);
     let body_bg = if hovered { CARD_HOVER_BG } else { CARD_BG };
+    // The hover highlight must also lighten the title strip: a live
+    // thumbnail composites over the body, hiding the body highlight.
+    let title_bg = if hovered { CARD_TITLE_HOVER_BG } else { CARD_TITLE_BG };
     if card_is_titled(r) {
         let title = Rect::new(r.x, r.y, r.width, CARD_TITLE_H);
         let body = Rect::new(r.x, r.y + CARD_TITLE_H, r.width, r.height - CARD_TITLE_H);
-        sdf_fill_round(pixels, alpha, w, h, &title, radius, true, false, CARD_TITLE_BG, OPAQUE);
+        sdf_fill_round(pixels, alpha, w, h, &title, radius, true, false, title_bg, OPAQUE);
         sdf_fill_round(pixels, alpha, w, h, &body, radius, false, true, body_bg, OPAQUE);
     } else {
         sdf_fill_round(pixels, alpha, w, h, r, radius, true, true, body_bg, OPAQUE);
@@ -1328,7 +1448,7 @@ unsafe fn draw_text_in(hdc: HDC, text: &str, r: &Rect, color: u32, format: DRAW_
 
 /// GDI content pass: text and icons only — every shape is rasterized by
 /// [`draw_shapes`] before this runs.
-unsafe fn draw_content(hdc: HDC, model: &OverviewModel) {
+unsafe fn draw_content(hdc: HDC, model: &OverviewModel, thumb_wids: &HashSet<u64>) {
     SetBkMode(hdc, TRANSPARENT);
     let accent = model.accent_bgr;
     let label_font = make_font(14, FW_SEMIBOLD.0 as i32);
@@ -1340,7 +1460,11 @@ unsafe fn draw_content(hdc: HDC, model: &OverviewModel) {
         for card in &row.cards {
             if card_is_titled(&card.rect) {
                 draw_card_title_strip(hdc, card, card_font, pill_font, accent);
-                draw_card_body_icon(hdc, card);
+                // A live thumbnail composites over the body: the painted
+                // placeholder icon would bleed around its letterboxing.
+                if !thumb_wids.contains(&card.window_id) {
+                    draw_card_body_icon(hdc, card);
+                }
             } else {
                 draw_card_compact(hdc, card, card_font, pill_font, accent);
             }
@@ -1443,8 +1567,9 @@ unsafe fn draw_card_title_strip(
     }
 }
 
-/// Card body placeholder: a larger centered app icon (thumbnails will
-/// fill this area in a later phase).
+/// Card body placeholder: a larger centered app icon. Only drawn when no
+/// live thumbnail is registered for the card (the thumbnail composites
+/// over this area).
 unsafe fn draw_card_body_icon(hdc: HDC, card: &OverviewCard) {
     let r = &card.rect;
     let body = Rect::new(r.x, r.y + CARD_TITLE_H, r.width, r.height - CARD_TITLE_H);
@@ -1529,4 +1654,30 @@ unsafe fn draw_card_compact(
             draw_tab_pill(hdc, &pill, n, pill_font, accent);
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_thumb_body_titled_card_insets_below_title_strip() {
+        let card = Rect::new(100, 50, 200, 150); // titled: >= 72x56
+        let body = thumb_body(&card).expect("titled card gets a thumb body");
+        assert_eq!(body.x, 100 + THUMB_INSET);
+        assert_eq!(body.y, 50 + CARD_TITLE_H + THUMB_INSET);
+        assert_eq!(body.width, 200 - 2 * THUMB_INSET);
+        assert_eq!(body.height, 150 - CARD_TITLE_H - 2 * THUMB_INSET);
+    }
+
+    #[test]
+    fn test_thumb_body_compact_card_gets_none() {
+        // Below TITLED_MIN_H / TITLED_MIN_W: compact rendering, no thumbnail.
+        assert!(thumb_body(&Rect::new(0, 0, 200, 40)).is_none());
+        assert!(thumb_body(&Rect::new(0, 0, 60, 200)).is_none());
+    }
+
+
+
+
 }

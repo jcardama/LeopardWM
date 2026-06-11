@@ -13,7 +13,9 @@ All notable changes to LeopardWM will be documented in this file.
   active workspace's visible region. Click a card to jump to that window,
   click a row to switch workspace, middle-click a card to close it,
   arrows/Enter and digits 1-9 work from the keyboard, Esc dismisses.
-  Live window previews come in a later release.
+  Cards show live window previews (windows on hidden workspaces show
+  their last frame); set `render = "placeholder"` under `[overview]` or
+  pick it in Settings to keep the icon placeholders.
 
 ## 0.1.19
 

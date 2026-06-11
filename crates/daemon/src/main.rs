@@ -2001,8 +2001,8 @@ async fn handle_overview_event(
         OverviewEvent::Dismissed => {
             let mut s = ctx.state.lock().await;
             if s.overview_open {
+                // hide_overview restores the foreground itself.
                 s.hide_overview();
-                s.sync_foreground_window();
             }
         }
     }

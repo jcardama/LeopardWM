@@ -111,6 +111,12 @@ workspace_switch_duration_ms = 200  # switching workspaces
 scroll_duration_ms = 200            # scrolling a column into view
 easing = "ease_out"
 
+[overview]
+# Workspace overview card bodies: "live" (default) shows DWM window
+# previews (last frame for windows on hidden workspaces); "placeholder"
+# keeps the static app-icon bodies.
+# render = "live"
+
 [workspaces]
 # Optional display names for workspaces 1-9, by position. Shown in
 # `lwm query workspace` and pushed to bars over IPC. Leave an entry empty
@@ -155,6 +161,7 @@ mod tests {
             "[gestures]",
             "[snap_hints]",
             "[animation]",
+            "[overview]",
             "[workspaces]",
             "[[window_rules]]",
         ] {
