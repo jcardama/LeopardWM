@@ -1,3 +1,4 @@
+use leopardwm_platform_win32::overview::OverviewEvent;
 use leopardwm_platform_win32::tab_strip::TabAction;
 use leopardwm_platform_win32::{GestureEvent, HotkeyEvent, WindowEvent};
 use std::collections::BTreeSet;
@@ -87,6 +88,10 @@ pub(crate) enum DaemonEvent {
     /// a per-window message, not a global hook — so polling is the
     /// pragmatic alternative.
     TabStripIconPoll,
+    /// User action from the overview overlay (activate a window, switch
+    /// workspace, close a window, or dismiss). The overlay hit-tests its
+    /// own model copy; the daemon routes the resulting intent here.
+    Overview(OverviewEvent),
     /// Rename-dialog result delivered from the spawned modal thread.
     /// `new_title: None` means cancel; `Some("")` means clear the
     /// override and fall back to the live window title; `Some(name)`

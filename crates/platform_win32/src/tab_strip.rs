@@ -2871,4 +2871,4 @@ unsafe extern "system" fn tab_strip_wnd_proc(
 // crate exposes the components but not the combined OR'd value as a named
 // constant in our crate's import surface, so we name it locally.
 // `CreateFontW` expects u32 for `ipitchandfamily`.
-const FONT_PIPELINE_DEFAULT_PITCH_AND_FAMILY: u32 = 0; // DEFAULT_PITCH | FF_DONTCARE
+pub(crate) const FONT_PIPELINE_DEFAULT_PITCH_AND_FAMILY: u32 = 0; // DEFAULT_PITCH | FF_DONTCARE

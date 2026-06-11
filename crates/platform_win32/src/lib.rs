@@ -15,6 +15,7 @@ pub mod gestures;
 pub mod hotkeys;
 pub mod mouse_hook;
 pub mod overlay;
+pub mod overview;
 pub mod tab_strip;
 pub mod thumbnail;
 

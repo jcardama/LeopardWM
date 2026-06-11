@@ -21,6 +21,7 @@ mod helpers;
 mod ipc_server;
 mod layout_apply;
 mod monitors;
+mod overview;
 mod persistence;
 mod scratchpad;
 mod settings;
@@ -714,6 +715,31 @@ async fn spawn_tab_forwarders(
     }
 }
 
+/// Wire the overview overlay's event channel and forwarder thread.
+/// The overlay itself is created lazily on first show; this just installs
+/// the sender and drains the channel into `DaemonEvent::Overview`.
+async fn spawn_overview_forwarder(
+    state: &Arc<Mutex<AppState>>,
+    event_tx: &mpsc::Sender<DaemonEvent>,
+    thread_handles: &mut Vec<std::thread::JoinHandle<()>>,
+) {
+    let (overview_tx, overview_rx) =
+        std::sync::mpsc::channel::<leopardwm_platform_win32::overview::OverviewEvent>();
+    {
+        let mut state_guard = state.lock().await;
+        state_guard.install_overview(overview_tx);
+    }
+    match spawn_forwarding_thread(
+        "overview-fwd",
+        overview_rx,
+        event_tx.clone(),
+        DaemonEvent::Overview,
+    ) {
+        Ok(handle) => thread_handles.push(handle),
+        Err(e) => warn!("{}", e),
+    }
+}
+
 /// Install WinEvent hooks and register display-change and power-state forwarding.
 fn setup_window_hooks(
     config: &Config,
@@ -1200,6 +1226,12 @@ async fn process_window_event(ctx: &mut EventLoopCtx<'_>, win_event: WindowEvent
         {
             let mut state = ctx.state.lock().await;
             state.handle_window_event(win_event);
+
+            // Keep an open overview in sync with window lifecycle changes
+            // (e.g. a card middle-click close completing asynchronously).
+            if state.overview_open {
+                state.refresh_overview_model();
+            }
 
             // Start animation worker if the event triggered a transition.
             if state.is_animating() && !*ctx.animation_active {
@@ -1913,6 +1945,78 @@ async fn handle_tab_action(
     }
 }
 
+/// Handle an overview overlay action (mirrors `handle_tab_action`).
+async fn handle_overview_event(
+    ctx: &mut EventLoopCtx<'_>,
+    event: leopardwm_platform_win32::overview::OverviewEvent,
+) {
+    use leopardwm_platform_win32::overview::OverviewEvent;
+    match event {
+        OverviewEvent::ActivateWindow(wid) => {
+            let mut s = ctx.state.lock().await;
+            s.hide_overview();
+            let Some((monitor, ws_idx)) = s.find_window_workspace(wid) else {
+                debug!("Overview activate: window {} no longer managed", wid);
+                return;
+            };
+            s.focused_monitor = monitor;
+            if ws_idx != s.active_workspace_idx(monitor) {
+                let resp = s.handle_command(IpcCommand::SwitchWorkspace {
+                    index: (ws_idx + 1) as u8,
+                });
+                if let IpcResponse::Error { message } = resp {
+                    warn!("Overview workspace switch failed: {}", message);
+                    return;
+                }
+            }
+            // Tiled focus flows through the workspace; floating focus is
+            // tracked via previous_focused_hwnd (same split as elsewhere).
+            if s.focused_workspace().is_some_and(|ws| ws.is_floating(wid)) {
+                s.previous_focused_hwnd = Some(wid);
+            } else if let Some(ws) = s.focused_workspace_mut() {
+                let _ = ws.focus_window(wid);
+            }
+            let _ = leopardwm_platform_win32::set_foreground_window(wid);
+            s.sync_foreground_window();
+        }
+        OverviewEvent::SwitchWorkspace(idx) => {
+            let mut s = ctx.state.lock().await;
+            s.hide_overview();
+            let resp = s.handle_command(IpcCommand::SwitchWorkspace {
+                index: (idx + 1) as u8,
+            });
+            if let IpcResponse::Error { message } = resp {
+                warn!("Overview workspace switch failed: {}", message);
+            }
+        }
+        OverviewEvent::CloseWindow(wid) => {
+            if let Err(e) = leopardwm_platform_win32::close_window(wid) {
+                warn!("close_window from overview failed: {}", e);
+            }
+            // WM_CLOSE completes asynchronously — the Destroyed event
+            // refreshes the model again. The overview stays open.
+            let mut s = ctx.state.lock().await;
+            s.refresh_overview_model();
+        }
+        OverviewEvent::Dismissed => {
+            let mut s = ctx.state.lock().await;
+            if s.overview_open {
+                s.hide_overview();
+                s.sync_foreground_window();
+            }
+        }
+    }
+    // A workspace switch above may have started a slide transition.
+    let mut state = ctx.state.lock().await;
+    if state.is_animating() && !*ctx.animation_active {
+        state.tick_animations(0);
+        if let Ok(true) = state.send_animation_frame(ctx.animation_worker) {
+            *ctx.animation_active = true;
+            *ctx.last_frame_instant = Some(std::time::Instant::now());
+        }
+    }
+}
+
 /// Apply a rename-dialog result as a tab title override.
 async fn handle_tab_rename_submitted(
     state: &Arc<Mutex<AppState>>,
@@ -2288,6 +2392,8 @@ async fn handle_display_change_settled(ctx: &mut EventLoopCtx<'_>) {
     // Cancel any in-flight ghost animation — its rects were
     // computed under the old geometry.
     state.abort_active_ghost_transition();
+    // The overview's geometry is stale too — hide instead of rebuilding.
+    state.hide_overview();
     state.display_change_pending = false;
     // Clear stale min-width and min-height constraints — they were
     // computed with old border metrics and cause cumulative column
@@ -2370,6 +2476,7 @@ async fn main() -> Result<()> {
     let mut thread_handles: Vec<std::thread::JoinHandle<()>> = Vec::new();
 
     spawn_tab_forwarders(&state, &event_tx, &mut thread_handles).await;
+    spawn_overview_forwarder(&state, &event_tx, &mut thread_handles).await;
 
     // Install WinEvent hooks for window lifecycle tracking (if enabled in config)
     let _hook_handle = setup_window_hooks(&config, &event_tx, &mut thread_handles);
@@ -2568,6 +2675,9 @@ async fn main() -> Result<()> {
             }
             DaemonEvent::TabStripIconPoll => {
                 handle_tab_strip_icon_poll(&state).await;
+            }
+            DaemonEvent::Overview(overview_event) => {
+                handle_overview_event(&mut ctx, overview_event).await;
             }
             DaemonEvent::TabAction {
                 monitor,

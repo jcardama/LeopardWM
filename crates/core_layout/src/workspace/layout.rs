@@ -21,6 +21,14 @@ impl Workspace {
         self.compute_non_fullscreen_placements(viewport, viewport_left)
     }
 
+    /// Compute placements for the ENTIRE strip, ignoring scroll: viewport
+    /// left is pinned to 0 and the caller supplies a viewport wide enough
+    /// for every column, so nothing is marked off-screen. Used by the
+    /// workspace overview to miniaturize the whole strip.
+    pub fn placements_for_full_strip(&self, viewport: Rect) -> Vec<WindowPlacement> {
+        self.compute_non_fullscreen_placements(viewport, 0)
+    }
+
     /// Compute non-fullscreen placements for a specific viewport-left offset.
     /// Used by both static and animated placement paths.
     fn compute_non_fullscreen_placements(

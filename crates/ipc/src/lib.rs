@@ -448,6 +448,9 @@ pub enum IpcCommand {
     WorkspacePrev,
     /// Switch to the next workspace (cycles 9 → 1 on wrap).
     WorkspaceNext,
+    /// Toggle the workspace overview overlay (a map of the focused
+    /// monitor's non-empty workspaces).
+    ToggleOverview,
 
     /// Query whether the daemon is configured to auto-start with Windows.
     GetAutoStart,
@@ -720,6 +723,7 @@ mod tests {
             IpcCommand::ScratchpadStash,
             IpcCommand::ScratchpadToggle,
             IpcCommand::ToggleSticky,
+            IpcCommand::ToggleOverview,
             IpcCommand::ToggleNewWindowPlacement,
             IpcCommand::SetColumnWidth { fraction: 0.5 },
             IpcCommand::SetColumnWidth { fraction: 0.333 },

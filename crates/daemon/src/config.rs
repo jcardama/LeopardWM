@@ -1404,7 +1404,11 @@ mod tests {
     #[test]
     fn test_hotkey_config_default() {
         let config = HotkeyConfig::default();
-        assert_eq!(config.bindings.len(), 57);
+        assert_eq!(config.bindings.len(), 58);
+        assert_eq!(
+            config.bindings.get("Ctrl+Alt+Space"),
+            Some(&"toggle_overview".to_string())
+        );
         assert_eq!(
             config.bindings.get("Ctrl+Alt+T"),
             Some(&"toggle_tabbed".to_string())

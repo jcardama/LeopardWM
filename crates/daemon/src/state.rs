@@ -321,6 +321,16 @@ pub(crate) struct AppState {
             leopardwm_platform_win32::tab_strip::TabActionEvent,
         >,
     >,
+    /// Whether the workspace overview overlay is currently shown.
+    pub(crate) overview_open: bool,
+    /// Overview overlay. NOT constructed in `new` — lazily created on the
+    /// first `show_overview` so tests (and headless runs) never spawn the
+    /// interactive top-level window.
+    pub(crate) overview_overlay: Option<leopardwm_platform_win32::overview::OverviewOverlay>,
+    /// Sender cloned into the overlay at lazy-init. Installed once during
+    /// daemon startup (parallel to `tab_strip_action_tx`).
+    pub(crate) overview_event_tx:
+        Option<std::sync::mpsc::Sender<leopardwm_platform_win32::overview::OverviewEvent>>,
     /// Whether tiling is paused.
     pub(crate) paused: bool,
     /// Guard flag to suppress MovedOrResized events during apply_layout().
@@ -627,6 +637,9 @@ impl AppState {
             // it to the same DaemonEvent drain.
             tab_strip_overlays: std::collections::HashMap::new(),
             tab_strip_action_tx: None,
+            overview_open: false,
+            overview_overlay: None,
+            overview_event_tx: None,
             // Paused under cfg(test): placeholder hwnds collide with real
             // HWNDs and lag the mouse via DWM. Tests opt out as needed.
             paused: cfg!(test),
@@ -869,6 +882,22 @@ impl AppState {
         // it runs — all of them share this cloned sender so click /
         // close / rename actions land in the same DaemonEvent drain.
         self.tab_strip_action_tx = Some(tab_action_tx);
+    }
+
+    /// Install the overview event sender. The overlay itself is created
+    /// lazily on first `show_overview`; this just stashes the channel.
+    ///
+    /// Skipped in test builds (the overlay would create a real top-level
+    /// window) — with no sender, `show_overview` skips overlay creation.
+    pub(crate) fn install_overview(
+        &mut self,
+        event_tx: std::sync::mpsc::Sender<leopardwm_platform_win32::overview::OverviewEvent>,
+    ) {
+        if cfg!(test) {
+            drop(event_tx);
+            return;
+        }
+        self.overview_event_tx = Some(event_tx);
     }
 
     /// Try to consume `pending_tab_focus` if it matches the given event

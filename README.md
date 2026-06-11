@@ -40,6 +40,7 @@ A few deliberate **non-features**, so you know what you're getting:
 - **Tabbed columns** — toggle a column between vertical-stack and tab-strip mode (`Ctrl+Alt+T`); only the active tab fills the column rect, the rest sit in a clickable strip above
 - **Scratchpad** — stash the focused window out of the layout (`Ctrl+Alt+Shift+S`) and summon it back as a floating, centered overlay on demand (`Ctrl+Alt+S`); stash it again to release it back to tiling
 - **Sticky windows** — pin a window (`Ctrl+Alt+Y`) so it stays visible on every workspace and follows you as you switch
+- **Overview mode** — `Ctrl+Alt+Space` opens a map of the monitor's non-empty workspaces; click a window card to jump to it, click a row to switch workspace, or drive it with arrows/Enter/digits
 - **Per-app window rules** — float, ignore, or tile by class/title/executable, plus per-app open behavior: target workspace, initial column width, open maximized
 - Floating and fullscreen toggles
 - Width and height presets with column equalization, maximize-column, center-column
@@ -122,6 +123,7 @@ Most hotkeys use `Ctrl+Alt` as the base modifier. Layered pattern: base = focus,
 | `Ctrl+Alt+Win+Shift+,`/`.` | Move window to monitor |
 | `Ctrl+Alt+1`...`9` | Switch to workspace 1–9 |
 | `Ctrl+Alt+Shift+1`...`9` | Move focused window to workspace 1–9 |
+| `Ctrl+Alt+Space` | Toggle workspace overview |
 | `Win+Ctrl+Left` / `Right` | Workspace prev / next (cycles) |
 | `Ctrl+Alt+W` | Close focused window |
 | `Ctrl+Alt+F` | Toggle floating |

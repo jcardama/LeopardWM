@@ -331,6 +331,10 @@ impl AppState {
                      command loop — this is an internal routing bug.",
                 )
             }
+            IpcCommand::ToggleOverview => {
+                self.toggle_overview();
+                IpcResponse::Ok
+            }
             IpcCommand::ToggleTabbed => {
                 self.execute_workspace_command(true, false, |ws, _vw| {
                     ws.toggle_focused_column_tabbed_mode();
@@ -699,6 +703,11 @@ impl AppState {
     fn handle_switch_workspace(&mut self, index: u8) -> IpcResponse {
         if !(1..=9).contains(&index) {
             return IpcResponse::error("Workspace index must be 1-9");
+        }
+        // A switch initiated outside the overlay (hotkey, CLI) dismisses
+        // an open overview; overlay-initiated switches hid it already.
+        if self.overview_open {
+            self.hide_overview();
         }
         let idx = (index - 1) as usize;
         let monitor = self.focused_monitor;

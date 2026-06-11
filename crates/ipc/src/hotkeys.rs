@@ -132,6 +132,7 @@ pub fn hotkey_catalog() -> Vec<HotkeyAction> {
         action("refresh", Some("Ctrl+Alt+R"), "Refresh", "Session"),
         action("reload", Some("Ctrl+Alt+Shift+R"), "Reload config", "Session"),
         action("panic_revert", Some("Win+Ctrl+Escape"), "Emergency restore", "Session"),
+        action("toggle_overview", Some("Ctrl+Alt+Space"), "Toggle overview", "Workspaces"),
         action("workspace_prev", Some("Win+Ctrl+Left"), "Previous workspace", "Workspaces"),
         action("workspace_next", Some("Win+Ctrl+Right"), "Next workspace", "Workspaces"),
     ];
@@ -230,6 +231,7 @@ pub fn command_for_action(id: &str) -> Option<crate::IpcCommand> {
         "move_window_down" => IpcCommand::MoveWindowDown,
         "workspace_prev" => IpcCommand::WorkspacePrev,
         "workspace_next" => IpcCommand::WorkspaceNext,
+        "toggle_overview" => IpcCommand::ToggleOverview,
         _ => return None,
     })
 }
@@ -328,6 +330,7 @@ mod tests {
             ("Ctrl+Alt+R", "refresh"),
             ("Ctrl+Alt+Shift+R", "reload"),
             ("Win+Ctrl+Escape", "panic_revert"),
+            ("Ctrl+Alt+Space", "toggle_overview"),
             ("Win+Ctrl+Left", "workspace_prev"),
             ("Win+Ctrl+Right", "workspace_next"),
             ("Ctrl+Alt+1", "switch_workspace_1"),

@@ -29,7 +29,15 @@ pub const DEFAULT_CORNER_RADIUS: f32 = 8.0;
 /// Signed distance field for a rounded rectangle.
 ///
 /// Returns negative values inside, positive outside, zero on the boundary.
-fn rounded_rect_sdf(px: f32, py: f32, rx: f32, ry: f32, rw: f32, rh: f32, radius: f32) -> f32 {
+pub(crate) fn rounded_rect_sdf(
+    px: f32,
+    py: f32,
+    rx: f32,
+    ry: f32,
+    rw: f32,
+    rh: f32,
+    radius: f32,
+) -> f32 {
     let cx = rx + rw / 2.0;
     let cy = ry + rh / 2.0;
     let hx = rw / 2.0;
@@ -43,7 +51,7 @@ fn rounded_rect_sdf(px: f32, py: f32, rx: f32, ry: f32, rw: f32, rh: f32, radius
     outside + inside - radius
 }
 
-fn clamp(v: f32, lo: f32, hi: f32) -> f32 {
+pub(crate) fn clamp(v: f32, lo: f32, hi: f32) -> f32 {
     v.max(lo).min(hi)
 }
 

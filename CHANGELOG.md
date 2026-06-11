@@ -4,6 +4,17 @@ All notable changes to LeopardWM will be documented in this file.
 
 ## Unreleased
 
+### Improvements
+
+- **Overview mode.** `Ctrl+Alt+Space` (or `lwm toggle-overview`) opens a
+  map of the focused monitor's non-empty workspaces over a blurred
+  backdrop: one row per workspace, each window a rounded card (icon +
+  title) at its true position in the strip, with a ring marking the
+  active workspace's visible region. Click a card to jump to that window,
+  click a row to switch workspace, middle-click a card to close it,
+  arrows/Enter and digits 1-9 work from the keyboard, Esc dismisses.
+  Live window previews come in a later release.
+
 ## 0.1.19
 
 ### Improvements
