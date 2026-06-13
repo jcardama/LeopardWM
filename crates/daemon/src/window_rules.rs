@@ -131,16 +131,12 @@ impl AppState {
                 continue;
             }
 
-            // Prefer the monitor/workspace this window was on last session
-            // (recovered from the persisted snapshot) so a daemon restart
-            // doesn't move it to whichever monitor its current — possibly
-            // stale or off-screen — position happens to map to. Falls back
-            // to the window's current monitor for genuinely new windows.
-            let restored = self.pending_placement_restore.get(&win_info.hwnd).copied();
-            let monitor_id = restored
-                .map(|(m, _)| m)
-                .filter(|m| self.monitors.contains_key(m))
-                .or_else(|| find_monitor_for_rect(&monitors, &win_info.rect).map(|m| m.id))
+            // Windows restored from the persisted snapshot are already managed
+            // (placed by restore_workspace_structure before this enumerate) and
+            // get skipped below. Genuinely-new windows land on the monitor their
+            // current on-screen position maps to.
+            let monitor_id = find_monitor_for_rect(&monitors, &win_info.rect)
+                .map(|m| m.id)
                 .unwrap_or(self.focused_monitor);
 
             // Get floating rect before borrowing workspace mutably (to avoid borrow conflict)
@@ -162,12 +158,8 @@ impl AppState {
                 continue;
             }
 
-            // Restored windows go back to their saved workspace index (which
-            // may be an inactive workspace, so ensure it exists first); new
-            // windows land on the monitor's active workspace.
-            let target_idx = restored
-                .map(|(_, ws)| ws)
-                .unwrap_or_else(|| self.active_workspace_idx(monitor_id));
+            // New windows land on the monitor's active workspace.
+            let target_idx = self.active_workspace_idx(monitor_id);
             let _ = self.ensure_workspace_exists(monitor_id, target_idx);
             if let Some(workspace) = self.workspaces.get_mut(&monitor_id).and_then(|v| v.get_mut(target_idx)) {
                 match action {

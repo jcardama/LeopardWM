@@ -187,15 +187,40 @@ impl AppState {
             .unwrap_or_else(|| std::path::PathBuf::from("workspace-state.json"))
     }
 
-    /// Build the startup placement-restore map from a saved snapshot:
-    /// window HWND -> (monitor id, workspace index), resolving the saved
-    /// device name to a current monitor. Consumed by the next
-    /// `enumerate_and_add_windows` so windows return to the monitor/workspace
-    /// they were on last session instead of being re-derived from their
-    /// current on-screen position (which jumps when a window was off-screen
-    /// or on an inactive workspace at shutdown). Cleared after enumeration.
-    pub(crate) fn build_placement_restore(&mut self, snapshot: &StateSnapshot) {
-        self.pending_placement_restore.clear();
+    /// Restore the FULL saved workspace structure from a snapshot, BEFORE
+    /// `enumerate_and_add_windows`. For each saved workspace whose monitor is
+    /// still present, the cloned `Workspace` is pruned of dead windows (closed
+    /// while the daemon was down), has its `#[serde(skip)]` runtime params
+    /// re-applied, and is installed into `self.workspaces[monitor][ws_idx]`.
+    /// This brings back column grouping, per-column widths, intra-column
+    /// heights, and scroll offset — not just monitor+workspace+order.
+    ///
+    /// `enumerate_and_add_windows` then skips windows already managed (the
+    /// restored ones) and only adds genuinely-new windows by current position.
+    ///
+    /// Returns the set of `(monitor, ws_idx)` slots that were restored, so the
+    /// caller can skip startup width-normalization / scroll-reset for them
+    /// (which would otherwise wipe the restored widths and scroll offset).
+    pub(crate) fn restore_workspace_structure(
+        &mut self,
+        snapshot: &StateSnapshot,
+    ) -> HashSet<(MonitorId, usize)> {
+        self.restore_workspace_structure_with(snapshot, |hwnd| {
+            leopardwm_platform_win32::is_valid_window(hwnd)
+        })
+    }
+
+    /// Testable core of `restore_workspace_structure`: the `is_alive`
+    /// predicate decides which HWNDs survive pruning. Production passes the
+    /// real `is_valid_window` Win32 call; tests pass a fake so the
+    /// structure-rebuild logic can be exercised without Win32.
+    pub(crate) fn restore_workspace_structure_with(
+        &mut self,
+        snapshot: &StateSnapshot,
+        is_alive: impl Fn(u64) -> bool,
+    ) -> HashSet<(MonitorId, usize)> {
+        let mut restored_slots = HashSet::new();
+
         for ws_snapshot in &snapshot.workspaces {
             let Some(monitor_id) = self
                 .monitors
@@ -203,18 +228,90 @@ impl AppState {
                 .find(|(_, m)| m.device_name == ws_snapshot.monitor_device_name)
                 .map(|(&id, _)| id)
             else {
+                debug!(
+                    "Skipping saved workspace for unknown monitor '{}'",
+                    ws_snapshot.monitor_device_name
+                );
                 continue;
             };
-            // Clamp to the 1-9 workspace range (0-based 0..=8). The snapshot
-            // is user-writable JSON, so a garbage index must not drive
-            // `ensure_workspace_exists` into creating pathologically many
-            // workspaces on startup.
+
+            // Clamp to the 1-9 workspace range (0-based 0..=8). The snapshot is
+            // user-writable JSON, so a garbage index must not drive the vec to
+            // pathological length on startup.
             let ws_idx = ws_snapshot.workspace_index.min(8);
-            for wid in ws_snapshot.workspace.all_window_ids() {
-                self.pending_placement_restore
-                    .insert(wid, (monitor_id, ws_idx));
+
+            // Clone the saved workspace and prune windows that closed while the
+            // daemon was down. Mirror reconcile/migration pruning: use the
+            // type-preserving remove APIs (remove_window / remove_floating).
+            let mut ws = ws_snapshot.workspace.clone();
+            let dead: Vec<u64> = ws.all_window_ids().into_iter().filter(|&w| !is_alive(w)).collect();
+            for wid in dead {
+                if ws.is_floating(wid) {
+                    ws.remove_floating(wid);
+                } else {
+                    let _ = ws.remove_window(wid);
+                }
             }
+
+            // The clone's #[serde(skip)] runtime fields deserialized to
+            // defaults; re-apply them exactly like reconcile_monitors does.
+            // apply_to sets gaps + default_column_width + tab_strip_reserve_px
+            // WITHOUT touching per-column widths, so the saved widths survive.
+            let scale = self.monitors.get(&monitor_id).map(|m| m.scale_factor).unwrap_or(1.0);
+            let vw = self
+                .monitors
+                .get(&monitor_id)
+                .map(|m| m.work_area.width)
+                .unwrap_or(FALLBACK_VIEWPORT_WIDTH);
+            let params = ScaledLayoutParams::from_config(
+                &self.config.layout,
+                &self.config.appearance,
+                scale,
+                vw,
+            );
+            params.apply_to(&mut ws);
+            ws.set_centering_mode(self.config.layout.centering_mode.into());
+            ws.set_center_past_edges(self.config.layout.center_past_edges);
+            ws.set_reduce_motion(self.reduce_motion);
+            ws.set_scroll_animation(
+                self.config.animation.scroll_duration_ms,
+                self.config.animation.easing,
+            );
+            // Preserve the saved scroll offset (it serializes, but set it
+            // explicitly so a future skip on this field would not regress).
+            ws.set_scroll_offset(ws_snapshot.workspace.scroll_offset());
+
+            // Install into the per-monitor vec, extending with fresh empty
+            // workspaces as needed.
+            let entry = self.workspaces.entry(monitor_id).or_default();
+            while entry.len() <= ws_idx {
+                let mut empty = Workspace::with_directional_gaps(
+                    params.gap,
+                    params.outer_gap_left,
+                    params.outer_gap_right,
+                    params.outer_gap_top,
+                    params.outer_gap_bottom,
+                );
+                empty.set_default_column_width(params.default_column_width);
+                empty.set_tab_strip_reserve_px(params.tab_strip_reserve_px);
+                empty.set_centering_mode(self.config.layout.centering_mode.into());
+                empty.set_center_past_edges(self.config.layout.center_past_edges);
+                empty.set_reduce_motion(self.reduce_motion);
+                empty.set_scroll_animation(
+                    self.config.animation.scroll_duration_ms,
+                    self.config.animation.easing,
+                );
+                entry.push(empty);
+            }
+            entry[ws_idx] = ws;
+            restored_slots.insert((monitor_id, ws_idx));
+            info!(
+                "Restored workspace structure for monitor '{}' workspace {}",
+                ws_snapshot.monitor_device_name, ws_idx
+            );
         }
+
+        restored_slots
     }
 
     /// Restore workspace state from a saved snapshot.

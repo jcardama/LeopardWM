@@ -262,13 +262,6 @@ pub(crate) struct AppState {
     /// restored by the workspace's column state on switch, but floating
     /// focus is not, so we remember it here and re-focus it on return.
     pub(crate) floating_focus: HashMap<(MonitorId, usize), u64>,
-    /// Startup-only: window HWND -> (monitor, workspace index) recovered from
-    /// the persisted snapshot, so `enumerate_and_add_windows` can place each
-    /// window back on the monitor/workspace it was on last session instead of
-    /// re-deriving from its current (possibly stale/off-screen) position.
-    /// Populated before the startup enumerate and cleared right after; empty
-    /// for reload/refresh re-enumerations.
-    pub(crate) pending_placement_restore: HashMap<u64, (MonitorId, usize)>,
     /// Monitor info indexed by monitor ID.
     pub(crate) monitors: HashMap<MonitorId, MonitorInfo>,
     /// Currently focused monitor.
@@ -634,7 +627,6 @@ impl AppState {
             workspaces,
             active_workspace: active_workspace_map,
             floating_focus: HashMap::new(),
-            pending_placement_restore: HashMap::new(),
             monitors: monitor_map,
             focused_monitor,
             platform_config,

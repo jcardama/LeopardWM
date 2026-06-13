@@ -549,13 +549,18 @@ fn detect_monitors() -> Vec<MonitorInfo> {
 
 /// Enumerate existing windows, restore saved workspace state, and normalize startup layout.
 fn init_workspace_state(state: &mut AppState) {
-    // Load the saved snapshot once and seed the placement-restore map BEFORE
-    // enumerating, so windows return to the monitor/workspace they were on
-    // last session instead of being re-derived from their current position.
+    // Load the saved snapshot once and rebuild the FULL workspace structure
+    // (column grouping, widths, heights, scroll) BEFORE enumerating, so each
+    // surviving window returns to its exact saved slot. enumerate then skips
+    // already-managed (restored) windows and only adds genuinely-new ones by
+    // current position. `restored_slots` are exempt from the startup
+    // width-normalization / scroll-reset below, which would wipe restored data.
     let snapshot = AppState::load_state();
-    if let Some(ref snap) = snapshot {
-        state.build_placement_restore(snap);
-    }
+    let restored_slots = if let Some(ref snap) = snapshot {
+        state.restore_workspace_structure(snap)
+    } else {
+        HashSet::new()
+    };
 
     match state.enumerate_and_add_windows() {
         Ok(count) => {
@@ -565,9 +570,6 @@ fn init_workspace_state(state: &mut AppState) {
             error!("Failed to enumerate windows: {}", e);
         }
     }
-    // Placement restore is startup-only; later refresh/reload re-enumerations
-    // must derive from current position.
-    state.pending_placement_restore.clear();
 
     // Log workspace state for all monitors
     let total_windows: usize = state.workspaces.values()
@@ -604,11 +606,15 @@ fn init_workspace_state(state: &mut AppState) {
     // Ensure the focused column is visible in the viewport for every workspace.
     // This also corrects stale scroll offsets from restored state that no longer
     // match the current window set.
-    for (monitor_id, ws_vec) in state.workspaces.iter_mut() {
-        for workspace in ws_vec.iter_mut() {
+    for (&monitor_id, ws_vec) in state.workspaces.iter_mut() {
+        for (ws_idx, workspace) in ws_vec.iter_mut().enumerate() {
+            // Restored slots keep their exact saved scroll offset.
+            if restored_slots.contains(&(monitor_id, ws_idx)) {
+                continue;
+            }
             if workspace.column_count() > 0 {
                 let width = monitor_widths
-                    .get(monitor_id)
+                    .get(&monitor_id)
                     .copied()
                     .unwrap_or(FALLBACK_VIEWPORT_WIDTH);
                 workspace.ensure_focused_visible(width);
@@ -627,21 +633,30 @@ fn init_workspace_state(state: &mut AppState) {
             (id, state.config.layout.default_column_width_px(vw))
         })
         .collect();
+    // Restored slots keep their saved per-column widths; only freshly-enumerated
+    // (non-restored) workspaces are normalized to the default width.
     for (&monitor_id, ws_vec) in state.workspaces.iter_mut() {
         let default_width = monitor_widths_for_default
             .get(&monitor_id)
             .copied()
             .unwrap_or(800);
-        for workspace in ws_vec.iter_mut() {
+        for (ws_idx, workspace) in ws_vec.iter_mut().enumerate() {
+            if restored_slots.contains(&(monitor_id, ws_idx)) {
+                continue;
+            }
             workspace.set_all_column_widths(default_width);
         }
     }
 
     // Reset scroll offset to 0 so windows tile from the left edge on startup
     // (like niri). The ensure_focused_visible call above may leave a stale
-    // centered offset when restoring state.
-    for (_monitor_id, ws_vec) in state.workspaces.iter_mut() {
-        for workspace in ws_vec.iter_mut() {
+    // centered offset when restoring state. Restored slots keep their saved
+    // scroll offset.
+    for (&monitor_id, ws_vec) in state.workspaces.iter_mut() {
+        for (ws_idx, workspace) in ws_vec.iter_mut().enumerate() {
+            if restored_slots.contains(&(monitor_id, ws_idx)) {
+                continue;
+            }
             workspace.set_scroll_offset(0.0);
         }
     }

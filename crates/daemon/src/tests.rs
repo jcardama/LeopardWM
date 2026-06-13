@@ -1209,24 +1209,6 @@ fn test_all_managed_window_ids_multi_monitor() {
     assert!(ids.contains(&200));
 }
 
-// ================================================================
-// Straddler demotion (no bleed onto neighbor monitor)
-// ================================================================
-
-fn demote_placement(
-    rect: Rect,
-) -> leopardwm_core_layout::WindowPlacement {
-    leopardwm_core_layout::WindowPlacement {
-        window_id: 1,
-        rect,
-        visibility: leopardwm_core_layout::Visibility::Visible,
-        column_index: 0,
-    }
-}
-
-
-
-
 
 // ================================================================
 // Minimize/Restore State Tests
@@ -3333,8 +3315,8 @@ fn test_matched_rule_returns_first_match_extras() {
         state.matched_rule("SomeClass", "Editor", "other.exe").unwrap().match_executable.as_deref() != Some("code.exe"));
 }
 
-#[test]
-fn test_build_placement_restore_maps_window_to_saved_monitor() {
+/// Build a two-monitor AppState (DISPLAY1 + DISPLAY2) for structure-restore tests.
+fn structure_restore_state() -> AppState {
     let mut monitors = test_monitors();
     monitors.push(MonitorInfo {
         id: 2,
@@ -3344,23 +3326,46 @@ fn test_build_placement_restore_maps_window_to_saved_monitor() {
         device_name: "DISPLAY2".to_string(),
         scale_factor: 1.0,
     });
-    let mut state = AppState::new_with_config(test_config(), monitors);
+    AppState::new_with_config(test_config(), monitors)
+}
 
-    // Snapshot says window 999 was on DISPLAY2, workspace index 2.
+/// Build a saved Workspace on DISPLAY2 with:
+/// - column 0: single window 100 @ width 640
+/// - column 1: stacked windows 200 + 201 @ width 480
+/// - scroll offset 333.0
+fn saved_two_column_workspace() -> leopardwm_core_layout::Workspace {
     let mut ws = leopardwm_core_layout::Workspace::default();
-    ws.insert_window(999, None).unwrap();
+    ws.insert_window(100, Some(640)).unwrap();
+    ws.insert_window(200, Some(480)).unwrap();
+    // Stack 201 into column 1 (the column holding 200).
+    let col1 = ws
+        .columns()
+        .iter()
+        .position(|c| c.windows().contains(&200))
+        .unwrap();
+    ws.insert_window_in_column(201, col1).unwrap();
+    ws.set_scroll_offset(333.0);
+    ws
+}
+
+#[test]
+fn test_restore_structure_preserves_columns_widths_grouping_scroll() {
+    let mut state = structure_restore_state();
     let snapshot = crate::state::StateSnapshot {
         saved_at: "0".to_string(),
         workspaces: vec![crate::state::WorkspaceSnapshot {
             monitor_device_name: "DISPLAY2".to_string(),
-            workspace_index: 2,
-            workspace: ws,
+            workspace_index: 0,
+            workspace: saved_two_column_workspace(),
         }],
         focused_monitor_name: "DISPLAY1".to_string(),
         active_workspace: std::collections::HashMap::new(),
         tab_title_overrides: std::collections::HashMap::new(),
     };
-    state.build_placement_restore(&snapshot);
+
+    // Fake all four HWNDs alive so none are pruned (avoids the real Win32
+    // is_valid_window call).
+    let restored = state.restore_workspace_structure_with(&snapshot, |_| true);
 
     let display2_id = state
         .monitors
@@ -3368,13 +3373,101 @@ fn test_build_placement_restore_maps_window_to_saved_monitor() {
         .find(|(_, m)| m.device_name == "DISPLAY2")
         .map(|(&id, _)| id)
         .unwrap();
-    assert_eq!(
-        state.pending_placement_restore.get(&999),
-        Some(&(display2_id, 2)),
-        "restored window should map to its saved monitor + workspace"
-    );
-    // Unknown device names are skipped, not mapped to a wrong monitor.
-    assert_eq!(state.pending_placement_restore.len(), 1);
+    assert!(restored.contains(&(display2_id, 0)));
+
+    let ws = &state.workspaces.get(&display2_id).unwrap()[0];
+    assert_eq!(ws.column_count(), 2, "saved column count preserved");
+    assert_eq!(ws.columns()[0].windows(), &[100], "col 0 membership");
+    assert_eq!(ws.columns()[1].windows(), &[200, 201], "col 1 stacked grouping");
+    assert_eq!(ws.columns()[0].width(), 640, "col 0 saved width preserved");
+    assert_eq!(ws.columns()[1].width(), 480, "col 1 saved width preserved");
+    assert_eq!(ws.scroll_offset(), 333.0, "saved scroll offset preserved");
+}
+
+#[test]
+fn test_restore_structure_prunes_dead_windows() {
+    let mut state = structure_restore_state();
+    let snapshot = crate::state::StateSnapshot {
+        saved_at: "0".to_string(),
+        workspaces: vec![crate::state::WorkspaceSnapshot {
+            monitor_device_name: "DISPLAY2".to_string(),
+            workspace_index: 0,
+            workspace: saved_two_column_workspace(),
+        }],
+        focused_monitor_name: "DISPLAY1".to_string(),
+        active_workspace: std::collections::HashMap::new(),
+        tab_title_overrides: std::collections::HashMap::new(),
+    };
+
+    // Window 100 and 201 closed while the daemon was down; 200 survives.
+    let alive = |w: u64| w == 200;
+    state.restore_workspace_structure_with(&snapshot, alive);
+
+    let display2_id = state
+        .monitors
+        .iter()
+        .find(|(_, m)| m.device_name == "DISPLAY2")
+        .map(|(&id, _)| id)
+        .unwrap();
+    let ws = &state.workspaces.get(&display2_id).unwrap()[0];
+    // Column 0 (window 100) emptied -> removed; column 1 retains only 200.
+    assert_eq!(ws.column_count(), 1, "empty column dropped after prune");
+    assert_eq!(ws.columns()[0].windows(), &[200], "only live window remains");
+    assert!(!ws.contains_window(100));
+    assert!(!ws.contains_window(201));
+}
+
+#[test]
+fn test_restore_structure_clamps_workspace_index() {
+    let mut state = structure_restore_state();
+    let mut ws = leopardwm_core_layout::Workspace::default();
+    ws.insert_window(999, None).unwrap();
+    let snapshot = crate::state::StateSnapshot {
+        saved_at: "0".to_string(),
+        workspaces: vec![crate::state::WorkspaceSnapshot {
+            monitor_device_name: "DISPLAY2".to_string(),
+            // Out-of-range index (user-writable JSON) must clamp to 8.
+            workspace_index: 42,
+            workspace: ws,
+        }],
+        focused_monitor_name: "DISPLAY1".to_string(),
+        active_workspace: std::collections::HashMap::new(),
+        tab_title_overrides: std::collections::HashMap::new(),
+    };
+
+    let restored = state.restore_workspace_structure_with(&snapshot, |_| true);
+
+    let display2_id = state
+        .monitors
+        .iter()
+        .find(|(_, m)| m.device_name == "DISPLAY2")
+        .map(|(&id, _)| id)
+        .unwrap();
+    assert!(restored.contains(&(display2_id, 8)), "index clamped to 8");
+    let ws_vec = state.workspaces.get(&display2_id).unwrap();
+    assert_eq!(ws_vec.len(), 9, "vec extended to 0..=8, no further");
+    assert!(ws_vec[8].contains_window(999));
+}
+
+#[test]
+fn test_restore_structure_skips_unknown_monitor() {
+    let mut state = structure_restore_state();
+    let mut ws = leopardwm_core_layout::Workspace::default();
+    ws.insert_window(999, None).unwrap();
+    let snapshot = crate::state::StateSnapshot {
+        saved_at: "0".to_string(),
+        workspaces: vec![crate::state::WorkspaceSnapshot {
+            monitor_device_name: "GHOST_DISPLAY".to_string(),
+            workspace_index: 0,
+            workspace: ws,
+        }],
+        focused_monitor_name: "DISPLAY1".to_string(),
+        active_workspace: std::collections::HashMap::new(),
+        tab_title_overrides: std::collections::HashMap::new(),
+    };
+
+    let restored = state.restore_workspace_structure_with(&snapshot, |_| true);
+    assert!(restored.is_empty(), "unknown monitor produces no restored slots");
 }
 
 #[test]
