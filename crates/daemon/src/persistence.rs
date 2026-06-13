@@ -11,6 +11,39 @@ use tracing::{debug, info, warn};
 impl AppState {
     /// Save current workspace state to disk.
     pub(crate) fn save_state(&self) -> Result<()> {
+        let json = self.build_state_json()?;
+        Self::write_state_file(&json)?;
+        info!("Workspace state saved to {:?}", Self::state_file_path());
+        Ok(())
+    }
+
+    /// Atomically write the state JSON: write a uniquely-named temp file then
+    /// rename it over the target. Rename is atomic on the same volume, so a
+    /// concurrent writer (the debounced background save vs the graceful
+    /// shutdown save) or a crash mid-write can never leave a torn/truncated
+    /// state file — readers always see a complete previous or new version.
+    pub(crate) fn write_state_file(json: &str) -> Result<()> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+        let path = Self::state_file_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        // Unique temp name per write so two concurrent writers don't share
+        // (and tear) the same temp file before their renames.
+        let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
+        let tmp = path.with_extension(format!("{seq}.tmp"));
+        std::fs::write(&tmp, json)?;
+        std::fs::rename(&tmp, &path)?;
+        Ok(())
+    }
+
+    /// Build the persisted-state JSON string (StateSnapshot serialized).
+    /// Does everything `save_state` does except the filesystem write, so
+    /// the debounced background task can build under the lock and write
+    /// outside it.
+    pub(crate) fn build_state_json(&self) -> Result<String> {
         let mut snapshots: Vec<WorkspaceSnapshot> = Vec::new();
         for (monitor_id, ws_vec) in &self.workspaces {
             let active_idx = self.active_workspace_idx(*monitor_id);
@@ -58,15 +91,78 @@ impl AppState {
             tab_title_overrides: self.tab_title_overrides.clone(),
         };
 
-        let state_path = Self::state_file_path();
-        if let Some(parent) = state_path.parent() {
-            std::fs::create_dir_all(parent)?;
+        let json = serde_json::to_string_pretty(&snapshot)?;
+        Ok(json)
+    }
+
+    /// Cheap deterministic hash of the PERSISTED state (everything
+    /// `build_state_json` would serialize): focused monitor, per-monitor
+    /// active workspace index, every workspace's column membership +
+    /// floating windows + rounded scroll offset, and tab title override
+    /// keys/value lengths. Used to dedup save requests so unchanged
+    /// state (e.g. mid-animation frames with no structural delta) does
+    /// not enqueue a write.
+    pub(crate) fn persisted_signature(&self) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let mut hasher = DefaultHasher::new();
+        self.focused_monitor.hash(&mut hasher);
+
+        // Sort monitor ids for a deterministic traversal order.
+        let mut monitor_ids: Vec<MonitorId> = self.workspaces.keys().copied().collect();
+        monitor_ids.sort_unstable();
+
+        for monitor_id in monitor_ids {
+            monitor_id.hash(&mut hasher);
+            self.active_workspace_idx(monitor_id).hash(&mut hasher);
+            if let Some(ws_vec) = self.workspaces.get(&monitor_id) {
+                for workspace in ws_vec {
+                    // Column window-id membership (Vec<Vec<u64>>).
+                    for column in workspace.columns() {
+                        column.windows().len().hash(&mut hasher);
+                        for &wid in column.windows() {
+                            wid.hash(&mut hasher);
+                        }
+                    }
+                    // Floating windows: id + rect.
+                    for f in workspace.floating_windows() {
+                        f.id.hash(&mut hasher);
+                        f.rect.x.hash(&mut hasher);
+                        f.rect.y.hash(&mut hasher);
+                        f.rect.width.hash(&mut hasher);
+                        f.rect.height.hash(&mut hasher);
+                    }
+                    // Scroll offset rounded to whole pixels.
+                    (workspace.scroll_offset().round() as i64).hash(&mut hasher);
+                }
+            }
         }
 
-        let json = serde_json::to_string_pretty(&snapshot)?;
-        std::fs::write(&state_path, json)?;
-        info!("Workspace state saved to {:?}", state_path);
-        Ok(())
+        // Tab title overrides: sorted keys + value lengths (cheap).
+        let mut overrides: Vec<(u64, usize)> = self
+            .tab_title_overrides
+            .iter()
+            .map(|(&k, v)| (k, v.len()))
+            .collect();
+        overrides.sort_unstable();
+        overrides.hash(&mut hasher);
+
+        hasher.finish()
+    }
+
+    /// Request a debounced save iff the persisted state changed since the
+    /// last request. Non-blocking: drops the request on a full channel
+    /// (a queued request already covers the coalesced write). No-op when
+    /// no sender is installed (cfg(test) / pre-wiring).
+    pub(crate) fn request_save_if_changed(&mut self) {
+        let sig = self.persisted_signature();
+        if self.last_persisted_sig != Some(sig) {
+            self.last_persisted_sig = Some(sig);
+            if let Some(tx) = &self.save_request_tx {
+                let _ = tx.try_send(());
+            }
+        }
     }
 
     /// Load saved workspace state from disk.
@@ -89,6 +185,36 @@ impl AppState {
         directories::ProjectDirs::from("", "", "leopardwm")
             .map(|dirs| dirs.data_dir().join("workspace-state.json"))
             .unwrap_or_else(|| std::path::PathBuf::from("workspace-state.json"))
+    }
+
+    /// Build the startup placement-restore map from a saved snapshot:
+    /// window HWND -> (monitor id, workspace index), resolving the saved
+    /// device name to a current monitor. Consumed by the next
+    /// `enumerate_and_add_windows` so windows return to the monitor/workspace
+    /// they were on last session instead of being re-derived from their
+    /// current on-screen position (which jumps when a window was off-screen
+    /// or on an inactive workspace at shutdown). Cleared after enumeration.
+    pub(crate) fn build_placement_restore(&mut self, snapshot: &StateSnapshot) {
+        self.pending_placement_restore.clear();
+        for ws_snapshot in &snapshot.workspaces {
+            let Some(monitor_id) = self
+                .monitors
+                .iter()
+                .find(|(_, m)| m.device_name == ws_snapshot.monitor_device_name)
+                .map(|(&id, _)| id)
+            else {
+                continue;
+            };
+            // Clamp to the 1-9 workspace range (0-based 0..=8). The snapshot
+            // is user-writable JSON, so a garbage index must not drive
+            // `ensure_workspace_exists` into creating pathologically many
+            // workspaces on startup.
+            let ws_idx = ws_snapshot.workspace_index.min(8);
+            for wid in ws_snapshot.workspace.all_window_ids() {
+                self.pending_placement_restore
+                    .insert(wid, (monitor_id, ws_idx));
+            }
+        }
     }
 
     /// Restore workspace state from a saved snapshot.

@@ -584,5 +584,10 @@ impl AppState {
                 columns: self.focused_layout_columns(),
             });
         }
+
+        // Request a debounced persist if any PERSISTED field changed.
+        // Signature dedup + the background debounce coalesce animation
+        // frames and rapid structural changes into at most ~one write/sec.
+        self.request_save_if_changed();
     }
 }

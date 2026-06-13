@@ -262,6 +262,13 @@ pub(crate) struct AppState {
     /// restored by the workspace's column state on switch, but floating
     /// focus is not, so we remember it here and re-focus it on return.
     pub(crate) floating_focus: HashMap<(MonitorId, usize), u64>,
+    /// Startup-only: window HWND -> (monitor, workspace index) recovered from
+    /// the persisted snapshot, so `enumerate_and_add_windows` can place each
+    /// window back on the monitor/workspace it was on last session instead of
+    /// re-deriving from its current (possibly stale/off-screen) position.
+    /// Populated before the startup enumerate and cleared right after; empty
+    /// for reload/refresh re-enumerations.
+    pub(crate) pending_placement_restore: HashMap<u64, (MonitorId, usize)>,
     /// Monitor info indexed by monitor ID.
     pub(crate) monitors: HashMap<MonitorId, MonitorInfo>,
     /// Currently focused monitor.
@@ -478,6 +485,14 @@ pub(crate) struct AppState {
     /// used to dedup repeat emissions when the layout signature is
     /// unchanged (e.g. animation frames between settled positions).
     pub(crate) last_emitted_layout_sig: Option<u64>,
+    /// Sender for debounced workspace-state saves. Installed at startup
+    /// via `install_save_channel`; left `None` under cfg(test) and before
+    /// wiring so `request_save_if_changed` is a no-op then.
+    pub(crate) save_request_tx: Option<tokio::sync::mpsc::Sender<()>>,
+    /// Hash of the persisted state at the last save request, used to skip
+    /// redundant save requests (e.g. animation frames that don't change
+    /// any persisted field).
+    pub(crate) last_persisted_sig: Option<u64>,
     /// One-shot intent flag set by tab-click / tab-cycle commands so the
     /// resulting `WindowEvent::Focused` bypasses same-column suppression.
     /// `(monitor_id, ws_idx, col_idx, tab_idx, set_at)` — `set_at` is a
@@ -619,6 +634,7 @@ impl AppState {
             workspaces,
             active_workspace: active_workspace_map,
             floating_focus: HashMap::new(),
+            pending_placement_restore: HashMap::new(),
             monitors: monitor_map,
             focused_monitor,
             platform_config,
@@ -694,6 +710,8 @@ impl AppState {
             // and is expected to reconnect with a fresh Subscribe.
             event_broadcaster: tokio::sync::broadcast::channel(256).0,
             last_emitted_layout_sig: None,
+            save_request_tx: None,
+            last_persisted_sig: None,
             pending_tab_focus: None,
             tab_title_overrides: HashMap::new(),
             rename_dialog_active: Arc::new(AtomicBool::new(false)),
@@ -905,6 +923,13 @@ impl AppState {
             return;
         }
         self.overview_event_tx = Some(event_tx);
+    }
+
+    /// Install the debounced save-request sender. Stashed at startup; the
+    /// background save task owns the matching receiver. `None` until this
+    /// is called (and under cfg(test)), so saves are simply not requested.
+    pub(crate) fn install_save_channel(&mut self, tx: tokio::sync::mpsc::Sender<()>) {
+        self.save_request_tx = Some(tx);
     }
 
     /// Try to consume `pending_tab_focus` if it matches the given event

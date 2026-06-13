@@ -107,6 +107,13 @@ pub(crate) enum DaemonEvent {
         target_hwnd: u64,
         new_title: Option<String>,
     },
+    /// Debounced persist trigger. Emitted by the background save task
+    /// after a quiet period following one or more persisted-state
+    /// changes. Handled on the main loop, which builds the snapshot JSON
+    /// under its existing `AppState` lock and writes it off-loop. Routed
+    /// through the event loop (rather than locking `AppState` directly in
+    /// the spawned task) because `AppState` is not `Send`.
+    PersistStateNow,
     /// Shutdown signal.
     Shutdown,
 }

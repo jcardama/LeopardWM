@@ -549,6 +549,14 @@ fn detect_monitors() -> Vec<MonitorInfo> {
 
 /// Enumerate existing windows, restore saved workspace state, and normalize startup layout.
 fn init_workspace_state(state: &mut AppState) {
+    // Load the saved snapshot once and seed the placement-restore map BEFORE
+    // enumerating, so windows return to the monitor/workspace they were on
+    // last session instead of being re-derived from their current position.
+    let snapshot = AppState::load_state();
+    if let Some(ref snap) = snapshot {
+        state.build_placement_restore(snap);
+    }
+
     match state.enumerate_and_add_windows() {
         Ok(count) => {
             info!("Found and added {} manageable windows", count);
@@ -557,6 +565,9 @@ fn init_workspace_state(state: &mut AppState) {
             error!("Failed to enumerate windows: {}", e);
         }
     }
+    // Placement restore is startup-only; later refresh/reload re-enumerations
+    // must derive from current position.
+    state.pending_placement_restore.clear();
 
     // Log workspace state for all monitors
     let total_windows: usize = state.workspaces.values()
@@ -572,10 +583,11 @@ fn init_workspace_state(state: &mut AppState) {
         total_windows
     );
 
-    // Restore saved workspace state (after windows are enumerated so scroll
-    // offsets aren't clamped against empty workspaces).
-    let _restored_monitors = if let Some(snapshot) = AppState::load_state() {
-        let restored = state.restore_state(&snapshot);
+    // Restore scroll offsets / active workspace (after windows are enumerated
+    // so offsets aren't clamped against empty workspaces). Reuses the snapshot
+    // loaded above.
+    let _restored_monitors = if let Some(ref snapshot) = snapshot {
+        let restored = state.restore_state(snapshot);
         info!("Restored workspace state from previous session");
         restored
     } else {
@@ -1742,6 +1754,68 @@ async fn handle_tab_strip_icon_poll(state: &Arc<Mutex<AppState>>) {
     }
 }
 
+/// Persist the current workspace state to disk. The JSON snapshot is
+/// built under the `AppState` lock (held only for the build), then the
+/// filesystem write is dispatched to a blocking thread so the main event
+/// loop is never blocked on I/O.
+async fn handle_persist_state_now(state: &Arc<Mutex<AppState>>) {
+    let json = {
+        let s = state.lock().await;
+        s.build_state_json()
+    };
+    match json {
+        Ok(s) => {
+            tokio::task::spawn_blocking(move || {
+                if let Err(e) = AppState::write_state_file(&s) {
+                    warn!("debounced save failed: {e}");
+                }
+            });
+        }
+        Err(e) => warn!("debounced save serialize failed: {e}"),
+    }
+}
+
+/// Install the debounced save channel and spawn the coalescing task.
+///
+/// `finalize_layout_success` posts a `()` request whenever a PERSISTED
+/// field changes; the task coalesces a burst into at most ~one
+/// persist/second. The task itself never touches `AppState` (which is
+/// not `Send`): after the quiet period it asks the main loop to persist
+/// via `DaemonEvent::PersistStateNow`, which builds the snapshot under
+/// the lock and writes it off-loop. The task exits when the daemon drops
+/// its sender at shutdown, or when the event channel closes.
+async fn spawn_debounced_save(state: &Arc<Mutex<AppState>>, event_tx: &mpsc::Sender<DaemonEvent>) {
+    let (save_tx, mut save_rx) = mpsc::channel::<()>(8);
+    {
+        let mut g = state.lock().await;
+        g.install_save_channel(save_tx);
+    }
+    let persist_tx = event_tx.clone();
+    tokio::spawn(async move {
+        const DEBOUNCE: Duration = Duration::from_millis(1000);
+        loop {
+            // Wait for the first request; exit when the channel closes.
+            if save_rx.recv().await.is_none() {
+                break;
+            }
+            // Coalesce: each further request resets the quiet timer.
+            loop {
+                tokio::select! {
+                    _ = tokio::time::sleep(DEBOUNCE) => break,
+                    r = save_rx.recv() => {
+                        if r.is_none() {
+                            return;
+                        }
+                    }
+                }
+            }
+            if persist_tx.send(DaemonEvent::PersistStateNow).await.is_err() {
+                break;
+            }
+        }
+    });
+}
+
 /// Handle a tab-strip click action routed to the captured column identity.
 async fn handle_tab_action(
     state: &Arc<Mutex<AppState>>,
@@ -2484,6 +2558,9 @@ async fn main() -> Result<()> {
     spawn_tab_forwarders(&state, &event_tx, &mut thread_handles).await;
     spawn_overview_forwarder(&state, &event_tx, &mut thread_handles).await;
 
+    // Debounced workspace-state persistence (see `spawn_debounced_save`).
+    spawn_debounced_save(&state, &event_tx).await;
+
     // Install WinEvent hooks for window lifecycle tracking (if enabled in config)
     let _hook_handle = setup_window_hooks(&config, &event_tx, &mut thread_handles);
 
@@ -2681,6 +2758,9 @@ async fn main() -> Result<()> {
             }
             DaemonEvent::TabStripIconPoll => {
                 handle_tab_strip_icon_poll(&state).await;
+            }
+            DaemonEvent::PersistStateNow => {
+                handle_persist_state_now(&state).await;
             }
             DaemonEvent::Overview(overview_event) => {
                 handle_overview_event(&mut ctx, overview_event).await;

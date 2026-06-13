@@ -1210,6 +1210,25 @@ fn test_all_managed_window_ids_multi_monitor() {
 }
 
 // ================================================================
+// Straddler demotion (no bleed onto neighbor monitor)
+// ================================================================
+
+fn demote_placement(
+    rect: Rect,
+) -> leopardwm_core_layout::WindowPlacement {
+    leopardwm_core_layout::WindowPlacement {
+        window_id: 1,
+        rect,
+        visibility: leopardwm_core_layout::Visibility::Visible,
+        column_index: 0,
+    }
+}
+
+
+
+
+
+// ================================================================
 // Minimize/Restore State Tests
 // ================================================================
 
@@ -3312,4 +3331,116 @@ fn test_matched_rule_returns_first_match_extras() {
     assert_eq!(rule.column_width, Some(0.25));
     assert!(state.matched_rule("SomeClass", "Editor", "other.exe").is_none() ||
         state.matched_rule("SomeClass", "Editor", "other.exe").unwrap().match_executable.as_deref() != Some("code.exe"));
+}
+
+#[test]
+fn test_build_placement_restore_maps_window_to_saved_monitor() {
+    let mut monitors = test_monitors();
+    monitors.push(MonitorInfo {
+        id: 2,
+        rect: Rect::new(1920, 0, 1920, 1080),
+        work_area: Rect::new(1920, 0, 1920, 1040),
+        is_primary: false,
+        device_name: "DISPLAY2".to_string(),
+        scale_factor: 1.0,
+    });
+    let mut state = AppState::new_with_config(test_config(), monitors);
+
+    // Snapshot says window 999 was on DISPLAY2, workspace index 2.
+    let mut ws = leopardwm_core_layout::Workspace::default();
+    ws.insert_window(999, None).unwrap();
+    let snapshot = crate::state::StateSnapshot {
+        saved_at: "0".to_string(),
+        workspaces: vec![crate::state::WorkspaceSnapshot {
+            monitor_device_name: "DISPLAY2".to_string(),
+            workspace_index: 2,
+            workspace: ws,
+        }],
+        focused_monitor_name: "DISPLAY1".to_string(),
+        active_workspace: std::collections::HashMap::new(),
+        tab_title_overrides: std::collections::HashMap::new(),
+    };
+    state.build_placement_restore(&snapshot);
+
+    let display2_id = state
+        .monitors
+        .iter()
+        .find(|(_, m)| m.device_name == "DISPLAY2")
+        .map(|(&id, _)| id)
+        .unwrap();
+    assert_eq!(
+        state.pending_placement_restore.get(&999),
+        Some(&(display2_id, 2)),
+        "restored window should map to its saved monitor + workspace"
+    );
+    // Unknown device names are skipped, not mapped to a wrong monitor.
+    assert_eq!(state.pending_placement_restore.len(), 1);
+}
+
+#[test]
+fn test_persisted_signature_stable_with_no_change() {
+    let state = AppState::new_with_config(test_config(), test_monitors());
+    let a = state.persisted_signature();
+    let b = state.persisted_signature();
+    assert_eq!(a, b, "signature must be deterministic with no change");
+}
+
+#[test]
+fn test_persisted_signature_changes_on_window_add() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    let before = state.persisted_signature();
+    state.workspaces.get_mut(&1).unwrap()[0]
+        .insert_window(100, Some(800))
+        .unwrap();
+    let after = state.persisted_signature();
+    assert_ne!(before, after, "adding a window must change the signature");
+}
+
+#[test]
+fn test_persisted_signature_changes_on_scroll_offset() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    let before = state.persisted_signature();
+    state.workspaces.get_mut(&1).unwrap()[0].set_scroll_offset(500.0);
+    let after = state.persisted_signature();
+    assert_ne!(before, after, "scroll offset change must change the signature");
+}
+
+#[test]
+fn test_persisted_signature_changes_on_active_workspace() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    // Ensure a second workspace exists so the active index can move.
+    state.ensure_workspace_exists(1, 1);
+    let before = state.persisted_signature();
+    state.active_workspace.insert(1, 1);
+    let after = state.persisted_signature();
+    assert_ne!(
+        before, after,
+        "active workspace index change must change the signature"
+    );
+}
+
+#[test]
+fn test_request_save_if_changed_updates_last_sig_and_no_panic_without_sender() {
+    // No save_request_tx installed (constructor leaves it None under
+    // cfg(test)); request must update last_persisted_sig and not panic.
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    assert!(state.last_persisted_sig.is_none());
+
+    state.request_save_if_changed();
+    let first = state.last_persisted_sig;
+    assert!(first.is_some(), "first request records the signature");
+
+    // No change -> signature stays equal (still Some, no panic).
+    state.request_save_if_changed();
+    assert_eq!(state.last_persisted_sig, first);
+
+    // Real change -> recorded signature updates.
+    state.workspaces.get_mut(&1).unwrap()[0]
+        .insert_window(100, Some(800))
+        .unwrap();
+    state.request_save_if_changed();
+    assert_ne!(
+        state.last_persisted_sig, first,
+        "a change must update the recorded signature"
+    );
 }

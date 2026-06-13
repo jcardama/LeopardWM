@@ -31,6 +31,13 @@ All notable changes to LeopardWM will be documented in this file.
   to the new work area instead of leaving them behind a now-permanent
   taskbar. The work area was previously only refreshed on a display
   change, not on this setting change.
+- **Windows no longer jump monitors across a daemon restart.** Window
+  placement is restored from the saved session (each window returns to
+  its monitor and workspace) instead of being re-derived from its current
+  position, which scattered windows whose position was stale or
+  off-screen. Workspace state is now also saved continuously (debounced,
+  written atomically) rather than only on graceful shutdown, so the
+  layout survives a crash too.
 
 ## 0.1.19
 
