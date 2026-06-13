@@ -24,6 +24,14 @@ All notable changes to LeopardWM will be documented in this file.
   `[animation]` and your configured easing curve (instant under reduced
   motion), tunable in Settings.
 
+### Fixes
+
+- **Tiled windows follow taskbar work-area changes.** Toggling the
+  taskbar between auto-hide and always-visible now re-fits tiled windows
+  to the new work area instead of leaving them behind a now-permanent
+  taskbar. The work area was previously only refreshed on a display
+  change, not on this setting change.
+
 ## 0.1.19
 
 ### Improvements

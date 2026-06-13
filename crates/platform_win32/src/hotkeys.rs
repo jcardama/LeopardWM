@@ -18,6 +18,14 @@ use windows::Win32::UI::WindowsAndMessaging::{
 /// Window message for display configuration changes.
 const WM_DISPLAYCHANGE: u32 = 0x007E;
 
+/// Window message for system-wide setting changes (work area, theme, etc.).
+const WM_SETTINGCHANGE: u32 = 0x001A;
+
+/// `SystemParametersInfo` action signalling the desktop work area changed
+/// (wparam of `WM_SETTINGCHANGE`). Fired when the taskbar toggles between
+/// auto-hide and always-on, which resizes `rcWork` without a display change.
+const SPI_SETWORKAREA: usize = 0x002F;
+
 /// Window message for power state changes.
 const WM_POWERBROADCAST: u32 = 0x0218;
 
@@ -534,6 +542,21 @@ fn hotkey_window_proc_inner(
                 let _ = sender.send(WindowEvent::DisplayChange);
             }
 
+            windows::Win32::Foundation::LRESULT(0)
+        }
+        WM_SETTINGCHANGE if wparam.0 == SPI_SETWORKAREA => {
+            // The work area changed without a topology change (e.g. the
+            // taskbar toggled between auto-hide and always-on). Route it
+            // through the same debounced reconcile as a display change so
+            // tiled windows pick up the new work area instead of sitting
+            // behind a now-permanent taskbar.
+            tracing::info!("Work area changed (WM_SETTINGCHANGE / SPI_SETWORKAREA)");
+            let sender_guard = DISPLAY_CHANGE_SENDER
+                .lock()
+                .unwrap_or_else(recover_poisoned_mutex);
+            if let Some(sender) = sender_guard.as_ref() {
+                let _ = sender.send(WindowEvent::DisplayChange);
+            }
             windows::Win32::Foundation::LRESULT(0)
         }
         WM_POWERBROADCAST => {
