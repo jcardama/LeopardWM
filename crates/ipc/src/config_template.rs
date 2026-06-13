@@ -109,12 +109,15 @@ opacity = 128
 layout_duration_ms = 150            # column move / resize / tab changes
 workspace_switch_duration_ms = 200  # switching workspaces
 scroll_duration_ms = 200            # scrolling a column into view
+overview_duration_ms = 150          # overview open/close zoom
 easing = "ease_out"
 
 [overview]
 # Workspace overview card bodies: "live" (default) shows DWM window
-# previews (last frame for windows on hidden workspaces); "placeholder"
-# keeps the static app-icon bodies.
+# previews (last frame for windows on hidden workspaces); "snapshot"
+# shows a frame captured right before each window left the screen
+# (icon until one exists); "placeholder" keeps the static app-icon
+# bodies.
 # render = "live"
 
 [workspaces]

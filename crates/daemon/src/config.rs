@@ -64,7 +64,8 @@ pub struct OverviewConfig {
 }
 
 /// How overview cards render their body: live DWM thumbnails of the
-/// windows, or the static icon placeholder.
+/// windows, cached capture-on-hide snapshots, or the static icon
+/// placeholder.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum OverviewRender {
@@ -74,6 +75,10 @@ pub enum OverviewRender {
     Live,
     /// Static placeholder bodies (app icon only).
     Placeholder,
+    /// `PrintWindow` snapshots captured right before windows leave the
+    /// screen (workspace switch) and on overview open; icon placeholder
+    /// when no snapshot is cached yet.
+    Snapshot,
 }
 
 /// Workspace configuration.
@@ -792,6 +797,10 @@ pub struct AnimationConfig {
     #[serde(default = "default_scroll_duration")]
     pub scroll_duration_ms: u64,
 
+    /// Overview open/close zoom.
+    #[serde(default = "default_overview_duration")]
+    pub overview_duration_ms: u64,
+
     /// Easing curve applied to all of the above.
     #[serde(default)]
     pub easing: leopardwm_core_layout::Easing,
@@ -813,12 +822,17 @@ fn default_scroll_duration() -> u64 {
     200
 }
 
+fn default_overview_duration() -> u64 {
+    150
+}
+
 impl Default for AnimationConfig {
     fn default() -> Self {
         Self {
             layout_duration_ms: default_layout_duration(),
             workspace_switch_duration_ms: default_workspace_switch_duration(),
             scroll_duration_ms: default_scroll_duration(),
+            overview_duration_ms: default_overview_duration(),
             easing: leopardwm_core_layout::Easing::default(),
         }
     }
@@ -969,6 +983,10 @@ impl Config {
             (
                 "animation.scroll_duration_ms",
                 &mut self.animation.scroll_duration_ms,
+            ),
+            (
+                "animation.overview_duration_ms",
+                &mut self.animation.overview_duration_ms,
             ),
         ] {
             if *val > MAX_ANIMATION_DURATION_MS {
@@ -2116,6 +2134,7 @@ mod tests {
         assert_eq!(config.animation.layout_duration_ms, 150);
         assert_eq!(config.animation.workspace_switch_duration_ms, 200);
         assert_eq!(config.animation.scroll_duration_ms, 200);
+        assert_eq!(config.animation.overview_duration_ms, 150);
         assert_eq!(
             config.animation.easing,
             leopardwm_core_layout::Easing::EaseOut
@@ -2144,6 +2163,25 @@ mod tests {
         assert_eq!(config.animation.layout_duration_ms, 80);
         // Unspecified fields fall back to defaults.
         assert_eq!(config.animation.scroll_duration_ms, 200);
+        assert_eq!(config.animation.overview_duration_ms, 150);
+    }
+
+    #[test]
+    fn test_overview_duration_parses_and_clamps() {
+        let toml = "[animation]\noverview_duration_ms = 90\n";
+        let config: Config = toml::from_str(toml).expect("parse");
+        assert_eq!(config.animation.overview_duration_ms, 90);
+
+        let mut config = Config::default();
+        config.animation.overview_duration_ms = 99_999;
+        let warnings = config.validate();
+        assert_eq!(
+            config.animation.overview_duration_ms,
+            MAX_ANIMATION_DURATION_MS
+        );
+        assert!(warnings
+            .iter()
+            .any(|w| w.field == "animation.overview_duration_ms"));
     }
 
     #[test]
@@ -2176,6 +2214,13 @@ mod tests {
         let config: Config = toml::from_str("").expect("parse");
         assert_eq!(config.overview.render, OverviewRender::Live);
         assert_eq!(Config::default().overview.render, OverviewRender::Live);
+    }
+
+    #[test]
+    fn test_overview_render_parses_snapshot() {
+        let toml = "[overview]\nrender = \"snapshot\"\n";
+        let config: Config = toml::from_str(toml).expect("parse");
+        assert_eq!(config.overview.render, OverviewRender::Snapshot);
     }
 
     #[test]

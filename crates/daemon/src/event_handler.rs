@@ -348,6 +348,9 @@ impl AppState {
             // Forget any remembered floating focus for this window so
             // a recycled HWND can't wrongly re-focus on workspace return.
             self.floating_focus.retain(|_, &mut h| h != hwnd);
+            // Drop the cached window icon: the HICON dies with its
+            // window, and a recycled HWND must re-probe.
+            self.overview_icon_cache.remove(&hwnd);
         }
 
         // For Hidden events, verify the window is actually gone.
@@ -369,6 +372,9 @@ impl AppState {
         // Drop the recorded layout rect so the map doesn't retain
         // entries for windows that no longer exist.
         self.last_placed_layout_rects.remove(&hwnd);
+
+        // Drop any cached overview snapshot for the same reason.
+        leopardwm_platform_win32::snapshot::snapshot_remove(hwnd);
 
         // Drop any tab title override too — both Destroyed and
         // Hidden imply the window is no longer in any tabbed

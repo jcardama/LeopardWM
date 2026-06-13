@@ -1954,8 +1954,11 @@ async fn handle_overview_event(
     match event {
         OverviewEvent::ActivateWindow(wid) => {
             let mut s = ctx.state.lock().await;
-            s.hide_overview();
-            let Some((monitor, ws_idx)) = s.find_window_workspace(wid) else {
+            // Resolve the target workspace BEFORE hiding so the close
+            // animation zooms toward the activated workspace's row.
+            let target = s.find_window_workspace(wid);
+            s.hide_overview_animated(target.map(|(_, ws_idx)| ws_idx));
+            let Some((monitor, ws_idx)) = target else {
                 debug!("Overview activate: window {} no longer managed", wid);
                 return;
             };
@@ -1981,7 +1984,7 @@ async fn handle_overview_event(
         }
         OverviewEvent::SwitchWorkspace(idx) => {
             let mut s = ctx.state.lock().await;
-            s.hide_overview();
+            s.hide_overview_animated(Some(idx));
             let resp = s.handle_command(IpcCommand::SwitchWorkspace {
                 index: (idx + 1) as u8,
             });
@@ -2001,7 +2004,10 @@ async fn handle_overview_event(
         OverviewEvent::Dismissed => {
             let mut s = ctx.state.lock().await;
             if s.overview_open {
-                // hide_overview restores the foreground itself.
+                // The overlay already played its zoom-out and hid itself
+                // before sending Dismissed (or had nothing to animate):
+                // pure bookkeeping (open flag + foreground sync) over an
+                // idempotent hide.
                 s.hide_overview();
             }
         }

@@ -15,7 +15,14 @@ All notable changes to LeopardWM will be documented in this file.
   arrows/Enter and digits 1-9 work from the keyboard, Esc dismisses.
   Cards show live window previews (windows on hidden workspaces show
   their last frame); set `render = "placeholder"` under `[overview]` or
-  pick it in Settings to keep the icon placeholders.
+  pick it in Settings to keep the icon placeholders. A third option,
+  `render = "snapshot"`, captures each window right before it leaves the
+  screen and shows that frame instead (icon until one exists). Opening
+  and closing the overview zooms: cards fly between their real window
+  positions and their spots on the map while the backdrop fades. Speed
+  and easing come from a dedicated `overview_duration_ms` under
+  `[animation]` and your configured easing curve (instant under reduced
+  motion), tunable in Settings.
 
 ## 0.1.19
 

@@ -331,6 +331,12 @@ pub(crate) struct AppState {
     /// daemon startup (parallel to `tab_strip_action_tx`).
     pub(crate) overview_event_tx:
         Option<std::sync::mpsc::Sender<leopardwm_platform_win32::overview::OverviewEvent>>,
+    /// Per-window `get_window_icon` results (raw shared HICONs as
+    /// `isize`) reused across overview model rebuilds: a miss costs up
+    /// to two 50ms `SendMessageTimeoutW` probes against a hung app, on
+    /// the state lock. HICONs are app-owned shared handles — never
+    /// destroyed here. Evicted on real window destroy.
+    pub(crate) overview_icon_cache: HashMap<u64, Option<isize>>,
     /// Whether tiling is paused.
     pub(crate) paused: bool,
     /// Guard flag to suppress MovedOrResized events during apply_layout().
@@ -640,6 +646,7 @@ impl AppState {
             overview_open: false,
             overview_overlay: None,
             overview_event_tx: None,
+            overview_icon_cache: HashMap::new(),
             // Paused under cfg(test): placeholder hwnds collide with real
             // HWNDs and lag the mouse via DWM. Tests opt out as needed.
             paused: cfg!(test),

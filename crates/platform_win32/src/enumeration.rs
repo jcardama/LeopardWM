@@ -627,6 +627,7 @@ pub(crate) fn should_skip_window_by_class(class_name: &str) -> bool {
         "LeopardWMBorderFrame",       // Our own border overlay
         "LeopardWMThumbnailHost",     // Our own DWM thumbnail host
         "LeopardWMOverview",          // Our own overview overlay
+        "LeopardWMOverviewMask",      // Our own overview corner-cap mask layer
     ];
 
     SKIP_CLASSES.contains(&class_name)

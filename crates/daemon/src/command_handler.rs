@@ -707,7 +707,7 @@ impl AppState {
         // A switch initiated outside the overlay (hotkey, CLI) dismisses
         // an open overview; overlay-initiated switches hid it already.
         if self.overview_open {
-            self.hide_overview();
+            self.hide_overview_animated(Some((index - 1) as usize));
         }
         let idx = (index - 1) as usize;
         let monitor = self.focused_monitor;
@@ -783,6 +783,16 @@ impl AppState {
 
         // Snapshot old workspace's current positions (start for exiting windows).
         let mut old_placements = self.workspace_placements(monitor, current_idx);
+
+        // Overview snapshot mode: grab the outgoing windows NOW, while
+        // they are still on screen, so their cards show a real frame
+        // after they move offscreen below. Skipped otherwise (PrintWindow
+        // per window is not free).
+        if self.config.overview.render == crate::config::OverviewRender::Snapshot {
+            for (wid, _) in &old_placements {
+                let _ = leopardwm_platform_win32::snapshot::snapshot_capture(*wid);
+            }
+        }
 
         // Ensure target workspace exists (lazy creation)
         self.ensure_workspace_exists(monitor, idx);
@@ -964,6 +974,10 @@ impl AppState {
         }
 
         // Target workspace is not active — hide the moved window
+        // (capture-on-hide first for the overview's snapshot mode).
+        if self.config.overview.render == crate::config::OverviewRender::Snapshot {
+            let _ = leopardwm_platform_win32::snapshot::snapshot_capture(focused_hwnd);
+        }
         let _ = move_window_offscreen(focused_hwnd);
 
         // Ensure the source workspace scrolls to show its new focused window

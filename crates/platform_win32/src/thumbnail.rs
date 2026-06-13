@@ -55,9 +55,18 @@ static REGISTER_BALANCE: AtomicI64 = AtomicI64::new(0);
 ///   T2 register:   balance=0→1, calls set_topmost(true) first
 ///   T1 unregister: calls set_topmost(false)  ← host left non-topmost with a live thumbnail
 struct ZOrderState {
+    /// Every handle we own, wherever it is composited (health metric).
     balance: i64,
+    /// Handles composited on the singleton HOST only — drives the host's
+    /// topmost promotion/demotion. Overview-overlay registrations are
+    /// excluded: shuffling the host's z-order around the (itself topmost)
+    /// overview window caused visible z churn at overview open/close.
+    host_balance: i64,
 }
-static Z_ORDER_STATE: Mutex<ZOrderState> = Mutex::new(ZOrderState { balance: 0 });
+static Z_ORDER_STATE: Mutex<ZOrderState> = Mutex::new(ZOrderState {
+    balance: 0,
+    host_balance: 0,
+});
 
 /// Return the current outstanding-registration count. Should converge to 0
 /// after any animation cycle completes.
@@ -75,6 +84,9 @@ pub fn current_register_balance() -> i64 {
 pub struct ThumbnailHandle {
     /// Raw `HTHUMBNAIL` value. Set to 0 by `into_isize` to suppress Drop.
     handle: isize,
+    /// Whether this registration participates in the HOST z-order
+    /// accounting (true only for host-destined thumbnails).
+    host_z: bool,
 }
 
 // SAFETY: HTHUMBNAIL is a process-wide DWM handle, not bound to any HWND
@@ -86,7 +98,7 @@ unsafe impl Sync for ThumbnailHandle {}
 impl Drop for ThumbnailHandle {
     fn drop(&mut self) {
         if self.handle != 0 {
-            unregister_raw(self.handle);
+            unregister_impl(self.handle, self.host_z);
         }
     }
 }
@@ -101,6 +113,9 @@ impl ThumbnailHandle {
     /// `AppState.ghost_handles` into `WorkerCommand::Crossfade` entries
     /// owned by the worker thread.
     pub fn into_isize(mut self) -> isize {
+        // unregister_raw assumes host z-order accounting; only
+        // host-destined handles may be transferred raw.
+        debug_assert!(self.host_z, "into_isize on a non-host thumbnail handle");
         let raw = self.handle;
         self.handle = 0;
         std::mem::forget(self);
@@ -111,6 +126,15 @@ impl ThumbnailHandle {
     /// ownership — Drop still fires when `self` is dropped.
     pub fn as_isize(&self) -> isize {
         self.handle
+    }
+
+    /// Test-only stand-in (handle 0): Drop's unregister no-ops.
+    #[cfg(test)]
+    pub(crate) fn fake() -> Self {
+        Self {
+            handle: 0,
+            host_z: false,
+        }
     }
 }
 
@@ -123,13 +147,15 @@ pub fn register(wid: WindowId) -> Result<ThumbnailHandle, Win32Error> {
             "thumbnail host unavailable".into(),
         ));
     }
-    register_to(host_hwnd, wid)
+    register_to(host_hwnd, wid, true)
 }
 
 /// Register a DWM thumbnail of `source_wid` against an arbitrary top-level
-/// window of THIS process (e.g. the overview overlay). Shares the same
-/// `REGISTER_BALANCE` accounting and host z-order invariant as [`register`]
-/// (the balance counts every handle we own, wherever it is composited).
+/// window of THIS process (e.g. the overview overlay). Shares the
+/// `REGISTER_BALANCE` accounting with [`register`] (the balance counts
+/// every handle we own, wherever it is composited) but does NOT touch the
+/// host's z-order: the destination window manages its own z, and shuffling
+/// the host around it caused visible z churn (overview open/close flash).
 pub fn register_for_window(
     dest_hwnd_raw: isize,
     source_wid: WindowId,
@@ -139,10 +165,10 @@ pub fn register_for_window(
             "thumbnail destination hwnd is null".into(),
         ));
     }
-    register_to(HWND(dest_hwnd_raw as *mut c_void), source_wid)
+    register_to(HWND(dest_hwnd_raw as *mut c_void), source_wid, false)
 }
 
-fn register_to(dest: HWND, wid: WindowId) -> Result<ThumbnailHandle, Win32Error> {
+fn register_to(dest: HWND, wid: WindowId, host_z: bool) -> Result<ThumbnailHandle, Win32Error> {
     let source = window_id_to_hwnd(wid)?;
     let raw = unsafe { DwmRegisterThumbnail(dest, source) }.map_err(|e| {
         Win32Error::SetPositionFailed(format!("DwmRegisterThumbnail({:?}): {}", source.0, e))
@@ -159,18 +185,21 @@ fn register_to(dest: HWND, wid: WindowId) -> Result<ThumbnailHandle, Win32Error>
         let mut z = Z_ORDER_STATE
             .lock()
             .unwrap_or_else(crate::recover_poisoned_mutex);
-        let prev = z.balance;
         z.balance += 1;
         REGISTER_BALANCE.store(z.balance, Ordering::Relaxed);
-        // First active thumbnail: promote the host to HWND_TOPMOST so the
-        // composition sits above ordinary windows. While idle the host
+        // First active HOST thumbnail: promote the host to HWND_TOPMOST so
+        // the composition sits above ordinary windows. While idle the host
         // stays non-topmost so the Windows taskbar (also topmost) can
-        // animate without z-order interference.
-        if prev == 0 {
-            host().set_topmost(true);
+        // animate without z-order interference. Non-host registrations
+        // (overview overlay) never move the host.
+        if host_z {
+            z.host_balance += 1;
+            if z.host_balance == 1 {
+                host().set_topmost(true);
+            }
         }
     }
-    Ok(ThumbnailHandle { handle: raw })
+    Ok(ThumbnailHandle { handle: raw, host_z })
 }
 
 /// Update the destination rect, opacity, and visibility of a registered
@@ -231,9 +260,15 @@ pub fn source_size(handle: isize) -> Option<(i32, i32)> {
 
 /// Unregister a thumbnail by raw `HTHUMBNAIL` value. Used by the worker
 /// thread when consuming `CrossfadeEntry` values (whose Drop calls this).
+/// Raw transfers exist only on the HOST path, so this keeps the host
+/// z-order accounting; non-host handles unregister through their Drop.
 ///
 /// Idempotent on null/zero handles — does nothing.
 pub fn unregister_raw(handle: isize) {
+    unregister_impl(handle, true);
+}
+
+fn unregister_impl(handle: isize, host_z: bool) {
     if handle == 0 {
         return;
     }
@@ -250,14 +285,17 @@ pub fn unregister_raw(handle: isize) {
     let mut z = Z_ORDER_STATE
         .lock()
         .unwrap_or_else(crate::recover_poisoned_mutex);
-    let prev = z.balance;
     z.balance = (z.balance - 1).max(0);
     REGISTER_BALANCE.store(z.balance, Ordering::Relaxed);
-    // Last accounted thumbnail just went away: drop the host back to
+    // Last accounted HOST thumbnail just went away: drop the host back to
     // non-topmost so it stops interfering with the taskbar's auto-hide
     // z-order. Guard on prev >= 1 so a clamped underflow can't skip it.
-    if prev >= 1 && z.balance == 0 {
-        host().set_topmost(false);
+    if host_z {
+        let prev = z.host_balance;
+        z.host_balance = (z.host_balance - 1).max(0);
+        if prev >= 1 && z.host_balance == 0 {
+            host().set_topmost(false);
+        }
     }
 }
 

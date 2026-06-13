@@ -953,11 +953,12 @@ input[type="range"]::-webkit-slider-thumb {
             </div>
           </div>
           <div class="field">
-            <div class="field-info"><div class="field-label">Overview previews</div><div class="field-desc">Card contents in the workspace overview: live window previews or placeholder icons</div></div>
+            <div class="field-info"><div class="field-label">Overview previews</div><div class="field-desc">Card contents in the workspace overview: live window previews, snapshots captured when windows leave the screen, or placeholder icons</div></div>
             <div class="combobox" id="cb-overview-render">
               <button class="combobox-trigger" type="button"><span class="combobox-text">Live previews</span><svg class="combobox-chevron" viewBox="0 0 12 12"><path d="M2.15 4.65a.5.5 0 01.7 0L6 7.79l3.15-3.14a.5.5 0 11.7.7l-3.5 3.5a.5.5 0 01-.7 0l-3.5-3.5a.5.5 0 010-.7z"/></svg></button>
               <div class="combobox-popup">
                 <div class="combobox-option selected" data-value="live">Live previews</div>
+                <div class="combobox-option" data-value="snapshot">Snapshots</div>
                 <div class="combobox-option" data-value="placeholder">Placeholder icons</div>
               </div>
             </div>
@@ -1000,6 +1001,10 @@ input[type="range"]::-webkit-slider-thumb {
           <div class="field">
             <div class="field-info"><div class="field-label">Scroll duration</div><div class="field-desc">Scrolling a column into view (ms)</div></div>
             <input type="number" id="animation-scroll_duration_ms" min="0" max="2000">
+          </div>
+          <div class="field">
+            <div class="field-info"><div class="field-label">Overview</div><div class="field-desc">Overview open/close zoom (ms)</div></div>
+            <input type="number" id="animation-overview_duration_ms" min="0" max="2000">
           </div>
           <div class="field">
             <div class="field-info"><div class="field-label">Easing</div><div class="field-desc">Acceleration curve for all animations</div></div>
@@ -1323,6 +1328,7 @@ function init(cfg) {
   setVal('animation-layout_duration_ms', anim.layout_duration_ms != null ? anim.layout_duration_ms : 150);
   setVal('animation-workspace_switch_duration_ms', anim.workspace_switch_duration_ms != null ? anim.workspace_switch_duration_ms : 200);
   setVal('animation-scroll_duration_ms', anim.scroll_duration_ms != null ? anim.scroll_duration_ms : 200);
+  setVal('animation-overview_duration_ms', anim.overview_duration_ms != null ? anim.overview_duration_ms : 150);
   setCb('cb-animation-easing', anim.easing || 'ease_out');
 
   var wsNames = (cfg.workspaces && cfg.workspaces.names) || [];
@@ -1561,6 +1567,7 @@ function readConfig() {
       layout_duration_ms: num('animation-layout_duration_ms'),
       workspace_switch_duration_ms: num('animation-workspace_switch_duration_ms'),
       scroll_duration_ms: num('animation-scroll_duration_ms'),
+      overview_duration_ms: num('animation-overview_duration_ms'),
       easing: cbVal('cb-animation-easing')
     },
     workspaces: {

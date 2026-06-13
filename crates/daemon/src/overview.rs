@@ -1,9 +1,10 @@
 //! Workspace overview: a fullscreen map of the focused monitor's
 //! non-empty workspaces, one miniaturized row per workspace.
 //!
-//! `build_overview_model` is pure with respect to the platform — it reads
-//! workspace state and computes geometry only — so the model is unit
-//! tested without ever constructing the overlay window. `show_overview`
+//! `build_overview_model` reads workspace state and computes geometry
+//! (its only platform calls are cached per-window icon probes), so the
+//! model is unit tested without ever constructing the overlay window.
+//! `show_overview`
 //! lazily creates the [`OverviewOverlay`] on first use (never in
 //! `AppState::new`, never under `cfg(test)`).
 
@@ -152,25 +153,42 @@ impl AppState {
     ///
     /// Returns the overlay window rect (the monitor's work area) plus the
     /// model, or `None` when every workspace on the monitor is empty.
-    pub(crate) fn build_overview_model(&self) -> Option<(Rect, OverviewModel)> {
+    pub(crate) fn build_overview_model(&mut self) -> Option<(Rect, OverviewModel)> {
         let monitor = self.focused_monitor;
         let work_area = self.monitors.get(&monitor)?.work_area;
         let ws_vec = self.workspaces.get(&monitor)?;
         let active_idx = self.active_workspace_idx(monitor);
 
         // Only windows that yield cards count: a workspace whose every
-        // window is minimized would render an empty ghost row.
-        let non_empty: Vec<usize> = ws_vec
-            .iter()
-            .enumerate()
-            .filter(|(_, ws)| {
-                ws.all_window_ids().iter().any(|&wid| !ws.is_minimized(wid))
-            })
-            .map(|(i, _)| i)
-            .collect();
+        // window is minimized would render an empty ghost row. The same
+        // pass collects every card-eligible window id for the icon
+        // prefetch below.
+        let mut non_empty: Vec<usize> = Vec::new();
+        let mut icon_wids: Vec<u64> = Vec::new();
+        for (i, ws) in ws_vec.iter().enumerate() {
+            let ids = ws.all_window_ids();
+            if !ids.iter().any(|&wid| !ws.is_minimized(wid)) {
+                continue;
+            }
+            non_empty.push(i);
+            icon_wids.extend(ids.into_iter().filter(|&wid| {
+                wid != crate::state::DRAG_PLACEHOLDER_HWND && !ws.is_minimized(wid)
+            }));
+        }
         if non_empty.is_empty() {
             return None;
         }
+        // Fill the icon cache before the row loop re-borrows the
+        // workspaces: a `get_window_icon` miss costs up to two 50ms
+        // `SendMessageTimeoutW` probes against a hung app, so rebuilds
+        // (one per window event while the overview is open) must not
+        // re-probe every card.
+        for wid in icon_wids {
+            self.overview_icon_cache
+                .entry(wid)
+                .or_insert_with(|| leopardwm_platform_win32::get_window_icon(wid));
+        }
+        let ws_vec = self.workspaces.get(&monitor)?;
 
         let geoms = layout_overview_rows(work_area.width, work_area.height, non_empty.len());
         let focused_wid = ws_vec.get(active_idx).and_then(|ws| ws.focused_window());
@@ -233,9 +251,40 @@ impl AppState {
             // Raw config width (not DPI-scaled): the overlay is already
             // sized in the monitor's pixel space.
             accent_width,
+            anim_ms: self.overview_anim_ms(),
+            easing: self.config.animation.easing,
             rows,
         };
         Some((work_area, model))
+    }
+
+    /// Capture snapshots of the focused monitor's active-workspace
+    /// windows (the ones PrintWindow can grab meaningfully). No-op unless
+    /// `[overview] render = "snapshot"`.
+    pub(crate) fn capture_overview_snapshots(&self) {
+        if self.config.overview.render != crate::config::OverviewRender::Snapshot {
+            return;
+        }
+        let monitor = self.focused_monitor;
+        let idx = self.active_workspace_idx(monitor);
+        let Some(ws) = self.workspaces.get(&monitor).and_then(|v| v.get(idx)) else {
+            return;
+        };
+        // all_window_ids covers tiled AND floating windows.
+        for wid in ws.all_window_ids() {
+            if !ws.is_minimized(wid) {
+                let _ = leopardwm_platform_win32::snapshot::snapshot_capture(wid);
+            }
+        }
+    }
+
+    /// Open/close zoom duration for the overlay: the overview duration
+    /// from config, snapping instantly (0) under reduce-motion.
+    fn overview_anim_ms(&self) -> u32 {
+        if self.reduce_motion {
+            return 0;
+        }
+        u32::try_from(self.config.animation.overview_duration_ms).unwrap_or(0)
     }
 
     /// Miniaturize one workspace's ENTIRE strip into `strip` (scrolled-out
@@ -376,27 +425,43 @@ impl AppState {
             xform.offset_x += boundary_gap;
         }
 
-        // Live previews unless config says placeholder. A window already
-        // ghost-animating holds a DWM thumbnail registration; a second
-        // registration of the same source breaks on some builds, so those
-        // cards stay placeholders until the ghost handle is gone.
+        // Live previews unless config says placeholder/snapshot. A window
+        // already ghost-animating holds a DWM thumbnail registration; a
+        // second registration of the same source breaks on some builds, so
+        // those cards stay placeholders until the ghost handle is gone.
         let live_previews = self.config.overview.render == crate::config::OverviewRender::Live;
+        let snapshots = self.config.overview.render == crate::config::OverviewRender::Snapshot;
         let cards = sources
             .into_iter()
             .map(|(wid, r, tab_count)| {
                 let mut rect = xform.apply(&r);
                 rect.x += out_dir(&r) * boundary_gap;
+                // The window's real placement in overlay client coords:
+                // strip space minus the scroll (the strip places the
+                // viewport region at x = scroll; the overlay origin is
+                // the work-area origin). Filled for EVERY row — the
+                // close animation may zoom toward any workspace's
+                // would-be placements, not just the active one.
+                let from_rect = Rect::new(r.x - scroll, r.y, r.width, r.height);
                 OverviewCard {
                     window_id: wid,
                     title: self
                         .lookup_window_info(wid)
                         .map(|i| i.title)
                         .unwrap_or_default(),
-                    icon: leopardwm_platform_win32::get_window_icon(wid),
+                    // Prefetched into the cache by build_overview_model;
+                    // the fallback probe covers any uncached id.
+                    icon: self
+                        .overview_icon_cache
+                        .get(&wid)
+                        .copied()
+                        .unwrap_or_else(|| leopardwm_platform_win32::get_window_icon(wid)),
                     rect: inset_card(&rect),
+                    from_rect: Some(from_rect),
                     tab_count,
                     selected: Some(wid) == selected_wid,
                     live: live_previews && !self.ghost_handles.contains_key(&wid),
+                    snapshot: snapshots,
                 }
             })
             .collect();
@@ -420,10 +485,12 @@ impl AppState {
         (cards, marker, Some(xform.scaled_width(&content) + reserve))
     }
 
-    /// Toggle the overview overlay on the focused monitor.
+    /// Toggle the overview overlay on the focused monitor. Closing via
+    /// the toggle hotkey uses the same animated zoom-out as every other
+    /// close path.
     pub(crate) fn toggle_overview(&mut self) {
         if self.overview_open {
-            self.hide_overview();
+            self.hide_overview_animated(None);
         } else {
             self.show_overview();
         }
@@ -437,6 +504,10 @@ impl AppState {
         // Aborting BEFORE the model build also clears `ghost_handles`, so
         // those windows get live preview cards instead of placeholders.
         self.abort_active_ghost_transition();
+        // Snapshot mode: the active workspace's windows are still on
+        // screen — refresh their snapshots so the overlay never shows a
+        // stale frame for them.
+        self.capture_overview_snapshots();
         let Some((overlay_rect, model)) = self.build_overview_model() else {
             info!("Overview not shown: no non-empty workspaces on the focused monitor");
             return;
@@ -460,13 +531,39 @@ impl AppState {
         self.overview_open = true;
     }
 
-    /// Hide the overview overlay. When it actually closes an open
-    /// overview, hand the OS foreground (held by the overlay) back to
-    /// the workspace's focused window.
+    /// Hide the overview overlay instantly. When it actually closes an
+    /// open overview, hand the OS foreground (held by the overlay) back
+    /// to the workspace's focused window.
+    ///
+    /// Idempotent against the overlay's self-hide: an overlay-initiated
+    /// close (Esc/backdrop/focus loss) plays its zoom-out and hides the
+    /// window BEFORE sending `Dismissed`; `overlay.hide()` is then a
+    /// no-op and only the daemon bookkeeping (open flag, foreground
+    /// sync) runs here.
     pub(crate) fn hide_overview(&mut self) {
         let was_open = self.overview_open;
         if let Some(overlay) = &self.overview_overlay {
             overlay.hide();
+        }
+        self.overview_open = false;
+        if was_open {
+            self.sync_foreground_window();
+        }
+    }
+
+    /// Hide the overview with the animated zoom-out close toward
+    /// `target_workspace` (`None` = the active workspace).
+    ///
+    /// Design choice: `OverviewOverlay::hide_animated` is non-blocking —
+    /// the overlay glides its live thumbnails back on its own timer
+    /// thread and hides itself when done, while the daemon proceeds with
+    /// its focus/switch flow immediately. The workspace switch composing
+    /// in underneath the closing overlay is the Task View look; deferring
+    /// the activate flow until the zoom ends would just feel laggy.
+    pub(crate) fn hide_overview_animated(&mut self, target_workspace: Option<usize>) {
+        let was_open = self.overview_open;
+        if let Some(overlay) = &self.overview_overlay {
+            overlay.hide_animated(target_workspace);
         }
         self.overview_open = false;
         if was_open {
@@ -479,6 +576,13 @@ impl AppState {
     /// the last window on the monitor is gone.
     pub(crate) fn refresh_overview_model(&mut self) {
         if !self.overview_open {
+            return;
+        }
+        // Overlay-owned close in flight (Esc/backdrop/focus loss):
+        // `overview_open` stays true until `Dismissed` lands, but pushing
+        // models at a closing (or already-hidden) overlay would flash the
+        // map back. Belt-and-braces over `update_model`'s own no-op guard.
+        if self.overview_overlay.as_ref().is_some_and(OverviewOverlay::is_closing) {
             return;
         }
         match self.build_overview_model() {
@@ -540,7 +644,7 @@ mod tests {
 
     #[test]
     fn test_build_overview_model_returns_none_when_all_empty() {
-        let state = test_state();
+        let mut state = test_state();
         assert!(state.build_overview_model().is_none());
     }
 
@@ -1273,6 +1377,111 @@ mod tests {
     }
 
     #[test]
+    fn test_active_row_cards_carry_real_placement_from_rect() {
+        let mut state = test_state();
+        add_windows(&mut state, 0, &[101, 102]);
+
+        // Real placements in screen coords; work area at (0,0) so screen
+        // coords equal overlay client coords here.
+        let work_area = Rect::new(0, 0, 1920, 1040);
+        let placements = state.workspaces[&1][0].compute_placements(work_area);
+        let (_, model) = state.build_overview_model().expect("model");
+        for card in &model.rows[0].cards {
+            let placement = placements
+                .iter()
+                .find(|p| p.window_id == card.window_id)
+                .expect("placement");
+            assert_eq!(
+                card.from_rect,
+                Some(placement.rect),
+                "from_rect must be the window's real rect in client coords"
+            );
+        }
+    }
+
+    #[test]
+    fn test_from_rect_tracks_scroll_offset() {
+        let mut state = test_state();
+        add_windows(&mut state, 0, &[101, 102, 103, 104]);
+        {
+            let ws = state.workspaces.get_mut(&1).unwrap().get_mut(0).unwrap();
+            ws.set_all_column_widths(1000);
+            ws.set_scroll_offset(1500.0);
+        }
+
+        let work_area = Rect::new(0, 0, 1920, 1040);
+        let placements = state.workspaces[&1][0].compute_placements(work_area);
+        let (_, model) = state.build_overview_model().expect("model");
+        // Windows visible in the real viewport must have from_rects that
+        // match their actual scrolled placements.
+        for p in placements
+            .iter()
+            .filter(|p| p.visibility == Visibility::Visible)
+        {
+            let card = model.rows[0]
+                .cards
+                .iter()
+                .find(|c| c.window_id == p.window_id)
+                .expect("card");
+            assert_eq!(
+                card.from_rect,
+                Some(p.rect),
+                "scrolled placement mismatch for window {}",
+                p.window_id
+            );
+        }
+    }
+
+    #[test]
+    fn test_inactive_rows_also_carry_from_rect() {
+        let mut state = test_state();
+        add_windows(&mut state, 0, &[101]);
+        add_windows(&mut state, 1, &[201]);
+
+        let (_, model) = state.build_overview_model().expect("model");
+        // The close animation may target any row: every card carries a
+        // from_rect (the would-be placement when that workspace shows).
+        for row in &model.rows {
+            for card in &row.cards {
+                assert!(card.from_rect.is_some(), "card {} lacks from_rect", card.window_id);
+            }
+        }
+    }
+
+    #[test]
+    fn test_anim_ms_follows_overview_duration() {
+        let mut state = test_state();
+        add_windows(&mut state, 0, &[101]);
+        state.config.animation.overview_duration_ms = 175;
+        // The overview no longer borrows the layout duration.
+        state.config.animation.layout_duration_ms = 999;
+        state.reduce_motion = false;
+
+        let (_, model) = state.build_overview_model().expect("model");
+        assert_eq!(model.anim_ms, 175);
+    }
+
+    #[test]
+    fn test_model_carries_configured_easing() {
+        let mut state = test_state();
+        add_windows(&mut state, 0, &[101]);
+        state.config.animation.easing = leopardwm_core_layout::Easing::EaseInOut;
+
+        let (_, model) = state.build_overview_model().expect("model");
+        assert_eq!(model.easing, leopardwm_core_layout::Easing::EaseInOut);
+    }
+
+    #[test]
+    fn test_anim_ms_zero_under_reduce_motion() {
+        let mut state = test_state();
+        add_windows(&mut state, 0, &[101]);
+        state.reduce_motion = true;
+
+        let (_, model) = state.build_overview_model().expect("model");
+        assert_eq!(model.anim_ms, 0, "reduce-motion must snap instantly");
+    }
+
+    #[test]
     fn test_cards_live_by_default() {
         let mut state = test_state();
         add_windows(&mut state, 0, &[101, 102]);
@@ -1295,6 +1504,83 @@ mod tests {
             model.rows[0].cards.iter().all(|c| !c.live),
             "render = placeholder disables live previews"
         );
+    }
+
+    #[test]
+    fn test_cards_snapshot_when_config_snapshot() {
+        let mut state = test_state();
+        state.config.overview.render = crate::config::OverviewRender::Snapshot;
+        add_windows(&mut state, 0, &[101, 102]);
+
+        let (_, model) = state.build_overview_model().expect("model");
+        assert!(
+            model.rows[0].cards.iter().all(|c| c.snapshot && !c.live),
+            "render = snapshot marks cards snapshot and disables live previews"
+        );
+    }
+
+    #[test]
+    fn test_cards_not_snapshot_by_default() {
+        let mut state = test_state();
+        add_windows(&mut state, 0, &[101]);
+
+        let (_, model) = state.build_overview_model().expect("model");
+        assert!(
+            model.rows[0].cards.iter().all(|c| !c.snapshot),
+            "live mode must not draw snapshot bodies"
+        );
+    }
+
+    #[test]
+    fn test_icon_cache_hit_skips_platform_probe() {
+        let mut state = test_state();
+        add_windows(&mut state, 0, &[101, 102]);
+        // A cached icon must flow into the card without a re-probe (a
+        // real probe on the fake hwnd would return None, not 0x1234).
+        state.overview_icon_cache.insert(101, Some(0x1234));
+
+        let (_, model) = state.build_overview_model().expect("model");
+        let icon = |wid: u64| {
+            model.rows[0]
+                .cards
+                .iter()
+                .find(|c| c.window_id == wid)
+                .unwrap()
+                .icon
+        };
+        assert_eq!(icon(101), Some(0x1234), "card must use the cached icon");
+        assert_eq!(icon(102), None, "fake hwnd probes to None");
+    }
+
+    #[test]
+    fn test_icon_cache_populated_on_rebuild_miss() {
+        let mut state = test_state();
+        add_windows(&mut state, 0, &[101]);
+        assert!(state.overview_icon_cache.is_empty());
+
+        state.build_overview_model().expect("model");
+        // The miss (fake hwnd -> None) is cached so the next rebuild
+        // skips the SendMessageTimeoutW probes entirely.
+        assert_eq!(state.overview_icon_cache.get(&101), Some(&None));
+    }
+
+    #[test]
+    fn test_icon_cache_evicted_on_destroy_kept_on_hidden() {
+        use leopardwm_platform_win32::WindowEvent;
+        let mut state = test_state();
+        add_windows(&mut state, 0, &[101, 102]);
+        state.overview_icon_cache.insert(101, Some(0x1234));
+        state.overview_icon_cache.insert(102, Some(0x5678));
+
+        // Hidden (window may live on, e.g. close-to-tray): icon kept —
+        // the shared HICON stays valid while the window exists.
+        state.handle_window_event(WindowEvent::Hidden(102));
+        assert_eq!(state.overview_icon_cache.get(&102), Some(&Some(0x5678)));
+
+        // Real destroy: the HICON dies with the window; a recycled HWND
+        // must re-probe.
+        state.handle_window_event(WindowEvent::Destroyed(101));
+        assert!(!state.overview_icon_cache.contains_key(&101));
     }
 
     #[test]
