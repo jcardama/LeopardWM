@@ -41,15 +41,23 @@ impl AppState {
     /// different scratchpad is already stashed, summon it back first so it
     /// is not stranded hidden.
     pub(crate) fn scratchpad_stash(&mut self) {
-        // Use the OS-foreground window, not just the focused tiled column:
-        // a summoned scratchpad is a FLOATING window, which
-        // `Workspace::focused_window` does not report. Without this, stashing
-        // while the scratchpad is focused would grab a tiled window instead
-        // and fail to recognise "release the current scratchpad".
-        let Some(wid) = self
-            .previous_focused_hwnd
-            .or_else(|| self.focused_workspace().and_then(|ws| ws.focused_window()))
-        else {
+        // Pick the window to stash. The tiled focused window is authoritative
+        // and immune to async OS-foreground events: a late
+        // EVENT_SYSTEM_FOREGROUND from a window the user just moved off of can
+        // clobber `previous_focused_hwnd` right after a focus change, which
+        // would otherwise make us stash the wrong window (e.g. a column's
+        // stackmate instead of the focused window, leaving the intended target
+        // stranded alone in its column). Fall back to the OS-foreground window
+        // only for a summoned scratchpad, which floats and so is not reported
+        // by `Workspace::focused_window` — that path is how "stash the shown
+        // scratchpad to release it" is recognised.
+        let tiled_focus = self.focused_workspace().and_then(|ws| ws.focused_window());
+        let shown_scratchpad = self.scratchpad.filter(|s| s.shown).map(|s| s.window_id);
+        let wid = match shown_scratchpad {
+            Some(sp) if self.previous_focused_hwnd == Some(sp) => Some(sp),
+            _ => tiled_focus.or(self.previous_focused_hwnd),
+        };
+        let Some(wid) = wid else {
             info!("Scratchpad stash: no focused window");
             return;
         };
@@ -61,7 +69,13 @@ impl AppState {
         if let Some(sp) = self.scratchpad {
             if sp.window_id == wid {
                 self.scratchpad = None;
-                self.release_to_tiling(wid, sp.origin_column);
+                self.release_to_tiling(wid, sp.origin_column, sp.origin_sibling);
+                // Keep focus on the returned window — it was focused while
+                // summoned, so re-tiling it (especially back into a stack)
+                // shouldn't hand focus to a sibling.
+                if let Some(ws) = self.focused_workspace_mut() {
+                    let _ = ws.focus_window(wid);
+                }
                 let _ = self.apply_layout();
                 self.sync_foreground_window();
                 info!("Scratchpad: released window {} back to tiling", wid);
@@ -82,19 +96,29 @@ impl AppState {
         // designation up front, so a failure mid-release can never leave the
         // daemon pointing at a window that is already back in the layout.
         if let Some(prev) = self.scratchpad.take() {
-            self.release_to_tiling(prev.window_id, prev.origin_column);
+            self.release_to_tiling(prev.window_id, prev.origin_column, prev.origin_sibling);
         }
 
-        // Remember the column it currently occupies so releasing later
-        // restores it to the same spot rather than one column over.
-        let origin_column = self
+        // Remember where it sat so releasing later restores it to the same
+        // spot: the column index (fallback) and a window that shared the
+        // column (so it can rejoin that exact column even if indices shift).
+        let (origin_column, origin_sibling) = self
             .focused_workspace()
-            .and_then(|ws| ws.find_window_location(wid))
-            .map(|(col, _)| col)
+            .and_then(|ws| {
+                ws.find_window_location(wid).map(|(col, _)| {
+                    let sibling = ws
+                        .columns()
+                        .get(col)
+                        .and_then(|c| c.windows().iter().copied().find(|&w| w != wid));
+                    (col, sibling)
+                })
+            })
             .unwrap_or_else(|| {
-                self.focused_workspace()
+                let col = self
+                    .focused_workspace()
                     .map(|ws| ws.focused_column_index())
-                    .unwrap_or(0)
+                    .unwrap_or(0);
+                (col, None)
             });
 
         // Record the designation BEFORE hiding, so if anything aborts
@@ -105,6 +129,7 @@ impl AppState {
             window_id: wid,
             shown: false,
             origin_column,
+            origin_sibling,
         });
         self.hide_window_to_holding(wid);
         let _ = self.apply_layout();
@@ -112,17 +137,26 @@ impl AppState {
         info!("Scratchpad: stashed window {}", wid);
     }
 
-    /// Return `wid` to the active workspace as a tiled window at
-    /// `origin_column`: detach any floating entry, ensure it is uncloaked,
-    /// and insert it as a column at its original index. The subsequent
-    /// `apply_layout` repositions it on-screen, overriding any off-screen
-    /// parking from the holding state.
-    fn release_to_tiling(&mut self, wid: u64, origin_column: usize) {
+    /// Return `wid` to the active workspace as a tiled window: detach any
+    /// floating entry, ensure it is uncloaked, then rejoin its original column
+    /// if a window that shared it survives (found by `origin_sibling`, so it
+    /// works even if column indices shifted). If that column is gone, fall back
+    /// to a new column at `origin_column`. The subsequent `apply_layout`
+    /// repositions it on-screen, overriding any off-screen parking.
+    fn release_to_tiling(&mut self, wid: u64, origin_column: usize, origin_sibling: Option<u64>) {
         self.detach_window_from_workspace(wid);
         leopardwm_platform_win32::dwm_uncloak_window(wid);
         let reinserted = self
             .focused_workspace_mut()
-            .map(|ws| ws.insert_window_at_column(wid, None, origin_column).is_ok())
+            .map(|ws| {
+                let rejoin_column = origin_sibling
+                    .and_then(|s| ws.find_window_location(s))
+                    .map(|(col, _)| col);
+                match rejoin_column {
+                    Some(col) => ws.insert_window_in_column(wid, col).is_ok(),
+                    None => ws.insert_window_at_column(wid, None, origin_column).is_ok(),
+                }
+            })
             .unwrap_or(false);
         if !reinserted {
             // Reattach failed (no workspace, or a duplicate that detach

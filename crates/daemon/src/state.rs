@@ -52,10 +52,14 @@ pub(crate) struct DropTarget {
 pub(crate) struct ScratchpadState {
     pub(crate) window_id: u64,
     pub(crate) shown: bool,
-    /// Column index the window occupied before being stashed, so releasing
-    /// it returns it to (roughly) its original position rather than
-    /// landing one column over.
+    /// Column index the window occupied before being stashed. Used as the
+    /// fallback insert position when the original column no longer exists.
     pub(crate) origin_column: usize,
+    /// A window that shared the original column, if any. On release the window
+    /// rejoins this sibling's current column (robust to index shifts from
+    /// columns added/removed while stashed); `None` means it was alone in its
+    /// column, so it returns as its own column at `origin_column`.
+    pub(crate) origin_sibling: Option<u64>,
 }
 
 /// Action to show/hide the drag hint overlay, communicated from event handler to main loop.

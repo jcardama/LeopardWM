@@ -2975,6 +2975,97 @@ fn test_scratchpad_designating_new_releases_old() {
 }
 
 #[test]
+fn test_scratchpad_release_rejoins_original_column() {
+    // A window stashed from a stacked column should rejoin that column on
+    // release, not land in its own new column.
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    {
+        let ws = state.focused_workspace_mut().unwrap();
+        ws.insert_window(100, Some(400)).unwrap(); // column 0
+        ws.insert_window_in_column(200, 0).unwrap(); // column 0 now [100, 200]
+    }
+    state.focused_workspace_mut().unwrap().focus_window(200).unwrap();
+    assert_eq!(state.focused_workspace().unwrap().column_count(), 1);
+
+    state.scratchpad_stash(); // stash 200 (origin column 0, sibling 100)
+    state.scratchpad_toggle(); // summon (floating)
+    state.previous_focused_hwnd = Some(200); // OS foreground lands on it
+    state.scratchpad_stash(); // stash-on-self releases it back to tiling
+
+    let ws = state.focused_workspace().unwrap();
+    assert!(state.scratchpad.is_none(), "released");
+    assert_eq!(
+        ws.column_count(),
+        1,
+        "rejoined the original column instead of creating a new one"
+    );
+    assert_eq!(
+        ws.find_window_location(200).map(|(c, _)| c),
+        Some(0),
+        "back in column 0 with its sibling"
+    );
+    assert_eq!(
+        ws.focused_window(),
+        Some(200),
+        "the released window keeps focus, not its sibling"
+    );
+}
+
+#[test]
+fn test_scratchpad_solo_window_releases_to_new_column() {
+    // A window that was alone in its column has no sibling, so on release it
+    // returns as its own column at the original index (failsafe path).
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .insert_window(100, Some(400))
+        .unwrap();
+    state.scratchpad_stash(); // solo: origin_sibling = None
+    assert!(state.scratchpad.unwrap().origin_sibling.is_none());
+    state.scratchpad_toggle(); // summon
+    state.previous_focused_hwnd = Some(100);
+    state.scratchpad_stash(); // release
+
+    let ws = state.focused_workspace().unwrap();
+    assert!(ws.contains_window(100));
+    assert!(!ws.is_floating(100), "released as a tiled window");
+}
+
+#[test]
+fn test_scratchpad_stash_uses_tiled_focus_over_stale_foreground() {
+    // Regression: a late OS-foreground event can leave `previous_focused_hwnd`
+    // pointing at a window the user just moved off of. Stash must take the
+    // tiled-focused window, not the stale foreground one (the bug stashed a
+    // column's stackmate and left the intended window stranded alone).
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    {
+        let ws = state.focused_workspace_mut().unwrap();
+        ws.insert_window(100, Some(400)).unwrap();
+        ws.insert_window(200, Some(400)).unwrap();
+    }
+    state.focused_workspace_mut().unwrap().focus_window(200).unwrap();
+    // Stale foreground from the window focus just left.
+    state.previous_focused_hwnd = Some(100);
+
+    state.scratchpad_stash();
+
+    let sp = state.scratchpad.expect("scratchpad designated");
+    assert_eq!(
+        sp.window_id, 200,
+        "stashes the tiled-focused window, not the stale foreground window"
+    );
+    assert!(
+        !state.focused_workspace().unwrap().contains_window(200),
+        "tiled-focused window is the one removed"
+    );
+    assert!(
+        state.focused_workspace().unwrap().contains_window(100),
+        "the stale-foreground window stays in the layout"
+    );
+}
+
+#[test]
 fn test_sticky_toggle_pins_and_floats() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
     state
