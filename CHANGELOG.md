@@ -45,6 +45,10 @@ All notable changes to LeopardWM will be documented in this file.
   every display instead of reappearing on the neighbor.
 - **New windows open on the active monitor.** A new window now opens on the
   monitor that currently has focus, instead of wherever it first appeared.
+- **Resizing a column keeps it in view.** Changing the focused column's width
+  (cycle, set-width, equalize, or drag-resize) now scrolls the viewport to keep
+  the column on screen, instead of letting a column near the edge grow
+  off-screen.
 
 ## 0.1.19
 

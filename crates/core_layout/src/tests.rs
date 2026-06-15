@@ -977,6 +977,45 @@ mod tests {
     }
 
     #[test]
+    fn test_cycle_width_up_with_ensure_keeps_rightmost_focused_in_view() {
+        // Regression: growing the focused rightmost column must keep it
+        // on-screen. cycle_width_up only changes the width; the command path
+        // now follows it with ensure_focused_visible so the viewport tracks the
+        // wider column instead of it growing off the right edge (the bug seen
+        // in the launch footage).
+        let mut ws = Workspace::with_gaps(10, 10);
+        ws.set_centering_mode(CenteringMode::Center);
+        ws.insert_window(1, Some(300)).unwrap();
+        ws.insert_window(2, Some(300)).unwrap();
+        ws.insert_window(3, Some(300)).unwrap();
+
+        let vw = 700;
+        ws.test_set_focus_unchecked(2, 0); // rightmost column
+        ws.ensure_focused_visible(vw);
+
+        let presets = vec![0.333, 0.5, 0.667];
+        ws.cycle_width_up(&presets, vw);
+        ws.ensure_focused_visible(vw);
+
+        let placements = ws.compute_placements(Rect::new(0, 0, vw, 1000));
+        let focused = placements
+            .iter()
+            .find(|p| p.window_id == 3)
+            .expect("focused window present");
+        assert_eq!(
+            focused.visibility,
+            Visibility::Visible,
+            "grown focused column stays visible, not off-screen right"
+        );
+        assert!(
+            focused.rect.right() <= vw,
+            "focused column right edge stays within the viewport (was {} > {})",
+            focused.rect.right(),
+            vw
+        );
+    }
+
+    #[test]
     fn test_move_column_then_resize() {
         let mut ws = Workspace::new();
         ws.insert_window(1, Some(400)).unwrap();

@@ -191,8 +191,9 @@ impl AppState {
             IpcCommand::MoveWindowToMonitorLeft => self.handle_move_window_to_monitor_left(),
             IpcCommand::MoveWindowToMonitorRight => self.handle_move_window_to_monitor_right(),
             IpcCommand::Resize { delta } => {
-                self.execute_workspace_command(true, false, |ws, _vw| {
+                self.execute_workspace_command(true, false, |ws, vw| {
                     ws.resize_focused_column(delta);
+                    ws.ensure_focused_visible_animated(vw);
                     info!("Resized column by {}", delta);
                 })
             }
@@ -251,6 +252,7 @@ impl AppState {
                 }
                 self.execute_workspace_command(true, false, |ws, vw| {
                     ws.set_focused_column_width_fraction(fraction, vw);
+                    ws.ensure_focused_visible_animated(vw);
                     info!("Set column width fraction to {:.3}", fraction);
                 })
             }
@@ -270,6 +272,7 @@ impl AppState {
             IpcCommand::EqualizeColumnWidths => {
                 self.execute_workspace_command(true, false, |ws, vw| {
                     ws.equalize_column_widths(vw);
+                    ws.ensure_focused_visible_animated(vw);
                     info!("Equalized column widths");
                 })
             }
@@ -277,6 +280,7 @@ impl AppState {
                 let presets = self.config.layout.width_presets.clone();
                 self.execute_workspace_command(true, false, |ws, vw| {
                     ws.cycle_width_up(&presets, vw);
+                    ws.ensure_focused_visible_animated(vw);
                     info!("Cycled column width up");
                 })
             }
@@ -284,6 +288,7 @@ impl AppState {
                 let presets = self.config.layout.width_presets.clone();
                 self.execute_workspace_command(true, false, |ws, vw| {
                     ws.cycle_width_down(&presets, vw);
+                    ws.ensure_focused_visible_animated(vw);
                     info!("Cycled column width down");
                 })
             }
