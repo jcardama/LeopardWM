@@ -11,6 +11,8 @@
 
 A scrollable tiling window manager for Windows.
 
+https://github.com/user-attachments/assets/d367d337-4005-4c1d-bdd5-8a678b34582f
+
 ## What Makes It Different
 
 Most Windows tilers use tree or BSP layouts. LeopardWM is **scroll-first**: windows sit on a horizontal strip, and your monitor acts as a viewport that scrolls over them. Navigation stays spatially consistent as windows are added — you move through context instead of constantly rebuilding split trees.
@@ -21,6 +23,28 @@ Most Windows tilers use tree or BSP layouts. LeopardWM is **scroll-first**: wind
 - **Auto-detected per-window rounded corners and high-contrast/reduced-motion/battery awareness** — system integration that respects user settings
 - **WebView2 settings GUI** with Mica backdrop and live theme switching — not just a config file
 - **GPL-3.0** — commercial use without a paid license, written in safe Rust
+
+## In Action
+
+**Overview** — zoom out to a map of your non-empty workspaces and jump anywhere
+
+https://github.com/user-attachments/assets/4de8a4f4-1bd9-4a69-bed8-4f6ba3dba0ca
+
+**Workspaces** — per-monitor workspaces; switch between them and move windows across
+
+https://github.com/user-attachments/assets/0c06ac6b-2527-467c-a369-b41ea48c040b
+
+**Tabbed columns** — collapse a column into a tab strip, only the active tab fills the rect
+
+https://github.com/user-attachments/assets/73f6a133-e038-41c5-8b33-79bd67c6c267
+
+**Scratchpad** — stash a window out of the layout and summon it back as a floating overlay
+
+https://github.com/user-attachments/assets/30595d72-0fad-4db8-903c-52307087c00e
+
+**Sticky windows** — pin a window so it stays visible and follows you across workspaces
+
+https://github.com/user-attachments/assets/43715787-1501-4e19-b693-f301065e914d
 
 ## Design Philosophy
 
