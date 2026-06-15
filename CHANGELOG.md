@@ -40,6 +40,11 @@ All notable changes to LeopardWM will be documented in this file.
   dropped; windows opened since are added. Workspace state is now saved
   continuously (debounced, written atomically) rather than only on
   graceful shutdown, so the layout survives a crash too.
+- **Off-screen columns no longer bleed onto other monitors.** On a
+  multi-monitor setup, a column scrolled fully off one monitor is parked off
+  every display instead of reappearing on the neighbor.
+- **New windows open on the active monitor.** A new window now opens on the
+  monitor that currently has focus, instead of wherever it first appeared.
 
 ## 0.1.19
 

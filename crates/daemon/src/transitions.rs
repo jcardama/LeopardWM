@@ -47,8 +47,9 @@ impl AppState {
         for (monitor_id, ws_vec) in &self.workspaces {
             let idx = self.active_workspace_idx(*monitor_id);
             if let Some(workspace) = ws_vec.get(idx) {
-                if let Some(monitor) = self.monitors.get(monitor_id) {
-                    for p in workspace.compute_placements_animated(monitor.work_area) {
+                if self.monitors.contains_key(monitor_id) {
+                    let viewport = self.layout_viewport(*monitor_id);
+                    for p in workspace.compute_placements_animated(viewport) {
                         rects.insert(p.window_id, p.rect);
                     }
                 }
@@ -218,8 +219,9 @@ impl AppState {
         for (monitor_id, ws_vec) in &self.workspaces {
             let idx = self.active_workspace_idx(*monitor_id);
             if let Some(workspace) = ws_vec.get(idx) {
-                if let Some(monitor) = self.monitors.get(monitor_id) {
-                    for p in workspace.compute_placements_animated(monitor.work_area) {
+                if self.monitors.contains_key(monitor_id) {
+                    let viewport = self.layout_viewport(*monitor_id);
+                    for p in workspace.compute_placements_animated(viewport) {
                         if p.visibility == leopardwm_core_layout::Visibility::Visible {
                             targets.insert(p.window_id, (p.rect, *monitor_id));
                         }

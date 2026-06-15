@@ -80,10 +80,10 @@ impl AppState {
             // Target column gets a placeholder so its windows shift to make room.
 
 
-            let viewport = match self.monitors.get(&target_monitor_id) {
-                Some(m) => m.work_area,
-                None => return,
-            };
+            if !self.monitors.contains_key(&target_monitor_id) {
+                return;
+            }
+            let viewport = self.layout_viewport(target_monitor_id);
 
             // Remove any existing placeholder before recomputing bounds.
             self.clear_drag_placeholder();
@@ -241,10 +241,10 @@ impl AppState {
     /// Show the column-reorder ghost at the insertion edge on a non-source monitor.
     fn shift_drag_cross_monitor_hint(&mut self, cursor_x: i32, target_monitor_id: MonitorId) {
         // Show ghost at the edge of the target monitor.
-        let viewport = match self.monitors.get(&target_monitor_id) {
-            Some(m) => m.work_area,
-            None => return,
-        };
+        if !self.monitors.contains_key(&target_monitor_id) {
+            return;
+        }
+        let viewport = self.layout_viewport(target_monitor_id);
         let ws_idx = self.active_workspace_idx(target_monitor_id);
         let Some(workspace) = self.workspaces.get(&target_monitor_id).and_then(|v| v.get(ws_idx)) else {
             return;
@@ -277,10 +277,10 @@ impl AppState {
         source_ws_idx: usize,
         current_col: usize,
     ) {
-        let viewport = match self.monitors.get(&source_monitor) {
-            Some(m) => m.work_area,
-            None => return,
-        };
+        if !self.monitors.contains_key(&source_monitor) {
+            return;
+        }
+        let viewport = self.layout_viewport(source_monitor);
         let Some(workspace) = self.workspaces.get(&source_monitor).and_then(|v| v.get(source_ws_idx)) else {
             return;
         };
@@ -533,13 +533,11 @@ impl AppState {
         let source_monitor = drag.source_monitor;
 
         // Find target column and slot from cursor position.
-        let target_viewport = match self.monitors.get(&target_monitor) {
-            Some(m) => m.work_area,
-            None => {
-                self.snap_back_tiled(source_monitor, drag.source_workspace_idx);
-                return;
-            }
-        };
+        if !self.monitors.contains_key(&target_monitor) {
+            self.snap_back_tiled(source_monitor, drag.source_workspace_idx);
+            return;
+        }
+        let target_viewport = self.layout_viewport(target_monitor);
 
         let (target_col_idx, window_slot) = {
             let ws_idx = self.active_workspace_idx(target_monitor);
@@ -895,13 +893,11 @@ impl AppState {
         };
 
         // Compute target insertion index.
-        let target_viewport = match self.monitors.get(&target_monitor) {
-            Some(m) => m.work_area,
-            None => {
-                self.snap_back_tiled(source_monitor, drag.source_workspace_idx);
-                return;
-            }
-        };
+        if !self.monitors.contains_key(&target_monitor) {
+            self.snap_back_tiled(source_monitor, drag.source_workspace_idx);
+            return;
+        }
+        let target_viewport = self.layout_viewport(target_monitor);
 
         let tgt_idx = self.active_workspace_idx(target_monitor);
         let target_bounds = self

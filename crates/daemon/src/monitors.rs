@@ -2,7 +2,7 @@
 
 use crate::helpers::ScaledLayoutParams;
 use crate::state::*;
-use leopardwm_core_layout::Workspace;
+use leopardwm_core_layout::{Rect, Workspace};
 use leopardwm_platform_win32::{MonitorId, MonitorInfo};
 use std::collections::{HashMap, HashSet};
 use tracing::{info, warn};
@@ -326,5 +326,17 @@ impl AppState {
         self.workspaces.get_mut(&target_monitor).unwrap()[tgt_idx] = target_workspace;
         self.focused_monitor = target_monitor;
         Ok(Some(window_id))
+    }
+
+    /// The layout viewport for a monitor: its full work area. Single source of
+    /// truth for the rect fed into `compute_placements*`; columns fill the work
+    /// area edge to edge with no shared-edge inset.
+    pub(crate) fn layout_viewport(&self, monitor_id: MonitorId) -> Rect {
+        self.monitors
+            .get(&monitor_id)
+            .map(|m| m.work_area)
+            .unwrap_or_else(|| {
+                Rect::new(0, 0, FALLBACK_VIEWPORT_WIDTH, FALLBACK_VIEWPORT_HEIGHT)
+            })
     }
 }

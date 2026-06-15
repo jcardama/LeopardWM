@@ -547,15 +547,15 @@ fn hotkey_window_proc_inner(
         WM_SETTINGCHANGE if wparam.0 == SPI_SETWORKAREA => {
             // The work area changed without a topology change (e.g. the
             // taskbar toggled between auto-hide and always-on). Route it
-            // through the same debounced reconcile as a display change so
-            // tiled windows pick up the new work area instead of sitting
-            // behind a now-permanent taskbar.
-            tracing::info!("Work area changed (WM_SETTINGCHANGE / SPI_SETWORKAREA)");
+            // through a shorter-debounced reconcile than a display change so
+            // tiled windows re-fit promptly (the OS shoves them flush against
+            // the new taskbar immediately; a slow reconcile makes that a
+            // visible two-step).
             let sender_guard = DISPLAY_CHANGE_SENDER
                 .lock()
                 .unwrap_or_else(recover_poisoned_mutex);
             if let Some(sender) = sender_guard.as_ref() {
-                let _ = sender.send(WindowEvent::DisplayChange);
+                let _ = sender.send(WindowEvent::WorkAreaChanged);
             }
             windows::Win32::Foundation::LRESULT(0)
         }

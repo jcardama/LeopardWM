@@ -1200,9 +1200,17 @@ async fn handle_ipc_command(
 
 /// Handle a platform window event, including display-change and focus-follows-mouse debouncing.
 async fn process_window_event(ctx: &mut EventLoopCtx<'_>, win_event: WindowEvent) {
-    // Debounce DisplayChange — contrast theme switches fire multiple
-    // WM_DISPLAYCHANGE messages with intermediate work areas.
-    if matches!(win_event, WindowEvent::DisplayChange) {
+    // Debounce DisplayChange / WorkAreaChanged into a single reconcile.
+    // Contrast/DPI changes fire multiple WM_DISPLAYCHANGE messages with
+    // intermediate work areas, so they need a longer quiet window; a taskbar
+    // work-area toggle settles quickly (a couple of SPI_SETWORKAREA events
+    // ~130ms apart) and the OS shoves windows flush immediately, so it gets a
+    // shorter debounce to re-fit promptly without the slow two-step. Both
+    // route through the same DisplayChangeSettled reconcile.
+    if matches!(
+        win_event,
+        WindowEvent::DisplayChange | WindowEvent::WorkAreaChanged
+    ) {
         // Immediately clear inset cache and refresh high contrast state
         // (cheap operations that should happen right away).
         leopardwm_platform_win32::clear_inset_cache();
@@ -1210,14 +1218,27 @@ async fn process_window_event(ctx: &mut EventLoopCtx<'_>, win_event: WindowEvent
             let mut state = ctx.state.lock().await;
             state.refresh_high_contrast();
             state.display_change_pending = true;
+            // A real topology/DPI change needs the full reconcile; a
+            // work-area-only change (taskbar) does not. Sticky-true if a
+            // DisplayChange occurs anywhere in the debounce window.
+            if matches!(win_event, WindowEvent::DisplayChange) {
+                state.display_change_needs_full = true;
+            }
         }
-        // Cancel pending timer and restart — only process after 500ms of quiet
+        // A work-area change coalesces fast; a topology/DPI change needs to
+        // settle. Take the longer of the two if both are in flight.
+        let debounce_ms = if matches!(win_event, WindowEvent::WorkAreaChanged) {
+            180
+        } else {
+            500
+        };
+        // Cancel pending timer and restart — only process after quiet.
         if let Some(handle) = ctx.display_change_timer.take() {
             handle.abort();
         }
         let dc_tx = ctx.event_tx.clone();
         *ctx.display_change_timer = Some(tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(debounce_ms)).await;
             let _ = dc_tx.send(DaemonEvent::DisplayChangeSettled).await;
         }));
         return;
@@ -2478,11 +2499,18 @@ async fn handle_display_change_settled(ctx: &mut EventLoopCtx<'_>) {
     // may have re-populated it with stale border metrics.
     leopardwm_platform_win32::clear_inset_cache();
     ctx.animation_worker.clear_cache();
-    // Resize the DWM thumbnail host to the new virtual-screen
-    // geometry so subsequent ghost-animation registrations use
-    // correct coordinates. Safe no-op when host construction
+    let needs_full = {
+        let state = ctx.state.lock().await;
+        state.display_change_needs_full
+    };
+    // Resize the DWM thumbnail host to the new virtual-screen geometry so
+    // subsequent ghost-animation registrations use correct coordinates. Only
+    // needed for a real topology/DPI change — a work-area (taskbar) toggle
+    // leaves the virtual screen unchanged. Safe no-op when host construction
     // failed earlier (returns Ok with hwnd_raw == 0).
-    leopardwm_platform_win32::thumbnail::host().resize_to_virtual_screen();
+    if needs_full {
+        leopardwm_platform_win32::thumbnail::host().resize_to_virtual_screen();
+    }
     let mut state = ctx.state.lock().await;
     // Cancel any in-flight ghost animation — its rects were
     // computed under the old geometry.
@@ -2490,15 +2518,20 @@ async fn handle_display_change_settled(ctx: &mut EventLoopCtx<'_>) {
     // The overview's geometry is stale too — hide instead of rebuilding.
     state.hide_overview();
     state.display_change_pending = false;
-    // Clear stale min-width and min-height constraints — they were
-    // computed with old border metrics and cause cumulative column
-    // shrinking / wrong intra-column distribution on theme changes.
-    for ws_vec in state.workspaces.values_mut() {
-        for ws in ws_vec.iter_mut() {
-            ws.clear_all_min_widths();
-            ws.clear_all_min_heights();
+    // Clear stale min-width and min-height constraints ONLY for a real
+    // topology/DPI change: they were computed with old border metrics and
+    // cause cumulative column shrinking there. For a work-area-only change
+    // (taskbar toggle), border metrics are unchanged, and clearing them would
+    // recompute column widths and shift partially-visible windows mid-refit.
+    if needs_full {
+        for ws_vec in state.workspaces.values_mut() {
+            for ws in ws_vec.iter_mut() {
+                ws.clear_all_min_widths();
+                ws.clear_all_min_heights();
+            }
         }
     }
+    state.display_change_needs_full = false;
     state.handle_window_event(WindowEvent::DisplayChange);
     state.refresh_reduce_motion();
 

@@ -14,12 +14,13 @@ use tracing::info;
 impl AppState {
     /// Snapshot a workspace's current animated placements as `(window_id, rect)` pairs.
     fn workspace_placements(&self, monitor: leopardwm_platform_win32::MonitorId, ws_idx: usize) -> Vec<(u64, Rect)> {
+        let viewport = self.layout_viewport(monitor);
         self.workspaces
             .get(&monitor)
             .and_then(|v| v.get(ws_idx))
-            .zip(self.monitors.get(&monitor))
-            .map(|(ws, mon)| {
-                ws.compute_placements_animated(mon.work_area)
+            .filter(|_| self.monitors.contains_key(&monitor))
+            .map(|ws| {
+                ws.compute_placements_animated(viewport)
                     .into_iter()
                     .map(|p| (p.window_id, p.rect))
                     .collect()
@@ -607,8 +608,8 @@ impl AppState {
                     // Get rect from computed placements
                     let rect = self
                         .monitors
-                        .get(monitor_id)
-                        .map(|m| workspace.compute_placements(m.work_area))
+                        .contains_key(monitor_id)
+                        .then(|| workspace.compute_placements(self.layout_viewport(*monitor_id)))
                         .and_then(|placements| {
                             placements
                                 .into_iter()

@@ -58,6 +58,10 @@ pub enum WindowEvent {
     MoveSizeEnd(WindowId),
     /// Display configuration changed (monitors added/removed/rearranged).
     DisplayChange,
+    /// The desktop work area changed without a topology change (e.g. the
+    /// taskbar toggled between auto-hide and always-on). Reconciled on a
+    /// shorter debounce than `DisplayChange` since it settles quickly.
+    WorkAreaChanged,
     /// Mouse cursor entered a window (for focus-follows-mouse).
     MouseEnterWindow(WindowId),
     /// A window's title text changed. The daemon refreshes the tab

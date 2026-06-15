@@ -284,8 +284,8 @@ impl AppState {
     /// Returns the absolute screen position of the focused column.
     pub(crate) fn get_focused_column_rect(&self) -> Option<Rect> {
         let workspace = self.focused_workspace()?;
-        let monitor = self.monitors.get(&self.focused_monitor)?;
-        let placements = workspace.compute_placements(monitor.work_area);
+        self.monitors.get(&self.focused_monitor)?;
+        let placements = workspace.compute_placements(self.layout_viewport(self.focused_monitor));
 
         // Find the placement for the focused window
         let focused_hwnd = workspace.focused_window()?;

@@ -206,7 +206,8 @@ impl AppState {
     /// transition duration).
     fn compute_window_layout_rect(&self, hwnd: u64) -> Option<leopardwm_core_layout::Rect> {
         let (monitor_id, ws_idx) = self.find_window_workspace(hwnd)?;
-        let viewport = self.monitors.get(&monitor_id)?.work_area;
+        self.monitors.get(&monitor_id)?;
+        let viewport = self.layout_viewport(monitor_id);
         let workspace = self.workspaces.get(&monitor_id)?.get(ws_idx)?;
         let mut placements = workspace.compute_placements_animated(viewport);
         if let Some(ref transition) = self.layout_transition {

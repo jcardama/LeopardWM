@@ -27,7 +27,9 @@ impl AppState {
             | WindowEvent::MoveSizeStart(id)
             | WindowEvent::MoveSizeEnd(id)
             | WindowEvent::TitleChanged(id) => Some(*id),
-            WindowEvent::DisplayChange | WindowEvent::MouseEnterWindow(_) => None,
+            WindowEvent::DisplayChange
+            | WindowEvent::WorkAreaChanged
+            | WindowEvent::MouseEnterWindow(_) => None,
         };
 
         // Validate window existence for events that require it.
@@ -56,6 +58,10 @@ impl AppState {
             WindowEvent::MoveSizeEnd(hwnd) => self.on_move_size_end(hwnd),
             WindowEvent::MovedOrResized(hwnd) => self.on_window_moved_or_resized(hwnd),
             WindowEvent::DisplayChange => self.on_display_change(),
+            // Work-area changes reach the reconcile via the debounced
+            // DisplayChangeSettled path (see process_window_event), so a raw
+            // event here is a no-op; reconcile defensively if one arrives.
+            WindowEvent::WorkAreaChanged => self.on_display_change(),
             WindowEvent::MouseEnterWindow(_hwnd) => {
                 // This is handled by the main event loop with debouncing
                 // (focus_follows_mouse delay)
@@ -172,11 +178,13 @@ impl AppState {
                 return;
             }
 
-            // Determine which monitor this window should be on
-            let monitors: Vec<_> = self.monitors.values().cloned().collect();
-            let monitor_id = find_monitor_for_rect(&monitors, &win_info.rect)
-                .map(|m| m.id)
-                .unwrap_or(self.focused_monitor);
+            // New windows open on the focused monitor — the active monitor
+            // follows the focused window (see on_window_focused), so a new
+            // window lands where the user is working rather than wherever
+            // the app happened to spawn it (which often defaults to another
+            // monitor). A per-app rule's open_on_workspace can still
+            // redirect it below.
+            let monitor_id = self.focused_monitor;
 
             // Get floating rect before borrowing workspace mutably
             let floating_rect = if action == config::WindowAction::Float {
@@ -571,13 +579,14 @@ impl AppState {
                     .unwrap_or(crate::state::FALLBACK_WORK_AREA_HEIGHT);
                 let y_offset = if ws_idx > active_idx { slide_height } else { -slide_height };
 
+                let viewport = self.layout_viewport(monitor_id);
+
                 // Snapshot old workspace positions for exit animation.
                 let old_placements: Vec<(u64, leopardwm_core_layout::Rect)> =
                     self.workspaces.get(&monitor_id)
                         .and_then(|v| v.get(active_idx))
-                        .zip(self.monitors.get(&monitor_id))
-                        .map(|(ws, mon)| {
-                            ws.compute_placements_animated(mon.work_area)
+                        .map(|ws| {
+                            ws.compute_placements_animated(viewport)
                                 .into_iter()
                                 .map(|p| (p.window_id, p.rect))
                                 .collect()
@@ -590,9 +599,8 @@ impl AppState {
                 let new_placements: Vec<(u64, leopardwm_core_layout::Rect)> =
                     self.workspaces.get(&monitor_id)
                         .and_then(|v| v.get(ws_idx))
-                        .zip(self.monitors.get(&monitor_id))
-                        .map(|(ws, mon)| {
-                            ws.compute_placements_animated(mon.work_area)
+                        .map(|ws| {
+                            ws.compute_placements_animated(viewport)
                                 .into_iter()
                                 .map(|p| (p.window_id, p.rect))
                                 .collect()
@@ -806,6 +814,7 @@ impl AppState {
     fn on_window_minimized(&mut self, hwnd: u64) {
         if let Some((monitor_id, ws_idx)) = self.find_window_workspace(hwnd) {
             let viewport_width = self.viewport_width_for(monitor_id);
+            let layout_viewport = self.layout_viewport(monitor_id);
             let snapshot = self.snapshot_layout();
 
             // If the minimized window is a floating window tracked as
@@ -854,8 +863,8 @@ impl AppState {
                     workspace.ensure_focused_visible_animated(viewport_width);
 
                     // Log expected post-minimize placements for debugging
-                    if let Some(monitor) = self.monitors.get(&monitor_id) {
-                        let post_placements = workspace.compute_placements(monitor.work_area);
+                    {
+                        let post_placements = workspace.compute_placements(layout_viewport);
                         for p in &post_placements {
                             info!(
                                 "  post-minimize placement: hwnd={} rect=({},{} {}x{})",

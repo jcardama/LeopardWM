@@ -3537,3 +3537,43 @@ fn test_request_save_if_changed_updates_last_sig_and_no_panic_without_sender() {
         "a change must update the recorded signature"
     );
 }
+
+// ========================================================================
+// Shared-edge viewport guard (layout_viewport)
+// ========================================================================
+
+#[test]
+fn test_layout_viewport_single_monitor_is_work_area() {
+    let state = AppState::new_with_config(test_config(), test_monitors());
+    assert_eq!(
+        state.layout_viewport(1),
+        state.monitors[&1].work_area,
+        "viewport is the full work area"
+    );
+}
+
+#[test]
+fn test_layout_viewport_side_by_side_monitors_use_full_work_area() {
+    // Adjacent monitors each fill their own work area edge to edge — no
+    // shared-edge margin (a fully-visible edge column ends at the seam).
+    let state = AppState::new_with_config(test_config(), two_monitors());
+    assert_eq!(
+        state.layout_viewport(1),
+        state.monitors[&1].work_area,
+        "left monitor uses its full work area"
+    );
+    assert_eq!(
+        state.layout_viewport(2),
+        state.monitors[&2].work_area,
+        "right monitor uses its full work area"
+    );
+}
+
+#[test]
+fn test_layout_viewport_unknown_monitor_falls_back() {
+    let state = AppState::new_with_config(test_config(), test_monitors());
+    let vp = state.layout_viewport(99999);
+    assert_eq!(vp.x, 0);
+    assert_eq!(vp.y, 0);
+    assert!(vp.width > 0 && vp.height > 0, "fallback viewport is non-empty");
+}

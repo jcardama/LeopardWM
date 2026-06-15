@@ -35,6 +35,12 @@ const DWMWA_TRANSITIONS_FORCEDISABLED: DWMWINDOWATTRIBUTE = DWMWINDOWATTRIBUTE(3
 /// OR-cloak invariant (or recovery paths that want to force-uncloak
 /// regardless) should call this directly.
 unsafe fn dwm_set_cloak(hwnd: HWND, cloaked: bool) {
+    // NOTE: DWMWA_CLOAK only succeeds on windows owned by the calling
+    // process; cloaking another process's window returns E_ACCESSDENIED
+    // (0x80070005). LeopardWM manages external windows, so this is a no-op
+    // for them and hiding relies on physically moving windows off-screen
+    // (see the off-screen sentinel positioning). Kept as belt-and-suspenders
+    // for the rare same-process window.
     let value = BOOL::from(cloaked);
     let _ = DwmSetWindowAttribute(
         hwnd,

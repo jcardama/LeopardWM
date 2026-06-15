@@ -351,6 +351,13 @@ pub(crate) struct AppState {
     /// Suppress MovedOrResized snap-backs while a display change is being debounced.
     /// Set on WM_DISPLAYCHANGE, cleared after the debounced handler runs.
     pub(crate) display_change_pending: bool,
+    /// Whether the pending debounced change needs the full topology/DPI
+    /// reconcile (clearing stale min-size constraints, resizing the thumbnail
+    /// host) vs a lightweight work-area-only refit. A real display change sets
+    /// this; a taskbar work-area toggle leaves it false so it doesn't recompute
+    /// column widths and shift partially-visible windows. Reset after the
+    /// settle handler runs.
+    pub(crate) display_change_needs_full: bool,
     /// Active drag state: tracks the window being dragged, source position, and drop target.
     pub(crate) drag_state: Option<DragState>,
     /// HWND being actively resized via border drag (not title bar move).
@@ -661,6 +668,7 @@ impl AppState {
             applying_layout: false,
             reapplying_after_violation: false,
             display_change_pending: false,
+            display_change_needs_full: false,
             drag_state: None,
             resize_hwnd: None,
             last_resize_hint_update: None,
