@@ -32,3 +32,6 @@ bash.exe.stackdump
 
 # Claude Code
 .claude/
+
+# Local recording / launch-footage working folder (scripts + captured media)
+recording/
