@@ -1,13 +1,12 @@
 //! Security attributes for the IPC named pipe.
 //!
 //! A named pipe inherits the creating process's integrity level. When the
-//! daemon runs elevated (high integrity), a non-elevated CLI (medium) is then
-//! blocked from connecting (the access-denied in issue #25). We build a
-//! security descriptor that grants the current user full access and labels the
-//! pipe at MEDIUM integrity, so a non-elevated same-user client can connect
-//! even to an elevated daemon. Building falls back to `None` on any failure,
-//! in which case the caller creates the pipe with default attributes (the
-//! prior behavior).
+//! daemon runs elevated (high integrity), a non-elevated client (medium) is
+//! blocked from connecting. We build a security descriptor that grants the
+//! current user full access and labels the pipe at MEDIUM integrity, so a
+//! non-elevated same-user client can connect even to an elevated daemon.
+//! Building falls back to `None` on any failure, in which case the caller
+//! creates the pipe with default attributes.
 
 use std::ffi::c_void;
 use windows::core::{PCWSTR, PWSTR};

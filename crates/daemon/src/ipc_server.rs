@@ -41,12 +41,8 @@ pub(crate) fn response_for_ipc_wait_failure(cmd: &IpcCommand, timed_out: bool) -
 pub(crate) async fn run_ipc_server(event_tx: mpsc::Sender<DaemonEvent>) {
     let mut is_first_instance = true;
     let pipe_name = preferred_pipe_name();
-    // Security attributes so a non-elevated client can connect even when the
-    // daemon is running elevated (issue #25). Built once and reused across
-    // pipe-instance creations. We keep only the raw SECURITY_ATTRIBUTES pointer
-    // as a usize (Send) and leak the backing for the process lifetime — the IPC
-    // server runs as long as the daemon — so the async server future stays
-    // Send without an `unsafe impl Send`. None falls back to default creation.
+    // Held as a usize and leaked for the daemon's lifetime so the async server
+    // future stays Send without an `unsafe impl Send`.
     let pipe_security_ptr: Option<usize> =
         match leopardwm_platform_win32::ipc_security::PipeSecurityAttributes::new() {
             Some(sec) => {
@@ -73,9 +69,6 @@ pub(crate) async fn run_ipc_server(event_tx: mpsc::Sender<DaemonEvent>) {
             }
         };
 
-        // Create a new pipe server instance. With security attributes when we
-        // built them (so a non-elevated client reaches an elevated daemon),
-        // otherwise the default create().
         let mut opts = ServerOptions::new();
         opts.first_pipe_instance(is_first_instance)
             .pipe_mode(PipeMode::Byte);
