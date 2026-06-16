@@ -90,6 +90,14 @@ impl AppState {
     }
 
     /// Handle a window-created event: rules, monitor/workspace placement, insertion.
+    /// Take the column width remembered for a hidden window that is now
+    /// reappearing, if it hasn't expired. Removing it keeps the map bounded.
+    pub(crate) fn take_remembered_column_width(&mut self, hwnd: u64) -> Option<i32> {
+        self.hidden_column_widths
+            .retain(|_, (t, _)| t.elapsed() < RECENTLY_HIDDEN_TTL);
+        self.hidden_column_widths.remove(&hwnd).map(|(_, w)| w)
+    }
+
     fn on_window_created(&mut self, hwnd: u64) {
         // Suppress transient windows that rapidly show/hide the same HWND
         // (e.g., Electron notification popups from Beeper, Slack).
@@ -221,9 +229,12 @@ impl AppState {
                 None
             };
 
-            // Per-app initial column width (viewport fraction -> px).
-            let rule_width_px = rule_column_width
-                .map(|f| ((f * f64::from(viewport_width)).round() as i32).max(100));
+            // Per-app initial column width (viewport fraction -> px). A width
+            // remembered from before this window was hidden takes precedence,
+            // so a reshown window keeps its size instead of resetting.
+            let rule_width_px = self.take_remembered_column_width(hwnd).or_else(|| {
+                rule_column_width.map(|f| ((f * f64::from(viewport_width)).round() as i32).max(100))
+            });
 
             if let Some(workspace) = self.workspaces.get_mut(&monitor_id).and_then(|v| v.get_mut(target_idx)) {
                 let added = match action {
@@ -427,7 +438,16 @@ impl AppState {
 
             let snapshot = self.snapshot_layout();
             let mut was_tiled = false;
+            // Remember the column width before removal so a hidden-then-reshown
+            // window (e.g. a virtual-desktop tool that hides/shows on switch)
+            // re-tiles at its prior width instead of the default.
+            let mut hidden_width: Option<i32> = None;
             if let Some(workspace) = self.workspaces.get_mut(&monitor_id).and_then(|v| v.get_mut(ws_idx)) {
+                if is_hidden_event {
+                    hidden_width = workspace
+                        .find_window_location(hwnd)
+                        .and_then(|(col, _)| workspace.columns().get(col).map(|c| c.width()));
+                }
                 // Try to remove as floating window first
                 let was_floating = workspace.remove_floating(hwnd);
 
@@ -447,6 +467,14 @@ impl AppState {
                     workspace.ensure_focused_visible_animated(viewport_width);
                 }
             }
+            if was_tiled {
+                if let Some(w) = hidden_width {
+                    self.hidden_column_widths
+                        .insert(hwnd, (std::time::Instant::now(), w));
+                }
+            }
+            self.hidden_column_widths
+                .retain(|_, (t, _)| t.elapsed() < RECENTLY_HIDDEN_TTL);
             // Restore WS_MAXIMIZEBOX (no-op if not tracked)
             self.restore_snap_for_window(hwnd);
 

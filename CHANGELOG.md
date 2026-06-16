@@ -13,6 +13,10 @@ All notable changes to LeopardWM will be documented in this file.
   — and even then, the IPC pipe now grants the current user access at medium
   integrity, so `lwm` (and scripts) still connect from a normal terminal
   instead of failing with access-denied.
+- **Hidden windows keep their size when they reappear.** A managed window that
+  is hidden and later shown again (for example by a third-party virtual-desktop
+  tool that hides windows on switch) now re-tiles at the column width it had
+  before, instead of resetting to the default.
 
 ## 0.2.0
 

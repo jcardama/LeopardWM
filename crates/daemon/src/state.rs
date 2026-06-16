@@ -408,6 +408,11 @@ pub(crate) struct AppState {
     /// re-creation of Electron popup windows (Beeper, Slack) that rapidly
     /// show/hide the same HWND.  Entries older than 5 minutes are lazily evicted.
     pub(crate) recently_hidden_hwnds: HashMap<u64, std::time::Instant>,
+    /// Column width a tiled window had when it was hidden, keyed by HWND, so a
+    /// window that disappears and reappears (e.g. a third-party virtual-desktop
+    /// tool hiding/showing windows on switch) re-tiles at its prior width
+    /// instead of resetting to default. Entries expire after RECENTLY_HIDDEN_TTL.
+    pub(crate) hidden_column_widths: HashMap<u64, (std::time::Instant, i32)>,
     /// Tracks when each managed window was added to a workspace. Used to
     /// distinguish transient popups (managed briefly) from real windows
     /// (managed for a long time, e.g., close-to-tray apps).
@@ -690,6 +695,7 @@ impl AppState {
             layout_apply_timeout: APPLY_LAYOUT_TIMEOUT,
             start_time: std::time::Instant::now(),
             recently_hidden_hwnds: HashMap::new(),
+            hidden_column_widths: HashMap::new(),
             window_managed_at: HashMap::new(),
             snap_disabled_hwnds: HashSet::new(),
             on_battery_or_saver: leopardwm_platform_win32::is_on_battery_or_power_saver(),

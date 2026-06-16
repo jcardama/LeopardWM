@@ -2405,6 +2405,63 @@ fn test_recently_hidden_hwnd_suppresses_recreation() {
     );
 }
 
+#[test]
+fn test_hidden_window_restores_column_width_on_reshow() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state
+        .injected_window_info
+        .insert(300, make_test_window_info(300));
+
+    // Create it, then give it a distinct (non-default) column width.
+    state.handle_window_event(WindowEvent::Created(300));
+    state.focused_workspace_mut().unwrap().resize_focused_column(250);
+    let width_before = state.focused_workspace().unwrap().columns()[0].width();
+
+    // Backdate so the hide isn't treated as transient (transient windows are
+    // suppressed on re-create instead of re-tiled).
+    state.window_managed_at.insert(
+        300,
+        std::time::Instant::now() - std::time::Duration::from_secs(31),
+    );
+
+    // Hide -> the column width is remembered.
+    state.handle_window_event(WindowEvent::Hidden(300));
+    assert_eq!(state.focused_workspace().unwrap().window_count(), 0);
+    assert_eq!(
+        state.hidden_column_widths.get(&300).map(|(_, w)| *w),
+        Some(width_before),
+        "hidden window's column width is remembered"
+    );
+
+    // Reshow -> re-tiled at the remembered width, not the default.
+    state.handle_window_event(WindowEvent::Created(300));
+    let ws = state.focused_workspace().unwrap();
+    assert_eq!(ws.window_count(), 1, "window re-tiled on reshow");
+    assert_eq!(
+        ws.columns()[0].width(),
+        width_before,
+        "reshown window keeps its prior column width"
+    );
+    assert!(
+        !state.hidden_column_widths.contains_key(&300),
+        "remembered width is consumed on restore"
+    );
+}
+
+#[test]
+fn test_take_remembered_column_width_consumes_entry() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state
+        .hidden_column_widths
+        .insert(100, (std::time::Instant::now(), 555));
+    assert_eq!(state.take_remembered_column_width(100), Some(555));
+    assert!(
+        !state.hidden_column_widths.contains_key(&100),
+        "entry is removed once taken"
+    );
+    assert_eq!(state.take_remembered_column_width(100), None);
+}
+
 // =========================================================================
 // R32-C3: Deterministic daemon singleton test (Iter 41)
 // =========================================================================
