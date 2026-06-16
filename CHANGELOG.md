@@ -2,6 +2,18 @@
 
 All notable changes to LeopardWM will be documented in this file.
 
+## 0.2.1
+
+### Fixes
+
+- **The daemon no longer requests elevation by default.** It now runs at the
+  same privilege as the process that launched it, so admin users no longer get
+  a UAC prompt on launch and `lwm` works from a normal, non-elevated terminal.
+  To manage windows belonging to elevated apps, run the daemon as administrator
+  — and even then, the IPC pipe now grants the current user access at medium
+  integrity, so `lwm` (and scripts) still connect from a normal terminal
+  instead of failing with access-denied.
+
 ## 0.2.0
 
 ### Improvements

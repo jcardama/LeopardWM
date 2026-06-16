@@ -71,9 +71,10 @@ jobs:
   publish-winget:
     needs: build
     runs-on: windows-latest
-    # Only publish to winget when the WINGET_TOKEN secret is configured.
-    # Provide a fine-grained PAT with `public_repo` scope on the user's
-    # fork of microsoft/winget-pkgs (auto-created on first run).
+    # WINGET_TOKEN must be a CLASSIC PAT with the `public_repo` scope (not a
+    # fine-grained PAT — those can't open the upstream PR). The action forks
+    # microsoft/winget-pkgs to the token owner's account on first run, then
+    # opens a version-bump PR from that fork.
     if: ${{ !github.event.repository.fork }}
     steps:
       - uses: vedantmgoyal9/winget-releaser@main
@@ -81,4 +82,6 @@ jobs:
           identifier: jcardama.LeopardWM
           installers-regex: '\.msi$'
           token: ${{ secrets.WINGET_TOKEN }}
-        continue-on-error: true
+        # No continue-on-error: a winget failure should surface as a failed
+        # job (the GitHub Release is already published by the `build` job, so
+        # this can't block the release) rather than silently no-op for months.

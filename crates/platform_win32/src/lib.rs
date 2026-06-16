@@ -13,6 +13,7 @@ pub mod border;
 pub mod dialog;
 pub mod gestures;
 pub mod hotkeys;
+pub mod ipc_security;
 pub mod mouse_hook;
 pub mod overlay;
 pub mod overview;
