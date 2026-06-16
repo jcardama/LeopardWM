@@ -40,6 +40,7 @@ impl SettingsWindowHandle {
         event_tx: mpsc::Sender<SettingsEvent>,
         initial_section: Option<&str>,
         high_contrast: bool,
+        failed_binds: Vec<String>,
     ) -> Option<Self> {
         if SETTINGS_OPEN
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -53,9 +54,13 @@ impl SettingsWindowHandle {
         let handle = std::thread::Builder::new()
             .name("settings-window".into())
             .spawn(move || {
-                if let Err(e) =
-                    win32::run_settings_window(config, event_tx, section.as_deref(), high_contrast)
-                {
+                if let Err(e) = win32::run_settings_window(
+                    config,
+                    event_tx,
+                    section.as_deref(),
+                    high_contrast,
+                    failed_binds,
+                ) {
                     warn!("Settings window error: {}", e);
                 }
                 SETTINGS_OPEN.store(false, Ordering::SeqCst);

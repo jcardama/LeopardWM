@@ -1914,6 +1914,7 @@ fn test_hotkey_state_registered_count_default() {
         mapping,
         requested_count: 2,
         registered_count: 1, // Simulate: only 1 of 2 actually registered
+        failed_binds: vec!["Win+Left".to_string()],
     };
 
     assert_eq!(hs.mapping.len(), 2, "mapping has 2 parsed hotkeys");
@@ -1927,6 +1928,27 @@ fn test_hotkey_state_registered_count_default() {
         hs.registered_count,
         "registered_count should differ from mapping.len() when partial"
     );
+}
+
+#[test]
+fn test_failed_bind_labels_returns_unregistered_combos() {
+    let binds = vec![
+        (10 as HotkeyId, "Win+Left".to_string()),
+        (20 as HotkeyId, "Win+Right".to_string()),
+        (30 as HotkeyId, "Ctrl+Alt+H".to_string()),
+    ];
+    // Only id 30 registered; 10 and 20 were rejected by the OS.
+    let failed = failed_bind_labels(&binds, &[30]);
+    assert_eq!(failed, vec!["Win+Left".to_string(), "Win+Right".to_string()]);
+}
+
+#[test]
+fn test_failed_bind_labels_empty_when_all_registered() {
+    let binds = vec![
+        (10 as HotkeyId, "Win+Left".to_string()),
+        (20 as HotkeyId, "Win+Right".to_string()),
+    ];
+    assert!(failed_bind_labels(&binds, &[10, 20]).is_empty());
 }
 
 // =========================================================================

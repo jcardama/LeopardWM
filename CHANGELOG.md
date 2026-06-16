@@ -6,17 +6,24 @@ All notable changes to LeopardWM will be documented in this file.
 
 ### Fixes
 
-- **The daemon no longer requests elevation by default.** It now runs at the
-  same privilege as the process that launched it, so admin users no longer get
-  a UAC prompt on launch and `lwm` works from a normal, non-elevated terminal.
-  To manage windows belonging to elevated apps, run the daemon as administrator
-  — and even then, the IPC pipe now grants the current user access at medium
-  integrity, so `lwm` (and scripts) still connect from a normal terminal
+- **The daemon no longer requests elevation by default.** It runs at the same
+  privilege as the terminal that launched it, so admin users no longer get a UAC
+  prompt on launch and `lwm` works from a normal terminal. To manage elevated
+  apps you can still run the daemon as administrator; the IPC pipe now grants the
+  current user access either way, so `lwm` connects from a normal terminal
   instead of failing with access-denied.
-- **Hidden windows keep their size when they reappear.** A managed window that
+- **Hidden windows keep their width when they reappear.** A managed window that
   is hidden and later shown again (for example by a third-party virtual-desktop
-  tool that hides windows on switch) now re-tiles at the column width it had
-  before, instead of resetting to the default.
+  tool) now re-tiles at its previous column width instead of resetting to the
+  default.
+- **Rejected hotkeys are no longer silent.** When the OS won't register a key
+  combo (Windows or another app already owns it), the Settings hotkeys tab shows
+  a dismissible warning listing the rejected binds, and the daemon logs them.
+- **Logs are written to a file now**, at
+  `%LOCALAPPDATA%\leopardwm\logs\leopardwm-daemon.log` (the folder the tray's
+  "View Logs" opens and `lwm collect-logs` reads). Previously they went only to
+  stdout and were lost on a direct launch. `collect-logs` also bundles the
+  watchdog log.
 
 ## 0.2.0
 

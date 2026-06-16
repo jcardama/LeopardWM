@@ -77,6 +77,7 @@ pub fn run_settings_window(
     event_tx: mpsc::Sender<SettingsEvent>,
     initial_section: Option<&str>,
     high_contrast: bool,
+    failed_binds: Vec<String>,
 ) -> Result<()> {
     unsafe {
         let hinstance = GetModuleHandleW(None)?;
@@ -167,13 +168,15 @@ pub fn run_settings_window(
         // reset-to-defaults from this single catalog (see ipc::hotkeys).
         let catalog_json = serde_json::to_string(&leopardwm_ipc::hotkeys::hotkey_catalog())
             .unwrap_or_else(|_| "[]".to_string());
+        let failed_binds_json =
+            serde_json::to_string(&failed_binds).unwrap_or_else(|_| "[]".to_string());
 
         let settings_html = SETTINGS_HTML.replace("{VERSION}", env!("CARGO_PKG_VERSION"));
         let webview = wry::WebViewBuilder::new_with_web_context(&mut web_context)
             .with_html(&settings_html)
             .with_initialization_script(format!(
-                "window._initConfig = {}; window._hotkeyCatalog = {};",
-                config_json, catalog_json
+                "window._initConfig = {}; window._hotkeyCatalog = {}; window._failedHotkeys = {};",
+                config_json, catalog_json, failed_binds_json
             ))
             .with_ipc_handler(move |req| {
                 handle_ipc(req.body(), &event_tx, hwnd);

@@ -218,6 +218,12 @@ impl HotkeyHandle {
     pub fn registered_count(&self) -> usize {
         self.registered_ids.len()
     }
+
+    /// IDs of the hotkeys that registered successfully. Callers compare this
+    /// against the requested set to find which binds were rejected by the OS.
+    pub fn registered_ids(&self) -> &[HotkeyId] {
+        &self.registered_ids
+    }
 }
 
 impl Drop for HotkeyHandle {

@@ -98,7 +98,7 @@ fn main() -> Result<()> {
                 // "disabled" message before the watchdog process exits.
                 let handle = notification::show_toast(
                     "LeopardWM disabled",
-                    "Repeated crashes detected. Run `lwm doctor` and check %TEMP%\\leopardwm-daemon.err.log.",
+                    "Repeated crashes detected. Run `lwm collect-logs` for details.",
                     notification::Severity::Warning,
                 );
                 let _ = handle.join();
@@ -157,6 +157,11 @@ fn find_daemon_binary() -> Result<PathBuf> {
 fn spawn_daemon(path: &Path, args: &[String]) -> Result<ExitStatus> {
     let mut child = Command::new(path)
         .args(args)
+        // The daemon writes its own log file, so null its stdout rather than
+        // duplicating it into the watchdog log. stderr stays inherited so a
+        // panic before the tracing subscriber inits still reaches the watchdog
+        // error log.
+        .stdout(std::process::Stdio::null())
         .spawn()
         .with_context(|| format!("failed to spawn {}", path.display()))?;
     child.wait().context("failed to wait on daemon child")

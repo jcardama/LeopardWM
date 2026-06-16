@@ -45,6 +45,16 @@ fn sanitize_pipe_scope_segment(scope: &str) -> String {
     sanitized.trim_matches('_').to_string()
 }
 
+/// Directory for LeopardWM logs: `%LOCALAPPDATA%\leopardwm\logs` (falls back to
+/// a `leopardwm\logs` subdir of the temp dir if the local data dir is
+/// unavailable). Shared by the daemon (which writes its log there), the CLI
+/// (`collect-logs`, daemon-launch redirects), and the tray's "View Logs".
+pub fn log_dir() -> std::path::PathBuf {
+    directories::BaseDirs::new()
+        .map(|d| d.data_local_dir().join("leopardwm").join("logs"))
+        .unwrap_or_else(|| std::env::temp_dir().join("leopardwm").join("logs"))
+}
+
 /// Build a user-scoped pipe name from an arbitrary user/domain scope string.
 pub fn scoped_pipe_name_for_user(scope: &str) -> String {
     let segment = sanitize_pipe_scope_segment(scope);
@@ -934,6 +944,16 @@ mod tests {
         // Verify pipe name follows Windows named pipe convention
         assert!(PIPE_NAME.starts_with(r"\\.\pipe\"));
         assert_eq!(PIPE_NAME, r"\\.\pipe\leopardwm");
+    }
+
+    #[test]
+    fn test_log_dir_is_leopardwm_logs() {
+        let dir = log_dir();
+        assert!(dir.ends_with("logs"), "log dir ends with logs: {dir:?}");
+        assert!(
+            dir.to_string_lossy().contains("leopardwm"),
+            "log dir is under a leopardwm folder: {dir:?}"
+        );
     }
 
     #[test]

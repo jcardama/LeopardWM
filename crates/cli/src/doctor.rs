@@ -250,7 +250,8 @@ pub(crate) fn handle_collect_logs() -> Result<()> {
     println!();
 
     // Daemon log
-    let log_path = std::env::temp_dir().join("leopardwm-daemon.log");
+    let log_dir = leopardwm_ipc::log_dir();
+    let log_path = log_dir.join("leopardwm-daemon.log");
     println!("## Daemon Log ({}):", log_path.display());
     match fs::read_to_string(&log_path) {
         Ok(content) => {
@@ -269,11 +270,30 @@ pub(crate) fn handle_collect_logs() -> Result<()> {
     println!();
 
     // Error log
-    let err_log_path = std::env::temp_dir().join("leopardwm-daemon.err.log");
+    let err_log_path = log_dir.join("leopardwm-daemon.err.log");
     println!("## Daemon Error Log ({}):", err_log_path.display());
     match fs::read_to_string(&err_log_path) {
         Ok(content) if !content.trim().is_empty() => println!("{}", content),
         Ok(_) => println!("  (empty)"),
+        Err(e) => println!("  (not found or unreadable: {})", e),
+    }
+    println!();
+
+    // Watchdog log — captures the daemon's stdout/stderr when launched via the
+    // watchdog (e.g. autostart), including panics that never reach the file log.
+    let watchdog_log_path = log_dir.join("leopardwm-watchdog.log");
+    println!("## Watchdog Log ({}):", watchdog_log_path.display());
+    match fs::read_to_string(&watchdog_log_path) {
+        Ok(content) => {
+            let lines: Vec<&str> = content.lines().collect();
+            let start = lines.len().saturating_sub(100);
+            for line in &lines[start..] {
+                println!("{}", line);
+            }
+            if start > 0 {
+                println!("  ... ({} earlier lines omitted)", start);
+            }
+        }
         Err(e) => println!("  (not found or unreadable: {})", e),
     }
     println!();

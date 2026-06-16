@@ -58,7 +58,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, error, info, warn, Level};
-use tracing_subscriber::FmtSubscriber;
 
 /// Command-line arguments for the daemon binary.
 #[derive(Parser, Debug, Clone)]
@@ -126,6 +125,9 @@ struct HotkeyState {
     /// Number of hotkeys the OS actually registered (may be less than
     /// `requested_count` if some conflicted with other applications).
     registered_count: usize,
+    /// Key combos the OS rejected (e.g. `Win+Left`), in display form. Shown as
+    /// a warning in the Settings hotkeys tab so silent failures are visible.
+    failed_binds: Vec<String>,
 }
 
 /// Register hotkeys from config and return state.
@@ -179,6 +181,16 @@ async fn reload_config_and_hotkeys(
     }
 }
 
+/// Key combos (display form) whose ids are absent from `registered` — i.e. the
+/// binds the OS rejected. Surfaced to the Settings hotkeys tab as a warning.
+fn failed_bind_labels(bind_labels: &[(HotkeyId, String)], registered: &[HotkeyId]) -> Vec<String> {
+    bind_labels
+        .iter()
+        .filter(|(id, _)| !registered.contains(id))
+        .map(|(_, key)| key.clone())
+        .collect()
+}
+
 fn setup_hotkeys(config: &Config, event_tx: mpsc::Sender<DaemonEvent>) -> HotkeyState {
     let config_hotkeys = &config.hotkeys.bindings;
 
@@ -188,6 +200,7 @@ fn setup_hotkeys(config: &Config, event_tx: mpsc::Sender<DaemonEvent>) -> Hotkey
     // command and have a queued WM_HOTKEY fire the wrong action.
     let mut hotkeys = Vec::new();
     let mut mapping = HashMap::new();
+    let mut bind_labels: Vec<(HotkeyId, String)> = Vec::new();
 
     for (key_str, cmd_str) in config_hotkeys {
         if let Some((modifiers, vk)) = parse_hotkey_string(key_str) {
@@ -202,6 +215,7 @@ fn setup_hotkeys(config: &Config, event_tx: mpsc::Sender<DaemonEvent>) -> Hotkey
                 }
                 hotkeys.push(Hotkey::new(id, modifiers, vk));
                 mapping.insert(id, cmd);
+                bind_labels.push((id, key_str.clone()));
                 debug!("Configured hotkey {}: {} -> {:?}", id, key_str, cmd_str);
             } else {
                 warn!(
@@ -223,12 +237,21 @@ fn setup_hotkeys(config: &Config, event_tx: mpsc::Sender<DaemonEvent>) -> Hotkey
             mapping,
             requested_count: 0,
             registered_count: 0,
+            failed_binds: Vec::new(),
         };
     }
 
     match register_hotkeys(hotkeys) {
         Ok((handle, hotkey_receiver)) => {
             info!("Registered {} global hotkeys", handle.registered_count());
+
+            let failed_binds = failed_bind_labels(&bind_labels, handle.registered_ids());
+            if !failed_binds.is_empty() {
+                warn!(
+                    "These hotkeys were rejected by the OS (already in use): {}",
+                    failed_binds.join(", ")
+                );
+            }
 
             // Spawn task to forward hotkey events
             match std::thread::Builder::new()
@@ -252,6 +275,7 @@ fn setup_hotkeys(config: &Config, event_tx: mpsc::Sender<DaemonEvent>) -> Hotkey
                 mapping,
                 requested_count,
                 registered_count,
+                failed_binds,
             }
         }
         Err(e) => {
@@ -264,6 +288,7 @@ fn setup_hotkeys(config: &Config, event_tx: mpsc::Sender<DaemonEvent>) -> Hotkey
                 mapping,
                 requested_count,
                 registered_count: 0,
+                failed_binds: failed_bind_labels(&bind_labels, &[]),
             }
         }
     }
@@ -444,8 +469,24 @@ fn bootstrap_config() -> Result<(Config, Vec<config::ConfigWarning>)> {
         "error" => Level::ERROR,
         _ => Level::INFO, // default fallback for invalid values
     };
-    let subscriber = FmtSubscriber::builder().with_max_level(log_level).finish();
-    tracing::subscriber::set_global_default(subscriber)?;
+    // Write logs to both stdout (captured by the watchdog when launched that
+    // way) and a file in the shared log dir, so the log the banner advertises
+    // and `lwm collect-logs`/"View Logs" point at actually exists regardless of
+    // how the daemon was launched.
+    use tracing_subscriber::prelude::*;
+    let log_dir = leopardwm_ipc::log_dir();
+    let _ = std::fs::create_dir_all(&log_dir);
+    let file_appender = tracing_appender::rolling::never(&log_dir, "leopardwm-daemon.log");
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::filter::LevelFilter::from_level(log_level))
+        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stdout))
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .with_writer(file_appender),
+        )
+        .try_init()
+        .map_err(|e| anyhow::anyhow!("Failed to set tracing subscriber: {}", e))?;
 
     // Validate and clamp config values
     let config_warnings = config.validate();
@@ -987,7 +1028,7 @@ async fn print_banner(
         .into_iter()
         .find(|p| p.exists())
         .map(|p| p.display().to_string());
-    let log_path = std::env::temp_dir()
+    let log_path = leopardwm_ipc::log_dir()
         .join("leopardwm-daemon.log")
         .display()
         .to_string();
@@ -1551,6 +1592,7 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
                 ctx.settings_sync_tx.clone(),
                 None,
                 hc,
+                ctx.hotkey_state.failed_binds.clone(),
             );
         }
         tray::TrayEvent::OpenAbout => {
@@ -1565,6 +1607,7 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
                 ctx.settings_sync_tx.clone(),
                 Some("about"),
                 hc,
+                ctx.hotkey_state.failed_binds.clone(),
             );
         }
         tray::TrayEvent::EditConfig => {
@@ -1581,7 +1624,8 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
         }
         tray::TrayEvent::ViewLogs => {
             info!("Tray: View logs requested");
-            let log_dir = std::env::temp_dir();
+            let log_dir = leopardwm_ipc::log_dir();
+            let _ = std::fs::create_dir_all(&log_dir);
             let _ = std::process::Command::new("cmd")
                 .args(["/c", "start", "", &log_dir.to_string_lossy()])
                 .spawn();
@@ -2620,6 +2664,7 @@ async fn main() -> Result<()> {
             mapping: HashMap::new(),
             requested_count: 0,
             registered_count: 0,
+            failed_binds: Vec::new(),
         }
     } else {
         setup_hotkeys(&config, event_tx.clone())

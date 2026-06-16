@@ -54,12 +54,13 @@ pub const SETTINGS_HTML: &str = r##"<!DOCTYPE html>
   --accent-text: #ffffff;
   --danger: #c42b1c;
 
+  --infobar-stroke: rgba(0,0,0,0.0578); /* CardStrokeColorDefault */
   --info-bg: rgba(0, 120, 212, 0.06);
   --info-stroke: #0078d4;
   --success-bg: rgba(16, 124, 16, 0.06);
   --success-stroke: #107c10;
-  --warning-bg: rgba(255, 152, 0, 0.06);
-  --warning-stroke: #ff9800;
+  --warning-bg: #FFF4CE;          /* SystemFillColorCautionBackground */
+  --warning-stroke: #9D5D00;      /* SystemFillColorCaution */
   --error-bg: rgba(200, 43, 28, 0.06);
   --error-stroke: var(--danger);
 
@@ -104,9 +105,11 @@ pub const SETTINGS_HTML: &str = r##"<!DOCTYPE html>
     --accent-text: #003046;
     --danger: #ff99a4;
 
+    --infobar-stroke: rgba(255,255,255,0.0837); /* CardStrokeColorDefault (dark) */
     --info-bg: rgba(118, 185, 237, 0.10);
     --success-bg: rgba(109, 202, 70, 0.10);
-    --warning-bg: rgba(255, 185, 0, 0.10);
+    --warning-bg: #433519;          /* SystemFillColorCautionBackground (dark) */
+    --warning-stroke: #FCE100;      /* SystemFillColorCaution (dark) */
     --error-bg: rgba(255, 153, 164, 0.08);
 
     --toggle-off-stroke: rgba(255,255,255,0.54);
@@ -717,28 +720,37 @@ input[type="range"]::-webkit-slider-thumb {
   border-radius: 3px;
 }
 
-/* ── InfoBar (WinUI 3 Fluent) ──────────────────────────────────────── */
+/* ── InfoBar (WinUI 3 control: uniform border, severity-tinted solid bg,
+      icon left, title bold + message inline, optional close X top-right) ── */
 .info-bar {
   display: flex;
   align-items: flex-start;
   gap: 12px;
-  padding: 12px 16px;
+  min-height: 44px;
+  padding: 11px 8px 11px 14px;
   border-radius: var(--ctrl-radius);
-  border: 1px solid var(--divider-stroke);
-  border-left: 3px solid var(--info-stroke);
+  border: 1px solid var(--infobar-stroke);
   background: var(--info-bg);
   margin: 8px 0;
 }
-.info-bar-icon { flex-shrink: 0; width: 16px; height: 16px; margin-top: 2px; fill: var(--info-stroke); }
-.info-bar-content { flex: 1; min-width: 0; }
-.info-bar-title { font-size: 14px; line-height: 20px; font-weight: 600; color: var(--text-primary); }
-.info-bar-message { font-size: 12px; line-height: 16px; color: var(--text-secondary); margin-top: 2px; }
+.info-bar-icon { flex-shrink: 0; width: 20px; height: 20px; margin-top: 1px; fill: var(--info-stroke); }
+.info-bar-content { flex: 1; min-width: 0; padding-top: 1px; font-size: 14px; line-height: 20px; }
+.info-bar-title { font-weight: 600; color: var(--text-primary); margin-right: 6px; }
+.info-bar-message { color: var(--text-primary); }
+.info-bar-close {
+  flex-shrink: 0; width: 32px; height: 32px; margin-top: -6px;
+  border: none; background: transparent; border-radius: var(--ctrl-radius);
+  cursor: pointer; color: var(--text-secondary);
+  display: flex; align-items: center; justify-content: center; font-size: 12px;
+}
+.info-bar-close:hover { background: var(--subtle-secondary); }
+.info-bar-close:active { background: var(--subtle-tertiary); }
 .info-bar[hidden] { display: none; }
-.info-bar.success { border-left-color: var(--success-stroke); background: var(--success-bg); }
+.info-bar.success { background: var(--success-bg); }
 .info-bar.success .info-bar-icon { fill: var(--success-stroke); }
-.info-bar.warning { border-left-color: var(--warning-stroke); background: var(--warning-bg); }
+.info-bar.warning { background: var(--warning-bg); }
 .info-bar.warning .info-bar-icon { fill: var(--warning-stroke); }
-.info-bar.error  { border-left-color: var(--error-stroke); background: var(--error-bg); }
+.info-bar.error  { background: var(--error-bg); }
 .info-bar.error .info-bar-icon { fill: var(--error-stroke); }
 
 </style>
@@ -856,8 +868,7 @@ input[type="range"]::-webkit-slider-thumb {
               <path d="M8 1a7 7 0 100 14A7 7 0 008 1zm-.75 3.5a.75.75 0 011.5 0v4a.75.75 0 01-1.5 0v-4zm.75 7a.75.75 0 110-1.5.75.75 0 010 1.5z"/>
             </svg>
             <div class="info-bar-content">
-              <div class="info-bar-title">High contrast mode</div>
-              <div class="info-bar-message">Border color is overridden by the system highlight color.</div>
+              <span class="info-bar-title">High contrast mode.</span><span class="info-bar-message">Border color is overridden by the system highlight color.</span>
             </div>
           </div>
           <div class="field">
@@ -1024,6 +1035,15 @@ input[type="range"]::-webkit-slider-thumb {
       <!-- Hotkeys -->
       <div id="sec-hotkeys" class="section">
         <h2 class="section-title">Hotkeys</h2>
+        <div class="info-bar warning" id="hotkey-warn-bar" hidden>
+          <svg class="info-bar-icon" viewBox="0 0 20 20" aria-hidden="true">
+            <path d="M10 2.2a1.3 1.3 0 0 1 1.13.66l7.3 12.64A1.3 1.3 0 0 1 17.3 17.5H2.7a1.3 1.3 0 0 1-1.13-1.95L8.87 2.86A1.3 1.3 0 0 1 10 2.2Zm0 9.55a.85.85 0 0 0 .85-.85V7.4a.85.85 0 0 0-1.7 0v3.5c0 .47.38.85.85.85Zm0 1.2a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Z"/>
+          </svg>
+          <div class="info-bar-content">
+            <span class="info-bar-title" id="hotkey-warn-title"></span><span class="info-bar-message" id="hotkey-warn-msg"></span>
+          </div>
+          <button class="info-bar-close" title="Dismiss" aria-label="Dismiss" onclick="document.getElementById('hotkey-warn-bar').hidden=true">&#10005;</button>
+        </div>
         <div class="table-wrap">
           <table>
             <thead><tr><th>Command</th><th>Key binding</th><th style="width:36px"></th></tr></thead>
@@ -1306,6 +1326,7 @@ function init(cfg) {
     }
     loadHotkeysSorted(bindings, scrollMod);
   }
+  renderFailedHotkeys();
 
   document.getElementById('rules-body').innerHTML = '';
   if (cfg.window_rules) { cfg.window_rules.forEach(function(r) { addRuleRow(r); }); }
@@ -1425,6 +1446,25 @@ function defaultKeyForCmd(cmd) {
 function resetHotkeyRow(tr) {
   var defKey = defaultKeyForCmd(tr.dataset.cmd);
   if (defKey) { tr.querySelector('.hk-key').value = defKey; autoSave(0); }
+}
+
+/* Show a dismissible warning when the OS rejected some hotkey binds at
+   registration (window._failedHotkeys, set by the daemon). */
+function renderFailedHotkeys() {
+  var failed = window._failedHotkeys || [];
+  var bar = document.getElementById('hotkey-warn-bar');
+  if (!bar) { return; }
+  if (!failed.length) { bar.hidden = true; return; }
+  var n = failed.length;
+  var combos = n === 1 ? failed[0]
+    : n === 2 ? failed[0] + ' and ' + failed[1]
+    : failed.slice(0, -1).join(', ') + ', and ' + failed[n - 1];
+  document.getElementById('hotkey-warn-title').textContent =
+    n + (n === 1 ? ' hotkey couldn\'t be registered.' : ' hotkeys couldn\'t be registered.');
+  document.getElementById('hotkey-warn-msg').textContent =
+    combos + (n === 1 ? ' is' : ' are') +
+    ' already in use by Windows or another app. Pick a different combination and reload your config.';
+  bar.hidden = false;
 }
 
 function loadHotkeysSorted(bindings, scrollModifier) {

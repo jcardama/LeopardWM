@@ -88,15 +88,16 @@ fn apply_detach_flags(_cmd: &mut Command) {}
 
 fn spawn_daemon(safe_mode: bool) -> Result<u32> {
     let daemon_path = ensure_daemon_binary()?;
-    let log_dir = std::env::temp_dir();
-    let stdout_path = log_dir.join("leopardwm-daemon.log");
+    let log_dir = leopardwm_ipc::log_dir();
+    std::fs::create_dir_all(&log_dir).context("Failed to create log directory")?;
+    // The daemon writes its own leopardwm-daemon.log; send its stdout to null
+    // so we don't open a second handle to the same file. Keep stderr for
+    // panics that fire before the tracing subscriber initializes.
     let stderr_path = log_dir.join("leopardwm-daemon.err.log");
-
-    let stdout = File::create(&stdout_path).context("Failed to create daemon stdout log")?;
     let stderr = File::create(&stderr_path).context("Failed to create daemon stderr log")?;
 
     let mut cmd = Command::new(daemon_path);
-    cmd.stdin(Stdio::null()).stdout(stdout).stderr(stderr);
+    cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(stderr);
     if safe_mode {
         cmd.arg("--safe-mode");
     }
@@ -110,7 +111,7 @@ fn spawn_daemon(safe_mode: bool) -> Result<u32> {
     }
     println!(
         "Logs: {} / {}",
-        stdout_path.display(),
+        log_dir.join("leopardwm-daemon.log").display(),
         stderr_path.display()
     );
     Ok(child.id())
@@ -159,7 +160,8 @@ fn spawn_watchdog(safe_mode: bool) -> Result<u32> {
     // direct-spawn path uses (covers the "ran from cargo target/" case).
     ensure_daemon_binary()?;
 
-    let log_dir = std::env::temp_dir();
+    let log_dir = leopardwm_ipc::log_dir();
+    std::fs::create_dir_all(&log_dir).context("Failed to create log directory")?;
     let stdout_path = log_dir.join("leopardwm-watchdog.log");
     let stderr_path = log_dir.join("leopardwm-watchdog.err.log");
 
