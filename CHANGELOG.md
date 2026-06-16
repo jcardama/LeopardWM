@@ -2,7 +2,7 @@
 
 All notable changes to LeopardWM will be documented in this file.
 
-## Unreleased
+## 0.2.0
 
 ### Improvements
 
@@ -49,6 +49,10 @@ All notable changes to LeopardWM will be documented in this file.
   (cycle, set-width, equalize, or drag-resize) now scrolls the viewport to keep
   the column on screen, instead of letting a column near the edge grow
   off-screen.
+- **Scratchpad stashes and restores the right window.** Stashing reliably
+  targets the focused window instead of occasionally grabbing a neighbor, and
+  releasing returns the window to its original column with focus intact rather
+  than dropping it into a new column or focusing a sibling.
 
 ## 0.1.19
 
