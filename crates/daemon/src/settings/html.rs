@@ -362,6 +362,11 @@ html, body {
 }
 .input-wrap:focus-within::after { transform: scaleX(1); }
 
+/* ── Hotkey recorder field ───────────────────────────────────────── */
+.hk-record { cursor: pointer; }
+.hk-record.recording { box-shadow: inset 0 0 0 1px var(--accent); }
+.hk-cmd-label[title] { cursor: help; }
+
 /* ── Text / Number Inputs ─────────────────────────────────────────── */
 input[type="text"],
 input[type="number"] {
@@ -1421,17 +1426,102 @@ function humanizeKey(chord) {
   return parts.join('+');
 }
 
+/* Click-to-record hotkey capture. Command-row key fields are readonly
+   recorders: click or press Enter to start, then press a combo. Emits the
+   daemon's canonical form (symbol keys, fixed Ctrl+Alt+Win+Shift order).
+   Bare Esc/Tab leave the field, bare Backspace clears the bind. */
+var CODE_TO_KEY = {
+  ArrowLeft: 'Left', ArrowRight: 'Right', ArrowUp: 'Up', ArrowDown: 'Down',
+  Space: 'Space', Enter: 'Enter', Tab: 'Tab', Escape: 'Escape',
+  Minus: '-', Equal: '=', Comma: ',', Period: '.', BracketLeft: '[', BracketRight: ']'
+};
+function codeToKey(code) {
+  if (/^Key[A-Z]$/.test(code)) return code.slice(3);
+  if (/^Digit[0-9]$/.test(code)) return code.slice(5);
+  if (/^F([1-9]|1[0-2])$/.test(code)) return code;
+  return CODE_TO_KEY[code];
+}
+function chordParts(mods) {
+  var parts = [];
+  if (mods.ctrl) parts.push('Ctrl');
+  if (mods.alt) parts.push('Alt');
+  if (mods.win) parts.push('Win');
+  if (mods.shift) parts.push('Shift');
+  return parts;
+}
+function exitRecording(input) {
+  input.classList.remove('recording');
+  input.placeholder = 'e.g. Ctrl+Alt+H';
+}
+function attachRecorder(input) {
+  if (input.dataset.recBound) return;
+  input.dataset.recBound = '1';
+  var prevValue = '';
+  function startRecording() {
+    if (input.classList.contains('recording')) return;
+    prevValue = input.value;
+    input.classList.add('recording');
+    input.placeholder = 'Press shortcut, Esc to cancel';
+    input.value = '';
+  }
+  input.addEventListener('mousedown', function(e) { if (e.button === 0) startRecording(); });
+  input.addEventListener('blur', function() {
+    if (input.classList.contains('recording')) { input.value = prevValue; exitRecording(input); }
+  });
+  input.addEventListener('keydown', function(e) {
+    if (!input.classList.contains('recording')) {
+      if (e.key === 'Enter') { e.preventDefault(); startRecording(); }
+      return;
+    }
+    if (e.isComposing || e.keyCode === 229 || e.repeat) return;
+    var mods = { ctrl: e.ctrlKey, alt: e.altKey, win: e.metaKey, shift: e.shiftKey };
+    var noMods = !mods.ctrl && !mods.alt && !mods.win && !mods.shift;
+    /* A modifier on its own: show the in-progress chord, keep recording. */
+    if (/^(Control|Alt|Shift|Meta)(Left|Right)$/.test(e.code)) {
+      e.preventDefault();
+      input.value = chordParts(mods).join('+') + '+…';
+      return;
+    }
+    /* Bare Esc/Tab are control gestures, not binds. */
+    if (e.code === 'Escape' && noMods) { e.preventDefault(); e.stopPropagation(); input.value = prevValue; exitRecording(input); return; }
+    if (e.code === 'Tab' && noMods) { input.value = prevValue; exitRecording(input); return; }
+    /* Bare Backspace/Delete clears the bind (parity with the old text box). */
+    if ((e.code === 'Backspace' || e.code === 'Delete') && noMods) {
+      e.preventDefault();
+      input.value = '';
+      exitRecording(input);
+      autoSave(0);
+      return;
+    }
+    var token = codeToKey(e.code);
+    if (!token) return; /* unmapped key: keep waiting */
+    e.preventDefault();
+    e.stopPropagation();
+    input.value = chordParts(mods).concat(token).join('+');
+    exitRecording(input);
+    var wb = document.getElementById('hotkey-warn-bar');
+    if (wb) wb.hidden = true; /* the warning is snapshot-stale once a bind is fixed */
+    autoSave(0);
+  });
+}
+
 function addHotkeyRow(key, cmd) {
   var tbody = document.getElementById('hotkeys-body');
   var tr = document.createElement('tr');
   tr.dataset.cmd = cmd;
+  /* Long labels carry a "(detail)" suffix; show the short name and move the
+     parenthetical into a hover tooltip so the row stays one line. */
+  var fullLabel = cmdLabel(cmd);
+  var parenIdx = fullLabel.indexOf(' (');
+  var shortLabel = parenIdx === -1 ? fullLabel : fullLabel.slice(0, parenIdx);
+  var labelTitle = parenIdx === -1 ? '' : ' title="' + escAttr(fullLabel) + '"';
   tr.innerHTML =
-    '<td class="hk-cmd-label">' + escHtml(cmdLabel(cmd)) + '</td>' +
-    '<td><input type="text" class="hk-key" value="' + escAttr(humanizeKey(key)) + '" placeholder="e.g. Ctrl+Alt+H"></td>' +
+    '<td class="hk-cmd-label"' + labelTitle + '>' + escHtml(shortLabel) + '</td>' +
+    '<td><input type="text" class="hk-key hk-record" value="' + escAttr(humanizeKey(key)) + '" placeholder="e.g. Ctrl+Alt+H" readonly title="Click or press Enter to record a shortcut"></td>' +
     '<td><button class="row-delete" title="Reset to default" onclick="resetHotkeyRow(this.closest(\'tr\'))">' + resetIcon + '</button></td>';
   tbody.appendChild(tr);
   wrapAllInputs(tr);
-  tr.querySelector('.hk-key').addEventListener('input', function() { autoSave(500); });
+  attachRecorder(tr.querySelector('.hk-key'));
 }
 
 function escHtml(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }

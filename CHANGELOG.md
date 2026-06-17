@@ -2,6 +2,16 @@
 
 All notable changes to LeopardWM will be documented in this file.
 
+## 0.2.2
+
+### Improvements
+
+- **Record hotkeys by pressing them.** In Settings, the hotkeys list now
+  captures shortcuts directly: click a binding (or press Enter) and press the
+  combo instead of typing it. Esc cancels, Backspace clears a binding.
+- Long action names in the hotkeys list no longer wrap to two lines; the full
+  name shows in a tooltip on hover.
+
 ## 0.2.1
 
 ### Fixes
