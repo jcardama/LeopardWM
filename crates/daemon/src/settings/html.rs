@@ -366,6 +366,8 @@ html, body {
 .hk-record { cursor: pointer; }
 .hk-record.recording { box-shadow: inset 0 0 0 1px var(--accent); }
 .hk-cmd-label[title] { cursor: help; }
+.hk-dup-note { display: block; margin-top: 4px; font-size: 11px; line-height: 14px; color: var(--warning-stroke); }
+.hk-dup-note:empty { display: none; }
 
 /* ── Text / Number Inputs ─────────────────────────────────────────── */
 input[type="text"],
@@ -1389,6 +1391,13 @@ HOTKEY_CATALOG.forEach(function(a) {
 });
 
 function cmdLabel(cmd) { return CMD_LABELS[cmd] || cmd; }
+/* The catalog label may carry a " (detail)" suffix; the short form (before the
+   parenthetical) is what the hotkeys list shows, with the full text in a tooltip. */
+function cmdShortLabel(cmd) {
+  var l = cmdLabel(cmd);
+  var i = l.indexOf(' (');
+  return i === -1 ? l : l.slice(0, i);
+}
 
 function updateScrollLabels() {
   var mod = readScrollModifier();
@@ -1449,9 +1458,16 @@ function chordParts(mods) {
   if (mods.shift) parts.push('Shift');
   return parts;
 }
+/* Tell the daemon to suspend/resume global hotkeys around recording, so the
+   combo being captured doesn't also fire its bound action. */
+function postRecording(active) {
+  try { window.ipc.postMessage(JSON.stringify({ action: 'set_recording', recording: active })); } catch (e) {}
+}
 function exitRecording(input) {
+  var wasRecording = input.classList.contains('recording');
   input.classList.remove('recording');
   input.placeholder = 'e.g. Ctrl+Alt+H';
+  if (wasRecording) { postRecording(false); }
 }
 function attachRecorder(input) {
   if (input.dataset.recBound) return;
@@ -1463,6 +1479,7 @@ function attachRecorder(input) {
     input.classList.add('recording');
     input.placeholder = 'Press shortcut, Esc to cancel';
     input.value = '';
+    postRecording(true);
   }
   input.addEventListener('mousedown', function(e) { if (e.button === 0) startRecording(); });
   input.addEventListener('blur', function() {
@@ -1490,6 +1507,7 @@ function attachRecorder(input) {
       e.preventDefault();
       input.value = '';
       exitRecording(input);
+      refreshDuplicateWarnings();
       autoSave(0);
       return;
     }
@@ -1501,6 +1519,7 @@ function attachRecorder(input) {
     exitRecording(input);
     var wb = document.getElementById('hotkey-warn-bar');
     if (wb) wb.hidden = true; /* the warning is snapshot-stale once a bind is fixed */
+    refreshDuplicateWarnings();
     autoSave(0);
   });
 }
@@ -1512,16 +1531,39 @@ function addHotkeyRow(key, cmd) {
   /* Long labels carry a "(detail)" suffix; show the short name and move the
      parenthetical into a hover tooltip so the row stays one line. */
   var fullLabel = cmdLabel(cmd);
-  var parenIdx = fullLabel.indexOf(' (');
-  var shortLabel = parenIdx === -1 ? fullLabel : fullLabel.slice(0, parenIdx);
-  var labelTitle = parenIdx === -1 ? '' : ' title="' + escAttr(fullLabel) + '"';
+  var shortLabel = cmdShortLabel(cmd);
+  var labelTitle = fullLabel === shortLabel ? '' : ' title="' + escAttr(fullLabel) + '"';
   tr.innerHTML =
     '<td class="hk-cmd-label"' + labelTitle + '>' + escHtml(shortLabel) + '</td>' +
-    '<td><input type="text" class="hk-key hk-record" value="' + escAttr(humanizeKey(key)) + '" placeholder="e.g. Ctrl+Alt+H" readonly title="Click or press Enter to record a shortcut"></td>' +
+    '<td><input type="text" class="hk-key hk-record" value="' + escAttr(humanizeKey(key)) + '" placeholder="e.g. Ctrl+Alt+H" readonly title="Click or press Enter to record a shortcut"><span class="hk-dup-note"></span></td>' +
     '<td><button class="row-delete" title="Reset to default" onclick="resetHotkeyRow(this.closest(\'tr\'))">' + resetIcon + '</button></td>';
   tbody.appendChild(tr);
   wrapAllInputs(tr);
   attachRecorder(tr.querySelector('.hk-key'));
+}
+
+/* Flag any combo bound to more than one command. Pure client-side check run
+   after every record/clear/reset; complements the daemon's OS-level warning. */
+function refreshDuplicateWarnings() {
+  var rows = document.querySelectorAll('#hotkeys-body tr[data-cmd]');
+  var byCombo = {};
+  rows.forEach(function(tr) {
+    var v = tr.querySelector('.hk-key').value.trim();
+    if (v) { (byCombo[v] = byCombo[v] || []).push(tr); }
+  });
+  rows.forEach(function(tr) {
+    var note = tr.querySelector('.hk-dup-note');
+    if (!note) { return; }
+    var v = tr.querySelector('.hk-key').value.trim();
+    var group = v ? byCombo[v] : null;
+    if (group && group.length > 1) {
+      var others = group.filter(function(t) { return t !== tr; })
+        .map(function(t) { return cmdShortLabel(t.dataset.cmd); });
+      note.textContent = 'Also bound to ' + others.join(', ');
+    } else {
+      note.textContent = '';
+    }
+  });
 }
 
 function escHtml(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
@@ -1535,7 +1577,7 @@ function defaultKeyForCmd(cmd) {
 
 function resetHotkeyRow(tr) {
   var defKey = defaultKeyForCmd(tr.dataset.cmd);
-  if (defKey) { tr.querySelector('.hk-key').value = defKey; autoSave(0); }
+  if (defKey) { tr.querySelector('.hk-key').value = defKey; refreshDuplicateWarnings(); autoSave(0); }
 }
 
 /* Show a dismissible warning when the OS rejected some hotkey binds at
@@ -1585,6 +1627,7 @@ function loadHotkeysSorted(bindings, scrollModifier) {
   else { tbody.appendChild(tr); }
   wrapAllInputs(tr);
   tr.querySelector('.hk-key').addEventListener('input', function() { updateScrollLabels(); autoSave(500); });
+  refreshDuplicateWarnings();
 }
 
 function resetHotkeys() {

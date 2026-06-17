@@ -7,6 +7,7 @@
 //! with `window.ipc.postMessage`.
 
 use std::sync::mpsc;
+use std::sync::Mutex;
 
 use anyhow::Result;
 use tracing::{info, warn};
@@ -18,6 +19,7 @@ use windows::Win32::Graphics::Dwm::{
 use windows::Win32::UI::Controls::MARGINS;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use raw_window_handle::{
@@ -43,6 +45,36 @@ const WINDOW_HEIGHT: i32 = 560;
 
 // Dark mode background (COLORREF = 0x00BBGGRR)
 const DARK_BG: u32 = 0x00202020;
+
+/// Custom message: ask the open settings window to refresh its rejected-hotkey
+/// warning. Carries no payload; the new list is read from `PENDING_FAILED_BINDS`
+/// on the window's own thread (the only thread that may touch the webview).
+const WM_SETTINGS_PUSH_BINDS: u32 = WM_APP + 1;
+
+/// Thread id of the open settings window's message loop, or `None` when closed.
+/// We target the thread queue (not the HWND) so a destroyed or recycled window
+/// can never receive a stray push.
+static SETTINGS_THREAD: Mutex<Option<u32>> = Mutex::new(None);
+/// Latest rejected-bind list as a JSON array, staged for the next push.
+static PENDING_FAILED_BINDS: Mutex<Option<String>> = Mutex::new(None);
+
+/// Push an updated rejected-hotkey list to the open settings window, if one is
+/// open. Safe to call from any thread and no-ops when no window is open; the
+/// `evaluate_script` itself runs on the window's own thread via its message loop.
+pub fn push_failed_binds(failed_binds: &[String]) {
+    let thread_id = match SETTINGS_THREAD.lock() {
+        Ok(g) => *g,
+        Err(_) => return,
+    };
+    let Some(thread_id) = thread_id else { return };
+    let json = serde_json::to_string(failed_binds).unwrap_or_else(|_| "[]".to_string());
+    if let Ok(mut pending) = PENDING_FAILED_BINDS.lock() {
+        *pending = Some(json);
+    }
+    unsafe {
+        let _ = PostThreadMessageW(thread_id, WM_SETTINGS_PUSH_BINDS, WPARAM(0), LPARAM(0));
+    }
+}
 
 /// Wrapper that implements `HasWindowHandle` + `HasDisplayHandle` for a raw HWND.
 struct Win32Handle(isize);
@@ -134,6 +166,12 @@ pub fn run_settings_window(
             None,
         )?;
 
+        // Expose this thread's id so the daemon can push live updates to the
+        // window's message queue (see push_failed_binds).
+        if let Ok(mut g) = SETTINGS_THREAD.lock() {
+            *g = Some(GetCurrentThreadId());
+        }
+
         // Apply Windows 11 DWM theming (Mica backdrop, dark title bar, rounded corners)
         apply_win11_theming(hwnd, dark);
 
@@ -171,6 +209,10 @@ pub fn run_settings_window(
         let failed_binds_json =
             serde_json::to_string(&failed_binds).unwrap_or_else(|_| "[]".to_string());
 
+        // Kept for the post-loop "window closed" notification; the original is
+        // moved into the IPC handler closure below.
+        let close_tx = event_tx.clone();
+
         let settings_html = SETTINGS_HTML.replace("{VERSION}", env!("CARGO_PKG_VERSION"));
         let webview = wry::WebViewBuilder::new_with_web_context(&mut web_context)
             .with_html(&settings_html)
@@ -203,12 +245,38 @@ pub fn run_settings_window(
         let _ = ShowWindow(hwnd, SW_SHOW);
         let _ = UpdateWindow(hwnd);
 
-        // Message loop
+        // Message loop. GetMessageW returns >0 for a message, 0 for WM_QUIT,
+        // and -1 on error; break on anything <= 0 (matches the hotkey loop).
         let mut msg_buf = MSG::default();
-        while GetMessageW(&mut msg_buf, None, 0, 0).as_bool() {
+        loop {
+            let rc = GetMessageW(&mut msg_buf, None, 0, 0).0;
+            if rc <= 0 {
+                break;
+            }
+            // Daemon-initiated live refresh of the rejected-hotkey warning. The
+            // webview is only valid on this thread, so we apply it here rather
+            // than in the (static) window proc.
+            if msg_buf.message == WM_SETTINGS_PUSH_BINDS {
+                let json = PENDING_FAILED_BINDS.lock().ok().and_then(|mut p| p.take());
+                if let Some(json) = json {
+                    let js = format!(
+                        "window._failedHotkeys = {}; if (typeof renderFailedHotkeys === 'function') renderFailedHotkeys();",
+                        json
+                    );
+                    let _ = webview.evaluate_script(&js);
+                }
+                continue;
+            }
             let _ = TranslateMessage(&msg_buf);
             DispatchMessageW(&msg_buf);
         }
+
+        // The window is gone; stop the daemon from posting to a dead thread.
+        if let Ok(mut g) = SETTINGS_THREAD.lock() {
+            *g = None;
+        }
+        // Let the daemon resume hotkeys if the window closed mid-recording.
+        let _ = close_tx.send(SettingsEvent::Closed);
 
         // Hide window before tearing down WebView2 to prevent white flash.
         let _ = ShowWindow(hwnd, SW_HIDE);
@@ -240,6 +308,10 @@ fn handle_ipc(body: &str, event_tx: &mpsc::Sender<SettingsEvent>, _hwnd: HWND) {
             if let Some(cfg_val) = msg.get("config") {
                 do_save(cfg_val, event_tx);
             }
+        }
+        "set_recording" => {
+            let recording = msg.get("recording").and_then(|v| v.as_bool()).unwrap_or(false);
+            let _ = event_tx.send(SettingsEvent::SetRecording(recording));
         }
         "set_auto_start" => {
             let Some(enabled) = msg.get("enabled").and_then(|v| v.as_bool()) else {

@@ -175,6 +175,9 @@ async fn reload_config_and_hotkeys(
         state.config.clone()
     };
     *hotkey_state = setup_hotkeys(&new_config, event_tx.clone());
+    // Refresh the rejected-hotkey warning in an open settings window so it
+    // reflects the new registration instead of the snapshot taken at open.
+    settings::push_failed_binds(&hotkey_state.failed_binds);
     sync_tray_toggles(tray_manager, &new_config);
     if let Some(ref overlay) = snap_hint_overlay {
         overlay.set_opacity(new_config.snap_hints.opacity);
@@ -2244,6 +2247,23 @@ async fn handle_settings_event(
                 info!("Hotkeys reloaded after settings save");
             } else if let IpcResponse::Error { message } = response {
                 warn!("Reload after settings save failed: {}", message);
+            }
+        }
+        settings::SettingsEvent::SetRecording(true) => {
+            // Suspend global hotkeys while the user records a combo, so pressing
+            // it doesn't also fire its action (and so the key reaches the webview).
+            debug!("Settings: recording started, suspending hotkeys");
+            ctx.hotkey_state.handle = None;
+        }
+        settings::SettingsEvent::SetRecording(false) | settings::SettingsEvent::Closed => {
+            // Resume only if currently suspended (handle dropped). A normal
+            // close with hotkeys registered is a no-op.
+            if ctx.hotkey_state.handle.is_none() {
+                debug!("Settings: recording ended, resuming hotkeys");
+                reload_config_and_hotkeys(
+                    ctx.state, ctx.hotkey_state, ctx.event_tx,
+                    ctx.tray_manager, ctx.snap_hint_overlay,
+                ).await;
             }
         }
     }

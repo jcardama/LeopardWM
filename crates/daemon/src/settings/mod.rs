@@ -8,6 +8,8 @@
 mod html;
 mod win32;
 
+pub use win32::push_failed_binds;
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 
@@ -20,6 +22,13 @@ use crate::config::Config;
 pub enum SettingsEvent {
     /// The user saved the config (already written to disk).
     Saved,
+    /// The hotkey recorder started (`true`) or stopped (`false`). While
+    /// recording, global hotkeys are suspended so the combo being captured
+    /// doesn't also fire its action.
+    SetRecording(bool),
+    /// The settings window closed. Used as a safety net to resume hotkeys if
+    /// the window was closed mid-recording.
+    Closed,
 }
 
 /// Singleton guard — only one settings window at a time.
