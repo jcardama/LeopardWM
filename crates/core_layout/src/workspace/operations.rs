@@ -224,7 +224,13 @@ impl Workspace {
     /// In a Tabbed receiver, the moved window becomes the new active tab
     /// (consistent with the "user-initiated keyboard move" intent).
     pub fn move_window_left(&mut self) {
+        if self.columns.is_empty() {
+            return;
+        }
         if self.focused_column == 0 {
+            // At the left edge there's no column to move into; instead unstack
+            // the window into a new column off the end (no-op if not stacked).
+            self.expel_to_left();
             return;
         }
         let Some(wid) = self.columns[self.focused_column]
@@ -249,6 +255,9 @@ impl Workspace {
     /// In a Tabbed receiver, the moved window becomes the new active tab.
     pub fn move_window_right(&mut self) {
         if self.focused_column + 1 >= self.columns.len() {
+            // At the right edge: unstack into a new column off the end
+            // instead of a dead-end (no-op if the column isn't stacked).
+            self.expel_to_right();
             return;
         }
         let Some(wid) = self.columns[self.focused_column]
@@ -274,7 +283,7 @@ impl Workspace {
     /// Push the focused window out to a new column on the left.
     /// The new column is always Vertical (single-window).
     pub fn expel_to_left(&mut self) {
-        if self.columns[self.focused_column].len() <= 1 {
+        if self.columns.is_empty() || self.columns[self.focused_column].len() <= 1 {
             return;
         }
         let Some(wid) = self.columns[self.focused_column]
@@ -299,7 +308,7 @@ impl Workspace {
     /// Push the focused window out to a new column on the right.
     /// The new column is always Vertical (single-window).
     pub fn expel_to_right(&mut self) {
-        if self.columns[self.focused_column].len() <= 1 {
+        if self.columns.is_empty() || self.columns[self.focused_column].len() <= 1 {
             return;
         }
         let Some(wid) = self.columns[self.focused_column]

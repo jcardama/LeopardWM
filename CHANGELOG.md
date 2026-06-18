@@ -34,6 +34,9 @@ All notable changes to LeopardWM will be documented in this file.
   scope.
 - Add `lwm workspace-next` and `lwm workspace-prev` to cycle through workspaces
   from the CLI (the `workspace_prev`/`workspace_next` hotkeys already existed).
+- **Moving a stacked window past the end of the strip unstacks it.** Pressing
+  move-window toward the edge now pops the window out into its own new column
+  off that end, instead of doing nothing.
 - **Jump to or move a column to the start/end of the strip.** New
   `focus_start`/`focus_end` (`Ctrl+Alt+Home`/`End`) jump focus to the first or
   last column, and `move_column_to_start`/`move_column_to_end`
