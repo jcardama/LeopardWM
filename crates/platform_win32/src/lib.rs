@@ -14,6 +14,7 @@ pub mod dialog;
 pub mod gestures;
 pub mod hotkeys;
 pub mod ipc_security;
+pub mod keyboard_hook;
 pub mod mouse_hook;
 pub mod overlay;
 pub mod overview;
@@ -35,6 +36,7 @@ mod window_style;
 
 pub use gestures::*;
 pub use hotkeys::*;
+pub use keyboard_hook::*;
 pub use mouse_hook::*;
 
 // Re-export public API from submodules

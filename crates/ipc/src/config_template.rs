@@ -87,6 +87,14 @@ focus_follows_mouse = false
 # right) or "in_column" (stacked into the focused column).
 # new_window_placement = "new_column"
 
+# Reclaim Windows-reserved shortcuts that RegisterHotKey can't claim (e.g.
+# Win+Ctrl+Arrow, which Windows owns for virtual desktops) via a low-level
+# keyboard hook, so a bind set to one of them drives LeopardWM instead. Opt-in.
+# Caveats: only known multi-modifier OS combos are reclaimed (never combos
+# another app owns); bare Win+<key> (Snap) and protected combos (Win+L) can't
+# be reclaimed; and it can't see keys while an elevated window is focused.
+# reclaim_os_shortcuts = false
+
 [hotkeys]
 {hotkeys}
 [gestures]

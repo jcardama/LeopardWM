@@ -133,8 +133,8 @@ pub fn hotkey_catalog() -> Vec<HotkeyAction> {
         action("reload", Some("Ctrl+Alt+Shift+R"), "Reload config", "Session"),
         action("panic_revert", Some("Win+Ctrl+Escape"), "Emergency restore", "Session"),
         action("toggle_overview", Some("Ctrl+Alt+Space"), "Toggle overview", "Workspaces"),
-        action("workspace_prev", Some("Win+Ctrl+Left"), "Previous workspace", "Workspaces"),
-        action("workspace_next", Some("Win+Ctrl+Right"), "Next workspace", "Workspaces"),
+        action("workspace_prev", Some("Ctrl+Alt+Shift+Left"), "Previous workspace", "Workspaces"),
+        action("workspace_next", Some("Ctrl+Alt+Shift+Right"), "Next workspace", "Workspaces"),
     ];
     for i in 1..=9u8 {
         v.push(action(
@@ -331,8 +331,8 @@ mod tests {
             ("Ctrl+Alt+Shift+R", "reload"),
             ("Win+Ctrl+Escape", "panic_revert"),
             ("Ctrl+Alt+Space", "toggle_overview"),
-            ("Win+Ctrl+Left", "workspace_prev"),
-            ("Win+Ctrl+Right", "workspace_next"),
+            ("Ctrl+Alt+Shift+Left", "workspace_prev"),
+            ("Ctrl+Alt+Shift+Right", "workspace_next"),
             ("Ctrl+Alt+1", "switch_workspace_1"),
             ("Ctrl+Alt+2", "switch_workspace_2"),
             ("Ctrl+Alt+3", "switch_workspace_3"),

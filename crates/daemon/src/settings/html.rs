@@ -961,6 +961,10 @@ input[type="range"]::-webkit-slider-thumb {
             <label class="toggle"><input type="checkbox" id="behavior-swap_chain_ghost_animation"><span class="track"></span><span class="thumb"></span></label>
           </div>
           <div class="field">
+            <div class="field-info"><div class="field-label">Reclaim Windows-reserved shortcuts</div><div class="field-desc">Use a keyboard hook so combos Windows owns (e.g. Win+Ctrl+Arrow) drive LeopardWM instead. Doesn't affect app-owned combos, bare Win+key, or elevated windows.</div></div>
+            <label class="toggle"><input type="checkbox" id="behavior-reclaim_os_shortcuts"><span class="track"></span><span class="thumb"></span></label>
+          </div>
+          <div class="field">
             <div class="field-info"><div class="field-label">New window placement</div><div class="field-desc">Where newly opened windows go: their own column or stacked into the focused column</div></div>
             <div class="combobox" id="cb-behavior-new_window_placement">
               <button class="combobox-trigger" type="button"><span class="combobox-text">New column</span><svg class="combobox-chevron" viewBox="0 0 12 12"><path d="M2.15 4.65a.5.5 0 01.7 0L6 7.79l3.15-3.14a.5.5 0 11.7.7l-3.5 3.5a.5.5 0 01-.7 0l-3.5-3.5a.5.5 0 010-.7z"/></svg></button>
@@ -1317,6 +1321,7 @@ function init(cfg) {
   setChecked('behavior-focus_follows_mouse', cfg.behavior.focus_follows_mouse);
   setVal('behavior-focus_follows_mouse_delay_ms', cfg.behavior.focus_follows_mouse_delay_ms);
   setChecked('behavior-disable_snap_layouts', cfg.behavior.disable_snap_layouts !== false);
+  setChecked('behavior-reclaim_os_shortcuts', cfg.behavior.reclaim_os_shortcuts === true);
   setChecked('behavior-swap_chain_ghost_animation', cfg.behavior.swap_chain_ghost_animation === true);
   setCb('cb-behavior-log_level', cfg.behavior.log_level);
   setCb('cb-behavior-tab_close_action', cfg.behavior.tab_close_action || 'close_window');
@@ -1716,6 +1721,7 @@ function readConfig() {
       focus_follows_mouse: checked('behavior-focus_follows_mouse'),
       focus_follows_mouse_delay_ms: num('behavior-focus_follows_mouse_delay_ms'),
       disable_snap_layouts: checked('behavior-disable_snap_layouts'),
+      reclaim_os_shortcuts: checked('behavior-reclaim_os_shortcuts'),
       swap_chain_ghost_animation: checked('behavior-swap_chain_ghost_animation'),
       log_level: cbVal('cb-behavior-log_level'),
       tab_close_action: cbVal('cb-behavior-tab_close_action'),

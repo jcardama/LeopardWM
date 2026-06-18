@@ -400,6 +400,13 @@ pub struct BehaviorConfig {
     /// stacked into the focused column.
     #[serde(default)]
     pub new_window_placement: NewWindowPlacement,
+
+    /// Reclaim known Windows-reserved shortcuts (e.g. Win+Ctrl+Arrow) that
+    /// `RegisterHotKey` can't claim, via a low-level keyboard hook, so they can
+    /// drive LeopardWM instead of Windows. Opt-in: a global key hook with the
+    /// caveats documented in the config template.
+    #[serde(default = "default_false")]
+    pub reclaim_os_shortcuts: bool,
 }
 
 /// Placement for newly opened tiled windows.
@@ -427,6 +434,7 @@ impl Default for BehaviorConfig {
             tab_close_action: TabCloseAction::default(),
             swap_chain_ghost_animation: true,
             new_window_placement: NewWindowPlacement::default(),
+            reclaim_os_shortcuts: false,
         }
     }
 }
@@ -1410,6 +1418,19 @@ mod tests {
         let parsed: Config = toml::from_str(&toml_str).unwrap();
         assert_eq!(parsed.layout.gap, config.layout.gap);
         assert_eq!(parsed.layout.centering_mode, config.layout.centering_mode);
+    }
+
+    #[test]
+    fn test_reclaim_os_shortcuts_defaults_false_and_roundtrips() {
+        assert!(!Config::default().behavior.reclaim_os_shortcuts);
+        let mut config = Config::default();
+        config.behavior.reclaim_os_shortcuts = true;
+        let toml_str = toml::to_string_pretty(&config).unwrap();
+        let parsed: Config = toml::from_str(&toml_str).unwrap();
+        assert!(parsed.behavior.reclaim_os_shortcuts);
+        // Absent from config => false (serde default).
+        let parsed_absent: Config = toml::from_str("[behavior]\n").unwrap();
+        assert!(!parsed_absent.behavior.reclaim_os_shortcuts);
     }
 
     #[test]

@@ -17,6 +17,15 @@ All notable changes to LeopardWM will be documented in this file.
   another command shows an inline note, and the "couldn't be registered"
   warning now refreshes the moment you change a binding instead of only when
   you reopen Settings.
+- **Default workspace prev/next shortcuts are now `Ctrl+Alt+Shift+Left/Right`.**
+  The old `Win+Ctrl+Left/Right` are reserved by Windows for virtual desktops and
+  never registered. Existing configs keep their current binds.
+- **Reclaim Windows-reserved shortcuts** (opt-in, off by default). A new
+  Behavior setting lets combos Windows owns, like `Win+Ctrl+Arrow`, drive
+  LeopardWM instead of switching virtual desktops. Only known multi-modifier OS
+  combos are reclaimed (never combos another app owns); bare `Win+key`,
+  protected combos like `Win+L`, and keys sent to elevated windows are out of
+  scope.
 
 ## 0.2.1
 
