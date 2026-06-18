@@ -249,6 +249,10 @@ pub(crate) enum MoveDirection {
     Left,
     /// Move focused column right
     Right,
+    /// Move focused column to the start (leftmost) of the strip
+    Start,
+    /// Move focused column to the end (rightmost) of the strip
+    End,
 }
 
 #[derive(Subcommand)]

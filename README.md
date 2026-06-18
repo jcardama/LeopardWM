@@ -134,6 +134,7 @@ Most hotkeys use `Ctrl+Alt` as the base modifier. Layered pattern: base = focus,
 | `Ctrl+Alt+H/L/J/K` | Focus left / right / down / up |
 | `Ctrl+Alt+Home` / `End` | Focus start / end of strip |
 | `Ctrl+Alt+Shift+H/L` | Move column left / right |
+| `Ctrl+Alt+Shift+Home` / `End` | Move column to start / end of strip |
 | `Ctrl+Alt+Shift+J/K` | Move window down / up in column |
 | `Ctrl+Alt+[` / `]` | Move window to left / right column |
 | `Ctrl+Alt+Shift+[` / `]` | Expel window to new column left / right |

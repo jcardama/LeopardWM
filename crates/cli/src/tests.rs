@@ -104,6 +104,22 @@ fn test_to_ipc_command_move_right() {
 }
 
 #[test]
+fn test_to_ipc_command_move_start() {
+    let cmd = Commands::Move {
+        direction: MoveDirection::Start,
+    };
+    assert!(matches!(to_ipc_command(&cmd), IpcCommand::MoveColumnToStart));
+}
+
+#[test]
+fn test_to_ipc_command_move_end() {
+    let cmd = Commands::Move {
+        direction: MoveDirection::End,
+    };
+    assert!(matches!(to_ipc_command(&cmd), IpcCommand::MoveColumnToEnd));
+}
+
+#[test]
 fn test_to_ipc_command_move_window_left() {
     let cmd = Commands::MoveWindow {
         direction: MoveWindowDirection::Left,

@@ -28,10 +28,12 @@ All notable changes to LeopardWM will be documented in this file.
   scope.
 - Add `lwm workspace-next` and `lwm workspace-prev` to cycle through workspaces
   from the CLI (the `workspace_prev`/`workspace_next` hotkeys already existed).
-- **Jump focus to the start or end of the strip.** New `focus_start`
-  (`Ctrl+Alt+Home`) and `focus_end` (`Ctrl+Alt+End`) hotkeys, and
-  `lwm focus start` / `lwm focus end`, move focus to the first or last column.
-  Home/End are now valid keys in hotkey bindings.
+- **Jump to or move a column to the start/end of the strip.** New
+  `focus_start`/`focus_end` (`Ctrl+Alt+Home`/`End`) jump focus to the first or
+  last column, and `move_column_to_start`/`move_column_to_end`
+  (`Ctrl+Alt+Shift+Home`/`End`) relocate the focused column there. Also as
+  `lwm focus start|end` and `lwm move start|end`. Home/End are now valid keys
+  in hotkey bindings.
 
 ## 0.2.1
 

@@ -25,6 +25,8 @@ pub(crate) fn to_ipc_command(cmd: &Commands) -> IpcCommand {
         Commands::Move { direction } => match direction {
             MoveDirection::Left => IpcCommand::MoveColumnLeft,
             MoveDirection::Right => IpcCommand::MoveColumnRight,
+            MoveDirection::Start => IpcCommand::MoveColumnToStart,
+            MoveDirection::End => IpcCommand::MoveColumnToEnd,
         },
         Commands::MoveWindow { direction } => match direction {
             MoveWindowDirection::Left => IpcCommand::MoveWindowLeft,

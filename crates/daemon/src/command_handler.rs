@@ -62,6 +62,33 @@ impl AppState {
     }
 
     /// Process an IPC command and return a response.
+    /// Focus or move the focused column to the start/end of the strip.
+    fn handle_strip_end_command(&mut self, cmd: IpcCommand) -> IpcResponse {
+        match cmd {
+            IpcCommand::FocusStart => self.execute_workspace_command(false, true, |ws, vw| {
+                ws.focus_start();
+                ws.ensure_focused_visible_animated(vw);
+                info!("Focus start -> column {}", ws.focused_column_index());
+            }),
+            IpcCommand::FocusEnd => self.execute_workspace_command(false, true, |ws, vw| {
+                ws.focus_end();
+                ws.ensure_focused_visible_animated(vw);
+                info!("Focus end -> column {}", ws.focused_column_index());
+            }),
+            IpcCommand::MoveColumnToStart => self.execute_workspace_command(true, false, |ws, vw| {
+                ws.move_column_to_start();
+                ws.ensure_focused_visible_animated(vw);
+                info!("Moved column to start");
+            }),
+            IpcCommand::MoveColumnToEnd => self.execute_workspace_command(true, false, |ws, vw| {
+                ws.move_column_to_end();
+                ws.ensure_focused_visible_animated(vw);
+                info!("Moved column to end");
+            }),
+            _ => unreachable!("handle_strip_end_command called with a non-strip-end command"),
+        }
+    }
+
     pub(crate) fn handle_command(&mut self, cmd: IpcCommand) -> IpcResponse {
         match cmd {
             IpcCommand::FocusLeft => {
@@ -118,20 +145,10 @@ impl AppState {
                     );
                 })
             }
-            IpcCommand::FocusStart => {
-                self.execute_workspace_command(false, true, |ws, vw| {
-                    ws.focus_start();
-                    ws.ensure_focused_visible_animated(vw);
-                    info!("Focus start -> column {}", ws.focused_column_index());
-                })
-            }
-            IpcCommand::FocusEnd => {
-                self.execute_workspace_command(false, true, |ws, vw| {
-                    ws.focus_end();
-                    ws.ensure_focused_visible_animated(vw);
-                    info!("Focus end -> column {}", ws.focused_column_index());
-                })
-            }
+            IpcCommand::FocusStart
+            | IpcCommand::FocusEnd
+            | IpcCommand::MoveColumnToStart
+            | IpcCommand::MoveColumnToEnd => self.handle_strip_end_command(cmd),
             IpcCommand::MoveColumnLeft => {
                 self.execute_workspace_command(true, false, |ws, vw| {
                     ws.move_column_left();

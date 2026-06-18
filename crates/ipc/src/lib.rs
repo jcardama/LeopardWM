@@ -341,6 +341,10 @@ pub enum IpcCommand {
     MoveColumnLeft,
     /// Move the focused column right.
     MoveColumnRight,
+    /// Move the focused column to the start (leftmost) of the strip.
+    MoveColumnToStart,
+    /// Move the focused column to the end (rightmost) of the strip.
+    MoveColumnToEnd,
 
     /// Move the focused window to the column on the left.
     MoveWindowLeft,

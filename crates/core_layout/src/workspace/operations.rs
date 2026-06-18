@@ -131,6 +131,18 @@ impl Workspace {
         }
     }
 
+    /// Move the focused column to the start (leftmost) of the strip.
+    pub fn move_column_to_start(&mut self) {
+        self.reorder_column(self.focused_column, 0);
+    }
+
+    /// Move the focused column to the end (rightmost) of the strip.
+    pub fn move_column_to_end(&mut self) {
+        if !self.columns.is_empty() {
+            self.reorder_column(self.focused_column, self.columns.len() - 1);
+        }
+    }
+
     /// Move a column from one index to another, shifting intermediate columns.
     /// No-op if indices are equal or out of bounds.
     pub fn reorder_column(&mut self, from: usize, to: usize) {

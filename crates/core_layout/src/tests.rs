@@ -108,6 +108,31 @@ mod tests {
     }
 
     #[test]
+    fn test_move_column_to_start_end() {
+        let mut ws = Workspace::new();
+        ws.insert_window(1, Some(400)).unwrap();
+        ws.insert_window(2, Some(400)).unwrap();
+        ws.insert_window(3, Some(400)).unwrap();
+        assert_eq!(ws.focused_column_index(), 2);
+        assert_eq!(ws.focused_window(), Some(3));
+
+        ws.move_column_to_start();
+        assert_eq!(ws.focused_column_index(), 0);
+        assert_eq!(ws.focused_window(), Some(3)); // focus follows the moved column
+
+        ws.move_column_to_end();
+        assert_eq!(ws.focused_column_index(), 2);
+        assert_eq!(ws.focused_window(), Some(3));
+
+        // Idempotent at the end; no panic on an empty workspace.
+        ws.move_column_to_end();
+        assert_eq!(ws.focused_column_index(), 2);
+        let mut empty = Workspace::new();
+        empty.move_column_to_start();
+        empty.move_column_to_end();
+    }
+
+    #[test]
     fn test_remove_window() {
         let mut ws = Workspace::new();
         ws.insert_window(1, Some(400)).unwrap();
