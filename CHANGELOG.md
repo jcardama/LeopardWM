@@ -34,6 +34,10 @@ All notable changes to LeopardWM will be documented in this file.
   scope.
 - Add `lwm workspace-next` and `lwm workspace-prev` to cycle through workspaces
   from the CLI (the `workspace_prev`/`workspace_next` hotkeys already existed).
+- **Sticky windows keep their mode.** `Ctrl+Alt+Y` no longer force-floats the
+  window: a tiled window stays tiled and follows you across workspaces as a
+  column you can cycle to, while a floating window stays a floating overlay (as
+  before). The mode is whatever the window already is when you toggle it.
 - **Moving a stacked window past the end of the strip unstacks it.** Pressing
   move-window toward the edge now pops the window out into its own new column
   off that end, instead of doing nothing.

@@ -41,26 +41,13 @@ impl AppState {
             return;
         }
 
-        // Pin: ensure the window is floating so it can overlay any
-        // workspace. Only mark it sticky once it is actually floating, so a
-        // tiled window can't be pinned in a non-floating state.
-        let viewport = self.focused_viewport();
-        let floating = if let Some(ws) = self.focused_workspace_mut() {
-            if !ws.is_floating(wid) {
-                let _ = ws.focus_window(wid);
-                let _ = ws.toggle_floating(viewport);
-            }
-            let ok = ws.is_floating(wid);
-            if ok {
+        // Stick in the window's CURRENT mode — never force a mode change. A
+        // floating window is pinned so it overlays any workspace; a tiled
+        // window stays tiled and is re-homed as a column on each switch.
+        if let Some(ws) = self.focused_workspace_mut() {
+            if ws.is_floating(wid) {
                 ws.set_floating_pinned(wid, true);
             }
-            ok
-        } else {
-            false
-        };
-        if !floating {
-            warn!("Sticky: could not float window {}; not pinning", wid);
-            return;
         }
         self.sticky_windows.insert(wid);
         let _ = self.apply_layout();
@@ -78,7 +65,11 @@ impl AppState {
         }
         let monitor = self.focused_monitor;
         let active = self.active_workspace_idx(monitor);
-        let sticky: Vec<u64> = self.sticky_windows.iter().copied().collect();
+        // Sort for a stable order: multiple tiled stickies must keep a fixed
+        // end-of-strip order across switches rather than reshuffle (HashSet
+        // iteration is unordered).
+        let mut sticky: Vec<u64> = self.sticky_windows.iter().copied().collect();
+        sticky.sort_unstable();
         for wid in sticky {
             let Some((mon, ws_idx)) = self.find_window_workspace(wid) else {
                 // No longer tracked anywhere (closed); drop it.
@@ -91,7 +82,45 @@ impl AppState {
             if mon != monitor || ws_idx == active {
                 continue;
             }
-            // Preserve its current floating rect across the move.
+            // Branch on the window's mode in ITS OWN (source) workspace, never
+            // the now-active one — else a floating sticky could be misread as
+            // tiled and wrongly converted.
+            let is_floating = self
+                .workspaces
+                .get(&mon)
+                .and_then(|v| v.get(ws_idx))
+                .is_some_and(|ws| ws.is_floating(wid));
+
+            if !is_floating {
+                // Tiled sticky: remove from source, then append as a column at
+                // the END of the active workspace without stealing focus.
+                let removed = self
+                    .workspaces
+                    .get_mut(&mon)
+                    .and_then(|v| v.get_mut(ws_idx))
+                    .map(|ws| ws.remove_window(wid).is_ok())
+                    .unwrap_or(false);
+                if !removed {
+                    continue;
+                }
+                let appended = self
+                    .workspaces
+                    .get_mut(&monitor)
+                    .and_then(|v| v.get_mut(active))
+                    .map(|ws| ws.append_window_no_focus(wid, None).is_ok())
+                    .unwrap_or(false);
+                if !appended {
+                    // Effectively unreachable (no duplicate possible post-remove);
+                    // recover the window into its source workspace if it ever fires.
+                    warn!("Sticky: could not re-home tiled window {}; rolled back to source", wid);
+                    if let Some(ws) = self.workspaces.get_mut(&mon).and_then(|v| v.get_mut(ws_idx)) {
+                        let _ = ws.insert_window(wid, None);
+                    }
+                }
+                continue;
+            }
+
+            // Floating sticky: preserve its float rect across the move.
             let rect = self
                 .workspaces
                 .get(&mon)
@@ -148,13 +177,24 @@ impl AppState {
         }
         let monitor = self.focused_monitor;
         let active = self.active_workspace_idx(monitor);
-        let floating_here = self
+        let (floating_here, tiled_here) = self
             .workspaces
             .get(&monitor)
             .and_then(|v| v.get(active))
-            .is_some_and(|ws| ws.is_floating(wid));
-        if !floating_here {
+            .map(|ws| {
+                let floating = ws.is_floating(wid);
+                (floating, !floating && ws.contains_window(wid))
+            })
+            .unwrap_or((false, false));
+        if !floating_here && !tiled_here {
             return false;
+        }
+        if tiled_here {
+            // Align the workspace's tiled focus with the foreground we assert
+            // so the post-switch focus sync doesn't recompute and fight it.
+            if let Some(ws) = self.workspaces.get_mut(&monitor).and_then(|v| v.get_mut(active)) {
+                let _ = ws.focus_window(wid);
+            }
         }
         self.previous_focused_hwnd = Some(wid);
         self.show_border(wid);

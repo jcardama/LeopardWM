@@ -158,6 +158,31 @@ mod tests {
     }
 
     #[test]
+    fn test_append_window_no_focus() {
+        let mut ws = Workspace::new();
+        ws.append_window_no_focus(1, Some(400)).unwrap(); // empty -> focuses only column
+        assert_eq!(ws.column_count(), 1);
+        assert_eq!(ws.focused_column_index(), 0);
+
+        ws.insert_window(2, Some(400)).unwrap(); // col 1, focused
+        ws.focus_start(); // focus column 0
+        assert_eq!(ws.focused_column_index(), 0);
+
+        ws.append_window_no_focus(3, Some(400)).unwrap(); // appends at the end
+        assert_eq!(ws.column_count(), 3);
+        assert_eq!(ws.focused_column_index(), 0); // focus NOT stolen
+
+        // Duplicate is rejected, focus untouched.
+        assert!(ws.append_window_no_focus(3, Some(400)).is_err());
+        assert_eq!(ws.column_count(), 3);
+        assert_eq!(ws.focused_column_index(), 0);
+
+        // The appended window is the rightmost column.
+        ws.focus_end();
+        assert_eq!(ws.focused_window(), Some(3));
+    }
+
+    #[test]
     fn test_remove_window() {
         let mut ws = Workspace::new();
         ws.insert_window(1, Some(400)).unwrap();

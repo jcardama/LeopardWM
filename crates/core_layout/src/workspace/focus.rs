@@ -69,6 +69,33 @@ impl Workspace {
         Ok(())
     }
 
+    /// Append a window as a new single-window column at the END of the strip
+    /// without changing the current focus. Used to re-home a tiled sticky
+    /// window onto a workspace on switch: it lands at the rightmost position
+    /// but must not steal focus from whatever the user is actually on.
+    ///
+    /// # Errors
+    ///
+    /// Returns `LayoutError::DuplicateWindow` if the window ID already exists.
+    pub fn append_window_no_focus(
+        &mut self,
+        window_id: WindowId,
+        width: Option<i32>,
+    ) -> Result<(), LayoutError> {
+        let saved_col = self.focused_column;
+        let saved_win = self.focused_window_in_column;
+        let was_empty = self.columns.is_empty();
+        self.insert_window_at_column(window_id, width, self.columns.len())?;
+        // Appending at the end never shifts existing column indices, so the
+        // saved focus is still valid. If the workspace was empty, leave focus
+        // on the new (only) column.
+        if !was_empty {
+            self.focused_column = saved_col;
+            self.focused_window_in_column = saved_win;
+        }
+        Ok(())
+    }
+
     /// Insert a window without changing the current focus.
     ///
     /// Same as `insert_window`, but preserves `focused_column` and

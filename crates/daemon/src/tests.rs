@@ -3174,8 +3174,42 @@ fn test_scratchpad_stash_uses_tiled_focus_over_stale_foreground() {
     );
 }
 
+/// Float the focused window `wid` (sticky must then keep it floating).
+fn float_focused_window(state: &mut AppState, wid: u64) {
+    let vp = state.focused_viewport();
+    state.focused_workspace_mut().unwrap().focus_window(wid).unwrap();
+    state.focused_workspace_mut().unwrap().toggle_floating(vp);
+    state.previous_focused_hwnd = Some(wid);
+}
+
 #[test]
-fn test_sticky_toggle_pins_and_floats() {
+fn test_sticky_floating_window_stays_floating() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .insert_window(100, Some(800))
+        .unwrap();
+    float_focused_window(&mut state, 100);
+
+    state.toggle_sticky(); // pin
+    assert!(state.sticky_windows.contains(&100), "pinned into sticky set");
+    assert!(
+        state.focused_workspace().unwrap().is_floating(100),
+        "a floating window stays floating when stuck"
+    );
+
+    state.previous_focused_hwnd = Some(100);
+    state.toggle_sticky(); // un-pin
+    assert!(!state.sticky_windows.contains(&100), "unpinned from sticky set");
+    assert!(
+        state.focused_workspace().unwrap().is_floating(100),
+        "un-pinning leaves it floating in place"
+    );
+}
+
+#[test]
+fn test_sticky_tiled_window_stays_tiled() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
     state
         .focused_workspace_mut()
@@ -3184,21 +3218,16 @@ fn test_sticky_toggle_pins_and_floats() {
         .unwrap();
     state.focused_workspace_mut().unwrap().focus_window(100).unwrap();
 
-    state.toggle_sticky(); // pin
-    assert!(state.sticky_windows.contains(&100), "pinned into sticky set");
+    state.toggle_sticky(); // stick a TILED window
+    assert!(state.sticky_windows.contains(&100), "tiled window added to sticky set");
     assert!(
-        state.focused_workspace().unwrap().is_floating(100),
-        "pinning floats the window"
+        !state.focused_workspace().unwrap().is_floating(100),
+        "a tiled window stays tiled when stuck (not force-floated)"
     );
 
-    // It is floating now, so the tiled-focus accessor won't report it.
-    state.previous_focused_hwnd = Some(100);
-    state.toggle_sticky(); // un-pin
-    assert!(!state.sticky_windows.contains(&100), "unpinned from sticky set");
-    assert!(
-        state.focused_workspace().unwrap().is_floating(100),
-        "un-pinning leaves it floating in place"
-    );
+    state.toggle_sticky(); // un-stick (tiled focus still reports it)
+    assert!(!state.sticky_windows.contains(&100));
+    assert!(!state.focused_workspace().unwrap().is_floating(100), "still tiled");
 }
 
 #[test]
@@ -3210,7 +3239,7 @@ fn test_sticky_window_follows_workspace_switch() {
         .unwrap()
         .insert_window(100, Some(800))
         .unwrap();
-    state.focused_workspace_mut().unwrap().focus_window(100).unwrap();
+    float_focused_window(&mut state, 100);
     state.toggle_sticky(); // 100 floating + sticky on workspace 0
     assert!(state.sticky_windows.contains(&100));
 
@@ -3231,6 +3260,33 @@ fn test_sticky_window_follows_workspace_switch() {
 }
 
 #[test]
+fn test_tiled_sticky_follows_switch_as_end_column() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    let mon = state.focused_monitor;
+    state.focused_workspace_mut().unwrap().insert_window(100, Some(800)).unwrap();
+    state.focused_workspace_mut().unwrap().focus_window(100).unwrap();
+    state.toggle_sticky(); // 100 tiled + sticky on workspace 0
+
+    // Destination already has a tiled window so we can assert end placement.
+    state.ensure_workspace_exists(mon, 1);
+    state.workspaces.get_mut(&mon).unwrap()[1].insert_window(200, Some(800)).unwrap();
+    state.active_workspace.insert(mon, 1);
+    state.rehome_sticky_windows();
+
+    let dest = &state.workspaces.get(&mon).unwrap()[1];
+    assert!(dest.contains_window(100), "tiled sticky followed to the active workspace");
+    assert!(!dest.is_floating(100), "and it stayed tiled, not floated");
+    assert_eq!(dest.column_count(), 2, "destination now has both columns");
+    assert!(!state.workspaces.get(&mon).unwrap()[0].contains_window(100), "left the old workspace");
+
+    // Floating-stays-floating guard: a tiled sticky must never become floating
+    // across a switch (the rehome reads is_floating on the SOURCE workspace).
+    state.active_workspace.insert(mon, 0);
+    state.rehome_sticky_windows();
+    assert!(!state.workspaces.get(&mon).unwrap()[0].is_floating(100), "still tiled after switching back");
+}
+
+#[test]
 fn test_sticky_toggle_sets_floating_pinned() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
     state
@@ -3238,7 +3294,7 @@ fn test_sticky_toggle_sets_floating_pinned() {
         .unwrap()
         .insert_window(100, Some(800))
         .unwrap();
-    state.focused_workspace_mut().unwrap().focus_window(100).unwrap();
+    float_focused_window(&mut state, 100);
 
     state.toggle_sticky(); // pin
     let pinned = state
@@ -3271,7 +3327,7 @@ fn test_sticky_rehome_preserves_pinned() {
         .unwrap()
         .insert_window(100, Some(800))
         .unwrap();
-    state.focused_workspace_mut().unwrap().focus_window(100).unwrap();
+    float_focused_window(&mut state, 100);
     state.toggle_sticky(); // 100 floating + sticky + pinned on workspace 0
 
     state.ensure_workspace_exists(mon, 1);
@@ -3312,7 +3368,7 @@ fn switch_with_focused_sticky() -> AppState {
         .unwrap()
         .insert_window(100, Some(800))
         .unwrap();
-    state.focused_workspace_mut().unwrap().focus_window(100).unwrap();
+    float_focused_window(&mut state, 100);
     state.toggle_sticky(); // 100 floating + sticky on workspace 0
     // Destination workspace has its own tiled window (focus magnet).
     state.ensure_workspace_exists(mon, 1);
@@ -3383,8 +3439,9 @@ fn test_sticky_window_not_focused_does_not_steal_focus_on_switch() {
         .insert_window(100, Some(800))
         .unwrap();
     state.focused_workspace_mut().unwrap().focus_window(100).unwrap();
-    state.toggle_sticky(); // 100 floating + sticky on workspace 0
-    // User is focused on a TILED window, not the pin.
+    state.toggle_sticky(); // 100 tiled + sticky on workspace 0
+    // User is focused on a different TILED window, not the sticky one. The
+    // tiled rehome appends without stealing focus, so focus must not jump to it.
     state
         .focused_workspace_mut()
         .unwrap()
@@ -3410,6 +3467,62 @@ fn test_sticky_window_not_focused_does_not_steal_focus_on_switch() {
         state.pending_sticky_refocus,
         None,
         "no landing refocus armed when the pin was not focused"
+    );
+}
+
+#[test]
+fn test_tiled_sticky_focused_keeps_focus_across_switch() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    let mon = state.focused_monitor;
+    state.focused_workspace_mut().unwrap().insert_window(100, Some(800)).unwrap();
+    state.focused_workspace_mut().unwrap().focus_window(100).unwrap();
+    state.toggle_sticky(); // tiled sticky, focused
+    state.ensure_workspace_exists(mon, 1);
+    state.workspaces.get_mut(&mon).unwrap()[1].insert_window(200, Some(800)).unwrap();
+    state.previous_focused_hwnd = Some(100); // user is on the sticky window
+    state.reduce_motion = false;
+
+    let resp = state.handle_command(IpcCommand::SwitchWorkspace { index: 2 });
+    assert!(matches!(resp, IpcResponse::Ok));
+
+    let dest = &state.workspaces.get(&mon).unwrap()[1];
+    assert!(dest.contains_window(100) && !dest.is_floating(100), "followed and stayed tiled");
+    assert_eq!(dest.focused_window(), Some(100), "destination focus is the sticky window");
+    assert_eq!(state.previous_focused_hwnd, Some(100), "focus stays on the tiled sticky");
+}
+
+#[test]
+fn test_refocus_sticky_window_tiled() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.focused_workspace_mut().unwrap().insert_window(100, Some(800)).unwrap();
+    state.focused_workspace_mut().unwrap().insert_window(200, Some(800)).unwrap();
+    state.focused_workspace_mut().unwrap().focus_window(100).unwrap();
+    state.toggle_sticky(); // 100 tiled-sticky
+    state.focused_workspace_mut().unwrap().focus_window(200).unwrap(); // move focus off it
+
+    assert!(state.refocus_sticky_window(100), "tiled sticky refocus applies");
+    assert_eq!(state.focused_workspace().unwrap().focused_window(), Some(100));
+    assert_eq!(state.previous_focused_hwnd, Some(100));
+}
+
+#[test]
+fn test_sticky_mode_transition_tiled_to_floating() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    let mon = state.focused_monitor;
+    state.focused_workspace_mut().unwrap().insert_window(100, Some(800)).unwrap();
+    state.focused_workspace_mut().unwrap().focus_window(100).unwrap();
+    state.toggle_sticky(); // tiled sticky
+    // Float it mid-session (Ctrl+Alt+F equivalent); stickiness is preserved.
+    let vp = state.focused_viewport();
+    state.focused_workspace_mut().unwrap().toggle_floating(vp);
+    assert!(state.focused_workspace().unwrap().is_floating(100));
+
+    state.ensure_workspace_exists(mon, 1);
+    state.active_workspace.insert(mon, 1);
+    state.rehome_sticky_windows();
+    assert!(
+        state.workspaces.get(&mon).unwrap()[1].is_floating(100),
+        "after floating, the sticky now follows via the floating path"
     );
 }
 

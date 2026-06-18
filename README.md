@@ -42,7 +42,7 @@ https://github.com/user-attachments/assets/73f6a133-e038-41c5-8b33-79bd67c6c267
 
 https://github.com/user-attachments/assets/30595d72-0fad-4db8-903c-52307087c00e
 
-**Sticky windows** — pin a window so it stays visible and follows you across workspaces
+**Sticky windows** — pin a window so it follows you across workspaces, tiled or floating
 
 https://github.com/user-attachments/assets/43715787-1501-4e19-b693-f301065e914d
 
@@ -63,7 +63,7 @@ A few deliberate **non-features**, so you know what you're getting:
 - Drag-and-drop column reorder (Shift+drag to merge windows)
 - **Tabbed columns** — toggle a column between vertical-stack and tab-strip mode (`Ctrl+Alt+T`); only the active tab fills the column rect, the rest sit in a clickable strip above
 - **Scratchpad** — stash the focused window out of the layout (`Ctrl+Alt+Shift+S`) and summon it back as a floating, centered overlay on demand (`Ctrl+Alt+S`); stash it again to release it back to tiling
-- **Sticky windows** — pin a window (`Ctrl+Alt+Y`) so it stays visible on every workspace and follows you as you switch
+- **Sticky windows** — pin a window (`Ctrl+Alt+Y`) so it follows you across workspaces, keeping its current mode: a tiled window stays tiled (a column you can cycle to), a floating window stays a floating overlay
 - **Overview mode** — `Ctrl+Alt+Space` opens a map of the monitor's non-empty workspaces; click a window card to jump to it, click a row to switch workspace, or drive it with arrows/Enter/digits
 - **Per-app window rules** — float, ignore, or tile by class/title/executable, plus per-app open behavior: target workspace, initial column width, open maximized
 - Floating and fullscreen toggles
@@ -157,7 +157,7 @@ Most hotkeys use `Ctrl+Alt` as the base modifier. Layered pattern: base = focus,
 | `Ctrl+Alt+T` | Toggle tabbed mode on focused column |
 | `Ctrl+Alt+S` | Toggle scratchpad (summon / hide) |
 | `Ctrl+Alt+Shift+S` | Stash focused window to scratchpad (or release it back to tiling) |
-| `Ctrl+Alt+Y` | Toggle sticky (pin focused window to every workspace) |
+| `Ctrl+Alt+Y` | Toggle sticky (follow across workspaces, keeping tiled/floating mode) |
 | `Ctrl+Alt+P` | Toggle pause |
 | `Ctrl+Alt+R` | Refresh (re-enumerate windows) |
 | `Ctrl+Alt+Shift+R` | Reload config |
