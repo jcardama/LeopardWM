@@ -1332,11 +1332,13 @@ function init(cfg) {
     var raw = cfg.hotkeys.bindings || cfg.hotkeys;
     var bindings = {};
     var scrollMod = 'Ctrl+Alt';
+    var disabled = [];
     for (var k in raw) {
       if (k === 'scroll_modifier') { scrollMod = raw[k]; }
+      else if (k === 'disabled') { disabled = raw[k] || []; }
       else { bindings[k] = raw[k]; }
     }
-    loadHotkeysSorted(bindings, scrollMod);
+    loadHotkeysSorted(bindings, scrollMod, disabled);
   }
   renderFailedHotkeys();
 
@@ -1605,15 +1607,17 @@ function renderFailedHotkeys() {
   bar.hidden = false;
 }
 
-function loadHotkeysSorted(bindings, scrollModifier) {
+function loadHotkeysSorted(bindings, scrollModifier, disabled) {
   var tbody = document.getElementById('hotkeys-body');
   tbody.innerHTML = '';
+  var disabledSet = disabled || [];
   /* Build cmd→key map from config */
   var cmdToKey = {};
   Object.entries(bindings).forEach(function(e) { cmdToKey[e[1]] = e[0]; });
-  /* Render in defined order */
+  /* Render in defined order. A command the user disabled stays empty rather
+     than falling back to its default. */
   CMD_ORDER.forEach(function(cmd) {
-    var key = cmdToKey[cmd] || defaultKeyForCmd(cmd);
+    var key = cmdToKey[cmd] || (disabledSet.indexOf(cmd) === -1 ? defaultKeyForCmd(cmd) : '');
     addHotkeyRow(key, cmd);
   });
   /* Append any custom commands not in CMD_ORDER */
@@ -1729,7 +1733,8 @@ function readConfig() {
       new_window_placement: cbVal('cb-behavior-new_window_placement')
     },
     hotkeys: Object.assign(readHotkeys(), {
-      scroll_modifier: readScrollModifier()
+      scroll_modifier: readScrollModifier(),
+      disabled: readDisabledHotkeys()
     }),
     window_rules: readRules(),
     gestures: {
@@ -1781,6 +1786,18 @@ function readHotkeys() {
     if (k && c) b[k] = c;
   });
   return b;
+}
+
+/* Commands the user cleared: an empty row whose action has a default. These
+   are recorded so the daemon's defaults-merge won't resurrect the binding. */
+function readDisabledHotkeys() {
+  var d = [];
+  document.querySelectorAll('#hotkeys-body tr[data-cmd]').forEach(function(tr) {
+    var k = tr.querySelector('.hk-key').value.trim();
+    var c = tr.dataset.cmd;
+    if (!k && c && defaultKeyForCmd(c)) d.push(c);
+  });
+  return d;
 }
 
 function readScrollModifier() {

@@ -4,6 +4,12 @@ All notable changes to LeopardWM will be documented in this file.
 
 ## 0.2.2
 
+### Fixes
+
+- **Clearing a hotkey now sticks.** A removed binding used to have its default
+  re-added on the next load, so it kept firing and a blank field refilled on
+  restart. Cleared bindings are now remembered and stay unbound.
+
 ### Improvements
 
 - **Record hotkeys by pressing them.** In Settings, the hotkeys list now

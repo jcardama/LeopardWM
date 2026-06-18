@@ -652,6 +652,12 @@ pub struct HotkeyConfig {
     #[serde(default = "default_scroll_modifier")]
     pub scroll_modifier: String,
 
+    /// Commands the user has intentionally left unbound. The defaults-merge
+    /// skips re-adding their default binding, so a cleared binding stays
+    /// cleared instead of springing back on the next load.
+    #[serde(default)]
+    pub disabled: Vec<String>,
+
     /// Map of hotkey string to command name.
     #[serde(flatten)]
     pub bindings: HashMap<String, String>,
@@ -661,6 +667,7 @@ impl Default for HotkeyConfig {
     fn default() -> Self {
         Self {
             scroll_modifier: default_scroll_modifier(),
+            disabled: Vec::new(),
             // Defaults come from the single hotkey catalog in `ipc::hotkeys`.
             bindings: leopardwm_ipc::hotkeys::default_bindings_map(),
         }
@@ -1290,18 +1297,23 @@ impl Config {
         // Migrate deprecated hotkey command names.
         Self::migrate_hotkey_bindings(&mut config.hotkeys.bindings);
 
-        // Merge default hotkeys: any command not already bound by the user
-        // gets its default binding. This ensures new hotkeys automatically
-        // appear for existing users without overriding their customizations.
-        let user_commands: HashSet<String> =
-            config.hotkeys.bindings.values().cloned().collect();
-        for (key, cmd) in HotkeyConfig::default().bindings {
-            if !user_commands.contains(&cmd) {
-                config.hotkeys.bindings.insert(key, cmd);
-            }
-        }
+        Self::merge_default_hotkeys(&mut config.hotkeys);
 
         Ok(config)
+    }
+
+    /// Re-add default bindings for commands the user has neither bound nor
+    /// disabled. This surfaces new hotkeys to existing configs across updates
+    /// without overriding customizations — and without resurrecting a binding
+    /// the user intentionally cleared (those go in `hotkeys.disabled`).
+    fn merge_default_hotkeys(hotkeys: &mut HotkeyConfig) {
+        let user_commands: HashSet<String> = hotkeys.bindings.values().cloned().collect();
+        let disabled: HashSet<&String> = hotkeys.disabled.iter().collect();
+        for (key, cmd) in HotkeyConfig::default().bindings {
+            if !user_commands.contains(&cmd) && !disabled.contains(&cmd) {
+                hotkeys.bindings.insert(key, cmd);
+            }
+        }
     }
 
     /// Save configuration to the primary config path.
@@ -1612,6 +1624,7 @@ mod tests {
         let defaults = HotkeyConfig::default();
         let mut user = HotkeyConfig {
             scroll_modifier: default_scroll_modifier(),
+            disabled: Vec::new(),
             bindings: HashMap::new(),
         };
         // User only binds focus_left to a custom key
@@ -1642,6 +1655,57 @@ mod tests {
             user.bindings.get("Ctrl+Alt+Shift+J"),
             Some(&"move_window_down".to_string())
         );
+    }
+
+    #[test]
+    fn test_merge_skips_disabled_commands() {
+        // A user who cleared (disabled) consume_from_right should NOT get its
+        // default binding re-added by the merge.
+        let mut hk = HotkeyConfig {
+            scroll_modifier: default_scroll_modifier(),
+            disabled: vec!["consume_from_right".to_string()],
+            bindings: HashMap::new(),
+        };
+        Config::merge_default_hotkeys(&mut hk);
+
+        assert!(
+            !hk.bindings.values().any(|c| c == "consume_from_right"),
+            "disabled command should stay unbound after merge"
+        );
+        // Other defaults are still merged in.
+        assert!(hk.bindings.values().any(|c| c == "focus_left"));
+    }
+
+    #[test]
+    fn test_disabled_deserializes_from_json_save_payload() {
+        // Mirrors the settings-save path (JS object -> serde_json -> Config).
+        let json = serde_json::json!({
+            "scroll_modifier": "Ctrl+Alt",
+            "disabled": ["consume_from_right"],
+            "Ctrl+Alt+H": "focus_left",
+        });
+        let hk: HotkeyConfig = serde_json::from_value(json).unwrap();
+        assert_eq!(hk.disabled, vec!["consume_from_right".to_string()]);
+        assert_eq!(hk.bindings.get("Ctrl+Alt+H"), Some(&"focus_left".to_string()));
+        // `disabled` must not leak into the flattened bindings map.
+        assert!(!hk.bindings.contains_key("disabled"));
+    }
+
+    #[test]
+    fn test_disabled_roundtrips_with_flattened_bindings() {
+        let mut hk = HotkeyConfig::default();
+        hk.disabled = vec!["consume_from_right".to_string()];
+        hk.bindings.clear();
+        hk.bindings
+            .insert("Ctrl+Alt+H".to_string(), "focus_left".to_string());
+        let toml_str = toml::to_string_pretty(&hk).unwrap();
+        let parsed: HotkeyConfig = toml::from_str(&toml_str).unwrap();
+        assert_eq!(parsed.disabled, vec!["consume_from_right".to_string()]);
+        assert_eq!(
+            parsed.bindings.get("Ctrl+Alt+H"),
+            Some(&"focus_left".to_string())
+        );
+        assert_eq!(parsed.scroll_modifier, hk.scroll_modifier);
     }
 
     #[test]
