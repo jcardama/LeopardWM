@@ -1446,6 +1446,7 @@ function humanizeKey(chord) {
    Bare Esc/Tab leave the field, bare Backspace clears the bind. */
 var CODE_TO_KEY = {
   ArrowLeft: 'Left', ArrowRight: 'Right', ArrowUp: 'Up', ArrowDown: 'Down',
+  Home: 'Home', End: 'End',
   Space: 'Space', Enter: 'Enter', Tab: 'Tab', Escape: 'Escape',
   Minus: '-', Equal: '=', Comma: ',', Period: '.', BracketLeft: '[', BracketRight: ']'
 };

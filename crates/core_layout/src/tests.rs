@@ -81,6 +81,33 @@ mod tests {
     }
 
     #[test]
+    fn test_focus_start_end() {
+        let mut ws = Workspace::new();
+        ws.insert_window(1, Some(400)).unwrap();
+        ws.insert_window(2, Some(400)).unwrap();
+        ws.insert_window(3, Some(400)).unwrap();
+        assert_eq!(ws.focused_column_index(), 2); // last inserted
+
+        ws.focus_start();
+        assert_eq!(ws.focused_column_index(), 0);
+
+        ws.focus_end();
+        assert_eq!(ws.focused_column_index(), 2);
+
+        // Idempotent at the ends.
+        ws.focus_end();
+        assert_eq!(ws.focused_column_index(), 2);
+        ws.focus_start();
+        ws.focus_start();
+        assert_eq!(ws.focused_column_index(), 0);
+
+        // No panic on an empty workspace.
+        let mut empty = Workspace::new();
+        empty.focus_start();
+        empty.focus_end();
+    }
+
+    #[test]
     fn test_remove_window() {
         let mut ws = Workspace::new();
         ws.insert_window(1, Some(400)).unwrap();

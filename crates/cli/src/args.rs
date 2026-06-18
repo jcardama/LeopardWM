@@ -221,6 +221,10 @@ pub(crate) enum FocusDirection {
     Up,
     /// Focus the window below (in stacked columns)
     Down,
+    /// Focus the first (leftmost) column of the strip
+    Start,
+    /// Focus the last (rightmost) column of the strip
+    End,
 }
 
 #[derive(Subcommand)]

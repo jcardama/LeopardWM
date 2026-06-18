@@ -127,11 +127,12 @@ A default config is created automatically at `%APPDATA%\leopardwm\config\config.
 
 ## Default Hotkeys
 
-Most hotkeys use `Ctrl+Alt` as the base modifier. Layered pattern: base = focus, +Shift = move, +Win = monitor scope. Workspace prev/next reuses Windows' native `Win+Ctrl+Arrow` shortcut so it works with existing muscle memory. Every hotkey is rebindable in `config.toml`.
+Most hotkeys use `Ctrl+Alt` as the base modifier. Layered pattern: base = focus, +Shift = move, +Win = monitor scope. Every hotkey is rebindable in `config.toml`. Combos Windows reserves (like `Win+Ctrl+Arrow`) can't be bound directly, but the opt-in **Reclaim Windows-reserved shortcuts** setting lets you use them anyway.
 
 | Key | Action |
 |---|---|
 | `Ctrl+Alt+H/L/J/K` | Focus left / right / down / up |
+| `Ctrl+Alt+Home` / `End` | Focus start / end of strip |
 | `Ctrl+Alt+Shift+H/L` | Move column left / right |
 | `Ctrl+Alt+Shift+J/K` | Move window down / up in column |
 | `Ctrl+Alt+[` / `]` | Move window to left / right column |
@@ -148,7 +149,7 @@ Most hotkeys use `Ctrl+Alt` as the base modifier. Layered pattern: base = focus,
 | `Ctrl+Alt+1`...`9` | Switch to workspace 1–9 |
 | `Ctrl+Alt+Shift+1`...`9` | Move focused window to workspace 1–9 |
 | `Ctrl+Alt+Space` | Toggle workspace overview |
-| `Win+Ctrl+Left` / `Right` | Workspace prev / next (cycles) |
+| `Ctrl+Alt+Shift+Left` / `Right` | Workspace prev / next (cycles) |
 | `Ctrl+Alt+W` | Close focused window |
 | `Ctrl+Alt+F` | Toggle floating |
 | `Ctrl+Alt+Shift+F` | Toggle fullscreen |

@@ -118,6 +118,20 @@ impl AppState {
                     );
                 })
             }
+            IpcCommand::FocusStart => {
+                self.execute_workspace_command(false, true, |ws, vw| {
+                    ws.focus_start();
+                    ws.ensure_focused_visible_animated(vw);
+                    info!("Focus start -> column {}", ws.focused_column_index());
+                })
+            }
+            IpcCommand::FocusEnd => {
+                self.execute_workspace_command(false, true, |ws, vw| {
+                    ws.focus_end();
+                    ws.ensure_focused_visible_animated(vw);
+                    info!("Focus end -> column {}", ws.focused_column_index());
+                })
+            }
             IpcCommand::MoveColumnLeft => {
                 self.execute_workspace_command(true, false, |ws, vw| {
                     ws.move_column_left();

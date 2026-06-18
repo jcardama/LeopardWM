@@ -34,6 +34,22 @@ fn test_to_ipc_command_focus_right() {
 }
 
 #[test]
+fn test_to_ipc_command_focus_start() {
+    let cmd = Commands::Focus {
+        direction: FocusDirection::Start,
+    };
+    assert!(matches!(to_ipc_command(&cmd), IpcCommand::FocusStart));
+}
+
+#[test]
+fn test_to_ipc_command_focus_end() {
+    let cmd = Commands::Focus {
+        direction: FocusDirection::End,
+    };
+    assert!(matches!(to_ipc_command(&cmd), IpcCommand::FocusEnd));
+}
+
+#[test]
 fn test_to_ipc_command_focus_up() {
     let cmd = Commands::Focus {
         direction: FocusDirection::Up,

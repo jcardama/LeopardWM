@@ -647,6 +647,8 @@ pub mod vk {
     pub const UP: u32 = 0x26;
     pub const RIGHT: u32 = 0x27;
     pub const DOWN: u32 = 0x28;
+    pub const HOME: u32 = 0x24;
+    pub const END: u32 = 0x23;
 
     // Other
     pub const TAB: u32 = 0x09;
@@ -696,6 +698,8 @@ pub fn parse_vk(key: &str) -> Option<u32> {
         "RIGHT" => Some(vk::RIGHT),
         "UP" => Some(vk::UP),
         "DOWN" => Some(vk::DOWN),
+        "HOME" => Some(vk::HOME),
+        "END" => Some(vk::END),
         "TAB" => Some(vk::TAB),
         "SPACE" => Some(vk::SPACE),
         "ENTER" | "RETURN" => Some(vk::ENTER),
@@ -906,6 +910,8 @@ mod tests {
         // Navigation
         assert_eq!(parse_vk("Left"), Some(vk::LEFT));
         assert_eq!(parse_vk("RIGHT"), Some(vk::RIGHT));
+        assert_eq!(parse_vk("Home"), Some(vk::HOME));
+        assert_eq!(parse_vk("end"), Some(vk::END));
 
         // Special keys
         assert_eq!(parse_vk("Tab"), Some(vk::TAB));

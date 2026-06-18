@@ -331,6 +331,49 @@ impl Workspace {
         );
     }
 
+    /// Move focus to the first (leftmost) column that has a visible window.
+    pub fn focus_start(&mut self) {
+        self.focus_to_strip_end(false);
+    }
+
+    /// Move focus to the last (rightmost) column that has a visible window.
+    pub fn focus_end(&mut self) {
+        self.focus_to_strip_end(true);
+    }
+
+    /// Jump focus to the first or last column with a visible window, scanning
+    /// inward past all-minimized columns. Stays put if none qualify.
+    fn focus_to_strip_end(&mut self, last: bool) {
+        if self.columns.is_empty() {
+            return;
+        }
+        let start = self.focused_column;
+        self.focused_column = if last { self.columns.len() - 1 } else { 0 };
+        while !self.has_visible_window_in_column(self.focused_column) {
+            if last && self.focused_column > 0 {
+                self.focused_column -= 1;
+            } else if !last && self.focused_column + 1 < self.columns.len() {
+                self.focused_column += 1;
+            } else {
+                self.focused_column = start;
+                break;
+            }
+        }
+        self.land_focus_in_current_column();
+        self.clamp_focus_indices();
+        if self.has_visible_window_in_column(self.focused_column) {
+            self.adjust_focus_to_visible_in_column();
+        }
+        self.sync_active_tab_to_focus();
+
+        debug_assert!(
+            self.columns.is_empty()
+                || (self.focused_column < self.columns.len()
+                    && self.focused_window_in_column < self.columns[self.focused_column].len()),
+            "Invariant violation: focus indices out of bounds after focus_to_strip_end"
+        );
+    }
+
     /// Move focus to the window above in the current column, skipping
     /// minimized windows. In a Tabbed column, cycles to the previous tab
     /// (wrapping at the start) so a single keypress walks the tab list.

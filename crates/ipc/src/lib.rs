@@ -332,6 +332,10 @@ pub enum IpcCommand {
     FocusNext,
     /// Focus the previous window in linear order (across columns).
     FocusPrev,
+    /// Focus the first (leftmost) column of the strip.
+    FocusStart,
+    /// Focus the last (rightmost) column of the strip.
+    FocusEnd,
 
     /// Move the focused column left.
     MoveColumnLeft,
