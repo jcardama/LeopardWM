@@ -1955,10 +1955,11 @@ fn test_reclaimable_binds_only_reclaims_os_reserved() {
         (1 as HotkeyId, "Win+Ctrl+Left".to_string(), win_ctrl, 0x25),
         (2 as HotkeyId, "Ctrl+Alt+M".to_string(), ctrl_alt, 0x4D),
     ];
-    let (reclaim, failed) = reclaimable_binds(&rejected, true);
+    let (reclaim, reclaim_labels, failed) = reclaimable_binds(&rejected, true);
     // OS-reserved Win+Ctrl+Left is reclaimed; app-owned Ctrl+Alt+M stays a warning.
     assert_eq!(reclaim.len(), 1);
     assert_eq!(reclaim[0].vk, 0x25);
+    assert_eq!(reclaim_labels, vec!["Win+Ctrl+Left".to_string()]);
     assert_eq!(failed, vec!["Ctrl+Alt+M".to_string()]);
 }
 
@@ -1967,8 +1968,9 @@ fn test_reclaimable_binds_excludes_bare_win() {
     // Win+Left (Snap) is bare-Win — excluded (swallowing would pop Start).
     let win = Modifiers { win: true, ..Default::default() };
     let rejected = vec![(1 as HotkeyId, "Win+Left".to_string(), win, 0x25)];
-    let (reclaim, failed) = reclaimable_binds(&rejected, true);
+    let (reclaim, reclaim_labels, failed) = reclaimable_binds(&rejected, true);
     assert!(reclaim.is_empty());
+    assert!(reclaim_labels.is_empty());
     assert_eq!(failed, vec!["Win+Left".to_string()]);
 }
 
@@ -1976,8 +1978,9 @@ fn test_reclaimable_binds_excludes_bare_win() {
 fn test_reclaimable_binds_disabled_keeps_all_failed() {
     let win_ctrl = Modifiers { ctrl: true, win: true, ..Default::default() };
     let rejected = vec![(1 as HotkeyId, "Win+Ctrl+Left".to_string(), win_ctrl, 0x25)];
-    let (reclaim, failed) = reclaimable_binds(&rejected, false);
+    let (reclaim, reclaim_labels, failed) = reclaimable_binds(&rejected, false);
     assert!(reclaim.is_empty());
+    assert!(reclaim_labels.is_empty());
     assert_eq!(failed, vec!["Win+Ctrl+Left".to_string()]);
 }
 

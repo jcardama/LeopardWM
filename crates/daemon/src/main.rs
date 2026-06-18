@@ -208,14 +208,11 @@ fn rejected_binds(bind_labels: &[BindInfo], registered: &[HotkeyId]) -> Vec<Bind
 /// bare-Win press that pops the Start menu): `Win+Ctrl+Arrow` (virtual desktops)
 /// and `Win+Shift+Left/Right` (move window across monitors).
 fn is_os_reserved(m: Modifiers, vk: u32) -> bool {
-    const VK_LEFT: u32 = 0x25;
-    const VK_UP: u32 = 0x26;
-    const VK_RIGHT: u32 = 0x27;
-    const VK_DOWN: u32 = 0x28;
+    use leopardwm_platform_win32::vk as keys;
     let win_ctrl = Modifiers { ctrl: true, win: true, ..Default::default() };
     let win_shift = Modifiers { shift: true, win: true, ..Default::default() };
-    (m == win_ctrl && matches!(vk, VK_LEFT | VK_UP | VK_RIGHT | VK_DOWN))
-        || (m == win_shift && matches!(vk, VK_LEFT | VK_RIGHT))
+    (m == win_ctrl && matches!(vk, keys::LEFT | keys::UP | keys::RIGHT | keys::DOWN))
+        || (m == win_shift && matches!(vk, keys::LEFT | keys::RIGHT))
 }
 
 /// Split the rejected binds into the ones we'll reclaim via the keyboard hook
@@ -223,17 +220,24 @@ fn is_os_reserved(m: Modifiers, vk: u32) -> bool {
 /// that stay in the warning (app-owned conflicts, or reclaim disabled). We only
 /// reclaim known OS-reserved combos — a `RegisterHotKey` rejection usually means
 /// another app owns the combo, and swallowing those would steal app shortcuts.
-fn reclaimable_binds(rejected: &[BindInfo], reclaim_enabled: bool) -> (Vec<ReclaimBind>, Vec<String>) {
+/// Returns `(reclaim binds, their labels, still-failed labels)` — the labels let
+/// the caller fold reclaimed binds back into the warning if the hook won't install.
+fn reclaimable_binds(
+    rejected: &[BindInfo],
+    reclaim_enabled: bool,
+) -> (Vec<ReclaimBind>, Vec<String>, Vec<String>) {
     let mut reclaim = Vec::new();
+    let mut reclaim_labels = Vec::new();
     let mut still_failed = Vec::new();
     for (id, label, m, vk) in rejected {
         if reclaim_enabled && is_os_reserved(*m, *vk) {
             reclaim.push(ReclaimBind { modifiers: *m, vk: *vk, id: *id });
+            reclaim_labels.push(label.clone());
         } else {
             still_failed.push(label.clone());
         }
     }
-    (reclaim, still_failed)
+    (reclaim, reclaim_labels, still_failed)
 }
 
 /// Install the reclaim keyboard hook for the given combos and forward its
@@ -327,16 +331,22 @@ fn setup_hotkeys(config: &Config, event_tx: mpsc::Sender<DaemonEvent>) -> Hotkey
             info!("Registered {} global hotkeys", handle.registered_count());
 
             let rejected = rejected_binds(&bind_labels, handle.registered_ids());
-            let (reclaim, failed_binds) =
+            let (reclaim, reclaim_labels, mut failed_binds) =
                 reclaimable_binds(&rejected, config.behavior.reclaim_os_shortcuts);
+            // Install the reclaim hook before the hotkey-fwd thread consumes event_tx.
+            let reclaim_hook = install_reclaim_hook(reclaim, event_tx.clone());
+            // If reclaim was wanted but the hook didn't install, those combos are
+            // neither registered nor reclaimed — surface them in the warning
+            // instead of leaving the user with no signal.
+            if reclaim_hook.is_none() && !reclaim_labels.is_empty() {
+                failed_binds.extend(reclaim_labels);
+            }
             if !failed_binds.is_empty() {
                 warn!(
                     "These hotkeys were rejected by the OS (already in use): {}",
                     failed_binds.join(", ")
                 );
             }
-            // Install the reclaim hook before the hotkey-fwd thread consumes event_tx.
-            let reclaim_hook = install_reclaim_hook(reclaim, event_tx.clone());
 
             // Spawn task to forward hotkey events
             match std::thread::Builder::new()

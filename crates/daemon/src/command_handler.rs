@@ -61,7 +61,6 @@ impl AppState {
         IpcResponse::Ok
     }
 
-    /// Process an IPC command and return a response.
     /// Focus or move the focused column to the start/end of the strip.
     fn handle_strip_end_command(&mut self, cmd: IpcCommand) -> IpcResponse {
         match cmd {
@@ -167,14 +166,14 @@ impl AppState {
                 self.execute_workspace_command(true, true, |ws, vw| {
                     ws.move_window_left();
                     ws.ensure_focused_visible_animated(vw);
-                    info!("Moved window left to adjacent column");
+                    info!("Moved window left");
                 })
             }
             IpcCommand::MoveWindowRight => {
                 self.execute_workspace_command(true, true, |ws, vw| {
                     ws.move_window_right();
                     ws.ensure_focused_visible_animated(vw);
-                    info!("Moved window right to adjacent column");
+                    info!("Moved window right");
                 })
             }
             IpcCommand::ExpelToLeft => {

@@ -1550,6 +1550,18 @@ function addHotkeyRow(key, cmd) {
   attachRecorder(tr.querySelector('.hk-key'));
 }
 
+/* Canonicalize a combo so equivalent orderings collide: modifiers in a fixed
+   order (Ctrl, Alt, Win, Shift) with the non-modifier key last. Without this,
+   "Win+Ctrl+Escape" and "Ctrl+Win+Escape" bucket as distinct and a real clash
+   slips through. */
+function normalizeCombo(v) {
+  var order = { Ctrl: 0, Alt: 1, Win: 2, Shift: 3 };
+  var parts = v.split('+').map(function(p) { return p.trim(); }).filter(Boolean);
+  var mods = parts.filter(function(p) { return p in order; }).sort(function(a, b) { return order[a] - order[b]; });
+  var keys = parts.filter(function(p) { return !(p in order); });
+  return mods.concat(keys).join('+');
+}
+
 /* Flag any combo bound to more than one command. Pure client-side check run
    after every record/clear/reset; complements the daemon's OS-level warning. */
 function refreshDuplicateWarnings() {
@@ -1557,13 +1569,13 @@ function refreshDuplicateWarnings() {
   var byCombo = {};
   rows.forEach(function(tr) {
     var v = tr.querySelector('.hk-key').value.trim();
-    if (v) { (byCombo[v] = byCombo[v] || []).push(tr); }
+    if (v) { var k = normalizeCombo(v); (byCombo[k] = byCombo[k] || []).push(tr); }
   });
   rows.forEach(function(tr) {
     var note = tr.querySelector('.hk-dup-note');
     if (!note) { return; }
     var v = tr.querySelector('.hk-key').value.trim();
-    var group = v ? byCombo[v] : null;
+    var group = v ? byCombo[normalizeCombo(v)] : null;
     if (group && group.length > 1) {
       var others = group.filter(function(t) { return t !== tr; })
         .map(function(t) { return cmdShortLabel(t.dataset.cmd); });

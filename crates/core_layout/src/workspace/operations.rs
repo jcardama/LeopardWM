@@ -229,7 +229,7 @@ impl Workspace {
         }
         if self.focused_column == 0 {
             // At the left edge there's no column to move into; instead unstack
-            // the window into a new column off the end (no-op if not stacked).
+            // the window into a new column at the left edge (no-op if not stacked).
             self.expel_to_left();
             return;
         }

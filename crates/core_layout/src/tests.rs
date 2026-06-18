@@ -158,6 +158,27 @@ mod tests {
     }
 
     #[test]
+    fn test_move_window_left_edge_unstacks() {
+        let mut ws = Workspace::new();
+        ws.insert_window(1, Some(400)).unwrap();
+        ws.insert_window(2, Some(400)).unwrap(); // col 1, focused
+        ws.move_window_left(); // window 2 joins column 0 -> one stacked column
+        assert_eq!(ws.column_count(), 1);
+        assert_eq!(ws.focused_column_index(), 0);
+
+        // Moving left at the left edge unstacks into a new column at the edge.
+        ws.move_window_left();
+        assert_eq!(ws.column_count(), 2);
+        assert_eq!(ws.focused_window(), Some(2));
+        assert_eq!(ws.focused_column_index(), 0);
+
+        // A lone window at the left edge stays put (nothing to unstack).
+        ws.move_window_left();
+        assert_eq!(ws.column_count(), 2);
+        assert_eq!(ws.focused_column_index(), 0);
+    }
+
+    #[test]
     fn test_append_window_no_focus() {
         let mut ws = Workspace::new();
         ws.append_window_no_focus(1, Some(400)).unwrap(); // empty -> focuses only column
