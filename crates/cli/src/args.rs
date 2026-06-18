@@ -187,6 +187,10 @@ pub(crate) enum Commands {
         #[arg(value_parser = clap::value_parser!(u8).range(1..=9))]
         number: u8,
     },
+    /// Switch to the next workspace (wraps 9 -> 1)
+    WorkspaceNext,
+    /// Switch to the previous workspace (wraps 1 -> 9)
+    WorkspacePrev,
     /// Toggle the workspace overview (map of non-empty workspaces)
     ToggleOverview,
     /// Query daemon status

@@ -26,6 +26,8 @@ All notable changes to LeopardWM will be documented in this file.
   combos are reclaimed (never combos another app owns); bare `Win+key`,
   protected combos like `Win+L`, and keys sent to elevated windows are out of
   scope.
+- Add `lwm workspace-next` and `lwm workspace-prev` to cycle through workspaces
+  from the CLI (the `workspace_prev`/`workspace_next` hotkeys already existed).
 
 ## 0.2.1
 

@@ -75,6 +75,8 @@ pub(crate) fn to_ipc_command(cmd: &Commands) -> IpcCommand {
         Commands::EqualizeHeights => IpcCommand::EqualizeColumnHeights,
         Commands::Workspace { number } => IpcCommand::SwitchWorkspace { index: *number },
         Commands::MoveToWorkspace { number } => IpcCommand::MoveToWorkspace { index: *number },
+        Commands::WorkspaceNext => IpcCommand::WorkspaceNext,
+        Commands::WorkspacePrev => IpcCommand::WorkspacePrev,
         Commands::ToggleOverview => IpcCommand::ToggleOverview,
         Commands::Status => IpcCommand::QueryStatus,
         Commands::PanicRevert => IpcCommand::PanicRevert,

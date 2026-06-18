@@ -203,6 +203,22 @@ fn test_to_ipc_command_query_workspace() {
 }
 
 #[test]
+fn test_to_ipc_command_workspace_next() {
+    assert!(matches!(
+        to_ipc_command(&Commands::WorkspaceNext),
+        IpcCommand::WorkspaceNext
+    ));
+}
+
+#[test]
+fn test_to_ipc_command_workspace_prev() {
+    assert!(matches!(
+        to_ipc_command(&Commands::WorkspacePrev),
+        IpcCommand::WorkspacePrev
+    ));
+}
+
+#[test]
 fn test_to_ipc_command_query_focused() {
     let cmd = Commands::Query {
         what: QueryType::Focused,
