@@ -72,22 +72,39 @@ pub fn set_foreground_window(hwnd: WindowId) -> Result<bool, Win32Error> {
         let current_thread = GetCurrentThreadId();
         let mut diagnostics: Vec<String> = Vec::new();
 
-        // Attach to the target thread's input queue to allow SetForegroundWindow
-        let mut attached = false;
-        if target_thread != current_thread {
-            if windows::Win32::System::Threading::AttachThreadInput(
-                current_thread,
-                target_thread,
-                true,
-            )
-            .as_bool()
-            {
-                attached = true;
+        // Attach our input queue to BOTH the current foreground window's thread
+        // and the target window's thread so Windows permits the foreground
+        // change. Attaching to the foreground thread is what lets us steal focus
+        // from an active holder (e.g. a borderless fullscreen game): hotkeys now
+        // arrive via a low-level keyboard hook, which does not grant this process
+        // the "last input event" foreground right that RegisterHotKey conferred.
+        // Without it the window scrolls into place but stays behind the
+        // foreground app.
+        let foreground_thread = {
+            let fg = GetForegroundWindow();
+            if fg.0.is_null() {
+                0
             } else {
-                diagnostics.push(format!(
-                    "AttachThreadInput attach failed (current_thread={}, target_thread={})",
-                    current_thread, target_thread
-                ));
+                GetWindowThreadProcessId(fg, None)
+            }
+        };
+        let mut attached: Vec<u32> = Vec::new();
+        for candidate in [foreground_thread, target_thread] {
+            if candidate != 0 && candidate != current_thread && !attached.contains(&candidate) {
+                if windows::Win32::System::Threading::AttachThreadInput(
+                    current_thread,
+                    candidate,
+                    true,
+                )
+                .as_bool()
+                {
+                    attached.push(candidate);
+                } else {
+                    diagnostics.push(format!(
+                        "AttachThreadInput attach failed (current_thread={}, other_thread={})",
+                        current_thread, candidate
+                    ));
+                }
             }
         }
 
@@ -109,19 +126,20 @@ pub fn set_foreground_window(hwnd: WindowId) -> Result<bool, Win32Error> {
             }
         }
 
-        // Detach thread input
-        if attached
-            && !windows::Win32::System::Threading::AttachThreadInput(
+        // Detach every input queue we attached to.
+        for thread in &attached {
+            if !windows::Win32::System::Threading::AttachThreadInput(
                 current_thread,
-                target_thread,
+                *thread,
                 false,
             )
             .as_bool()
-        {
-            diagnostics.push(format!(
-                "AttachThreadInput detach failed (current_thread={}, target_thread={})",
-                current_thread, target_thread
-            ));
+            {
+                diagnostics.push(format!(
+                    "AttachThreadInput detach failed (current_thread={}, other_thread={})",
+                    current_thread, thread
+                ));
+            }
         }
 
         if foreground_set {
