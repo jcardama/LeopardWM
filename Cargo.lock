@@ -1092,7 +1092,7 @@ checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 
 [[package]]
 name = "leopardwm-cli"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -1109,7 +1109,7 @@ dependencies = [
 
 [[package]]
 name = "leopardwm-core-layout"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -1118,7 +1118,7 @@ dependencies = [
 
 [[package]]
 name = "leopardwm-daemon"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -1147,7 +1147,7 @@ dependencies = [
 
 [[package]]
 name = "leopardwm-ipc"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "directories",
  "serde",
@@ -1157,7 +1157,7 @@ dependencies = [
 
 [[package]]
 name = "leopardwm-platform-win32"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "leopardwm-core-layout",
@@ -1169,7 +1169,7 @@ dependencies = [
 
 [[package]]
 name = "leopardwm-watchdog"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "leopardwm-platform-win32",
