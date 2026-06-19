@@ -9,7 +9,38 @@ use leopardwm_platform_win32::{
     move_window_offscreen,
 };
 use std::collections::HashMap;
-use tracing::info;
+use tracing::{debug, info};
+
+/// How a command interacts with a workspace that is currently fullscreen.
+enum FullscreenPolicy {
+    /// Drop fullscreen first, then run the command against the visible strip.
+    /// For focus/structural commands that would otherwise mutate the hidden
+    /// layout invisibly and dispatch focus to cloaked windows.
+    Exit,
+    /// Ignore while fullscreen — pure sizing/scroll commands have no visible
+    /// effect on a single fullscreen window, and a stray scroll gesture must
+    /// not silently drop fullscreen.
+    Suppress,
+    /// Run unchanged (fullscreen toggle, queries, cross-monitor/workspace moves).
+    Allow,
+}
+
+/// Classify how `cmd` should behave when the focused workspace is fullscreen.
+fn fullscreen_policy(cmd: &IpcCommand) -> FullscreenPolicy {
+    use IpcCommand::*;
+    match cmd {
+        FocusLeft | FocusRight | FocusUp | FocusDown | FocusNext | FocusPrev | FocusStart
+        | FocusEnd | MoveColumnLeft | MoveColumnRight | MoveColumnToStart | MoveColumnToEnd
+        | MoveWindowLeft | MoveWindowRight | MoveWindowUp | MoveWindowDown | ExpelToLeft
+        | ExpelToRight | ConsumeFromLeft | ConsumeFromRight | ToggleTabbed => {
+            FullscreenPolicy::Exit
+        }
+        Resize { .. } | Scroll { .. } | SetColumnWidth { .. } | CycleWidthUp | CycleWidthDown
+        | CycleHeightUp | CycleHeightDown | CenterColumn | MaximizeColumn
+        | EqualizeColumnWidths | EqualizeColumnHeights => FullscreenPolicy::Suppress,
+        _ => FullscreenPolicy::Allow,
+    }
+}
 
 impl AppState {
     /// Snapshot a workspace's current animated placements as `(window_id, rect)` pairs.
@@ -61,6 +92,24 @@ impl AppState {
         IpcResponse::Ok
     }
 
+    /// Exit fullscreen on the focused workspace if active, restoring the tiled
+    /// strip (un-cloaking the other windows) and the focus border. Returns
+    /// whether fullscreen was cleared. Called before focus/structural commands
+    /// so they apply to the visible layout instead of the hidden one.
+    fn exit_fullscreen_if_active(&mut self) -> bool {
+        let Some(fs_wid) = self.focused_workspace().and_then(|ws| ws.fullscreen_window_id()) else {
+            return false;
+        };
+        // Clear unconditionally — `toggle_fullscreen` would re-enter on the
+        // focused window when the fullscreen pointer is stale.
+        if let Some(ws) = self.focused_workspace_mut() {
+            ws.clear_fullscreen_if_window(fs_wid);
+        }
+        let _ = self.apply_layout();
+        self.sync_foreground_window();
+        true
+    }
+
     /// Focus or move the focused column to the start/end of the strip.
     fn handle_strip_end_command(&mut self, cmd: IpcCommand) -> IpcResponse {
         match cmd {
@@ -89,6 +138,22 @@ impl AppState {
     }
 
     pub(crate) fn handle_command(&mut self, cmd: IpcCommand) -> IpcResponse {
+        // A fullscreen window cloaks the rest of the strip. Focus/structural
+        // commands must drop fullscreen first so they act on the visible layout
+        // (otherwise they mutate the hidden strip and dispatch focus to cloaked
+        // windows); pure sizing/scroll commands are ignored while fullscreen.
+        if self.focused_workspace().is_some_and(|ws| ws.is_fullscreen()) {
+            match fullscreen_policy(&cmd) {
+                FullscreenPolicy::Exit => {
+                    self.exit_fullscreen_if_active();
+                }
+                FullscreenPolicy::Suppress => {
+                    debug!("Ignoring {:?} while fullscreen", cmd);
+                    return IpcResponse::Ok;
+                }
+                FullscreenPolicy::Allow => {}
+            }
+        }
         match cmd {
             IpcCommand::FocusLeft => {
                 self.execute_workspace_command(false, true, |ws, vw| {

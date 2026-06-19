@@ -6,22 +6,19 @@ All notable changes to LeopardWM will be documented in this file.
 
 ### Fixes
 
-- **Focus-follows-mouse no longer flashes the taskbar.** Moving the cursor
-  quickly to a taskbar button could fire a focus on the window you just left,
-  which made Windows flash that button. Focus now cancels when the cursor
-  leaves a window, and is re-checked the moment it fires so it only lands if
-  the cursor is still over the window.
+- **Fullscreen windows no longer swallow commands.** Focus and layout commands
+  now drop fullscreen and apply to the visible layout instead of the hidden
+  strip; scrolling and resizing are ignored while fullscreen.
+- **Focus-follows-mouse no longer flashes the taskbar.** Focus now cancels when
+  the cursor leaves a window and is re-checked when it fires, so it only lands
+  while the cursor is still over the window.
 - **Toggling focus-follows-mouse now takes effect immediately.** The tray and
-  Settings toggle previously only applied after a daemon restart; it now
-  installs or removes the mouse hook live.
-- **Focus-follows-mouse now tracks floating and tiled windows consistently.**
-  Hovering back to a tiled window after a floating one focused nothing, and
-  hovering a floating window never showed the focus border. Both now focus and
-  highlight the hovered window either way.
+  Settings toggle installs or removes the mouse hook live, with no restart.
+- **Focus-follows-mouse now handles floating and tiled windows consistently.**
+  Hovering between them focuses and highlights whichever window the cursor is
+  over, in either direction.
 - **Floating windows no longer grow each time you move them.** A dragged
-  floating window stored its outer rect while the layout expected the visible
-  rect, so each move added the invisible border width back and the window crept
-  larger. It now stores the visible rect and keeps its size.
+  floating window now keeps its size.
 
 ## 0.2.2
 

@@ -691,6 +691,62 @@ fn test_cmd_focus_right_empty() {
     assert_eq!(resp, IpcResponse::Ok);
 }
 
+fn fullscreen_state_two_columns() -> AppState {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    let ws = state.focused_workspace_mut().unwrap();
+    ws.insert_window(100, Some(800)).unwrap();
+    ws.insert_window(200, Some(800)).unwrap(); // focus on column 1 (window 200)
+    assert!(ws.toggle_fullscreen(), "entered fullscreen");
+    assert!(ws.is_fullscreen());
+    state
+}
+
+#[test]
+fn test_focus_command_exits_fullscreen_and_moves_focus() {
+    let mut state = fullscreen_state_two_columns();
+    let resp = state.handle_command(IpcCommand::FocusLeft);
+    assert_eq!(resp, IpcResponse::Ok);
+    let ws = state.focused_workspace().unwrap();
+    assert!(!ws.is_fullscreen(), "focus command must drop fullscreen");
+    assert_eq!(ws.focused_column_index(), 0, "focus moved to the left column");
+}
+
+#[test]
+fn test_structural_command_exits_fullscreen() {
+    let mut state = fullscreen_state_two_columns();
+    let resp = state.handle_command(IpcCommand::ConsumeFromLeft);
+    assert_eq!(resp, IpcResponse::Ok);
+    let ws = state.focused_workspace().unwrap();
+    assert!(!ws.is_fullscreen(), "consume must drop fullscreen");
+    assert_eq!(ws.column_count(), 1, "left window consumed into the focused column");
+}
+
+#[test]
+fn test_scroll_and_resize_are_suppressed_while_fullscreen() {
+    let mut state = fullscreen_state_two_columns();
+    assert_eq!(state.handle_command(IpcCommand::Scroll { delta: 120.0 }), IpcResponse::Ok);
+    assert!(
+        state.focused_workspace().unwrap().is_fullscreen(),
+        "scroll must not drop fullscreen"
+    );
+    assert_eq!(state.handle_command(IpcCommand::Resize { delta: 50 }), IpcResponse::Ok);
+    assert!(
+        state.focused_workspace().unwrap().is_fullscreen(),
+        "resize must not drop fullscreen"
+    );
+}
+
+#[test]
+fn test_toggle_fullscreen_still_exits_while_fullscreen() {
+    let mut state = fullscreen_state_two_columns();
+    let resp = state.handle_command(IpcCommand::ToggleFullscreen);
+    assert_eq!(resp, IpcResponse::Ok);
+    assert!(
+        !state.focused_workspace().unwrap().is_fullscreen(),
+        "toggle-fullscreen still turns it off"
+    );
+}
+
 #[test]
 fn test_cmd_move_left_empty() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
