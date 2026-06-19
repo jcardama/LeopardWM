@@ -6,6 +6,11 @@ All notable changes to LeopardWM will be documented in this file.
 
 ### Fixes
 
+- **Resolution and monitor changes keep working after you save settings.** Saving
+  settings, reloading config, or recording a hotkey stopped the daemon from
+  noticing later display changes, so a resolution switch (or a fullscreen app
+  that changes resolution) left the layout sized for the old display until a
+  manual refresh. Display and power events are now tracked for the whole session.
 - **AltGr no longer triggers workspace shortcuts on international keyboards.**
   Hotkeys are now matched by a keyboard hook that tells left and right modifiers
   apart, so AltGr (Right Alt) types accented characters instead of firing

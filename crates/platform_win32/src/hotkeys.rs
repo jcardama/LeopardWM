@@ -117,29 +117,23 @@ pub struct HotkeyEvent {
     pub id: HotkeyId,
 }
 
-/// Global sender for display change events forwarded to window event channel.
-/// Uses Mutex to allow re-registration after dropping previous EventHookHandle.
+/// Global sender for display change events forwarded to the window event
+/// channel. Registered once at startup (`set_display_change_sender`) and
+/// deliberately NOT cleared when the system-event window is dropped: the window
+/// is recreated on every config reload, but the daemon's forwarding channel
+/// lives for the whole session. Clearing it on window drop silently stopped
+/// display-change (and power) events from reaching the daemon after the first
+/// reload, so resolution/work-area changes no longer reconciled.
 static DISPLAY_CHANGE_SENDER: std::sync::Mutex<Option<mpsc::Sender<WindowEvent>>> =
     std::sync::Mutex::new(None);
 
-/// Global sender for power state change events.
+/// Global sender for power state change events. Same lifetime as
+/// [`DISPLAY_CHANGE_SENDER`]: set once at startup, survives window recreation.
 static POWER_STATE_SENDER: std::sync::Mutex<Option<mpsc::Sender<bool>>> =
     std::sync::Mutex::new(None);
 
 /// Custom message to signal the system-event thread to stop.
 const WM_QUIT_SYSEVENT_THREAD: u32 = WM_USER + 1;
-
-fn clear_sysevent_globals() {
-    let mut sender = DISPLAY_CHANGE_SENDER
-        .lock()
-        .unwrap_or_else(recover_poisoned_mutex);
-    *sender = None;
-    drop(sender);
-    let mut sender = POWER_STATE_SENDER
-        .lock()
-        .unwrap_or_else(recover_poisoned_mutex);
-    *sender = None;
-}
 
 fn request_sysevent_thread_shutdown(hwnd: HWND, thread_id: u32) -> bool {
     let mut shutdown_signal_sent = unsafe {
@@ -213,8 +207,10 @@ impl Drop for SystemEventHandle {
             }
         }
 
-        // Clear the global senders to allow re-registration (recover from mutex poisoning)
-        clear_sysevent_globals();
+        // The display/power forwarding senders are intentionally left intact:
+        // they belong to the daemon for the whole session, and this window is
+        // recreated on every config reload. Clearing them here would stop
+        // display-change and power events from reconciling after one reload.
     }
 }
 
@@ -349,13 +345,11 @@ pub fn register_system_events() -> Result<SystemEventHandle, Win32Error> {
 
     // Wait for initialization
     let init_result = init_rx.recv().map_err(|_| {
-        clear_sysevent_globals();
         Win32Error::HotkeyRegistrationFailed("Thread initialization failed".to_string())
     })?;
     let (hwnd_raw, thread_id) = match init_result {
         Ok(v) => v,
         Err(e) => {
-            clear_sysevent_globals();
             if thread.is_finished() {
                 let _ = thread.join();
             }
@@ -651,38 +645,66 @@ mod tests {
     }
 
     #[test]
-    fn test_clear_sysevent_globals_resets_senders() {
+    fn test_sysevent_handle_drop_preserves_forwarding_senders() {
         let _guard = HOTKEY_TEST_LOCK
             .lock()
             .unwrap_or_else(recover_poisoned_mutex);
 
         let (display_tx, _display_rx) = mpsc::channel::<WindowEvent>();
         let (power_tx, _power_rx) = mpsc::channel::<bool>();
-
         {
-            let mut sender_guard = DISPLAY_CHANGE_SENDER
+            let mut g = DISPLAY_CHANGE_SENDER
                 .lock()
                 .unwrap_or_else(recover_poisoned_mutex);
-            *sender_guard = Some(display_tx);
+            *g = Some(display_tx);
         }
         {
-            let mut sender_guard = POWER_STATE_SENDER
+            let mut g = POWER_STATE_SENDER
                 .lock()
                 .unwrap_or_else(recover_poisoned_mutex);
-            *sender_guard = Some(power_tx);
+            *g = Some(power_tx);
         }
 
-        clear_sysevent_globals();
+        // Dropping the system-event window happens on every config reload. It
+        // must NOT clear the daemon's forwarding senders, or display-change and
+        // power events stop reaching the daemon after the first reload.
+        let finished = std::thread::spawn(|| {});
+        for _ in 0..100 {
+            if finished.is_finished() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        drop(SystemEventHandle {
+            hwnd: HWND(std::ptr::null_mut()),
+            thread_id: 0,
+            thread: Some(finished),
+        });
 
         let display_sender = DISPLAY_CHANGE_SENDER
             .lock()
             .unwrap_or_else(recover_poisoned_mutex);
-        assert!(display_sender.is_none());
+        assert!(
+            display_sender.is_some(),
+            "display sender must survive window drop"
+        );
         drop(display_sender);
         let power_sender = POWER_STATE_SENDER
             .lock()
             .unwrap_or_else(recover_poisoned_mutex);
-        assert!(power_sender.is_none());
+        assert!(
+            power_sender.is_some(),
+            "power sender must survive window drop"
+        );
+        drop(power_sender);
+
+        // Cleanup for other tests.
+        *DISPLAY_CHANGE_SENDER
+            .lock()
+            .unwrap_or_else(recover_poisoned_mutex) = None;
+        *POWER_STATE_SENDER
+            .lock()
+            .unwrap_or_else(recover_poisoned_mutex) = None;
     }
 
     #[test]
