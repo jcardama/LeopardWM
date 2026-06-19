@@ -2,6 +2,23 @@
 
 All notable changes to LeopardWM will be documented in this file.
 
+## 0.2.3
+
+### Fixes
+
+- **Focus-follows-mouse no longer flashes the taskbar.** Moving the cursor
+  quickly to a taskbar button could fire a focus on the window you just left,
+  which made Windows flash that button. Focus now cancels when the cursor
+  leaves a window, and is re-checked the moment it fires so it only lands if
+  the cursor is still over the window.
+- **Toggling focus-follows-mouse now takes effect immediately.** The tray and
+  Settings toggle previously only applied after a daemon restart; it now
+  installs or removes the mouse hook live.
+- **Focus-follows-mouse now tracks floating and tiled windows consistently.**
+  Hovering back to a tiled window after a floating one focused nothing, and
+  hovering a floating window never showed the focus border. Both now focus and
+  highlight the hovered window either way.
+
 ## 0.2.2
 
 ### Fixes

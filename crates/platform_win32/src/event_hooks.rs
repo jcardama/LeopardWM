@@ -64,6 +64,10 @@ pub enum WindowEvent {
     WorkAreaChanged,
     /// Mouse cursor entered a window (for focus-follows-mouse).
     MouseEnterWindow(WindowId),
+    /// Mouse cursor left a manageable window for a non-manageable one (the
+    /// taskbar, a popup, etc.). Cancels any pending focus-follows-mouse focus
+    /// so a debounced focus doesn't fire on a window the cursor has left.
+    MouseLeftManaged,
     /// A window's title text changed. The daemon refreshes the tab
     /// strip overlay so tab labels stay in sync with the underlying
     /// window's title without waiting for the next layout-changing

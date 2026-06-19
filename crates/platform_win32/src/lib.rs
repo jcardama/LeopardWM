@@ -68,7 +68,8 @@ pub use visibility::{
     uncloak_all_visible_windows,
 };
 pub use window_query::{
-    get_cursor_pos, get_window_chrome_rect, get_window_corner_radius, get_window_icon,
+    cursor_is_over_window, get_cursor_pos, get_window_chrome_rect, get_window_corner_radius,
+    get_window_icon,
     get_window_visible_rect, is_cursor_on_resize_border, is_shift_key_pressed, is_valid_window,
     is_window_alive_and_visible, is_window_maximized, is_window_shell_cloaked, is_window_valid,
     is_window_visible,

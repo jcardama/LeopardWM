@@ -2090,6 +2090,33 @@ fn test_focus_follows_mouse_handles_floating_window() {
 }
 
 #[test]
+fn test_focus_follows_mouse_floating_then_tiled_focuses_tiled() {
+    // Regression: hovering a floating window then a tiled one must focus the
+    // tiled window. The floating branch sets previous_focused_hwnd; if the
+    // tiled branch leaves it set, sync_foreground_window keeps preferring the
+    // floating window and the tiled focus never lands.
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    let ws = state.focused_workspace_mut().unwrap();
+    ws.insert_window(100, Some(800)).unwrap();
+    ws.insert_window(200, Some(800)).unwrap();
+    ws.add_floating(500, Rect::new(100, 100, 400, 300)).unwrap();
+    state.previous_focused_hwnd = None;
+
+    // Hover the floating window: it becomes the foreground preference.
+    assert!(state.apply_focus_follows_mouse(500));
+    assert_eq!(state.previous_focused_hwnd, Some(500));
+
+    // Hover a tiled window: foreground must move to it, not stay on floating.
+    assert!(state.apply_focus_follows_mouse(100));
+    assert_eq!(
+        state.previous_focused_hwnd,
+        Some(100),
+        "tiled hover after floating must foreground the tiled window"
+    );
+    assert_eq!(state.focused_workspace().unwrap().focused_window(), Some(100));
+}
+
+#[test]
 fn test_restored_floating_window_does_not_steal_tiled_focus() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
     let ws = state.focused_workspace_mut().unwrap();

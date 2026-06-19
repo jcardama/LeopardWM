@@ -47,7 +47,7 @@ use leopardwm_core_layout::Rect;
 use leopardwm_ipc::{pipe_name_candidates, preferred_pipe_name, IpcCommand, IpcResponse};
 use leopardwm_platform_win32::{
     cascade_windows, enumerate_monitors, enumerate_windows, install_event_hooks,
-    install_keyboard_hook, install_mouse_hook, overlay::OverlayWindow, parse_hotkey_string,
+    install_keyboard_hook, install_mouse_hook, overlay::OverlayWindow, parse_hotkey_string, MouseHookHandle,
     register_gestures, register_hotkeys, restore_windows_moved_offscreen,
     set_display_change_sender, set_dpi_awareness, set_power_state_sender,
     uncloak_all_visible_windows, GestureEvent, Hotkey, HotkeyId, KeyboardHookHandle, Modifiers,
@@ -171,6 +171,7 @@ async fn reload_config_and_hotkeys(
     event_tx: &mpsc::Sender<DaemonEvent>,
     tray_manager: &Option<tray::TrayManager>,
     snap_hint_overlay: &Option<OverlayWindow>,
+    mouse_hook_handle: &mut Option<MouseHookHandle>,
 ) {
     // Drop both hooks BEFORE setup_hotkeys rebuilds them: assignment drops the
     // old HotkeyState last, so an unhook-then-reinstall must happen here or the
@@ -182,6 +183,9 @@ async fn reload_config_and_hotkeys(
         state.config.clone()
     };
     *hotkey_state = setup_hotkeys(&new_config, event_tx.clone());
+    // Apply a focus-follows-mouse change from the reloaded config (e.g. the
+    // Settings toggle) without waiting for a restart.
+    sync_mouse_hook(new_config.behavior.focus_follows_mouse, mouse_hook_handle, event_tx);
     // Refresh the rejected-hotkey warning in an open settings window so it
     // reflects the new registration instead of the snapshot taken at open.
     settings::push_failed_binds(&hotkey_state.failed_binds);
@@ -532,6 +536,7 @@ struct EventLoopCtx<'a> {
     snap_hint_timer_handle: &'a mut Option<tokio::task::JoinHandle<()>>,
     focus_follows_mouse_timer: &'a mut Option<tokio::task::JoinHandle<()>>,
     display_change_timer: &'a mut Option<tokio::task::JoinHandle<()>>,
+    mouse_hook_handle: &'a mut Option<MouseHookHandle>,
 }
 
 /// Set DPI awareness, ensure a config file exists, load and validate config, and init logging.
@@ -986,45 +991,70 @@ fn setup_window_hooks(
     hook_handle
 }
 
-/// Install the mouse hook for focus-follows-mouse (if enabled).
+/// Install the focus-follows-mouse hook and spawn its event-forwarding thread.
+/// Returns the handle; dropping it uninstalls the hook, after which the
+/// forwarding thread exits as its channel closes. `thread_handles`, when
+/// supplied (startup), tracks that thread for a clean shutdown join; live
+/// toggles pass `None` and let it exit on channel close.
+fn install_ffm_hook(
+    event_tx: &mpsc::Sender<DaemonEvent>,
+    thread_handles: Option<&mut Vec<std::thread::JoinHandle<()>>>,
+) -> Option<MouseHookHandle> {
+    let (mouse_tx, mouse_rx) = std::sync::mpsc::channel::<WindowEvent>();
+    match install_mouse_hook(mouse_tx) {
+        Ok(handle) => {
+            info!("Focus-follows-mouse enabled");
+            match spawn_forwarding_thread(
+                "mouse-fwd",
+                mouse_rx,
+                event_tx.clone(),
+                DaemonEvent::WindowEvent,
+            ) {
+                Ok(fwd) => {
+                    if let Some(handles) = thread_handles {
+                        handles.push(fwd);
+                    }
+                }
+                Err(e) => warn!("{}", e),
+            }
+            Some(handle)
+        }
+        Err(e) => {
+            warn!("Failed to install mouse hook: {}. Focus-follows-mouse disabled.", e);
+            None
+        }
+    }
+}
+
+/// Install the mouse hook for focus-follows-mouse (if enabled at startup).
 fn setup_mouse_hook(
     config: &Config,
     event_tx: &mpsc::Sender<DaemonEvent>,
     thread_handles: &mut Vec<std::thread::JoinHandle<()>>,
-) -> Option<leopardwm_platform_win32::MouseHookHandle> {
+) -> Option<MouseHookHandle> {
     if config.behavior.focus_follows_mouse {
-        let (mouse_tx, mouse_rx) = std::sync::mpsc::channel::<WindowEvent>();
-        match install_mouse_hook(mouse_tx) {
-            Ok(handle) => {
-                info!(
-                    "Focus-follows-mouse enabled (delay: {}ms)",
-                    config.behavior.focus_follows_mouse_delay_ms
-                );
-
-                // Forward mouse events to the daemon event loop
-                match spawn_forwarding_thread(
-                    "mouse-fwd",
-                    mouse_rx,
-                    event_tx.clone(),
-                    DaemonEvent::WindowEvent,
-                ) {
-                    Ok(handle) => thread_handles.push(handle),
-                    Err(e) => warn!("{}", e),
-                }
-
-                Some(handle)
-            }
-            Err(e) => {
-                warn!(
-                    "Failed to install mouse hook: {}. Focus-follows-mouse disabled.",
-                    e
-                );
-                None
-            }
-        }
+        install_ffm_hook(event_tx, Some(thread_handles))
     } else {
         info!("Focus-follows-mouse disabled by config (focus_follows_mouse = false)");
         None
+    }
+}
+
+/// Bring the live mouse hook in line with the configured focus-follows-mouse
+/// setting: install it when newly enabled, drop it (uninstalling) when newly
+/// disabled. Lets the tray/Settings toggle take effect without a restart.
+fn sync_mouse_hook(
+    enabled: bool,
+    handle: &mut Option<MouseHookHandle>,
+    event_tx: &mpsc::Sender<DaemonEvent>,
+) {
+    match (enabled, handle.is_some()) {
+        (true, false) => *handle = install_ffm_hook(event_tx, None),
+        (false, true) => {
+            *handle = None;
+            info!("Focus-follows-mouse disabled");
+        }
+        _ => {}
     }
 }
 
@@ -1274,7 +1304,7 @@ async fn handle_ipc_command(
     if is_reload && matches!(response, IpcResponse::Ok) {
         reload_config_and_hotkeys(
             ctx.state, ctx.hotkey_state, ctx.event_tx,
-            ctx.tray_manager, ctx.snap_hint_overlay,
+            ctx.tray_manager, ctx.snap_hint_overlay, ctx.mouse_hook_handle,
         ).await;
         info!("Hotkeys reloaded after config reload");
     }
@@ -1407,6 +1437,13 @@ async fn process_window_event(ctx: &mut EventLoopCtx<'_>, win_event: WindowEvent
                     .send(DaemonEvent::FocusFollowsMouse { window_id: hwnd })
                     .await;
             }));
+        }
+    } else if let WindowEvent::MouseLeftManaged = win_event {
+        // The cursor left a managed window for the taskbar/a popup. Drop any
+        // pending focus so the debounce doesn't foreground the window we just
+        // left (which makes Windows flash that window's taskbar button).
+        if let Some(handle) = ctx.focus_follows_mouse_timer.take() {
+            handle.abort();
         }
     } else {
         {
@@ -1645,7 +1682,7 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
             if matches!(response, IpcResponse::Ok) {
                 reload_config_and_hotkeys(
                     ctx.state, ctx.hotkey_state, ctx.event_tx,
-                    ctx.tray_manager, ctx.snap_hint_overlay,
+                    ctx.tray_manager, ctx.snap_hint_overlay, ctx.mouse_hook_handle,
                 ).await;
                 info!("Hotkeys reloaded after tray config reload");
             } else if let IpcResponse::Error { message } = response {
@@ -1795,14 +1832,25 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
             let _ = state.config.save();
         }
         tray::TrayEvent::ToggleFocusFollowsMouse => {
-            let mut state = ctx.state.lock().await;
-            state.config.behavior.focus_follows_mouse =
-                !state.config.behavior.focus_follows_mouse;
-            info!(
-                "Tray: Focus follows mouse toggled to {}",
+            let enabled = {
+                let mut state = ctx.state.lock().await;
+                state.config.behavior.focus_follows_mouse =
+                    !state.config.behavior.focus_follows_mouse;
+                info!(
+                    "Tray: Focus follows mouse toggled to {}",
+                    state.config.behavior.focus_follows_mouse
+                );
+                let _ = state.config.save();
                 state.config.behavior.focus_follows_mouse
-            );
-            let _ = state.config.save();
+            };
+            // Install or drop the hook now so the toggle takes effect without a
+            // restart; clear any pending focus when turning it off.
+            sync_mouse_hook(enabled, ctx.mouse_hook_handle, ctx.event_tx);
+            if !enabled {
+                if let Some(handle) = ctx.focus_follows_mouse_timer.take() {
+                    handle.abort();
+                }
+            }
         }
         tray::TrayEvent::ToggleAutoStart => {
             use leopardwm_platform_win32::autostart;
@@ -2336,7 +2384,7 @@ async fn handle_settings_event(
             if matches!(response, IpcResponse::Ok) {
                 reload_config_and_hotkeys(
                     ctx.state, ctx.hotkey_state, ctx.event_tx,
-                    ctx.tray_manager, ctx.snap_hint_overlay,
+                    ctx.tray_manager, ctx.snap_hint_overlay, ctx.mouse_hook_handle,
                 ).await;
                 info!("Hotkeys reloaded after settings save");
             } else if let IpcResponse::Error { message } = response {
@@ -2358,7 +2406,7 @@ async fn handle_settings_event(
                 debug!("Settings: recording ended, resuming hotkeys");
                 reload_config_and_hotkeys(
                     ctx.state, ctx.hotkey_state, ctx.event_tx,
-                    ctx.tray_manager, ctx.snap_hint_overlay,
+                    ctx.tray_manager, ctx.snap_hint_overlay, ctx.mouse_hook_handle,
                 ).await;
             }
         }
@@ -2640,6 +2688,15 @@ async fn handle_animation_frame_applied(
 async fn handle_focus_follows_mouse(ctx: &mut EventLoopCtx<'_>, window_id: u64) {
     let mut state = ctx.state.lock().await;
     if state.config.behavior.focus_follows_mouse {
+        // Last gate before forcing foreground: the debounce may have elapsed
+        // after the cursor moved off this window without a cancel reaching us
+        // (window closed mid-delay, or an event we never got). Skip unless the
+        // cursor is still over it, so we never flash a stale window's taskbar
+        // button.
+        #[cfg(not(test))]
+        if !leopardwm_platform_win32::cursor_is_over_window(window_id) {
+            return;
+        }
         let applied = state.apply_focus_follows_mouse(window_id);
         if applied && state.is_animating() && !*ctx.animation_active {
             state.tick_animations(0);
@@ -2787,8 +2844,9 @@ async fn main() -> Result<()> {
         setup_hotkeys(&config, event_tx.clone())
     };
 
-    // Install mouse hook for focus-follows-mouse (if enabled)
-    let _mouse_hook_handle = setup_mouse_hook(&config, &event_tx, &mut thread_handles);
+    // Install mouse hook for focus-follows-mouse (if enabled). Kept mutable so
+    // a tray/Settings toggle can install or drop it live (see sync_mouse_hook).
+    let mut mouse_hook_handle = setup_mouse_hook(&config, &event_tx, &mut thread_handles);
 
     // Register gesture detection (if enabled)
     let _gesture_handle = setup_gestures(&config, &event_tx, &mut thread_handles);
@@ -2927,6 +2985,7 @@ async fn main() -> Result<()> {
         snap_hint_timer_handle: &mut snap_hint_timer_handle,
         focus_follows_mouse_timer: &mut focus_follows_mouse_timer,
         display_change_timer: &mut display_change_timer,
+        mouse_hook_handle: &mut mouse_hook_handle,
     };
 
     // Main event loop

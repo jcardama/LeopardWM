@@ -193,6 +193,28 @@ pub fn get_cursor_pos() -> Option<(i32, i32)> {
     }
 }
 
+/// Whether the cursor is currently over the given window (normalized to its
+/// root). Focus-follows-mouse calls this when a debounced focus finally fires,
+/// to confirm the pointer hasn't since moved off the window (e.g. onto the
+/// taskbar) — forcing foreground on a stale window there makes Windows flash
+/// its taskbar button. A destroyed window can't be returned by
+/// `WindowFromPoint`, so this also covers liveness.
+pub fn cursor_is_over_window(hwnd: WindowId) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::WindowFromPoint;
+    let Some((cx, cy)) = get_cursor_pos() else {
+        return false;
+    };
+    let point = windows::Win32::Foundation::POINT { x: cx, y: cy };
+    unsafe {
+        let raw = WindowFromPoint(point);
+        if raw.is_invalid() {
+            return false;
+        }
+        let root = crate::normalize_to_root_window(raw);
+        !root.is_invalid() && root.0 as WindowId == hwnd
+    }
+}
+
 /// Get the visible (DWM extended frame) rect of a window in screen coordinates.
 ///
 /// Returns the rect corresponding to layout coordinates — the visible area

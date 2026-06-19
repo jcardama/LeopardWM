@@ -29,7 +29,8 @@ impl AppState {
             | WindowEvent::TitleChanged(id) => Some(*id),
             WindowEvent::DisplayChange
             | WindowEvent::WorkAreaChanged
-            | WindowEvent::MouseEnterWindow(_) => None,
+            | WindowEvent::MouseEnterWindow(_)
+            | WindowEvent::MouseLeftManaged => None,
         };
 
         // Validate window existence for events that require it.
@@ -62,9 +63,9 @@ impl AppState {
             // DisplayChangeSettled path (see process_window_event), so a raw
             // event here is a no-op; reconcile defensively if one arrives.
             WindowEvent::WorkAreaChanged => self.on_display_change(),
-            WindowEvent::MouseEnterWindow(_hwnd) => {
-                // This is handled by the main event loop with debouncing
-                // (focus_follows_mouse delay)
+            WindowEvent::MouseEnterWindow(_) | WindowEvent::MouseLeftManaged => {
+                // Both are handled by the main event loop's focus-follows-mouse
+                // debouncing (schedule on enter, cancel on leave).
             }
             WindowEvent::TitleChanged(hwnd) => {
                 // Only refresh the tab strip when the title change is
@@ -1564,6 +1565,12 @@ impl AppState {
                 if workspace.is_floating(hwnd) {
                     // Floating windows are managed but not represented in tiled columns.
                     self.previous_focused_hwnd = Some(hwnd);
+                    // Draw the focus border here. Pre-setting previous_focused_hwnd
+                    // above makes the OS-side EVENT_SYSTEM_FOREGROUND dedup at the
+                    // top of on_window_focused early-return, so it never paints the
+                    // border (or broadcasts) for this window — we must do both here
+                    // or the floating window looks unfocused.
+                    self.show_border(hwnd);
                     // Skip the real Win32 call in tests — placeholder hwnds collide
                     // with real running windows and lag the user's mouse / steal
                     // focus via AttachThreadInput.
@@ -1573,10 +1580,6 @@ impl AppState {
                         "Focus-follows-mouse: focused floating window {} on monitor {}",
                         hwnd, monitor_id
                     );
-                    // Pre-setting previous_focused_hwnd above would otherwise
-                    // make the OS-side EVENT_SYSTEM_FOREGROUND dedup at the
-                    // top of WindowEvent::Focused early-return, swallowing
-                    // the broadcast. Route through the helper directly.
                     self.broadcast_focused_window_if_changed(
                         monitor_id as i64,
                         Some(hwnd),
@@ -1598,6 +1601,11 @@ impl AppState {
                 if let Err(e) = self.apply_layout() {
                     warn!("Failed to apply layout after focus-follows-mouse: {}", e);
                 }
+                // Drop any floating-window preference left by a prior hover so
+                // the tiled focus actually takes effect — otherwise
+                // sync_foreground_window keeps foregrounding the still-floating
+                // previous window and the tiled window never gets focus.
+                self.previous_focused_hwnd = None;
                 self.sync_foreground_window();
                 return true;
             }

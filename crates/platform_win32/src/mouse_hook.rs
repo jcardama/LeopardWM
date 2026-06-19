@@ -20,6 +20,11 @@ static MOUSE_EVENT_SENDER: std::sync::Mutex<Option<mpsc::Sender<WindowEvent>>> =
 /// Track the window the mouse is currently over.
 static CURRENT_MOUSE_WINDOW: std::sync::Mutex<Option<WindowId>> = std::sync::Mutex::new(None);
 
+/// Whether the currently-tracked window is one we'd manage (i.e. we emitted a
+/// `MouseEnterWindow` for it). Lets us fire `MouseLeftManaged` exactly on the
+/// managed -> non-manageable transition, not on every move over the taskbar.
+static CURRENT_OVER_MANAGED: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
+
 /// Handle for the low-level mouse hook.
 ///
 /// Dropping this handle will signal the dedicated message-pump thread to
@@ -183,15 +188,33 @@ unsafe extern "system" fn mouse_ll_hook_proc(
             .unwrap_or_else(recover_poisoned_mutex);
         if *current != candidate_window_id {
             *current = candidate_window_id;
+            // Updating CURRENT_MOUSE_WINDOW above means later moves within the
+            // same window hit the early return, so each branch fires once.
+            let candidate_managed = candidate_hwnd.is_some_and(should_emit_window_event);
+            let mut over_managed = CURRENT_OVER_MANAGED
+                .lock()
+                .unwrap_or_else(recover_poisoned_mutex);
+            let was_managed = *over_managed;
+            *over_managed = candidate_managed;
+            drop(over_managed);
 
-            if let Some(hwnd) = candidate_hwnd {
-                if should_emit_window_event(hwnd) {
+            if candidate_managed {
+                if let Some(hwnd) = candidate_hwnd {
                     let sender_guard = MOUSE_EVENT_SENDER
                         .lock()
                         .unwrap_or_else(recover_poisoned_mutex);
                     if let Some(sender) = sender_guard.as_ref() {
                         let _ = sender.send(WindowEvent::MouseEnterWindow(hwnd.0 as WindowId));
                     }
+                }
+            } else if was_managed {
+                // Left a managed window for the taskbar/a popup: cancel any
+                // pending focus so it doesn't fire on the window we just left.
+                let sender_guard = MOUSE_EVENT_SENDER
+                    .lock()
+                    .unwrap_or_else(recover_poisoned_mutex);
+                if let Some(sender) = sender_guard.as_ref() {
+                    let _ = sender.send(WindowEvent::MouseLeftManaged);
                 }
             }
         }
