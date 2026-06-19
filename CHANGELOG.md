@@ -18,6 +18,10 @@ All notable changes to LeopardWM will be documented in this file.
   Hovering back to a tiled window after a floating one focused nothing, and
   hovering a floating window never showed the focus border. Both now focus and
   highlight the hovered window either way.
+- **Floating windows no longer grow each time you move them.** A dragged
+  floating window stored its outer rect while the layout expected the visible
+  rect, so each move added the invisible border width back and the window crept
+  larger. It now stores the visible rect and keeps its size.
 
 ## 0.2.2
 

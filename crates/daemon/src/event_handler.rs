@@ -1069,14 +1069,17 @@ impl AppState {
         };
 
         if !drag.is_tiled {
-            // Floating window: update stored rect so layout won't snap it back.
+            // Floating window: store the VISIBLE rect (DWM extended frame), the
+            // same convention used when a window is floated and on live moves.
+            // Using the outer GetWindowRect here made apply_placements re-add the
+            // border insets on each drop, growing the window ~14px per cycle.
             if let Some((monitor_id, ws_idx)) = self.find_window_workspace(hwnd) {
-                if let Some(win_info) = self.lookup_window_info(hwnd) {
+                if let Some(visible_rect) = leopardwm_platform_win32::get_window_visible_rect(hwnd) {
                     if let Some(workspace) = self.workspaces.get_mut(&monitor_id).and_then(|v| v.get_mut(ws_idx)) {
-                        workspace.update_floating(hwnd, win_info.rect);
+                        workspace.update_floating(hwnd, visible_rect);
                         debug!(
                             "Floating window {} dropped at {:?}",
-                            hwnd, win_info.rect
+                            hwnd, visible_rect
                         );
                     }
                 }
