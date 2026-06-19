@@ -1,10 +1,11 @@
-//! Reclaim OS-reserved keyboard shortcuts via a low-level keyboard hook.
+//! Global hotkey matching via a low-level keyboard hook.
 //!
-//! When `RegisterHotKey` can't claim a combo because Windows owns it (e.g.
-//! `Win+Ctrl+Arrow` for virtual-desktop switching), this opt-in `WH_KEYBOARD_LL`
-//! hook swallows the keystroke and re-emits it as a [`HotkeyEvent`] so the daemon
-//! runs the bound command. It only matches a curated set of combos the caller
-//! passes in, so it never steals shortcuts owned by other apps.
+//! A `WH_KEYBOARD_LL` hook is LeopardWM's sole hotkey matcher: it inspects every
+//! key-down, and when the modifiers and key match a configured bind it swallows
+//! the keystroke and re-emits it as a [`HotkeyEvent`] so the daemon runs the
+//! bound command. Matching here (rather than `RegisterHotKey`) lets us tell
+//! left/right modifiers apart, so AltGr (Left Ctrl + Right Alt on international
+//! layouts) types normally instead of firing Ctrl+Alt binds. (#44)
 //!
 //! Mirrors the dedicated-thread + message-pump pattern in `gestures.rs`.
 
@@ -12,31 +13,34 @@ use crate::{recover_poisoned_mutex, HotkeyEvent, HotkeyId, Modifiers, Win32Error
 use std::sync::mpsc;
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::Threading::GetCurrentThreadId;
-use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetAsyncKeyState, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
+    VIRTUAL_KEY,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetMessageW, PeekMessageW, PostThreadMessageW,
     SetWindowsHookExW, UnhookWindowsHookEx, KBDLLHOOKSTRUCT, MSG, PM_NOREMOVE, WH_KEYBOARD_LL,
     WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
-/// A combo to reclaim: its modifiers, virtual-key code, and the hotkey id to
-/// emit when it fires.
+/// A hotkey bind the hook matches: its modifiers, virtual-key code, and the
+/// hotkey id to emit when it fires.
 #[derive(Debug, Clone, Copy)]
-pub struct ReclaimBind {
+pub struct HotkeyBind {
     pub modifiers: Modifiers,
     pub vk: u32,
     pub id: HotkeyId,
 }
 
-/// Sender the hook proc uses to deliver reclaimed combos to the daemon.
-static RECLAIM_SENDER: std::sync::Mutex<Option<mpsc::Sender<HotkeyEvent>>> =
+/// Sender the hook proc uses to deliver matched binds to the daemon.
+static HOOK_SENDER: std::sync::Mutex<Option<mpsc::Sender<HotkeyEvent>>> =
     std::sync::Mutex::new(None);
-/// The set of combos the hook should reclaim.
-static RECLAIM_BINDS: std::sync::Mutex<Vec<ReclaimBind>> = std::sync::Mutex::new(Vec::new());
-/// Virtual-keys of currently-held reclaimed main keys. Lets us fire once per
+/// The set of binds the hook should match.
+static HOOK_BINDS: std::sync::Mutex<Vec<HotkeyBind>> = std::sync::Mutex::new(Vec::new());
+/// Virtual-keys of currently-held matched main keys. Lets us fire once per
 /// physical press and swallow auto-repeat, tracking each key independently so a
-/// second reclaimed key held at the same time can't reset the first.
-static RECLAIM_HELD: std::sync::Mutex<Vec<i32>> = std::sync::Mutex::new(Vec::new());
+/// second matched key held at the same time can't reset the first.
+static HOOK_HELD: std::sync::Mutex<Vec<i32>> = std::sync::Mutex::new(Vec::new());
 
 // Modifier virtual-key codes (both the generic and left/right variants the
 // low-level hook reports).
@@ -60,17 +64,17 @@ fn is_modifier_vk(vk: i32) -> bool {
     )
 }
 
-/// Find the reclaim bind matching exactly the held modifiers and key. Exact
+/// Find the bind matching exactly the held modifiers and key. Exact
 /// match means a superset (extra modifier held) does not fire it, matching
 /// `RegisterHotKey` semantics.
-fn find_reclaim(binds: &[ReclaimBind], held: Modifiers, vk: u32) -> Option<ReclaimBind> {
+fn find_bind(binds: &[HotkeyBind], held: Modifiers, vk: u32) -> Option<HotkeyBind> {
     binds
         .iter()
         .find(|b| b.vk == vk && b.modifiers == held)
         .copied()
 }
 
-/// Handle for the reclaim hook. Dropping it signals the dedicated thread to
+/// Handle for the keyboard hook. Dropping it signals the dedicated thread to
 /// unhook and exit, then clears the global state.
 pub struct KeyboardHookHandle {
     thread_id: u32,
@@ -91,55 +95,55 @@ impl Drop for KeyboardHookHandle {
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
         }
-        let mut sender = RECLAIM_SENDER.lock().unwrap_or_else(recover_poisoned_mutex);
+        let mut sender = HOOK_SENDER.lock().unwrap_or_else(recover_poisoned_mutex);
         *sender = None;
         drop(sender);
-        let mut binds = RECLAIM_BINDS.lock().unwrap_or_else(recover_poisoned_mutex);
+        let mut binds = HOOK_BINDS.lock().unwrap_or_else(recover_poisoned_mutex);
         binds.clear();
         drop(binds);
-        let mut held = RECLAIM_HELD.lock().unwrap_or_else(recover_poisoned_mutex);
+        let mut held = HOOK_HELD.lock().unwrap_or_else(recover_poisoned_mutex);
         held.clear();
-        tracing::debug!("OS-shortcut reclaim hook stopped");
+        tracing::debug!("Keyboard hook stopped");
     }
 }
 
-/// Install the reclaim hook for the given combos. Spawns a dedicated thread
+/// Install the keyboard hook for the given binds. Spawns a dedicated thread
 /// with a message pump (required for `WH_KEYBOARD_LL`). Returns a handle that
-/// must be kept alive and a receiver for reclaimed combos.
+/// must be kept alive and a receiver for matched binds.
 pub fn install_keyboard_hook(
-    binds: Vec<ReclaimBind>,
+    binds: Vec<HotkeyBind>,
 ) -> Result<(KeyboardHookHandle, mpsc::Receiver<HotkeyEvent>), Win32Error> {
     let count = binds.len();
     let (tx, rx) = mpsc::channel();
 
     {
-        let mut sender = RECLAIM_SENDER.lock().map_err(|_| {
-            Win32Error::HookInstallFailed("Reclaim sender mutex poisoned".to_string())
+        let mut sender = HOOK_SENDER.lock().map_err(|_| {
+            Win32Error::HookInstallFailed("Hook sender mutex poisoned".to_string())
         })?;
         if sender.is_some() {
             return Err(Win32Error::HookInstallFailed(
-                "Reclaim hook already installed - drop existing handle first".to_string(),
+                "Keyboard hook already installed - drop existing handle first".to_string(),
             ));
         }
         *sender = Some(tx);
     }
     {
-        let mut b = RECLAIM_BINDS
+        let mut b = HOOK_BINDS
             .lock()
-            .map_err(|_| Win32Error::HookInstallFailed("Reclaim binds mutex poisoned".to_string()))?;
+            .map_err(|_| Win32Error::HookInstallFailed("Hook binds mutex poisoned".to_string()))?;
         *b = binds;
     }
     {
-        let mut held = RECLAIM_HELD
+        let mut held = HOOK_HELD
             .lock()
-            .map_err(|_| Win32Error::HookInstallFailed("Reclaim held mutex poisoned".to_string()))?;
+            .map_err(|_| Win32Error::HookInstallFailed("Hook held mutex poisoned".to_string()))?;
         held.clear();
     }
 
     let (init_tx, init_rx) = std::sync::mpsc::channel::<Result<u32, Win32Error>>();
 
     let thread = std::thread::Builder::new()
-        .name("reclaim-hook".into())
+        .name("hotkey-hook".into())
         .spawn(move || unsafe {
             let thread_id = GetCurrentThreadId();
 
@@ -176,14 +180,14 @@ pub fn install_keyboard_hook(
             let _ = UnhookWindowsHookEx(hook);
         })
         .map_err(|e| {
-            Win32Error::HookInstallFailed(format!("Failed to spawn reclaim thread: {}", e))
+            Win32Error::HookInstallFailed(format!("Failed to spawn hotkey hook thread: {}", e))
         })?;
 
     let thread_id = init_rx.recv().map_err(|_| {
-        Win32Error::HookInstallFailed("Reclaim thread initialization failed".to_string())
+        Win32Error::HookInstallFailed("Keyboard hook thread initialization failed".to_string())
     })??;
 
-    tracing::info!("OS-shortcut reclaim hook installed ({} combos)", count);
+    tracing::info!("Keyboard hook installed ({} hotkeys)", count);
 
     Ok((
         KeyboardHookHandle {
@@ -225,7 +229,7 @@ unsafe fn keyboard_ll_hook_inner(ncode: i32, wparam: WPARAM, lparam: LPARAM) -> 
     // On key-up, drop the key from the held set so its next press fires again.
     // Always pass key-ups through.
     if msg == WM_KEYUP || msg == WM_SYSKEYUP {
-        let mut held = RECLAIM_HELD.lock().unwrap_or_else(recover_poisoned_mutex);
+        let mut held = HOOK_HELD.lock().unwrap_or_else(recover_poisoned_mutex);
         held.retain(|&k| k != vk);
         drop(held);
         return CallNextHookEx(None, ncode, wparam, lparam);
@@ -241,34 +245,58 @@ unsafe fn keyboard_ll_hook_inner(ncode: i32, wparam: WPARAM, lparam: LPARAM) -> 
         return CallNextHookEx(None, ncode, wparam, lparam);
     }
 
+    // Track the physical down-state of every non-modifier key so a bind fires
+    // once per physical press and never on auto-repeat. Recorded for matched and
+    // unmatched keys alike: otherwise a key held bare (e.g. typing it), then
+    // joined by modifiers, would look freshly pressed on its next auto-repeat
+    // and fire the now-matching bind. The key-up handler above clears it.
+    let is_new_press = {
+        let mut held = HOOK_HELD.lock().unwrap_or_else(recover_poisoned_mutex);
+        if held.contains(&vk) {
+            false
+        } else {
+            held.push(vk);
+            true
+        }
+    };
+
+    // AltGr emits Left Ctrl + Right Alt. Treat any Right-Alt-down state as AltGr
+    // and never match a bind, so AltGr combos pass through and type normally on
+    // international layouts (the synthesized Left Ctrl would otherwise satisfy a
+    // Ctrl bind too). (#44)
+    if GetAsyncKeyState(VK_RMENU) < 0 {
+        return CallNextHookEx(None, ncode, wparam, lparam);
+    }
+    // Read the left/right-specific modifiers: Alt means Left Alt only (Right Alt
+    // is AltGr, handled above); Ctrl/Shift/Win accept either side.
     let held = Modifiers {
-        ctrl: GetAsyncKeyState(VK_CONTROL) < 0,
-        alt: GetAsyncKeyState(VK_MENU) < 0,
-        shift: GetAsyncKeyState(VK_SHIFT) < 0,
+        ctrl: GetAsyncKeyState(VK_LCONTROL) < 0 || GetAsyncKeyState(VK_RCONTROL) < 0,
+        alt: GetAsyncKeyState(VK_LMENU) < 0,
+        shift: GetAsyncKeyState(VK_LSHIFT) < 0 || GetAsyncKeyState(VK_RSHIFT) < 0,
         win: GetAsyncKeyState(VK_LWIN) < 0 || GetAsyncKeyState(VK_RWIN) < 0,
     };
 
     let matched = {
-        let binds = RECLAIM_BINDS.lock().unwrap_or_else(recover_poisoned_mutex);
-        find_reclaim(&binds, held, vk as u32)
+        let binds = HOOK_BINDS.lock().unwrap_or_else(recover_poisoned_mutex);
+        find_bind(&binds, held, vk as u32)
     };
 
     if let Some(bind) = matched {
         // Fire once per physical press; swallow auto-repeat without re-firing.
         // Always swallow so the OS action (e.g. desktop switch) never leaks.
-        let is_new_press = {
-            let mut held = RECLAIM_HELD.lock().unwrap_or_else(recover_poisoned_mutex);
-            if held.contains(&vk) {
-                false
-            } else {
-                held.push(vk);
-                true
-            }
-        };
         if is_new_press {
-            let sender = RECLAIM_SENDER.lock().unwrap_or_else(recover_poisoned_mutex);
+            let sender = HOOK_SENDER.lock().unwrap_or_else(recover_poisoned_mutex);
             if let Some(s) = sender.as_ref() {
                 let _ = s.send(HotkeyEvent { id: bind.id });
+            }
+            // For a bare-Win bind, swallowing the main key leaves Windows seeing
+            // Win pressed and released with nothing in between, which pops the
+            // Start menu on key-up. Inject a no-op modifier tap so the OS treats
+            // the Win press as part of a chord and suppresses the menu. Combos
+            // with another modifier already use up the Win press, so skip them.
+            let m = bind.modifiers;
+            if m.win && !m.ctrl && !m.alt && !m.shift {
+                send_start_menu_mask();
             }
         }
         return LRESULT(1);
@@ -277,12 +305,32 @@ unsafe fn keyboard_ll_hook_inner(ncode: i32, wparam: WPARAM, lparam: LPARAM) -> 
     CallNextHookEx(None, ncode, wparam, lparam)
 }
 
+/// Inject a Ctrl key tap to mask a bare-Win press so it doesn't pop the Start
+/// menu after the hook swallows the bound key. Ctrl alone is inert, so the tap
+/// has no user-visible side effect.
+unsafe fn send_start_menu_mask() {
+    let key = |flags| INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: VIRTUAL_KEY(VK_CONTROL as u16),
+                wScan: 0,
+                dwFlags: flags,
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    };
+    let inputs = [key(Default::default()), key(KEYEVENTF_KEYUP)];
+    SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn bind(modifiers: Modifiers, vk: u32) -> ReclaimBind {
-        ReclaimBind {
+    fn bind(modifiers: Modifiers, vk: u32) -> HotkeyBind {
+        HotkeyBind {
             modifiers,
             vk,
             id: crate::Hotkey::stable_id(modifiers, vk),
@@ -300,7 +348,7 @@ mod tests {
     #[test]
     fn exact_match_fires() {
         let binds = vec![bind(win_ctrl(), 0x25)]; // Win+Ctrl+Left
-        let found = find_reclaim(&binds, win_ctrl(), 0x25);
+        let found = find_bind(&binds, win_ctrl(), 0x25);
         assert!(found.is_some());
         assert_eq!(found.unwrap().id, crate::Hotkey::stable_id(win_ctrl(), 0x25));
     }
@@ -314,14 +362,14 @@ mod tests {
             shift: true, // extra modifier held
             ..Default::default()
         };
-        assert!(find_reclaim(&binds, held, 0x25).is_none());
+        assert!(find_bind(&binds, held, 0x25).is_none());
     }
 
     #[test]
     fn wrong_key_or_mods_does_not_match() {
         let binds = vec![bind(win_ctrl(), 0x25)];
-        assert!(find_reclaim(&binds, win_ctrl(), 0x27).is_none()); // Right, not Left
-        assert!(find_reclaim(&binds, Modifiers { ctrl: true, ..Default::default() }, 0x25).is_none());
+        assert!(find_bind(&binds, win_ctrl(), 0x27).is_none()); // Right, not Left
+        assert!(find_bind(&binds, Modifiers { ctrl: true, ..Default::default() }, 0x25).is_none());
     }
 
     #[test]

@@ -6,6 +6,13 @@ All notable changes to LeopardWM will be documented in this file.
 
 ### Fixes
 
+- **AltGr no longer triggers workspace shortcuts on international keyboards.**
+  Hotkeys are now matched by a keyboard hook that tells left and right modifiers
+  apart, so AltGr (Right Alt) types accented characters instead of firing
+  Ctrl+Alt binds. Alt-based shortcuts use the left Alt key. The hook also drives
+  combos Windows owns, like Win+Ctrl+Arrow, so the "Reclaim Windows-reserved
+  shortcuts" setting is no longer needed and has been removed; combos reserved
+  below the hook, like Win+L, still can't be bound and now show a warning.
 - **Fullscreen windows no longer swallow commands.** Focus and layout commands
   now drop fullscreen and apply to the visible layout instead of the hidden
   strip; scrolling and resizing are ignored while fullscreen.

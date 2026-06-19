@@ -1967,11 +1967,12 @@ fn test_hotkey_state_registered_count_default() {
 
     let hs = HotkeyState {
         handle: None,
+        hook: None,
         mapping,
         requested_count: 2,
-        registered_count: 1, // Simulate: only 1 of 2 actually registered
+        registered_count: 1, // Simulate: only 1 of 2 installed in the hook
         failed_binds: vec!["Win+Left".to_string()],
-        reclaim_hook: None,
+        recording: false,
     };
 
     assert_eq!(hs.mapping.len(), 2, "mapping has 2 parsed hotkeys");
@@ -1988,56 +1989,19 @@ fn test_hotkey_state_registered_count_default() {
 }
 
 #[test]
-fn test_rejected_binds_returns_unregistered_combos() {
-    let m = Modifiers::default();
-    let binds = vec![
-        (10 as HotkeyId, "Win+Left".to_string(), m, 0x25),
-        (20 as HotkeyId, "Win+Right".to_string(), m, 0x27),
-        (30 as HotkeyId, "Ctrl+Alt+H".to_string(), m, 0x48),
-    ];
-    // Only id 30 registered; 10 and 20 were rejected by the OS.
-    let labels: Vec<String> = rejected_binds(&binds, &[30])
-        .iter()
-        .map(|(_, l, _, _)| l.clone())
-        .collect();
-    assert_eq!(labels, vec!["Win+Left".to_string(), "Win+Right".to_string()]);
-}
-
-#[test]
-fn test_reclaimable_binds_only_reclaims_os_reserved() {
-    let win_ctrl = Modifiers { ctrl: true, win: true, ..Default::default() };
-    let ctrl_alt = Modifiers { ctrl: true, alt: true, ..Default::default() };
-    let rejected = vec![
-        (1 as HotkeyId, "Win+Ctrl+Left".to_string(), win_ctrl, 0x25),
-        (2 as HotkeyId, "Ctrl+Alt+M".to_string(), ctrl_alt, 0x4D),
-    ];
-    let (reclaim, reclaim_labels, failed) = reclaimable_binds(&rejected, true);
-    // OS-reserved Win+Ctrl+Left is reclaimed; app-owned Ctrl+Alt+M stays a warning.
-    assert_eq!(reclaim.len(), 1);
-    assert_eq!(reclaim[0].vk, 0x25);
-    assert_eq!(reclaim_labels, vec!["Win+Ctrl+Left".to_string()]);
-    assert_eq!(failed, vec!["Ctrl+Alt+M".to_string()]);
-}
-
-#[test]
-fn test_reclaimable_binds_excludes_bare_win() {
-    // Win+Left (Snap) is bare-Win — excluded (swallowing would pop Start).
+fn test_protected_binds_flags_os_reserved_combos() {
     let win = Modifiers { win: true, ..Default::default() };
-    let rejected = vec![(1 as HotkeyId, "Win+Left".to_string(), win, 0x25)];
-    let (reclaim, reclaim_labels, failed) = reclaimable_binds(&rejected, true);
-    assert!(reclaim.is_empty());
-    assert!(reclaim_labels.is_empty());
-    assert_eq!(failed, vec!["Win+Left".to_string()]);
-}
-
-#[test]
-fn test_reclaimable_binds_disabled_keeps_all_failed() {
-    let win_ctrl = Modifiers { ctrl: true, win: true, ..Default::default() };
-    let rejected = vec![(1 as HotkeyId, "Win+Ctrl+Left".to_string(), win_ctrl, 0x25)];
-    let (reclaim, reclaim_labels, failed) = reclaimable_binds(&rejected, false);
-    assert!(reclaim.is_empty());
-    assert!(reclaim_labels.is_empty());
-    assert_eq!(failed, vec!["Win+Ctrl+Left".to_string()]);
+    let ctrl_alt = Modifiers { ctrl: true, alt: true, ..Default::default() };
+    let labels = vec![
+        (1 as HotkeyId, "Win+L".to_string(), win, 0x4C),        // lock — protected
+        (2 as HotkeyId, "Ctrl+Alt+Delete".to_string(), ctrl_alt, 0x2E), // protected
+        (3 as HotkeyId, "Ctrl+Alt+H".to_string(), ctrl_alt, 0x48), // normal — fine
+    ];
+    let protected = protected_binds(&labels);
+    assert_eq!(
+        protected,
+        vec!["Win+L".to_string(), "Ctrl+Alt+Delete".to_string()]
+    );
 }
 
 // =========================================================================
