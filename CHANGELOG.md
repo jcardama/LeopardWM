@@ -6,6 +6,10 @@ All notable changes to LeopardWM will be documented in this file.
 
 ### Fixes
 
+- **Fixed-size launcher and overlay windows are no longer tiled.** A
+  non-resizable helper window (for example one of Raycast's) could be given its
+  own column, leaving a large empty slot. Only resizable windows are tiled now,
+  and a leftover helper from a previous session is cleared on the next refresh.
 - **Resolution and monitor changes keep working after you save settings.** Saving
   settings, reloading config, or recording a hotkey stopped the daemon from
   noticing later display changes, so a resolution switch (or a fullscreen app

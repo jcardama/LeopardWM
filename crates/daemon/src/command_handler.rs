@@ -497,6 +497,7 @@ impl AppState {
     fn handle_refresh(&mut self) -> IpcResponse {
         match self.enumerate_and_add_windows() {
             Ok(added) => {
+                self.prune_stale_windows();
                 info!("Refreshed: added {} new windows across all monitors", added);
                 if let Err(e) = self.apply_layout() {
                     return IpcResponse::error(format!("Failed to apply layout: {}", e));

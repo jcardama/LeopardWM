@@ -5,7 +5,7 @@ use crate::state::*;
 use anyhow::Result;
 use leopardwm_core_layout::{Rect, Workspace};
 #[cfg(not(test))]
-use leopardwm_platform_win32::is_window_alive_and_visible;
+use leopardwm_platform_win32::{is_excluded_tool_window_hwnd, is_window_alive_and_visible};
 use leopardwm_platform_win32::{scale_px, MonitorId};
 use tracing::{debug, info, warn};
 
@@ -237,7 +237,10 @@ impl AppState {
             for (&monitor_id, ws_vec) in &self.workspaces {
                 for (ws_idx, workspace) in ws_vec.iter().enumerate() {
                     for &wid in &workspace.all_window_ids() {
-                        if !is_window_alive_and_visible(wid) && !workspace.is_minimized(wid) {
+                        let alive_visible = is_window_alive_and_visible(wid);
+                        let gone = !alive_visible && !workspace.is_minimized(wid);
+                        let unmanageable = alive_visible && is_excluded_tool_window_hwnd(wid);
+                        if gone || unmanageable {
                             stale.push((monitor_id, ws_idx, wid));
                         }
                     }

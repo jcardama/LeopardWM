@@ -21,8 +21,32 @@ use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetAncestor, GetClassNameW, GetWindow, GetWindowLongW, GetWindowRect,
     GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow,
     IsWindowVisible, GA_ROOT, GWL_EXSTYLE, GWL_STYLE, GW_OWNER, WS_EX_APPWINDOW,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_VISIBLE,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_THICKFRAME, WS_VISIBLE,
 };
+
+/// Whether a tool window (`WS_EX_TOOLWINDOW`) should be excluded from tiling.
+///
+/// Tool windows are auxiliary by design. We make an exception for ones that also
+/// set `WS_EX_APPWINDOW` (they ask to be treated as primary windows), but only
+/// when they are also resizable (`WS_THICKFRAME`). A fixed-size tool window is an
+/// overlay or launcher, like Raycast's 2x2 helper window, which must never be
+/// tiled into a column.
+fn is_excluded_tool_window(style: u32, ex_style: u32) -> bool {
+    let is_tool = ex_style & WS_EX_TOOLWINDOW.0 != 0;
+    let is_app = ex_style & WS_EX_APPWINDOW.0 != 0;
+    let is_resizable = style & WS_THICKFRAME.0 != 0;
+    is_tool && (!is_app || !is_resizable)
+}
+
+/// Reads a live window's current styles to test [`is_excluded_tool_window`].
+/// Style-only, so it's safe to call on already-managed windows without
+/// false-positiving on transient title/cloak states.
+pub fn is_excluded_tool_window_hwnd(hwnd: WindowId) -> bool {
+    let hwnd = HWND(hwnd as *mut c_void);
+    let style = unsafe { GetWindowLongW(hwnd, GWL_STYLE) as u32 };
+    let ex_style = unsafe { GetWindowLongW(hwnd, GWL_EXSTYLE) as u32 };
+    is_excluded_tool_window(style, ex_style)
+}
 
 /// Get info for a single window handle with relaxed filters.
 ///
@@ -37,13 +61,11 @@ pub fn get_window_info(hwnd_id: WindowId) -> Option<WindowInfo> {
             return None;
         }
 
-        let _style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
+        let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
         let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
 
-        // Skip tool windows (unless they have WS_EX_APPWINDOW)
-        let is_tool_window = ex_style & WS_EX_TOOLWINDOW.0 != 0;
-        let is_app_window = ex_style & WS_EX_APPWINDOW.0 != 0;
-        if is_tool_window && !is_app_window {
+        // Skip tool windows (unless they are a resizable WS_EX_APPWINDOW)
+        if is_excluded_tool_window(style, ex_style) {
             return None;
         }
 
@@ -117,7 +139,7 @@ pub fn get_window_info(hwnd_id: WindowId) -> Option<WindowInfo> {
 ///
 /// Filters out:
 /// - Invisible windows
-/// - Tool windows (WS_EX_TOOLWINDOW without WS_EX_APPWINDOW)
+/// - Tool windows, unless they are a resizable WS_EX_APPWINDOW
 /// - Windows with empty titles
 /// - Cloaked windows
 /// - Windows with WS_EX_NOACTIVATE
@@ -329,10 +351,8 @@ unsafe extern "system" fn enum_windows_callback(hwnd: HWND, lparam: LPARAM) -> B
         return TRUE;
     }
 
-    // Skip tool windows (unless they have WS_EX_APPWINDOW)
-    let is_tool_window = ex_style & WS_EX_TOOLWINDOW.0 != 0;
-    let is_app_window = ex_style & WS_EX_APPWINDOW.0 != 0;
-    if is_tool_window && !is_app_window {
+    // Skip tool windows (unless they are a resizable WS_EX_APPWINDOW)
+    if is_excluded_tool_window(style, ex_style) {
         return TRUE;
     }
 
@@ -447,9 +467,7 @@ pub(crate) fn should_emit_window_event_with_policy(
         return false;
     }
 
-    let is_tool_window = ex_style & WS_EX_TOOLWINDOW.0 != 0;
-    let is_app_window = ex_style & WS_EX_APPWINDOW.0 != 0;
-    if is_tool_window && !is_app_window {
+    if is_excluded_tool_window(style, ex_style) {
         return false;
     }
 
@@ -691,6 +709,23 @@ unsafe extern "system" fn collect_all_window_ids_callback(hwnd: HWND, lparam: LP
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_is_excluded_tool_window() {
+        let thickframe = WS_THICKFRAME.0;
+        let tool = WS_EX_TOOLWINDOW.0;
+        let app = WS_EX_APPWINDOW.0;
+
+        // Raycast's helper: tool + appwindow but fixed-size — excluded.
+        assert!(is_excluded_tool_window(0, tool | app));
+        // Plain tool window (no appwindow) — excluded regardless of resizability.
+        assert!(is_excluded_tool_window(thickframe, tool));
+        // Tool + appwindow + resizable — a genuine primary window, kept.
+        assert!(!is_excluded_tool_window(thickframe, tool | app));
+        // Not a tool window — never excluded here (resizable or not).
+        assert!(!is_excluded_tool_window(thickframe, app));
+        assert!(!is_excluded_tool_window(0, 0));
+    }
 
     #[test]
     #[ignore = "Requires display hardware - run with: cargo test -- --ignored"]
