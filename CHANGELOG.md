@@ -22,6 +22,10 @@ All notable changes to LeopardWM will be documented in this file.
   combos Windows owns, like Win+Ctrl+Arrow, so the "Reclaim Windows-reserved
   shortcuts" setting is no longer needed and has been removed; combos reserved
   below the hook, like Win+L, still can't be bound and now show a warning.
+- **Hotkey recording works on Dvorak and other non-QWERTY layouts.** The
+  Settings recorder captured the physical key position, so a recorded letter
+  binding fired from a different key than the one you pressed. It now records the
+  letter your layout produces, matching the key that triggers the shortcut.
 - **Fullscreen windows no longer swallow commands.** Focus and layout commands
   now drop fullscreen and apply to the visible layout instead of the hidden
   strip; scrolling and resizing are ignored while fullscreen.

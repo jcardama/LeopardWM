@@ -1447,8 +1447,13 @@ var CODE_TO_KEY = {
   Space: 'Space', Enter: 'Enter', Tab: 'Tab', Escape: 'Escape',
   Minus: '-', Equal: '=', Comma: ',', Period: '.', BracketLeft: '[', BracketRight: ']'
 };
-function codeToKey(code) {
-  if (/^Key[A-Z]$/.test(code)) return code.slice(3);
+function codeToKey(code, key) {
+  if (/^Key[A-Z]$/.test(code)) {
+    // Record the letter the layout produces (e.key), not the physical US
+    // position, so the bind matches the VK the daemon's hook sees on Dvorak.
+    if (typeof key === 'string' && /^[a-zA-Z]$/.test(key)) return key.toUpperCase();
+    return code.slice(3);
+  }
   if (/^Digit[0-9]$/.test(code)) return code.slice(5);
   if (/^F([1-9]|1[0-9]|2[0-4])$/.test(code)) return code;
   return CODE_TO_KEY[code];
@@ -1514,7 +1519,7 @@ function attachRecorder(input) {
       autoSave(0);
       return;
     }
-    var token = codeToKey(e.code);
+    var token = codeToKey(e.code, e.key);
     if (!token) return; /* unmapped key: keep waiting */
     e.preventDefault();
     e.stopPropagation();
