@@ -1506,6 +1506,12 @@ function init(cfg) {
         '<input type="text" id="workspace-name-' + i + '" maxlength="32" placeholder="' + i + '">';
       wsCard.appendChild(row);
     }
+    // These inputs are built after the init-time autosave wiring runs, so wire
+    // them here or edits never trigger a save.
+    wrapAllInputs(wsCard);
+    wsCard.querySelectorAll('input').forEach(function(el) {
+      el.addEventListener('input', function() { autoSave(500); });
+    });
   }
   for (var j = 1; j <= 9; j++) {
     setVal('workspace-name-' + j, wsNames[j - 1] || '');

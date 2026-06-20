@@ -6,6 +6,8 @@ All notable changes to LeopardWM will be documented in this file.
 
 ### Fixes
 
+- **Workspace names entered in Settings now save.** The name fields weren't
+  wired to autosave, so edits were lost. Naming a workspace now persists.
 - **Fixed-size launcher and overlay windows are no longer tiled.** A
   non-resizable helper window (for example one of Raycast's) could be given its
   own column, leaving a large empty slot. Only resizable windows are tiled now,
