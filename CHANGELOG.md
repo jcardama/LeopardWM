@@ -36,6 +36,12 @@ All notable changes to LeopardWM will be documented in this file.
 - **Floating windows no longer grow each time you move them.** A dragged
   floating window now keeps its size.
 
+### Improvements
+
+- **F13–F24 can be bound as hotkeys.** The Settings recorder and config parser
+  now accept the extended function keys, useful for keyboard navigation layers
+  that map shortcuts onto them.
+
 ## 0.2.2
 
 ### Fixes

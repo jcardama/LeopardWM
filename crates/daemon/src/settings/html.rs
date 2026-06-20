@@ -1450,7 +1450,7 @@ var CODE_TO_KEY = {
 function codeToKey(code) {
   if (/^Key[A-Z]$/.test(code)) return code.slice(3);
   if (/^Digit[0-9]$/.test(code)) return code.slice(5);
-  if (/^F([1-9]|1[0-2])$/.test(code)) return code;
+  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(code)) return code;
   return CODE_TO_KEY[code];
 }
 function chordParts(mods) {

@@ -547,8 +547,8 @@ pub fn parse_vk(key: &str) -> Option<u32> {
     // Function keys
     if key.starts_with('F') && key.len() <= 3 {
         if let Ok(n) = key[1..].parse::<u32>() {
-            if (1..=12).contains(&n) {
-                return Some(0x6F + n); // F1=0x70, F2=0x71, ...
+            if (1..=24).contains(&n) {
+                return Some(0x6F + n); // F1=0x70 .. F24=0x87
             }
         }
     }
@@ -769,6 +769,8 @@ mod tests {
         assert_eq!(parse_vk("F1"), Some(vk::F1));
         assert_eq!(parse_vk("F12"), Some(vk::F12));
         assert_eq!(parse_vk("f5"), Some(vk::F5));
+        assert_eq!(parse_vk("F13"), Some(0x7C));
+        assert_eq!(parse_vk("F24"), Some(0x87));
 
         // Navigation
         assert_eq!(parse_vk("Left"), Some(vk::LEFT));
@@ -784,7 +786,7 @@ mod tests {
 
         // Invalid
         assert_eq!(parse_vk("Invalid"), None);
-        assert_eq!(parse_vk("F13"), None);
+        assert_eq!(parse_vk("F25"), None);
     }
 
     #[test]
