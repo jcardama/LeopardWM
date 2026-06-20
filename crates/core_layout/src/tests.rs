@@ -34,6 +34,26 @@ mod tests {
     }
 
     #[test]
+    fn test_insert_window_at_column_no_focus() {
+        let mut ws = Workspace::new();
+        ws.insert_window(1, Some(400)).unwrap(); // col 0
+        ws.insert_window(2, Some(400)).unwrap(); // col 1, focused
+        assert_eq!(ws.focused_column_index(), 1);
+
+        // New column at slot 0 shifts the focused window right; focus follows it.
+        ws.insert_window_at_column_no_focus(3, Some(400), 0).unwrap();
+        assert_eq!(ws.column_count(), 3);
+        assert_eq!(ws.focused_window(), Some(2));
+        assert_eq!(ws.focused_column_index(), 2);
+        assert!(ws.insert_window_at_column_no_focus(3, None, 0).is_err());
+
+        // Into an empty workspace the new column becomes focused.
+        let mut empty = Workspace::new();
+        empty.insert_window_at_column_no_focus(9, None, 5).unwrap();
+        assert_eq!(empty.focused_window(), Some(9));
+    }
+
+    #[test]
     fn test_insert_multiple_windows() {
         let mut ws = Workspace::with_gaps(10, 10);
         ws.insert_window(1, Some(400)).unwrap();

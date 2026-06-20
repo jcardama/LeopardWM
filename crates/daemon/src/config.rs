@@ -488,7 +488,7 @@ fn default_active_border_position() -> String {
 /// match_class = "#32770"  # Windows dialogs
 /// action = "ignore"
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct WindowRule {
     /// Regex pattern to match window class name.
     #[serde(default)]
@@ -530,6 +530,17 @@ pub struct WindowRule {
     /// for tiled windows.
     #[serde(default)]
     pub column_width: Option<f64>,
+
+    /// Open the window at this 1-based column slot as its own column. Slots
+    /// past the end append; 0 is ignored. Tiled windows only.
+    #[serde(default)]
+    pub open_in_column: Option<u8>,
+
+    /// Make the window sticky on open so it follows across workspaces. Pair
+    /// with `action = "float"` for a floating overlay; on its own the window
+    /// stays tiled and follows as a column. Opens on the active workspace.
+    #[serde(default)]
+    pub sticky: bool,
 }
 
 /// Action to take for a matching window.
@@ -875,6 +886,11 @@ pub struct CompiledWindowRule {
     pub open_maximized: bool,
     /// Initial column width as a viewport fraction for tiled windows.
     pub column_width: Option<f64>,
+    /// Open at this 0-based column slot as its own column (validated from the
+    /// 1-based config; high values append, 0 is dropped).
+    pub open_in_column: Option<usize>,
+    /// Make the window sticky on open.
+    pub sticky: bool,
 }
 
 impl CompiledWindowRule {
@@ -1241,6 +1257,16 @@ impl Config {
                 }
                 None => None,
             };
+            // 1-based slot -> 0-based index. High values append (clamped at
+            // insert time); 0 violates the 1-based contract and is dropped.
+            let open_in_column = match rule.open_in_column {
+                Some(n) if n >= 1 => Some((n - 1) as usize),
+                Some(_) => {
+                    tracing::warn!("Window rule open_in_column = 0 is invalid (1-based); ignoring");
+                    None
+                }
+                None => None,
+            };
 
             compiled.push(CompiledWindowRule {
                 class_regex,
@@ -1253,6 +1279,8 @@ impl Config {
                 open_on_workspace,
                 open_maximized: rule.open_maximized,
                 column_width,
+                open_in_column,
+                sticky: rule.sticky,
             });
         }
 
@@ -1269,6 +1297,8 @@ impl Config {
                 open_on_workspace: None,
                 open_maximized: false,
                 column_width: None,
+                open_in_column: None,
+                sticky: false,
             });
         }
 
@@ -1717,6 +1747,8 @@ mod tests {
             open_on_workspace: None,
             open_maximized: false,
             column_width: None,
+            open_in_column: None,
+            sticky: false,
         };
 
         assert!(rule.matches("Notepad", "Untitled - Notepad", "notepad.exe"));
@@ -1736,6 +1768,8 @@ mod tests {
             open_on_workspace: None,
             open_maximized: false,
             column_width: None,
+            open_in_column: None,
+            sticky: false,
         };
 
         assert!(rule.matches(
@@ -1760,6 +1794,8 @@ mod tests {
             open_on_workspace: None,
             open_maximized: false,
             column_width: None,
+            open_in_column: None,
+            sticky: false,
         };
 
         assert!(rule.matches("SpotifyClass", "Spotify - Song Title", "spotify.exe"));
@@ -1780,6 +1816,8 @@ mod tests {
             open_on_workspace: None,
             open_maximized: false,
             column_width: None,
+            open_in_column: None,
+            sticky: false,
         };
 
         // Both patterns must match
@@ -1806,6 +1844,8 @@ mod tests {
             open_on_workspace: None,
             open_maximized: false,
             column_width: None,
+            open_in_column: None,
+            sticky: false,
         };
 
         assert!(!rule.matches("AnyClass", "Any Title", "any.exe"));
@@ -1918,6 +1958,8 @@ mod tests {
                 open_on_workspace: None,
                 open_maximized: false,
                 column_width: None,
+                open_in_column: None,
+                sticky: false,
             },
             WindowRule {
                 match_class: Some("Notepad".to_string()),
@@ -1930,6 +1972,8 @@ mod tests {
                 open_on_workspace: None,
                 open_maximized: false,
                 column_width: None,
+                open_in_column: None,
+                sticky: false,
             },
         ];
 
@@ -1958,6 +2002,8 @@ mod tests {
             open_on_workspace: None,
             open_maximized: false,
             column_width: None,
+            open_in_column: None,
+            sticky: false,
         };
 
         assert!(rule.matches("AnyClass", "[DEBUG] Application started", "app.exe"));
@@ -1978,6 +2024,8 @@ mod tests {
             open_on_workspace: None,
             open_maximized: false,
             column_width: None,
+            open_in_column: None,
+            sticky: false,
         };
 
         assert!(rule.matches("AnyClass", "Error Dialog", "app.exe"));
@@ -1998,6 +2046,8 @@ mod tests {
             open_on_workspace: None,
             open_maximized: false,
             column_width: None,
+            open_in_column: None,
+            sticky: false,
         };
 
         assert!(rule.matches("AnyClass", "Error Dialog", "app.exe"));
@@ -2019,6 +2069,8 @@ mod tests {
             open_on_workspace: None,
             open_maximized: false,
             column_width: None,
+            open_in_column: None,
+            sticky: false,
         };
 
         assert!(rule.matches("MyClass", "Any Title", "any.exe"));
@@ -2040,6 +2092,8 @@ mod tests {
             open_on_workspace: None,
             open_maximized: false,
             column_width: None,
+            open_in_column: None,
+            sticky: false,
         };
 
         assert!(rule.matches("AnyClass", "App Settings", "any.exe"));
@@ -2061,6 +2115,8 @@ mod tests {
             open_on_workspace: None,
             open_maximized: false,
             column_width: None,
+            open_in_column: None,
+            sticky: false,
         };
 
         assert!(rule.matches("AnyClass", "Any Title", "notepad.exe"));
@@ -2082,6 +2138,8 @@ mod tests {
             open_on_workspace: None,
             open_maximized: false,
             column_width: None,
+            open_in_column: None,
+            sticky: false,
         };
 
         // Should return false because regex is invalid
@@ -2102,6 +2160,8 @@ mod tests {
             open_on_workspace: None,
             open_maximized: false,
             column_width: None,
+            open_in_column: None,
+            sticky: false,
         };
 
         assert!(rule.matches("", "Title", "app.exe")); // Empty class matches .*
@@ -2346,6 +2406,8 @@ mod tests {
                     open_on_workspace: None,
                     open_maximized: false,
                     column_width: None,
+                    open_in_column: None,
+                    sticky: false,
                 },
                 WindowRule {
                     match_class: None,
@@ -2358,6 +2420,8 @@ mod tests {
                     open_on_workspace: None,
                     open_maximized: false,
                     column_width: None,
+                    open_in_column: None,
+                    sticky: false,
                 },
             ],
             ..Default::default()
@@ -2399,6 +2463,8 @@ mod tests {
                     open_on_workspace: None,
                     open_maximized: false,
                     column_width: None,
+                    open_in_column: None,
+                    sticky: false,
                 },
                 WindowRule {
                     match_class: Some("ValidClass".to_string()),
@@ -2411,6 +2477,8 @@ mod tests {
                     open_on_workspace: None,
                     open_maximized: false,
                     column_width: None,
+                    open_in_column: None,
+                    sticky: false,
                 },
             ],
             ..Default::default()
@@ -2423,6 +2491,31 @@ mod tests {
             1 + BUILTIN_IGNORE_EXECUTABLES.len()
         );
         assert!(compiled[0].matches("ValidClass", "Any Title", "any.exe"));
+    }
+
+    #[test]
+    fn test_compiled_window_rule_slot_and_sticky() {
+        let config = Config {
+            window_rules: vec![
+                WindowRule {
+                    match_class: Some("A".to_string()),
+                    open_in_column: Some(3),
+                    sticky: true,
+                    ..Default::default()
+                },
+                WindowRule {
+                    match_class: Some("B".to_string()),
+                    open_in_column: Some(0), // 0 violates 1-based, dropped
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let compiled = config.compile_window_rules();
+        assert_eq!(compiled[0].open_in_column, Some(2)); // 1-based 3 -> 0-based 2
+        assert!(compiled[0].sticky);
+        assert_eq!(compiled[1].open_in_column, None);
+        assert!(!compiled[1].sticky);
     }
 
     #[test]

@@ -173,10 +173,18 @@ impl AppState {
                 &executable,
             );
             // Per-app open extras from the same (first-match) rule.
-            let (rule_workspace, rule_maximized, rule_column_width) = self
+            let (rule_workspace, rule_maximized, rule_column_width, rule_slot, rule_sticky) = self
                 .matched_rule(&win_info.class_name, &win_info.title, &executable)
-                .map(|r| (r.open_on_workspace, r.open_maximized, r.column_width))
-                .unwrap_or((None, false, None));
+                .map(|r| {
+                    (
+                        r.open_on_workspace,
+                        r.open_maximized,
+                        r.column_width,
+                        r.open_in_column,
+                        r.sticky,
+                    )
+                })
+                .unwrap_or((None, false, None, None, false));
 
             // Skip ignored windows
             if action == config::WindowAction::Ignore {
@@ -214,7 +222,13 @@ impl AppState {
             // opens in the background (no focus steal, hidden until
             // that workspace is activated).
             let active_idx = self.active_workspace_idx(monitor_id);
-            let target_idx = rule_workspace.unwrap_or(active_idx);
+            // A sticky window shows on every workspace, so it always opens on the
+            // active one; an open_on_workspace would only hide it until a switch.
+            let target_idx = if rule_sticky {
+                active_idx
+            } else {
+                rule_workspace.unwrap_or(active_idx)
+            };
             let opens_in_background = target_idx != active_idx;
             if opens_in_background {
                 self.ensure_workspace_exists(monitor_id, target_idx);
@@ -267,7 +281,17 @@ impl AppState {
                         let in_column = self.config.behavior.new_window_placement
                             == config::NewWindowPlacement::InColumn
                             && workspace.column_count() > 0;
-                        let ok = if in_column {
+                        let ok = if let Some(slot) = rule_slot {
+                            // A slot rule opens the window as its own column at
+                            // that slot, overriding in-column stacking.
+                            if self.config.behavior.focus_new_windows || opens_in_background {
+                                workspace.insert_window_at_column(hwnd, rule_width_px, slot).is_ok()
+                            } else {
+                                workspace
+                                    .insert_window_at_column_no_focus(hwnd, rule_width_px, slot)
+                                    .is_ok()
+                            }
+                        } else if in_column {
                             // Stack into the focused column, directly
                             // below the focused window (matches
                             // hyprscroller's column mode rather than
@@ -323,6 +347,14 @@ impl AppState {
                         target_idx + 1,
                         action
                     );
+                    // A floating sticky pins to overlay every workspace; a tiled
+                    // one stays tiled and follows as a column on each switch.
+                    if rule_sticky {
+                        if matches!(action, config::WindowAction::Float) {
+                            workspace.set_floating_pinned(hwnd, true);
+                        }
+                        self.sticky_windows.insert(hwnd);
+                    }
                     if self.config.behavior.focus_new_windows && !opens_in_background {
                         self.focused_monitor = monitor_id;
                         if matches!(action, config::WindowAction::Float) {

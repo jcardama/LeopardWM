@@ -42,6 +42,11 @@ All notable changes to LeopardWM will be documented in this file.
 
 ### Improvements
 
+- **Window rules can place a window in a column and open it sticky.** A rule can
+  now open a matched window at a fixed column slot, and make it sticky on open so
+  it follows you across workspaces (add the float action for a floating overlay).
+  Both are configurable per rule in Settings, under a new per-rule Options menu
+  that also holds the existing corner, workspace, and maximize choices.
 - **F13–F24 can be bound as hotkeys.** The Settings recorder and config parser
   now accept the extended function keys, useful for keyboard navigation layers
   that map shortcuts onto them.

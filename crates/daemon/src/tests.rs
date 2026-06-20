@@ -249,6 +249,8 @@ fn test_window_rule_matching_class() {
             open_on_workspace: None,
             open_maximized: false,
             column_width: None,
+            open_in_column: None,
+            sticky: false,
         }],
         ..Default::default()
     };
@@ -271,6 +273,8 @@ fn test_window_rule_matching_title() {
             open_on_workspace: None,
             open_maximized: false,
             column_width: None,
+            open_in_column: None,
+            sticky: false,
         }],
         ..Default::default()
     };
@@ -293,6 +297,8 @@ fn test_window_rule_matching_executable() {
             open_on_workspace: None,
             open_maximized: false,
             column_width: None,
+            open_in_column: None,
+            sticky: false,
         }],
         ..Default::default()
     };
@@ -322,6 +328,8 @@ fn test_floating_rect_uses_rule_dimensions() {
             open_on_workspace: None,
             open_maximized: false,
             column_width: None,
+            open_in_column: None,
+            sticky: false,
         }],
         ..Default::default()
     };
@@ -347,6 +355,8 @@ fn test_floating_rect_preserves_original_if_no_dimensions() {
             open_on_workspace: None,
             open_maximized: false,
             column_width: None,
+            open_in_column: None,
+            sticky: false,
         }],
         ..Default::default()
     };
@@ -3667,6 +3677,8 @@ fn test_matched_rule_returns_first_match_extras() {
         open_on_workspace: Some(3),
         open_maximized: false,
         column_width: Some(0.25),
+        open_in_column: None,
+        sticky: false,
     }];
     let state = AppState::new_with_config(config, test_monitors());
     let rule = state

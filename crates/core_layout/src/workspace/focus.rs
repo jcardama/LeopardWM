@@ -96,6 +96,31 @@ impl Workspace {
         Ok(())
     }
 
+    /// Insert a window as a new column at `index` (clamped) without moving the
+    /// focused column; later columns shift right and the prior focus follows its
+    /// window. On an empty workspace the new column becomes focused.
+    ///
+    /// # Errors
+    ///
+    /// Returns `LayoutError::DuplicateWindow` if the window ID already exists.
+    pub fn insert_window_at_column_no_focus(
+        &mut self,
+        window_id: WindowId,
+        width: Option<i32>,
+        index: usize,
+    ) -> Result<(), LayoutError> {
+        if self.contains_window(window_id) {
+            return Err(LayoutError::DuplicateWindow(window_id));
+        }
+        let column_width = width
+            .unwrap_or(self.default_column_width)
+            .max(MIN_COLUMN_WIDTH);
+        // insert_column_at shifts focused_column right when inserting at or
+        // before it, so the prior focus is preserved without an override.
+        self.insert_column_at(Column::new(window_id, column_width), index);
+        Ok(())
+    }
+
     /// Insert a window without changing the current focus.
     ///
     /// Same as `insert_window`, but preserves `focused_column` and

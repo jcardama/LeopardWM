@@ -138,13 +138,23 @@ corner_style = "square"
 # match_title = ".*DevTools.*"
 # action = "float"
 
-# Per-app open behavior: open on a workspace (1-9), set the initial column
-# width (viewport fraction), or open with the column maximized.
+# Per-app open behavior: open on a workspace (1-9), pin to a column slot
+# (open_in_column, 1-based), set the initial column width (viewport fraction),
+# maximize the column, or make the window sticky so it follows you across
+# workspaces (add action = "float" for a floating overlay instead of a column).
 # [[window_rules]]
 # match_executable = "spotify.exe"
 # open_on_workspace = 5
 # column_width = 0.5
 # open_maximized = false
+#
+# [[window_rules]]
+# match_executable = "chrome.exe"
+# open_in_column = 1
+#
+# [[window_rules]]
+# match_executable = "slack.exe"
+# sticky = true
 "#
     )
 }

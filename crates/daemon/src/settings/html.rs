@@ -501,6 +501,127 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 2px; }
   background: var(--accent);
 }
 
+/* ── Per-rule Options popover (rules table) ──────────────────────── */
+.rule-opts { position: relative; display: inline-block; min-width: 80px; }
+/* Match the inline table combobox trigger: borderless, transparent, hover fill. */
+.rule-opts-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  max-width: 200px;
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--text-primary);
+  background: transparent;
+  border: none;
+  border-radius: var(--ctrl-radius);
+  padding: 4px 8px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.08s;
+}
+.rule-opts-btn .rule-opts-summary { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rule-opts-btn:hover { background: var(--ctrl-fill-secondary); }
+.rule-opts.open .rule-opts-btn .combobox-chevron { transform: rotate(180deg); }
+/* MenuFlyout-style options menu: radio submenus, checkmark toggle items,
+   separators (WinUI MenuFlyout idiom), plus one input row for the free
+   column-slot number (which a menu item can't express). */
+.rule-opts-pop {
+  display: none;
+  position: fixed;
+  z-index: 9000;
+  min-width: 248px;
+  padding: 4px;
+  background: var(--bg-solid-quaternary);
+  border: 1px solid var(--card-stroke);
+  border-radius: var(--overlay-radius);
+  box-shadow: var(--shadow);
+}
+.rule-opts.open .rule-opts-pop { display: block; }
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  /* Flush left by default; only items that show an indicator (checkable
+     toggles, radios) get the left gutter. */
+  padding: 0 12px;
+  border-radius: var(--ctrl-radius);
+  cursor: pointer;
+  position: relative;
+  font-size: 14px;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+.menu-item:hover { background: var(--subtle-secondary); }
+.menu-item .menu-label { flex: 1; }
+.menu-item .menu-value { color: var(--text-secondary); }
+.menu-arrow { width: 12px; height: 12px; flex-shrink: 0; fill: var(--text-secondary); }
+.menu-item.menu-toggle { padding-left: 32px; }
+/* Indicators centered in the 32px gutter (~16px from the left edge). */
+.menu-item.menu-toggle.checked::before {
+  content: '';
+  position: absolute;
+  left: 11px;
+  top: 50%;
+  width: 10px;
+  height: 5px;
+  border-left: 1.5px solid var(--text-primary);
+  border-bottom: 1.5px solid var(--text-primary);
+  transform: translateY(-70%) rotate(-45deg);
+}
+.menu-sep { height: 1px; background: var(--divider-stroke); margin: 5px 8px; }
+.menu-item.input-row { cursor: default; }
+.menu-item.input-row:hover { background: transparent; }
+.menu-item.input-row .opt-num {
+  width: 56px;
+  min-height: 28px;
+  padding: 3px 8px;
+  text-align: center;
+}
+.menu-sub {
+  display: none;
+  position: absolute;
+  top: -4px;
+  right: calc(100% + 3px);
+  z-index: 1;
+  min-width: 150px;
+  padding: 4px;
+  background: var(--bg-solid-quaternary);
+  border: 1px solid var(--card-stroke);
+  border-radius: var(--overlay-radius);
+  box-shadow: var(--shadow);
+}
+.menu-item.subopen > .menu-sub { display: block; }
+.menu-item.sub-right > .menu-sub { right: auto; left: calc(100% + 3px); }
+.menu-radio {
+  display: flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 12px 0 32px;
+  border-radius: var(--ctrl-radius);
+  cursor: pointer;
+  position: relative;
+  font-size: 14px;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+.menu-radio:hover { background: var(--subtle-secondary); }
+.menu-radio.selected::before {
+  content: '';
+  position: absolute;
+  left: 13px;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  margin-top: -3px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
 /* ── Toggle Switch (40x20, WinUI 3) ──────────────────────────────── */
 .toggle {
   position: relative;
@@ -1065,7 +1186,7 @@ input[type="range"]::-webkit-slider-thumb {
         <h2 class="section-title">Window rules</h2>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Class</th><th>Title</th><th>Executable</th><th>Action</th><th>Corners</th><th title="Open on workspace 1-9" style="width:52px">WS</th><th title="Maximize the column on open" style="width:58px;text-align:center;padding-left:10px">Max</th><th style="width:36px"></th></tr></thead>
+            <thead><tr><th>Class</th><th>Title</th><th>Executable</th><th>Action</th><th title="Per-app open behavior">Options</th><th style="width:36px"></th></tr></thead>
             <tbody id="rules-body"></tbody>
           </table>
         </div>
@@ -1187,12 +1308,21 @@ function initCombobox(cb) {
       if (other !== cb) other.classList.remove('open');
     });
     if (!cb.classList.contains('open')) {
-      /* Position popup using fixed coords from trigger rect */
+      /* Position popup using fixed coords from trigger rect. Anchor to the
+         left edge normally, but flip to right-anchored when the trigger sits
+         in the right half so the popup grows inward instead of clipping. */
       var rect = trigger.getBoundingClientRect();
       popup.style.minWidth = Math.max(rect.width, 100) + 'px';
       popup.style.width = 'auto';
-      popup.style.maxWidth = (window.innerWidth - rect.left - 8) + 'px';
-      popup.style.left = rect.left + 'px';
+      if (rect.left > window.innerWidth / 2) {
+        popup.style.right = (window.innerWidth - rect.right) + 'px';
+        popup.style.left = 'auto';
+        popup.style.maxWidth = (rect.right - 8) + 'px';
+      } else {
+        popup.style.left = rect.left + 'px';
+        popup.style.right = 'auto';
+        popup.style.maxWidth = (window.innerWidth - rect.left - 8) + 'px';
+      }
       var spaceBelow = window.innerHeight - rect.bottom - 8;
       var spaceAbove = rect.top - 8;
       if (spaceBelow >= spaceAbove) {
@@ -1224,6 +1354,11 @@ document.querySelectorAll('.combobox').forEach(function(cb) {
 });
 document.addEventListener('click', function() {
   document.querySelectorAll('.combobox.open').forEach(function(cb) { cb.classList.remove('open'); });
+  document.querySelectorAll('.rule-opts.open').forEach(function(o) {
+    o.classList.remove('open');
+    o.querySelectorAll('.menu-item.subopen').forEach(function(m) { m.classList.remove('subopen'); });
+    var tr = o.closest('tr'); if (tr && typeof updateRuleSummary === 'function') updateRuleSummary(tr);
+  });
 });
 
 /* ── High Contrast live detection ─────────────────────────────────── */
@@ -1673,14 +1808,15 @@ function addRuleRow(r) {
     var label = a.charAt(0).toUpperCase() + a.slice(1);
     return '<div class="combobox-option' + (a === action ? ' selected' : '') + '" data-value="' + a + '">' + label + '</div>';
   }).join('');
-  var cornerOpts = ['auto','square','rounded','small_rounded'].map(function(c) {
-    return '<div class="combobox-option' + (c === corner ? ' selected' : '') + '" data-value="' + c + '">' + cornerLabels[c] + '</div>';
+  var menuArrow = '<svg class="menu-arrow" viewBox="0 0 12 12"><path d="M4.35 2.15a.5.5 0 000 .7L7.79 6 4.35 9.15a.5.5 0 10.7.7l3.5-3.5a.5.5 0 000-.7l-3.5-3.5a.5.5 0 00-.7 0z"/></svg>';
+  var cornerRadios = ['auto','square','rounded','small_rounded'].map(function(c) {
+    return '<div class="menu-radio' + (c === corner ? ' selected' : '') + '" data-value="' + c + '">' + cornerLabels[c] + '</div>';
   }).join('');
   var ws = (r.open_on_workspace >= 1 && r.open_on_workspace <= 9) ? String(r.open_on_workspace) : '';
-  var wsOpts = ['','1','2','3','4','5','6','7','8','9'].map(function(w) {
-    var label = w === '' ? '-' : w;
-    return '<div class="combobox-option' + (w === ws ? ' selected' : '') + '" data-value="' + w + '">' + label + '</div>';
+  var wsRadios = ['','1','2','3','4','5','6','7','8','9'].map(function(w) {
+    return '<div class="menu-radio' + (w === ws ? ' selected' : '') + '" data-value="' + w + '">' + (w === '' ? 'None' : w) + '</div>';
   }).join('');
+  var slot = (r.open_in_column >= 1) ? String(r.open_in_column) : '';
   tr.innerHTML =
     '<td><input type="text" class="rule-class" value="' + escAttr(r.match_class||'') + '" placeholder="regex"></td>' +
     '<td><input type="text" class="rule-title" value="' + escAttr(r.match_title||'') + '" placeholder="regex"></td>' +
@@ -1689,20 +1825,133 @@ function addRuleRow(r) {
       '<button class="combobox-trigger" type="button"><span class="combobox-text">' + actionLabel + '</span>' + chevron + '</button>' +
       '<div class="combobox-popup">' + actionOpts + '</div>' +
     '</div></td>' +
-    '<td><div class="combobox rule-corner" data-value="' + corner + '">' +
-      '<button class="combobox-trigger" type="button"><span class="combobox-text">' + cornerLabels[corner] + '</span>' + chevron + '</button>' +
-      '<div class="combobox-popup">' + cornerOpts + '</div>' +
+    '<td><div class="rule-opts">' +
+      '<button type="button" class="rule-opts-btn"><span class="rule-opts-summary">Options</span>' + chevron + '</button>' +
+      '<div class="rule-opts-pop menu-flyout">' +
+        '<div class="menu-item has-sub rule-workspace" data-value="' + ws + '">' +
+          '<span class="menu-label">Open on workspace</span><span class="menu-value">' + (ws === '' ? 'None' : ws) + '</span>' + menuArrow +
+          '<div class="menu-sub">' + wsRadios + '</div></div>' +
+        '<div class="menu-item input-row"><span class="menu-label">Open in column</span>' +
+          '<input type="number" min="1" class="rule-slot opt-num" placeholder="-" value="' + slot + '"></div>' +
+        '<div class="menu-sep"></div>' +
+        '<div class="menu-item menu-toggle rule-maximized' + (r.open_maximized ? ' checked' : '') + '"><span class="menu-label">Maximize on open</span></div>' +
+        '<div class="menu-item menu-toggle rule-sticky' + (r.sticky ? ' checked' : '') + '"><span class="menu-label">Sticky (follows workspaces)</span></div>' +
+        '<div class="menu-sep"></div>' +
+        '<div class="menu-item has-sub rule-corner" data-value="' + corner + '">' +
+          '<span class="menu-label">Corners</span><span class="menu-value">' + cornerLabels[corner] + '</span>' + menuArrow +
+          '<div class="menu-sub">' + cornerRadios + '</div></div>' +
+      '</div>' +
     '</div></td>' +
-    '<td><div class="combobox compact rule-workspace" data-value="' + ws + '" title="Open on workspace 1-9">' +
-      '<button class="combobox-trigger" type="button"><span class="combobox-text">' + (ws === '' ? '-' : ws) + '</span>' + chevron + '</button>' +
-      '<div class="combobox-popup">' + wsOpts + '</div>' +
-    '</div></td>' +
-    '<td style="text-align:center;padding-left:10px"><label class="toggle" title="Maximize the column on open"><input type="checkbox" class="rule-maximized"' + (r.open_maximized ? ' checked' : '') + '><span class="track"></span><span class="thumb"></span></label></td>' +
     '<td><button class="row-delete" onclick="this.closest(\'tr\').remove();autoSave(0)">' + deleteIcon + '</button></td>';
   tbody.appendChild(tr);
   wrapAllInputs(tr);
   tr.querySelectorAll('input').forEach(function(el) { el.addEventListener('input', function() { autoSave(500); }); });
   tr.querySelectorAll('.combobox').forEach(function(cb) { initCombobox(cb); });
+  initRuleOptions(tr);
+  updateRuleSummary(tr);
+}
+
+/* Build the compact "WS5 · Col1 · Sticky" summary on the Options button. */
+function updateRuleSummary(tr) {
+  var parts = [];
+  var cornerEl = tr.querySelector('.rule-corner');
+  var corner = cornerEl ? cornerEl.dataset.value : 'auto';
+  var cornerShort = { square: 'Square', rounded: 'Round', small_rounded: 'SmRound' };
+  if (corner && corner !== 'auto') parts.push(cornerShort[corner] || corner);
+  var wsEl = tr.querySelector('.rule-workspace');
+  if (wsEl && wsEl.dataset.value) parts.push('WS' + wsEl.dataset.value);
+  var slotEl = tr.querySelector('.rule-slot');
+  if (slotEl && slotEl.value.trim()) parts.push('Col' + slotEl.value.trim());
+  if (tr.querySelector('.rule-maximized').classList.contains('checked')) parts.push('Max');
+  if (tr.querySelector('.rule-sticky').classList.contains('checked')) parts.push('Sticky');
+  var sum = tr.querySelector('.rule-opts-summary');
+  if (sum) sum.textContent = parts.length ? parts.join(' · ') : 'Options';
+}
+
+function initRuleOptions(tr) {
+  var cell = tr.querySelector('.rule-opts');
+  var btn = tr.querySelector('.rule-opts-btn');
+  var pop = tr.querySelector('.rule-opts-pop');
+  btn.addEventListener('click', function(e) {
+    e.stopPropagation();
+    document.querySelectorAll('.rule-opts.open').forEach(function(o) {
+      if (o !== cell) {
+        o.classList.remove('open');
+        o.querySelectorAll('.menu-item.subopen').forEach(function(m) { m.classList.remove('subopen'); });
+        var t = o.closest('tr'); if (t) updateRuleSummary(t);
+      }
+    });
+    document.querySelectorAll('.combobox.open').forEach(function(c) { c.classList.remove('open'); });
+    if (cell.classList.contains('open')) {
+      pop.querySelectorAll('.menu-item.subopen').forEach(function(m) { m.classList.remove('subopen'); });
+    }
+    if (!cell.classList.contains('open')) {
+      /* Right-anchor to the button so the flyout grows inward (it lives in the
+         right-side Options column) and never clips the right edge. */
+      var rect = btn.getBoundingClientRect();
+      pop.style.right = Math.max(8, window.innerWidth - rect.right) + 'px';
+      pop.style.left = 'auto';
+      if (window.innerHeight - rect.bottom - 8 >= 230) {
+        pop.style.top = (rect.bottom + 4) + 'px'; pop.style.bottom = 'auto';
+      } else {
+        pop.style.bottom = (window.innerHeight - rect.top + 4) + 'px'; pop.style.top = 'auto';
+      }
+    } else {
+      updateRuleSummary(tr);
+    }
+    cell.classList.toggle('open');
+  });
+  /* Clicks inside the flyout stay open; a click on the menu background (not an
+     item) closes any open submenu. */
+  pop.addEventListener('click', function(e) {
+    e.stopPropagation();
+    if (!e.target.closest('.menu-item.has-sub') && !e.target.closest('.menu-sub')) {
+      pop.querySelectorAll('.menu-item.subopen').forEach(function(m) { m.classList.remove('subopen'); });
+    }
+  });
+  pop.addEventListener('input', function() { updateRuleSummary(tr); });
+
+  /* Submenu parents: clicking toggles the submenu, closing siblings. */
+  pop.querySelectorAll('.menu-item.has-sub').forEach(function(item) {
+    item.addEventListener('click', function(e) {
+      if (e.target.closest('.menu-sub')) return; // handled by radio click
+      e.stopPropagation();
+      var wasOpen = item.classList.contains('subopen');
+      pop.querySelectorAll('.menu-item.subopen').forEach(function(m) { m.classList.remove('subopen'); });
+      if (!wasOpen) {
+        item.classList.add('subopen');
+        var sub = item.querySelector('.menu-sub');
+        // Open inward (the flyout is right-anchored); flip if it would clip left.
+        var subRect = sub.getBoundingClientRect();
+        item.classList.toggle('sub-right', subRect.left < 8);
+      }
+    });
+  });
+
+  /* Radio items set the parent's value and label, then close the submenu. */
+  pop.querySelectorAll('.menu-radio').forEach(function(opt) {
+    opt.addEventListener('click', function(e) {
+      e.stopPropagation();
+      var parent = opt.closest('.menu-item.has-sub');
+      parent.dataset.value = opt.dataset.value;
+      parent.querySelector('.menu-value').textContent = opt.textContent;
+      parent.querySelectorAll('.menu-radio').forEach(function(o) { o.classList.remove('selected'); });
+      opt.classList.add('selected');
+      parent.classList.remove('subopen');
+      updateRuleSummary(tr);
+      autoSave(0);
+    });
+  });
+
+  /* Toggle items (Maximize, Sticky) flip a checkmark. */
+  pop.querySelectorAll('.menu-item.menu-toggle').forEach(function(item) {
+    item.addEventListener('click', function(e) {
+      e.stopPropagation();
+      item.classList.toggle('checked');
+      updateRuleSummary(tr);
+      autoSave(0);
+    });
+  });
 }
 
 function escAttr(s) { return (s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
@@ -1825,6 +2074,7 @@ function readRules() {
     var r = Object.assign({}, tr._rule || {});
     delete r.match_class; delete r.match_title; delete r.match_executable;
     delete r.corner_style; delete r.open_on_workspace; delete r.open_maximized;
+    delete r.open_in_column; delete r.sticky;
     var cls = tr.querySelector('.rule-class').value.trim();
     var title = tr.querySelector('.rule-title').value.trim();
     var exe = tr.querySelector('.rule-exe').value.trim();
@@ -1839,8 +2089,11 @@ function readRules() {
     var wsEl = tr.querySelector('.rule-workspace');
     var wsv = wsEl ? parseInt(wsEl.dataset.value, 10) : NaN;
     if (wsv >= 1 && wsv <= 9) r.open_on_workspace = wsv;
-    var maxEl = tr.querySelector('.rule-maximized');
-    if (maxEl && maxEl.checked) r.open_maximized = true;
+    if (tr.querySelector('.rule-maximized').classList.contains('checked')) r.open_maximized = true;
+    var slotEl = tr.querySelector('.rule-slot');
+    var slotv = slotEl ? parseInt(slotEl.value, 10) : NaN;
+    if (slotv >= 1) r.open_in_column = slotv;
+    if (tr.querySelector('.rule-sticky').classList.contains('checked')) r.sticky = true;
     if (cls || title || exe) rules.push(r);
   });
   return rules;
