@@ -339,7 +339,6 @@ impl AppState {
         target_col: usize,
         window_slot: usize,
     ) {
-        // Same column: reorder the window within its column.
         let ws_idx = self.active_workspace_idx(target_monitor_id);
         let current_location = self
             .workspaces
@@ -716,29 +715,13 @@ impl AppState {
     /// Avoids a redundant transition since windows are already at their final positions
     /// from the live preview during drag.
     ///
-    /// **Known visual limitation (v0.1.14)**: when a single-window source
-    /// column gets emptied by the drop, the source column is removed and
-    /// every column to its right shifts left to fill the gap — including
-    /// a Tabbed destination column. The user perceives this as the tabbed
-    /// column "sliding" into its new x position when they drop into it.
-    /// We've tried (1) skipping the live-preview `start_layout_transition`
-    /// for Tabbed targets (no visible placeholder gap to animate),
-    /// (2) clearing `layout_transition` to None in this function (no
-    /// drop-time interpolation), and (3) disabling DWM transitions on
-    /// the dragged window so its final `SetWindowPos` lands without
-    /// DWM's position smoothing. The column geometry still actually
-    /// changes when the source collapses — there's no transition to
-    /// suppress, the column simply arrives at a different `x` because
-    /// there's one fewer column before it.
-    ///
-    /// Future fix (deferred): preserve a sentinel "ghost" hwnd in the
-    /// source column on drop so the column slot survives the drop, then
-    /// remove it on the next user-driven layout change. That keeps the
-    /// destination column's `x` stable at the cost of a brief gap where
-    /// the source used to be. Not implemented for v0.1.14 — the
-    /// behavior is consistent with how Vertical→Vertical drags resize
-    /// columns, just more noticeable when the destination is Tabbed
-    /// (the strip moves with the column).
+    /// Known visual limitation: when a single-window source column gets
+    /// emptied by the drop, every column to its right shifts left to fill
+    /// the gap — including a Tabbed destination column, which reads as the
+    /// tabbed column "sliding" into its new x. There's no transition to
+    /// suppress; the column simply arrives at a different `x` because there's
+    /// one fewer column before it. Consistent with Vertical→Vertical resize,
+    /// just more noticeable when the destination strip moves with the column.
     pub(crate) fn finalize_drag_merge(
         &mut self,
         hwnd: u64,

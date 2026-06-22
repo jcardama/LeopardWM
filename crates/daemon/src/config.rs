@@ -390,9 +390,7 @@ pub struct BehaviorConfig {
     /// Use DWM thumbnails to animate Chromium / Electron / Mozilla /
     /// Cascadia windows during layout transitions instead of per-frame
     /// `SetWindowPos` on the live HWND. Eliminates the visible 1px
-    /// wobble and Chrome stutter during column scroll. Shipped opt-in in
-    /// v0.1.16, soaked with no critical issues filed, default-on since
-    /// v0.1.18.
+    /// wobble and Chrome stutter during column scroll.
     #[serde(default = "default_true")]
     pub swap_chain_ghost_animation: bool,
 
@@ -2539,7 +2537,7 @@ mod tests {
     }
 
     // =========================================================================
-    // Hex Color Validation Tests (Iteration 34)
+    // Hex Color Validation Tests
     // =========================================================================
 
     #[test]
@@ -2597,7 +2595,7 @@ mod tests {
     }
 
     // =========================================================================
-    // Config Edge Case Tests (Iteration 34)
+    // Config Edge Case Tests
     // =========================================================================
 
     #[test]
@@ -2676,7 +2674,7 @@ mod tests {
     }
 
     // =========================================================================
-    // Regex Size Limit Test (Iteration 34)
+    // Regex Size Limit Test
     // =========================================================================
 
     #[test]
@@ -2700,7 +2698,7 @@ mod tests {
     }
 
     // =========================================================================
-    // Config Error-Path Tests (Iteration 37)
+    // Config Error-Path Tests
     // =========================================================================
 
     #[test]

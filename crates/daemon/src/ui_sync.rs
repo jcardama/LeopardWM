@@ -438,7 +438,7 @@ impl AppState {
             // Skip SetForegroundWindow if the target is currently cloaked
             // (off-screen-parked or ghost-animating). Calling
             // SetForegroundWindow on a cloaked HWND is undocumented
-            // behavior; the v3 plan dodges it entirely. Internal focus
+            // behavior, so avoid it entirely. Internal focus
             // state still updates so Alt+Tab / next-Focused-event correctly
             // resync once the cloak lifts.
             let target_cloaked = leopardwm_platform_win32::is_placement_cloaked(hwnd);

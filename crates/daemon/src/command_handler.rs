@@ -685,10 +685,8 @@ impl AppState {
     fn handle_query_all_windows(&mut self) -> IpcResponse {
         let mut windows = Vec::new();
 
-        // Get focused window for comparison
         let focused_hwnd = self.focused_workspace().and_then(|ws| ws.focused_window());
 
-        // Enumerate all windows to get titles and other info
         let win_info_map: HashMap<u64, (String, String, u32)> = match enumerate_windows() {
             Ok(wins) => wins
                 .into_iter()

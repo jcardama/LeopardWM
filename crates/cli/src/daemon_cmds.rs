@@ -577,7 +577,6 @@ pub(crate) async fn handle_subscribe(events: Option<Vec<String>>) -> Result<()> 
         anyhow::bail!("Daemon is not running. Start it with `leopardwm-cli run`.");
     }
 
-    // Open the pipe and send Subscribe.
     let client =
         open_pipe_with_retry(IPC_CONNECT_TIMEOUT, Some(IPC_NOT_FOUND_FAST_FAIL_AFTER)).await?;
     let (reader, mut writer) = tokio::io::split(client);
@@ -611,8 +610,8 @@ pub(crate) async fn handle_subscribe(events: Option<Vec<String>>) -> Result<()> 
         other => anyhow::bail!("Unexpected response to Subscribe: {:?}", other),
     }
 
-    // Stream loop. Each frame is a single line of JSON; raw passthrough
-    // to stdout so users can pipe into `jq` etc.
+    // Each frame is a single line of JSON; raw passthrough to stdout so
+    // users can pipe into `jq` etc.
     let mut stdout = tokio::io::stdout();
     let mut event_line = Vec::new();
     loop {

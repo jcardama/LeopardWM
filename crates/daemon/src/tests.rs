@@ -459,9 +459,9 @@ fn test_state_snapshot_with_tab_title_overrides_roundtrip() {
 
 #[test]
 fn test_state_snapshot_v0_1_14_backward_compat() {
-    // A v0.1.14-shape JSON has no `tab_title_overrides` field. Verify
-    // it loads with the new field defaulted to an empty map so existing
-    // users don't lose their workspace state on upgrade.
+    // An older snapshot JSON (before `tab_title_overrides` existed) has no
+    // such field. Verify it loads with the new field defaulted to an empty
+    // map so existing users don't lose their workspace state on upgrade.
     let legacy_json = r#"{
         "saved_at": "2026-04-01T00:00:00",
         "workspaces": [],
@@ -1069,7 +1069,7 @@ fn test_cmd_query_all_windows() {
 }
 
 // ========================================================================
-// New command tests (Iteration 29)
+// New command tests
 // ========================================================================
 
 #[test]
@@ -1569,7 +1569,7 @@ fn test_startup_banner_no_high_contrast() {
 }
 
 // =========================================================================
-// join_with_timeout tests (Iteration 34)
+// join_with_timeout tests
 // =========================================================================
 
 #[test]
@@ -1590,7 +1590,7 @@ fn test_join_with_timeout_hanging_thread() {
 }
 
 // =========================================================================
-// Workspace mutation tests (handle_window_event equivalent) (Iteration 34)
+// Workspace mutation tests (handle_window_event equivalent)
 // =========================================================================
 
 #[test]
@@ -1711,10 +1711,6 @@ fn test_multiple_monitors_focus_cross_monitor() {
     let ws = &state.workspaces.get(&state.focused_monitor).unwrap()[0];
     assert!(ws.contains_window(200));
 }
-
-// =========================================================================
-// Iteration 35: Codex review fixes
-// =========================================================================
 
 #[test]
 fn test_pipe_busy_error_code_is_231() {
@@ -1896,7 +1892,7 @@ fn test_shutdown_recovery_retry_budget_is_reasonable() {
 }
 
 // =========================================================================
-// A1: MovedOrResized suppression during apply_layout (Iteration 37)
+// MovedOrResized suppression during apply_layout
 // =========================================================================
 
 #[test]
@@ -1924,7 +1920,7 @@ fn test_applying_layout_flag_set_during_apply() {
 }
 
 // =========================================================================
-// A3: Fullscreen-minimize daemon-level regression test (Iteration 37)
+// Fullscreen-minimize daemon-level regression test
 // =========================================================================
 
 #[test]
@@ -1964,7 +1960,7 @@ fn test_fullscreen_minimize_clears_fullscreen_in_daemon() {
 }
 
 // =========================================================================
-// R29-C2: HotkeyState registered_count is distinct from mapping.len()
+// HotkeyState registered_count is distinct from mapping.len()
 // =========================================================================
 
 #[test]
@@ -2015,13 +2011,12 @@ fn test_protected_binds_flags_os_reserved_combos() {
 }
 
 // =========================================================================
-// =========================================================================
-// R31: Event-path behavior tests (Iteration 40)
+// Event-path behavior tests
 // =========================================================================
 
 #[test]
 fn test_focus_new_windows_false_preserves_focus_in_daemon() {
-    // R31-T1: Verify that focus_new_windows=false preserves the existing
+    // Verify that focus_new_windows=false preserves the existing
     // focused window when new windows are tiled -- tested at daemon level
     // by directly manipulating the workspace with the config-driven method.
     let mut config = test_config();
@@ -2052,7 +2047,7 @@ fn test_focus_new_windows_false_preserves_focus_in_daemon() {
 
 #[test]
 fn test_focused_event_updates_previous_focused_hwnd_for_floating() {
-    // R31-T3: Verify that a Focused event for a floating window updates
+    // Verify that a Focused event for a floating window updates
     // previous_focused_hwnd, enabling ToggleFloating to detect and unfloat it.
     let mut state = AppState::new_with_config(test_config(), test_monitors());
     let ws = state.focused_workspace_mut().unwrap();
@@ -2167,7 +2162,7 @@ fn test_restored_floating_window_does_not_steal_tiled_focus() {
     );
 }
 
-// R29-C5: applying_layout flag cleared after error path (Iteration 38)
+// applying_layout flag cleared after error path
 // =========================================================================
 
 #[test]
@@ -2374,7 +2369,7 @@ fn test_moved_or_resized_suppression_window_tracking() {
 }
 
 // =========================================================================
-// R32-C2: Injectable window enumeration for Created-event tests (Iter 41)
+// Injectable window enumeration for Created-event tests
 // =========================================================================
 
 fn make_test_window_info(hwnd: u64) -> leopardwm_platform_win32::WindowInfo {
@@ -2575,7 +2570,7 @@ fn test_take_remembered_column_width_consumes_entry() {
 }
 
 // =========================================================================
-// R32-C3: Deterministic daemon singleton test (Iter 41)
+// Deterministic daemon singleton test
 // =========================================================================
 
 #[test]
@@ -2605,7 +2600,7 @@ fn test_check_already_running_with_isolated_pipe() {
 }
 
 // =========================================================================
-// Phase 3: Reliability hardening tests (Iteration 43)
+// Reliability hardening tests
 // =========================================================================
 
 #[test]

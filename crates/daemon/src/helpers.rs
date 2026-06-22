@@ -128,7 +128,6 @@ impl AppState {
         // Update scroll modifier for the gesture hook
         leopardwm_platform_win32::set_scroll_modifier(&self.config.hotkeys.scroll_modifier);
 
-        // Re-check high contrast mode on config reload
         self.refresh_high_contrast();
 
         // Handle border transitions with new config values

@@ -36,7 +36,6 @@ pub struct MouseHookHandle {
 
 impl Drop for MouseHookHandle {
     fn drop(&mut self) {
-        // Signal the thread to exit
         unsafe {
             let _ = PostThreadMessageW(
                 self.thread_id,
@@ -74,7 +73,6 @@ impl Drop for MouseHookHandle {
 pub fn install_mouse_hook(
     event_sender: mpsc::Sender<WindowEvent>,
 ) -> Result<MouseHookHandle, Win32Error> {
-    // Store sender globally
     {
         let mut sender = MOUSE_EVENT_SENDER.lock().map_err(|_| {
             Win32Error::HookInstallFailed("Mouse sender mutex poisoned".to_string())
@@ -88,7 +86,6 @@ pub fn install_mouse_hook(
         *sender = Some(event_sender);
     }
 
-    // Channel to receive init result from the dedicated thread
     let (init_tx, init_rx) = std::sync::mpsc::channel::<Result<u32, Win32Error>>();
 
     let thread = std::thread::Builder::new()
@@ -97,11 +94,10 @@ pub fn install_mouse_hook(
             unsafe {
                 let thread_id = GetCurrentThreadId();
 
-                // Ensure message queue exists
+                // PeekMessageW forces the queue to exist before the hook installs.
                 let mut msg = MSG::default();
                 let _ = PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE);
 
-                // Install the low-level mouse hook on this thread
                 let hook =
                     match SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_ll_hook_proc), None, 0) {
                         Ok(h) => h,
@@ -135,7 +131,6 @@ pub fn install_mouse_hook(
             Win32Error::HookInstallFailed(format!("Failed to spawn mouse hook thread: {}", e))
         })?;
 
-    // Wait for initialization
     let thread_id = init_rx.recv().map_err(|_| {
         Win32Error::HookInstallFailed("Mouse hook thread initialization failed".to_string())
     })??;
@@ -157,18 +152,15 @@ unsafe extern "system" fn mouse_ll_hook_proc(
     wparam: windows::Win32::Foundation::WPARAM,
     lparam: windows::Win32::Foundation::LPARAM,
 ) -> windows::Win32::Foundation::LRESULT {
-    // If ncode < 0, we must call CallNextHookEx without processing
+    // ncode < 0: the hook must not process the event, just chain.
     if ncode < 0 {
         return CallNextHookEx(None, ncode, wparam, lparam);
     }
 
-    // Only process mouse move events
     if wparam.0 as u32 == WM_MOUSEMOVE {
-        // Get the mouse position from the hook struct
         let mouse_struct = &*(lparam.0 as *const MSLLHOOKSTRUCT);
         let point = mouse_struct.pt;
 
-        // Find the window at the cursor position
         let raw_hwnd = WindowFromPoint(point);
         let candidate_hwnd = if raw_hwnd.is_invalid() {
             None
@@ -182,7 +174,6 @@ unsafe extern "system" fn mouse_ll_hook_proc(
         };
         let candidate_window_id = candidate_hwnd.map(|hwnd| hwnd.0 as WindowId);
 
-        // Check if this is a different top-level window than before (recover from mutex poisoning)
         let mut current = CURRENT_MOUSE_WINDOW
             .lock()
             .unwrap_or_else(recover_poisoned_mutex);
@@ -220,6 +211,5 @@ unsafe extern "system" fn mouse_ll_hook_proc(
         }
     }
 
-    // Always call next hook in the chain
     CallNextHookEx(None, ncode, wparam, lparam)
 }

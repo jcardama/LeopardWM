@@ -366,9 +366,7 @@ fn class_name_hwnd(hwnd: HWND) -> String {
 /// Style choice: `WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE
 /// | WS_EX_TRANSPARENT` with a 1×1 fully-transparent UpdateLayeredWindow
 /// backing, mirroring `border.rs`. This is the proven-working pattern for
-/// click-through composite overlays in our codebase. If Intel iGPU
-/// hardware shows flicker artifacts, fall back to variants discussed in
-/// the plan's "ThumbnailHost — singleton host window" section.
+/// click-through composite overlays in our codebase.
 pub struct ThumbnailHost {
     hwnd_raw: isize,
     /// Virtual-screen origin captured at host creation, updated by

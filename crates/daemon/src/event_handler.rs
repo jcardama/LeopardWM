@@ -116,7 +116,6 @@ impl AppState {
         self.recently_hidden_hwnds
             .retain(|_, t| t.elapsed() < RECENTLY_HIDDEN_TTL);
 
-        // Check if any workspace already manages this window
         if self.find_window_workspace(hwnd).is_some() {
             debug!("Window {} already managed, ignoring create event", hwnd);
             return;
@@ -136,7 +135,6 @@ impl AppState {
                 return;
             }
 
-            // Get executable name for rule matching
             let executable =
                 get_process_executable(win_info.process_id).unwrap_or_default();
 
@@ -166,7 +164,6 @@ impl AppState {
                 return;
             }
 
-            // Check window rules
             let action = self.evaluate_window_rules(
                 &win_info.class_name,
                 &win_info.title,
@@ -186,7 +183,6 @@ impl AppState {
                 })
                 .unwrap_or((None, false, None, None, false));
 
-            // Skip ignored windows
             if action == config::WindowAction::Ignore {
                 debug!(
                     "Ignoring window by rule: {} ({})",

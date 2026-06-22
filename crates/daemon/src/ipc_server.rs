@@ -98,7 +98,6 @@ pub(crate) async fn run_ipc_server(event_tx: mpsc::Sender<DaemonEvent>) {
 
         debug!("Waiting for client connection on {}", pipe_name);
 
-        // Wait for a client to connect
         if let Err(e) = server.connect().await {
             error!("Failed to accept client connection: {}", e);
             drop(permit);
@@ -107,7 +106,6 @@ pub(crate) async fn run_ipc_server(event_tx: mpsc::Sender<DaemonEvent>) {
 
         debug!("Client connected");
 
-        // Handle this client
         let event_tx = event_tx.clone();
         tokio::spawn(async move {
             if let Err(e) = handle_client(server, event_tx, permit).await {

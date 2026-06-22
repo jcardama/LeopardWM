@@ -81,7 +81,6 @@ pub(crate) const MAX_SET_WIDTH_FRACTION: f64 = 1.0;
 /// target column without moving the real window.
 pub(crate) const DRAG_PLACEHOLDER_HWND: u64 = u64::MAX;
 
-/// Max time allowed for a single Win32 placement apply call.
 /// Maximum time to wait for the layout-apply worker before giving up and
 /// pausing the daemon. Raised from 1500ms to 5000ms so that transient CPU
 /// pressure (e.g. a `cargo build` or other all-cores workload running in the
@@ -179,7 +178,7 @@ pub(crate) struct GhostEntry {
     pub(crate) class_at_register: String,
     /// Final on-screen rect (host-client coordinates) where the
     /// thumbnail will rest during the post-landing crossfade.
-    #[allow(dead_code)] // Consumed in Stage D crossfade.
+    #[allow(dead_code)] // Consumed in the crossfade phase.
     pub(crate) final_dest_client_rect: Rect,
 }
 
@@ -214,7 +213,7 @@ impl GhostEntry {
     /// Caller takes responsibility for eventual unregistration. Used at
     /// landing to transfer ownership into `WorkerCommand::Crossfade`
     /// entries owned by the worker thread.
-    #[allow(dead_code)] // Consumed in Stage D crossfade.
+    #[allow(dead_code)] // Consumed in the crossfade phase.
     pub(crate) fn take_isize(mut self) -> isize {
         let raw = self.handle_isize;
         self.handle_isize = 0;
@@ -228,7 +227,7 @@ impl GhostEntry {
 /// `DaemonEvent::CrossfadeComplete { epoch }`. Stale completions (from
 /// fades aborted by a newer transition) are ignored by checking the
 /// epoch.
-#[allow(dead_code)] // Read in Stage D CrossfadeComplete handler.
+#[allow(dead_code)] // Read in the CrossfadeComplete handler.
 pub(crate) struct CrossfadeState {
     pub(crate) epoch: u64,
 }
@@ -576,7 +575,7 @@ pub(crate) struct StateSnapshot {
     #[serde(default)]
     pub(crate) active_workspace: HashMap<String, usize>,
     /// User-supplied tab title overrides keyed by HWND. Defaults to
-    /// empty so v0.1.14-shape snapshots load cleanly.
+    /// empty so older snapshots without this field load cleanly.
     #[serde(default)]
     pub(crate) tab_title_overrides: HashMap<u64, String>,
 }

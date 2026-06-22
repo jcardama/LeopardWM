@@ -414,7 +414,7 @@ impl AppState {
         // the daemon was down, Windows can re-issue the same HWND to a
         // different process and the persisted override would silently
         // attach. The `IsWindow` check is cheap and catches the common
-        // case; we don't bother with class/exe tagging in v0.1.15.
+        // case; we don't bother with class/exe tagging.
         for (&hwnd, title) in &snapshot.tab_title_overrides {
             if leopardwm_platform_win32::is_valid_window(hwnd) {
                 self.tab_title_overrides.insert(hwnd, title.clone());

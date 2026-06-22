@@ -506,7 +506,7 @@ mod tests {
         assert!(!r3.intersects(&r1));
     }
 
-    // ====== Tests added from code review (Cycle 1) ======
+    // ====== Tests added from code review ======
 
     #[test]
     fn test_remove_last_window_empties_workspace() {
@@ -632,7 +632,7 @@ mod tests {
         assert_eq!(placements[0].rect.x, -91);
     }
 
-    // ====== Tests added from code review (Cycle 2) ======
+    // ====== Tests added from code review ======
 
     #[test]
     fn test_column_empty_constructor() {
@@ -754,7 +754,7 @@ mod tests {
         assert_eq!(width, i32::MAX); // Should saturate at max
     }
 
-    // ====== Tests added from code review (Cycle 4) ======
+    // ====== Tests added from code review ======
 
     #[test]
     fn test_focus_window_by_id() {
@@ -861,7 +861,7 @@ mod tests {
         assert_eq!(col.windows(), &[1, 2, 3]);
     }
 
-    // ====== Tests added from code review (Cycle 5) ======
+    // ====== Tests added from code review ======
 
     #[test]
     fn test_remove_window_before_focus_in_stacked_column() {
@@ -1041,7 +1041,7 @@ mod tests {
         assert_eq!(removed, None);
     }
 
-    // ====== Tests added from code review (Cycle 7) ======
+    // ====== Tests added from code review ======
 
     #[test]
     fn test_compute_placements_zero_viewport_width() {
@@ -2965,7 +2965,7 @@ mod tests {
     }
 
     // =========================================================================
-    // insert_window_no_focus (R30-C1: focus_new_windows=false)
+    // insert_window_no_focus (focus_new_windows=false)
     // =========================================================================
 
     #[test]
@@ -3529,7 +3529,7 @@ mod tests {
     }
 
     // ========================================================================
-    // Tabbed Columns (Milestone 5)
+    // Tabbed Columns
     // ========================================================================
 
     fn ws_3_tabs() -> Workspace {

@@ -122,7 +122,6 @@ impl OverlayWindow {
 
         let thread = std::thread::spawn(move || {
             unsafe {
-                // Register window class
                 let class_name: Vec<u16> = "LeopardWMOverlayClass\0".encode_utf16().collect();
                 let wc = WNDCLASSW {
                     lpfnWndProc: Some(overlay_window_proc),
@@ -131,7 +130,6 @@ impl OverlayWindow {
                 };
                 RegisterClassW(&wc);
 
-                // Create the overlay window
                 // WS_EX_LAYERED: Allows transparency
                 // WS_EX_TRANSPARENT: Click-through
                 // WS_EX_TOPMOST: Always on top
@@ -186,7 +184,6 @@ impl OverlayWindow {
                 let hwnd_raw = hwnd.0 as isize;
                 let _ = init_tx.send(Ok(hwnd_raw));
 
-                // Message loop
                 let mut msg = MSG::default();
                 loop {
                     let result = GetMessageW(&mut msg, None, 0, 0);
@@ -204,7 +201,6 @@ impl OverlayWindow {
             }
         });
 
-        // Wait for initialization
         let hwnd_raw = match init_rx.recv() {
             Ok(Ok(raw)) => raw,
             Ok(Err(e)) => {
@@ -245,13 +241,11 @@ impl OverlayWindow {
     /// This method is safe to call from any thread. It updates the global
     /// overlay state and sends a message to the overlay thread to repaint.
     pub fn show_snap_target(&self, rect: Rect) {
-        // Update global state
         if let Ok(mut state) = OVERLAY_STATE.lock() {
             state.rect = Some(rect);
         }
 
         unsafe {
-            // Reposition and resize the window
             let _ = SetWindowPos(
                 self.hwnd,
                 Some(HWND_TOPMOST),
@@ -262,10 +256,9 @@ impl OverlayWindow {
                 SWP_NOACTIVATE | SWP_SHOWWINDOW,
             );
 
-            // Show the window without activating it
+            // SW_SHOWNA shows the window without activating it.
             let _ = ShowWindow(self.hwnd, SW_SHOWNA);
 
-            // Trigger a repaint
             let _ = InvalidateRect(Some(self.hwnd), None, true);
         }
     }
@@ -303,7 +296,6 @@ impl OverlayWindow {
     ///
     /// This method is safe to call from any thread.
     pub fn hide(&self) {
-        // Clear global state
         if let Ok(mut state) = OVERLAY_STATE.lock() {
             state.rect = None;
         }
@@ -365,12 +357,10 @@ impl OverlayWindow {
 
 impl Drop for OverlayWindow {
     fn drop(&mut self) {
-        // Signal thread to quit
         unsafe {
             let _ = PostMessageW(Some(self.hwnd), WM_QUIT_OVERLAY, WPARAM(0), LPARAM(0));
         }
 
-        // Wait for thread to finish
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
@@ -389,7 +379,6 @@ unsafe extern "system" fn overlay_window_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    // Wrap in catch_unwind to prevent panics from crashing
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         overlay_window_proc_inner(hwnd, msg, wparam, lparam)
     }));
@@ -405,21 +394,19 @@ unsafe extern "system" fn overlay_window_proc(
 
 /// Inner implementation of overlay window procedure.
 fn overlay_window_proc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    let _ = wparam; // Unused in current implementation
-    let _ = lparam; // Unused in current implementation
+    let _ = wparam;
+    let _ = lparam;
     match msg {
         WM_PAINT => {
             let mut ps = PAINTSTRUCT::default();
             let hdc = unsafe { BeginPaint(hwnd, &mut ps) };
 
-            // Get current color from state
             let color = if let Ok(state) = OVERLAY_STATE.lock() {
                 state.color
             } else {
                 OVERLAY_COLOR
             };
 
-            // Fill with the overlay color
             let brush = unsafe { CreateSolidBrush(windows::Win32::Foundation::COLORREF(color)) };
             let _ = unsafe { FillRect(hdc, &ps.rcPaint, brush) };
             let _ = unsafe { DeleteObject(brush.into()) };

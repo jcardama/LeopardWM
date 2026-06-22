@@ -535,7 +535,6 @@ impl AppState {
         width_violations: &[leopardwm_platform_win32::WidthViolation],
         height_violations: &[leopardwm_platform_win32::HeightViolation],
     ) -> bool {
-        // Feed width/height violations back to the layout engine.
         // Skip violations where min_width/min_height >= viewport size —
         // the window is temporarily fullscreen/maximized by the app
         // itself, not genuinely enforcing a minimum that large.

@@ -358,7 +358,6 @@ fn test_default_config_path_returns_some() {
     // This may return None in certain CI environments without home dirs
     // but on most systems it should return Some
     let path = default_config_path();
-    // Just verify the function runs without panicking
     if let Some(p) = path {
         assert!(p.ends_with("config.toml"));
     }
@@ -874,11 +873,9 @@ fn test_validate_toml_invalid() {
 
 #[test]
 fn test_check_result_variants() {
-    // Verify that all CheckResult variants can be constructed and printed
     let pass = CheckResult::Pass("test pass".to_string());
     let warn = CheckResult::Warn("test warn".to_string());
     let fail = CheckResult::Fail("test fail".to_string());
-    // Just verify they don't panic when printed
     pass.print();
     warn.print();
     fail.print();
@@ -891,7 +888,7 @@ fn test_get_windows_version_does_not_panic() {
 }
 
 // =========================================================================
-// Phase 2: CLI completeness tests (Iteration 42)
+// CLI completeness tests
 // =========================================================================
 
 #[test]
@@ -912,36 +909,28 @@ fn test_config_backup_and_restore_roundtrip() {
     let config_path = dir.join("config.toml");
     let backup_path = config_backup_path(&config_path);
 
-    // Write initial config
     fs::write(&config_path, "gap = 10\n").unwrap();
 
-    // Backup
     fs::copy(&config_path, &backup_path).unwrap();
     assert!(backup_path.exists());
 
-    // Modify config
     fs::write(&config_path, "gap = 20\n").unwrap();
 
-    // Restore
     fs::copy(&backup_path, &config_path).unwrap();
     let restored = fs::read_to_string(&config_path).unwrap();
     assert_eq!(restored, "gap = 10\n");
 
-    // Cleanup
     let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn test_handle_collect_logs_does_not_panic() {
-    // Just verify the function runs without panicking
-    // It prints to stdout, which is fine in tests
     let result = handle_collect_logs();
     assert!(result.is_ok());
 }
 
 #[test]
 fn test_config_action_variants_parse() {
-    // Verify ConfigAction variants can be constructed
     let _init = ConfigAction::Init {
         output: None,
         force: false,
@@ -953,7 +942,7 @@ fn test_config_action_variants_parse() {
 }
 
 // =========================================================================
-// Phase 4: Profile config tests (Iteration 44)
+// Profile config tests
 // =========================================================================
 
 #[test]

@@ -115,14 +115,11 @@ impl AppState {
         let mut added = 0;
 
         for win_info in windows {
-            // Get executable name for rule matching
             let executable = get_process_executable(win_info.process_id).unwrap_or_default();
 
-            // Check window rules
             let action =
                 self.evaluate_window_rules(&win_info.class_name, &win_info.title, &executable);
 
-            // Skip ignored windows
             if action == config::WindowAction::Ignore {
                 debug!(
                     "Ignoring window by rule: {} ({})",

@@ -5,7 +5,7 @@
 //! the keystroke and re-emits it as a [`HotkeyEvent`] so the daemon runs the
 //! bound command. Matching here (rather than `RegisterHotKey`) lets us tell
 //! left/right modifiers apart, so AltGr (Left Ctrl + Right Alt on international
-//! layouts) types normally instead of firing Ctrl+Alt binds. (#44)
+//! layouts) types normally instead of firing Ctrl+Alt binds.
 //!
 //! Mirrors the dedicated-thread + message-pump pattern in `gestures.rs`.
 
@@ -263,7 +263,7 @@ unsafe fn keyboard_ll_hook_inner(ncode: i32, wparam: WPARAM, lparam: LPARAM) -> 
     // AltGr emits Left Ctrl + Right Alt. Treat any Right-Alt-down state as AltGr
     // and never match a bind, so AltGr combos pass through and type normally on
     // international layouts (the synthesized Left Ctrl would otherwise satisfy a
-    // Ctrl bind too). (#44)
+    // Ctrl bind too).
     if GetAsyncKeyState(VK_RMENU) < 0 {
         return CallNextHookEx(None, ncode, wparam, lparam);
     }

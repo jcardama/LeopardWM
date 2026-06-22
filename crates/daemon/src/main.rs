@@ -137,9 +137,6 @@ struct HotkeyState {
     recording: bool,
 }
 
-/// Register hotkeys from config and return state.
-///
-/// This function is called both at startup and on config reload.
 /// Build the tray quick-toggle state from config (reads autostart from the registry).
 fn quick_toggle_state(config: &Config) -> tray::QuickToggleState {
     tray::QuickToggleState {
@@ -2555,7 +2552,7 @@ async fn handle_animation_frame_applied(
                 );
             }
 
-            // Stage D: if landing succeeded and we have ghosts,
+            // If landing succeeded and we have ghosts,
             // transfer their handles to the worker for an
             // 8-frame ease-in-cubic crossfade. If landing
             // failed, drop handles immediately (hard cut) —
@@ -2710,7 +2707,6 @@ async fn handle_display_change_settled(ctx: &mut EventLoopCtx<'_>) {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Parse command-line arguments
     let args = Args::parse();
 
     let (config, config_warnings) = bootstrap_config()?;
@@ -2744,7 +2740,6 @@ async fn main() -> Result<()> {
         config.behavior.log_level
     );
 
-    // Detect all monitors
     let monitors = detect_monitors();
 
     // Initialize state with config and monitors

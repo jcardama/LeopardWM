@@ -481,7 +481,6 @@ impl BorderFrame {
                 }
             }
 
-            // Apply the bitmap to the layered window
             let hdc_screen = GetDC(None);
             let hdc_mem = CreateCompatibleDC(Some(hdc_screen));
             let old = SelectObject(hdc_mem, hbitmap.into());

@@ -61,9 +61,8 @@ pub struct TabLabel {
 /// Discrete user-initiated action targeting a specific tab.
 ///
 /// Emitted by the strip's WndProc on click/middle-click/right-click and
-/// dispatched by the daemon. `Activate` is the v0.1.14 left-click flow;
-/// `Close`/`Untab`/`Rename` are the v0.1.15 affordances wired in later
-/// phases.
+/// dispatched by the daemon. `Activate` is the left-click flow;
+/// `Close`/`Untab`/`Rename` are the affordances wired in later.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TabAction {
     Activate,
@@ -2328,9 +2327,6 @@ pub(crate) unsafe fn create_glyph_bitmap_at_size(
     hbitmap
 }
 
-// Highlight slide animation tick. Re-renders the strip with the
-// interpolated highlight position; clears the transition (and kills
-// the timer) when the slide reaches its target.
 /// Handles the highlight slide-animation `WM_TIMER` tick.
 unsafe fn on_highlight_anim_tick(hwnd: HWND) -> LRESULT {
     let (strip_x, strip_y, strip_w, strip_h, finished) = {
@@ -2359,8 +2355,6 @@ unsafe fn on_highlight_anim_tick(hwnd: HWND) -> LRESULT {
     LRESULT(0)
 }
 
-// Hover tracking. Windows clears the TME_LEAVE subscription each
-// time it fires WM_MOUSELEAVE, so re-arm on the next mouse entry.
 /// Handles `WM_MOUSEMOVE`: hover tracking and tooltip-delay arming.
 unsafe fn on_strip_mouse_move(hwnd: HWND, lparam: LPARAM) -> LRESULT {
     let raw = lparam.0 as u32;
@@ -2479,9 +2473,6 @@ unsafe fn on_strip_mouse_leave(hwnd: HWND) -> LRESULT {
     LRESULT(0)
 }
 
-// Tooltip-delay one-shot. Fires `TOOLTIP_DELAY_MS` after the user
-// first enters a close-X; shows the popup if they're still parked
-// on the same X.
 /// Handles the tooltip-delay `WM_TIMER` one-shot.
 unsafe fn on_tooltip_delay_fired(hwnd: HWND) -> LRESULT {
     let _ = KillTimer(Some(hwnd), TOOLTIP_DELAY_TIMER_ID);

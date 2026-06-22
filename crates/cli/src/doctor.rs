@@ -31,7 +31,6 @@ pub(crate) fn doctor_config_path() -> (Option<PathBuf>, PathBuf) {
         .map(|dirs| dirs.config_dir().join("config.toml"))
         .unwrap_or_else(|| PathBuf::from("config.toml"));
 
-    // Check all possible locations
     let mut candidates = vec![primary.clone()];
     if let Some(base) = directories::BaseDirs::new() {
         candidates.push(
@@ -102,7 +101,6 @@ pub(crate) async fn handle_doctor() -> Result<()> {
     println!("LeopardWM Doctor");
     println!("===============");
 
-    // 1. Daemon binary check
     match find_daemon_binary() {
         Some(path) => CheckResult::Pass(format!("Daemon binary found: {}", path.display())),
         None => CheckResult::Fail(
@@ -111,7 +109,6 @@ pub(crate) async fn handle_doctor() -> Result<()> {
     }
     .print();
 
-    // 2. Config file exists
     let (found_path, display_path) = doctor_config_path();
     match &found_path {
         Some(path) => CheckResult::Pass(format!("Config file exists: {}", path.display())),
@@ -122,7 +119,6 @@ pub(crate) async fn handle_doctor() -> Result<()> {
     }
     .print();
 
-    // 3. Config file is valid TOML
     if let Some(ref path) = found_path {
         match validate_toml_file(path) {
             Ok(()) => CheckResult::Pass("Config file is valid TOML".to_string()),
@@ -131,10 +127,8 @@ pub(crate) async fn handle_doctor() -> Result<()> {
         .print();
     }
 
-    // 4. Daemon running check
     match probe_daemon_running() {
         Ok(true) => {
-            // Try to get status
             match send_command(IpcCommand::QueryStatus).await {
                 Ok(IpcResponse::StatusInfo {
                     version,
@@ -176,8 +170,7 @@ pub(crate) async fn handle_doctor() -> Result<()> {
         }
     }
 
-    // 5. Ghost-animation handle balance (only meaningful while running).
-    // A non-zero balance at rest means a DWM thumbnail leaked.
+    // A non-zero thumbnail balance at rest means a DWM thumbnail leaked.
     if matches!(probe_daemon_running(), Ok(true)) {
         match send_command(IpcCommand::HealthCheck).await {
             Ok(IpcResponse::HealthInfo {
@@ -203,7 +196,6 @@ pub(crate) async fn handle_doctor() -> Result<()> {
         }
     }
 
-    // 6. Admin check
     if is_running_as_admin() {
         CheckResult::Warn(
             "Running as administrator (may cause issues with non-elevated windows)".to_string(),
@@ -213,7 +205,6 @@ pub(crate) async fn handle_doctor() -> Result<()> {
     }
     .print();
 
-    // 6. Windows version
     let version = get_windows_version();
     CheckResult::Pass(format!("Windows version: {}", version)).print();
 
@@ -226,13 +217,11 @@ pub(crate) fn handle_collect_logs() -> Result<()> {
     println!("LeopardWM Log Collection");
     println!("=======================\n");
 
-    // OS version
     println!("## Environment");
     println!("OS: {}", get_windows_version());
     println!("CLI Version: {}", env!("CARGO_PKG_VERSION"));
     println!();
 
-    // Config file
     let (found_path, display_path) = doctor_config_path();
     match &found_path {
         Some(path) => {
@@ -249,13 +238,11 @@ pub(crate) fn handle_collect_logs() -> Result<()> {
     }
     println!();
 
-    // Daemon log
     let log_dir = leopardwm_ipc::log_dir();
     let log_path = log_dir.join("leopardwm-daemon.log");
     println!("## Daemon Log ({}):", log_path.display());
     match fs::read_to_string(&log_path) {
         Ok(content) => {
-            // Print last 100 lines
             let lines: Vec<&str> = content.lines().collect();
             let start = lines.len().saturating_sub(100);
             for line in &lines[start..] {
@@ -269,7 +256,6 @@ pub(crate) fn handle_collect_logs() -> Result<()> {
     }
     println!();
 
-    // Error log
     let err_log_path = log_dir.join("leopardwm-daemon.err.log");
     println!("## Daemon Error Log ({}):", err_log_path.display());
     match fs::read_to_string(&err_log_path) {
@@ -298,7 +284,6 @@ pub(crate) fn handle_collect_logs() -> Result<()> {
     }
     println!();
 
-    // Daemon binary
     println!("## Daemon Binary:");
     match find_daemon_binary() {
         Some(path) => println!("  Found: {}", path.display()),

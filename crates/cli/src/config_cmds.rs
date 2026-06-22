@@ -22,7 +22,6 @@ fn handle_init(output: Option<PathBuf>, force: bool, profile: Option<String>) ->
         .or_else(default_config_path)
         .context("Could not determine config path. Use --output to specify a path.")?;
 
-    // Check if file exists
     if path.exists() && !force {
         anyhow::bail!(
             "Config file already exists at: {}\nUse --force to overwrite.",
@@ -30,13 +29,11 @@ fn handle_init(output: Option<PathBuf>, force: bool, profile: Option<String>) ->
         );
     }
 
-    // Create parent directories
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
     }
 
-    // Write config file (apply profile overrides if specified)
     let config_content = match profile.as_deref() {
         Some("laptop") => generate_profile_config("laptop"),
         Some("ultrawide") => generate_profile_config("ultrawide"),
@@ -100,13 +97,11 @@ pub(crate) fn handle_config(action: ConfigAction) -> Result<()> {
             return handle_init(output, force, profile);
         }
         ConfigAction::Reset => {
-            // Back up current config if it exists
             if config_path.exists() {
                 fs::copy(&config_path, &backup_path)
                     .with_context(|| format!("Failed to backup to {}", backup_path.display()))?;
                 println!("Backed up current config to: {}", backup_path.display());
             }
-            // Write fresh defaults
             let config_content = generate_default_config();
             if let Some(parent) = config_path.parent() {
                 fs::create_dir_all(parent)?;

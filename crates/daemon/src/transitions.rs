@@ -150,28 +150,27 @@ impl AppState {
     /// Routed through by every code path that mutates or clears
     /// `layout_transition`. No-op when no ghost state is alive.
     pub(crate) fn abort_active_ghost_transition(&mut self) {
-        // Phase 1: drop ghost_handles. Each GhostEntry::Drop calls
-        // thumbnail::unregister_raw — no manual cleanup needed.
+        // Each GhostEntry::Drop calls thumbnail::unregister_raw, so dropping
+        // the handles is enough — no manual cleanup needed.
         let wids: Vec<u64> = self.ghost_handles.keys().copied().collect();
         self.ghost_handles.clear();
 
-        // Phase 2: uncloak the (formerly) ghosted sources. Routes through
-        // apply_cloak_state so a window also in GLOBAL_CLOAKED (off-screen
-        // parked) stays cloaked.
+        // Uncloak the (formerly) ghosted sources through apply_cloak_state so a
+        // window also in GLOBAL_CLOAKED (off-screen parked) stays cloaked.
         for wid in &wids {
             leopardwm_platform_win32::unmark_ghost_cloaked(*wid);
             leopardwm_platform_win32::apply_cloak_state(*wid);
         }
 
-        // Phase 3: clear ghosted_wids on any still-live transition so
+        // Clear ghosted_wids on any still-live transition so
         // partition_for_animation no longer routes frames for them.
         if let Some(ref mut transition) = self.layout_transition {
             transition.ghosted_wids.clear();
         }
 
-        // Phase 4: signal any in-flight crossfade to abort. Worker will
-        // ack via DaemonEvent::CrossfadeComplete { epoch }; that epoch's
-        // entry in crossfade_sources is removed then.
+        // Signal any in-flight crossfade to abort. The worker acks via
+        // DaemonEvent::CrossfadeComplete { epoch }; that epoch's entry in
+        // crossfade_sources is removed then.
         self.abort_active_crossfade();
     }
 

@@ -275,12 +275,10 @@ async fn send_command_inner(
     connect_timeout: Duration,
     response_timeout: Duration,
 ) -> Result<IpcResponse> {
-    // Connect to the named pipe (retry if busy/starting)
     let client = open_pipe_with_retry(connect_timeout, Some(IPC_NOT_FOUND_FAST_FAIL_AFTER)).await?;
 
     let (reader, mut writer) = tokio::io::split(client);
 
-    // Send command as JSON line
     let json = serde_json::to_string(&cmd)? + "\n";
     writer
         .write_all(json.as_bytes())

@@ -73,7 +73,7 @@ pub(crate) enum DaemonEvent {
     /// loop processes this event. (Focus can change between the
     /// originating WM_* arriving in the strip's WndProc and the main loop
     /// draining the channel.) `action` discriminates left-click vs.
-    /// close/untab/rename surfaces wired in v0.1.15.
+    /// close/untab/rename surfaces.
     TabAction {
         monitor: isize,
         workspace_idx: usize,

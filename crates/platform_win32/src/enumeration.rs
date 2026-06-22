@@ -90,7 +90,6 @@ pub fn get_window_info(hwnd_id: WindowId) -> Option<WindowInfo> {
             String::new()
         };
 
-        // Get class name
         let mut class_buf: Vec<u16> = vec![0; 256];
         let class_len = GetClassNameW(hwnd, &mut class_buf);
         let class_name = if class_len > 0 {
@@ -103,11 +102,9 @@ pub fn get_window_info(hwnd_id: WindowId) -> Option<WindowInfo> {
             return None;
         }
 
-        // Get process ID
         let mut process_id: u32 = 0;
         GetWindowThreadProcessId(hwnd, Some(&mut process_id));
 
-        // Get window rect
         let mut win_rect = RECT::default();
         if GetWindowRect(hwnd, &mut win_rect).is_err() {
             return None;
@@ -342,11 +339,9 @@ unsafe extern "system" fn enum_windows_callback(hwnd: HWND, lparam: LPARAM) -> B
         return TRUE;
     }
 
-    // Get window styles
     let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
     let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
 
-    // Skip if not visible style
     if style & WS_VISIBLE.0 == 0 {
         return TRUE;
     }
@@ -373,7 +368,6 @@ unsafe extern "system" fn enum_windows_callback(hwnd: HWND, lparam: LPARAM) -> B
         return TRUE;
     }
 
-    // Get window title
     let title_len = GetWindowTextLengthW(hwnd);
     if title_len == 0 {
         return TRUE; // Skip windows with no title
@@ -391,7 +385,6 @@ unsafe extern "system" fn enum_windows_callback(hwnd: HWND, lparam: LPARAM) -> B
         return TRUE;
     }
 
-    // Get class name
     let mut class_buf: Vec<u16> = vec![0; 256];
     let class_len = GetClassNameW(hwnd, &mut class_buf);
     let class_name = if class_len > 0 {
@@ -400,16 +393,13 @@ unsafe extern "system" fn enum_windows_callback(hwnd: HWND, lparam: LPARAM) -> B
         String::new()
     };
 
-    // Skip known system classes
     if should_skip_window_by_class(&class_name) {
         return TRUE;
     }
 
-    // Get process ID
     let mut process_id: u32 = 0;
     GetWindowThreadProcessId(hwnd, Some(&mut process_id));
 
-    // Get window rect
     let mut win_rect = RECT::default();
     if GetWindowRect(hwnd, &mut win_rect).is_err() {
         return TRUE;
@@ -661,17 +651,15 @@ pub(crate) fn should_skip_window_by_class(class_name: &str) -> bool {
 /// Returns None if the process cannot be accessed or doesn't exist.
 pub fn get_process_executable(pid: u32) -> Option<String> {
     unsafe {
-        // Open the process with limited query rights
         let handle = match OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
             Ok(h) => h,
             Err(_) => return None,
         };
 
-        // Get the executable path — use extended-length buffer for long paths
+        // Extended-length buffer for long paths.
         let mut buffer: Vec<u16> = vec![0; 1024];
         let len = K32GetModuleFileNameExW(Some(handle), None, &mut buffer);
 
-        // Close the handle
         let _ = CloseHandle(handle);
 
         if len == 0 || len as usize >= buffer.len() {
@@ -679,7 +667,6 @@ pub fn get_process_executable(pid: u32) -> Option<String> {
             return None;
         }
 
-        // Convert to string and extract filename
         let path = String::from_utf16_lossy(&buffer[..len as usize]);
         path.rsplit('\\').next().map(|s| s.to_string())
     }

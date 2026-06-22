@@ -319,7 +319,6 @@ pub fn cascade_windows(window_ids: &[WindowId]) {
         },
     };
 
-    // First restore any windows that are off-screen
     let _ = restore_all_windows_moved_offscreen_best_effort();
 
     // Use height as the base so windows look reasonable on ultrawide monitors
@@ -346,7 +345,6 @@ pub fn cascade_windows(window_ids: &[WindowId]) {
         })
         .collect();
 
-    // Restore minimized windows first
     for &wid in window_ids {
         let hwnd = HWND(wid as *mut c_void);
         unsafe {

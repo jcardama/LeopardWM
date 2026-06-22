@@ -110,13 +110,11 @@ pub fn remove_maximizebox(window_id: WindowId) -> Result<bool, Win32Error> {
         let new_style = style & !WS_MAXIMIZEBOX;
         SetWindowLongW(hwnd, GWL_STYLE, new_style);
 
-        // Notify the window frame has changed
         let _ = SetWindowPos(
             hwnd, None, 0, 0, 0, 0,
             SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
         );
 
-        // Register in global tracking set
         let mut guard = lock_snap_disabled();
         guard.get_or_insert_with(HashSet::new).insert(window_id);
     }

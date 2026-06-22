@@ -62,7 +62,6 @@ async fn main() -> Result<()> {
     let response = send_command(ipc_cmd).await?;
     print_response(&response);
 
-    // Exit with error code if response was an error
     if is_non_success_response(&response) {
         std::process::exit(1);
     }
