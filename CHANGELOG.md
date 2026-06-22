@@ -45,9 +45,10 @@ All notable changes to LeopardWM will be documented in this file.
 ### Improvements
 
 - **Windows on other workspaces (and scrolled off-screen) no longer clutter the
-  taskbar.** A window's taskbar button is now hidden whenever it isn't visible
-  in the current view, and restored when it scrolls back or you switch to its
-  workspace. Floating and minimized windows always keep their button.
+  taskbar.** A window's taskbar button is hidden whenever it isn't visible in the
+  current view, and restored when it scrolls back or you switch to its workspace.
+  Floating and minimized windows always keep their button. On by default; toggle
+  it from the tray menu or Settings ("Hide taskbar buttons for off-screen windows").
 - **Window rules can place a window in a column and open it sticky.** A rule can
   now open a matched window at a fixed column slot, and make it sticky on open so
   it follows you across workspaces (add the float action for a floating overlay).

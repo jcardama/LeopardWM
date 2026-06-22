@@ -398,6 +398,12 @@ pub struct BehaviorConfig {
     /// stacked into the focused column.
     #[serde(default)]
     pub new_window_placement: NewWindowPlacement,
+
+    /// Hide a window's taskbar button while it isn't visible in the current
+    /// view (on another workspace, or scrolled out of view). Floating and
+    /// minimized windows always keep their button.
+    #[serde(default = "default_true")]
+    pub hide_offscreen_taskbar_buttons: bool,
 }
 
 /// Placement for newly opened tiled windows.
@@ -425,6 +431,7 @@ impl Default for BehaviorConfig {
             tab_close_action: TabCloseAction::default(),
             swap_chain_ghost_animation: true,
             new_window_placement: NewWindowPlacement::default(),
+            hide_offscreen_taskbar_buttons: true,
         }
     }
 }
@@ -2534,6 +2541,18 @@ mod tests {
         "#;
         let config: Config = toml::from_str(toml_str).unwrap();
         assert!(config.behavior.focus_new_windows);
+    }
+
+    #[test]
+    fn test_hide_offscreen_taskbar_buttons_defaults_true_and_roundtrips() {
+        // Absent from config => true (serde default).
+        let absent: Config = toml::from_str("[behavior]\n").unwrap();
+        assert!(absent.behavior.hide_offscreen_taskbar_buttons);
+        // Explicit false round-trips through serialize/deserialize.
+        let mut config = Config::default();
+        config.behavior.hide_offscreen_taskbar_buttons = false;
+        let parsed: Config = toml::from_str(&toml::to_string_pretty(&config).unwrap()).unwrap();
+        assert!(!parsed.behavior.hide_offscreen_taskbar_buttons);
     }
 
     // =========================================================================

@@ -201,6 +201,10 @@ impl AppState {
             }
         }
 
+        // Apply a toggled hide_offscreen_taskbar_buttons setting live (restores
+        // all buttons when turned off, re-hides off-view ones when turned on).
+        self.sync_taskbar_buttons();
+
         info!(
             "Configuration applied to all {} workspaces",
             self.workspaces.len()
@@ -230,6 +234,18 @@ impl AppState {
     pub(crate) fn sync_taskbar_buttons(&self) {
         use leopardwm_platform_win32::taskbar::{taskbar_hide, taskbar_show};
         use leopardwm_core_layout::Visibility;
+        // Disabled: make sure no button stays hidden (restores any we hid before
+        // the user turned the option off), then leave the taskbar alone.
+        if !self.config.behavior.hide_offscreen_taskbar_buttons {
+            for ws_vec in self.workspaces.values() {
+                for workspace in ws_vec {
+                    for wid in workspace.all_window_ids() {
+                        taskbar_show(wid);
+                    }
+                }
+            }
+            return;
+        }
         for (&monitor, ws_vec) in &self.workspaces {
             let active = self.active_workspace_idx(monitor);
             let viewport = self.layout_viewport(monitor);

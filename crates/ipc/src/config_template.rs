@@ -87,6 +87,11 @@ focus_follows_mouse = false
 # right) or "in_column" (stacked into the focused column).
 # new_window_placement = "new_column"
 
+# Hide a window's taskbar button while it isn't visible in the current view
+# (on another workspace, or scrolled out of view). Floating and minimized
+# windows always keep their button. Default true.
+# hide_offscreen_taskbar_buttons = true
+
 [hotkeys]
 {hotkeys}
 [gestures]

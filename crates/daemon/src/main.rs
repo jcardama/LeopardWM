@@ -143,6 +143,7 @@ fn quick_toggle_state(config: &Config) -> tray::QuickToggleState {
         active_border: config.appearance.active_border,
         focus_new_windows: config.behavior.focus_new_windows,
         focus_follows_mouse: config.behavior.focus_follows_mouse,
+        hide_offscreen_taskbar: config.behavior.hide_offscreen_taskbar_buttons,
         auto_start: leopardwm_platform_win32::autostart::get_autostart().unwrap_or(false),
         centering_mode: match config.layout.centering_mode {
             config::CenteringModeConfig::Center => tray::CENTERING_CENTER,
@@ -1795,6 +1796,18 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
                     handle.abort();
                 }
             }
+        }
+        tray::TrayEvent::ToggleHideOffscreenTaskbar => {
+            let mut state = ctx.state.lock().await;
+            state.config.behavior.hide_offscreen_taskbar_buttons =
+                !state.config.behavior.hide_offscreen_taskbar_buttons;
+            info!(
+                "Tray: Hide off-screen taskbar buttons toggled to {}",
+                state.config.behavior.hide_offscreen_taskbar_buttons
+            );
+            let _ = state.config.save();
+            // Apply live: hide off-view buttons, or restore all when turned off.
+            state.sync_taskbar_buttons();
         }
         tray::TrayEvent::ToggleAutoStart => {
             use leopardwm_platform_win32::autostart;

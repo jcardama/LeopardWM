@@ -88,6 +88,7 @@ mod menu_ids {
     pub const TOGGLE_ACTIVE_BORDER: &str = "toggle_active_border";
     pub const TOGGLE_FOCUS_NEW_WINDOWS: &str = "toggle_focus_new_windows";
     pub const TOGGLE_FOCUS_FOLLOWS_MOUSE: &str = "toggle_focus_follows_mouse";
+    pub const TOGGLE_HIDE_OFFSCREEN_TASKBAR: &str = "toggle_hide_offscreen_taskbar";
     pub const TOGGLE_AUTO_START: &str = "toggle_auto_start";
     pub const CENTERING_CENTER: &str = "centering_center";
     pub const CENTERING_JUST_IN_VIEW: &str = "centering_just_in_view";
@@ -124,6 +125,8 @@ pub enum TrayEvent {
     ToggleFocusNewWindows,
     /// User toggled "Focus Follows Mouse" check item.
     ToggleFocusFollowsMouse,
+    /// User toggled "Hide off-screen taskbar buttons" check item.
+    ToggleHideOffscreenTaskbar,
     /// User toggled "Start with Windows" check item.
     ToggleAutoStart,
     /// User selected "Center" centering mode.
@@ -158,6 +161,7 @@ struct SharedState {
     active_border: AtomicBool,
     focus_new_windows: AtomicBool,
     focus_follows_mouse: AtomicBool,
+    hide_offscreen_taskbar: AtomicBool,
     auto_start: AtomicBool,
     centering_mode: AtomicU8,
     placement_mode: AtomicU8,
@@ -171,6 +175,7 @@ struct TrayItems {
     active_border_item: CheckMenuItem,
     focus_new_windows_item: CheckMenuItem,
     focus_follows_mouse_item: CheckMenuItem,
+    hide_offscreen_taskbar_item: CheckMenuItem,
     auto_start_item: CheckMenuItem,
     centering_center_item: CheckMenuItem,
     centering_just_in_view_item: CheckMenuItem,
@@ -185,6 +190,7 @@ pub struct QuickToggleState {
     pub active_border: bool,
     pub focus_new_windows: bool,
     pub focus_follows_mouse: bool,
+    pub hide_offscreen_taskbar: bool,
     pub auto_start: bool,
     /// 0 = Center, 1 = JustInView, 2 = OnOverflow
     pub centering_mode: u8,
@@ -223,6 +229,7 @@ impl TrayManager {
             active_border: AtomicBool::new(initial.active_border),
             focus_new_windows: AtomicBool::new(initial.focus_new_windows),
             focus_follows_mouse: AtomicBool::new(initial.focus_follows_mouse),
+            hide_offscreen_taskbar: AtomicBool::new(initial.hide_offscreen_taskbar),
             auto_start: AtomicBool::new(initial.auto_start),
             centering_mode: AtomicU8::new(initial.centering_mode),
             placement_mode: AtomicU8::new(initial.placement_mode),
@@ -312,6 +319,9 @@ impl TrayManager {
         self.shared
             .focus_follows_mouse
             .store(toggles.focus_follows_mouse, Ordering::Relaxed);
+        self.shared
+            .hide_offscreen_taskbar
+            .store(toggles.hide_offscreen_taskbar, Ordering::Relaxed);
         self.shared
             .auto_start
             .store(toggles.auto_start, Ordering::Relaxed);
@@ -514,6 +524,9 @@ fn run_tray_thread(
                             .focus_follows_mouse_item
                             .set_checked(shared.focus_follows_mouse.load(Ordering::Relaxed));
                         items
+                            .hide_offscreen_taskbar_item
+                            .set_checked(shared.hide_offscreen_taskbar.load(Ordering::Relaxed));
+                        items
                             .auto_start_item
                             .set_checked(shared.auto_start.load(Ordering::Relaxed));
                         let cm = shared.centering_mode.load(Ordering::Relaxed);
@@ -615,6 +628,15 @@ fn build_tray(
         None,
     );
     append(&focus_follows_mouse_item)?;
+
+    let hide_offscreen_taskbar_item = CheckMenuItem::with_id(
+        menu_ids::TOGGLE_HIDE_OFFSCREEN_TASKBAR,
+        "Hide Off-Screen Taskbar Buttons",
+        true,
+        initial.hide_offscreen_taskbar,
+        None,
+    );
+    append(&hide_offscreen_taskbar_item)?;
 
     let auto_start_item = CheckMenuItem::with_id(
         menu_ids::TOGGLE_AUTO_START,
@@ -762,6 +784,7 @@ fn build_tray(
         active_border_item,
         focus_new_windows_item,
         focus_follows_mouse_item,
+        hide_offscreen_taskbar_item,
         auto_start_item,
         centering_center_item,
         centering_just_in_view_item,
@@ -788,6 +811,7 @@ fn map_menu_id_to_event(menu_id: &str) -> Option<TrayEvent> {
         menu_ids::TOGGLE_ACTIVE_BORDER => Some(TrayEvent::ToggleActiveBorder),
         menu_ids::TOGGLE_FOCUS_NEW_WINDOWS => Some(TrayEvent::ToggleFocusNewWindows),
         menu_ids::TOGGLE_FOCUS_FOLLOWS_MOUSE => Some(TrayEvent::ToggleFocusFollowsMouse),
+        menu_ids::TOGGLE_HIDE_OFFSCREEN_TASKBAR => Some(TrayEvent::ToggleHideOffscreenTaskbar),
         menu_ids::TOGGLE_AUTO_START => Some(TrayEvent::ToggleAutoStart),
         menu_ids::CENTERING_CENTER => Some(TrayEvent::SetCenteringCenter),
         menu_ids::CENTERING_JUST_IN_VIEW => Some(TrayEvent::SetCenteringJustInView),
