@@ -221,6 +221,49 @@ impl AppState {
         ids
     }
 
+    /// Keep a window's taskbar button iff it's actually visible in a viewport:
+    /// hidden when on an inactive workspace OR scrolled off-viewport on the
+    /// active one; shown when visible (and always for floating/minimized
+    /// windows, which the user still reaches via the taskbar). External windows
+    /// can't be hidden from the taskbar by cloaking or off-screen position, so
+    /// this drives `ITaskbarList` directly. Idempotent and change-gated in the
+    /// controller, so it's cheap to call after any layout/scroll change.
+    pub(crate) fn sync_taskbar_buttons(&self) {
+        use leopardwm_platform_win32::taskbar::{taskbar_hide, taskbar_show};
+        use leopardwm_core_layout::Visibility;
+        for (&monitor, ws_vec) in &self.workspaces {
+            let active = self.active_workspace_idx(monitor);
+            let viewport = self.layout_viewport(monitor);
+            for (idx, workspace) in ws_vec.iter().enumerate() {
+                if idx != active {
+                    for wid in workspace.all_window_ids() {
+                        taskbar_hide(wid);
+                    }
+                    continue;
+                }
+                // Active workspace: a tiled window keeps its button only while
+                // it's visible in the viewport; floating and minimized windows
+                // always keep theirs.
+                let visible: std::collections::HashSet<u64> = workspace
+                    .compute_placements(viewport)
+                    .iter()
+                    .filter(|p| p.visibility == Visibility::Visible)
+                    .map(|p| p.window_id)
+                    .collect();
+                for wid in workspace.all_window_ids() {
+                    let keep = workspace.is_floating(wid)
+                        || workspace.is_minimized(wid)
+                        || visible.contains(&wid);
+                    if keep {
+                        taskbar_show(wid);
+                    } else {
+                        taskbar_hide(wid);
+                    }
+                }
+            }
+        }
+    }
+
     /// Remove managed windows that are no longer valid or visible.
     ///
     /// Some apps (e.g., Electron close-to-tray) hide windows without firing

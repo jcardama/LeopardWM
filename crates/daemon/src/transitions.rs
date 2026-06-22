@@ -16,12 +16,23 @@ impl AppState {
     /// Returns true if any animation is still running.
     pub(crate) fn tick_animations(&mut self, delta_ms: u64) -> bool {
         let mut still_animating = false;
+        let mut scroll_anims_settled = false;
         for ws_vec in self.workspaces.values_mut() {
             for workspace in ws_vec.iter_mut() {
+                let was_animating = workspace.is_animating();
                 if workspace.tick_animation(delta_ms) {
                     still_animating = true;
+                } else if was_animating {
+                    // A scroll animation just finished: scroll_offset is now the
+                    // target, so viewport visibility (and taskbar buttons) can be
+                    // reconciled against the settled position. An animated focus
+                    // scroll leaves scroll_offset stale until exactly this point.
+                    scroll_anims_settled = true;
                 }
             }
+        }
+        if scroll_anims_settled {
+            self.sync_taskbar_buttons();
         }
         if let Some(ref mut transition) = self.layout_transition {
             if transition.tick(delta_ms) {
@@ -32,6 +43,9 @@ impl AppState {
                     let _ = leopardwm_platform_win32::move_window_offscreen(*wid);
                 }
                 self.layout_transition = None;
+                // The slide is done; cloak any settled off-workspace windows
+                // that were skipped while animating so their taskbar buttons go.
+                self.sync_taskbar_buttons();
                 // Signal one more frame so entering windows land at their
                 // exact final positions (previous frame had t < 1.0).
                 still_animating = true;

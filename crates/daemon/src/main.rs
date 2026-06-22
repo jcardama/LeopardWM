@@ -2885,12 +2885,23 @@ async fn main() -> Result<()> {
     // Print startup banner for immediate user feedback
     print_banner(&state, &config_warnings, &hotkey_state, &args).await;
 
+    // Taskbar-button controller (ITaskbarList). Held for the whole session;
+    // dropping it on shutdown restores every hidden window's taskbar button.
+    let _taskbar_handle = leopardwm_platform_win32::taskbar::init_taskbar();
+
     // Apply initial layout so windows are tiled on startup
     {
         let mut state = state.lock().await;
         if let Err(e) = state.apply_layout() {
             warn!("Failed to apply initial layout: {}", e);
         }
+        // Restore any taskbar buttons a crashed prior instance left deleted
+        // (unconditional AddTab, harmless on present buttons), then hide the
+        // ones that should be hidden for the current layout.
+        for wid in state.all_managed_window_ids() {
+            leopardwm_platform_win32::taskbar::taskbar_restore(wid);
+        }
+        state.sync_taskbar_buttons();
         // Set the DWM active border color on the focused window immediately
         state.sync_foreground_window();
     }

@@ -363,9 +363,11 @@ impl AppState {
                         workspace.ensure_focused_visible_animated(viewport_width);
                     }
                     if opens_in_background {
-                        // Target workspace is not active: hide the
-                        // window until that workspace is switched to.
+                        // Target workspace is not active: hide the window and
+                        // remove its taskbar button until that workspace is
+                        // switched to.
                         let _ = leopardwm_platform_win32::move_window_offscreen(hwnd);
+                        leopardwm_platform_win32::taskbar::taskbar_hide(hwnd);
                     }
                     if let Some(snapshot) = snapshot {
                         self.start_layout_transition(snapshot);
@@ -403,6 +405,9 @@ impl AppState {
             // Drop the cached window icon: the HICON dies with its
             // window, and a recycled HWND must re-probe.
             self.overview_icon_cache.remove(&hwnd);
+            // Drop it from the taskbar hidden set so a recycled HWND isn't
+            // skipped by the hide change-gate.
+            leopardwm_platform_win32::taskbar::taskbar_forget(hwnd);
         }
 
         // For Hidden events, verify the window is actually gone.

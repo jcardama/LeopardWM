@@ -20,6 +20,7 @@ pub mod overlay;
 pub mod overview;
 pub mod snapshot;
 pub mod tab_strip;
+pub mod taskbar;
 pub mod thumbnail;
 
 pub use tab_strip::{TabAction, TabActionEvent, TabCloseAction};

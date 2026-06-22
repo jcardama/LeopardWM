@@ -86,6 +86,9 @@ impl AppState {
         if let Err(e) = self.apply_layout() {
             return IpcResponse::error(format!("Failed to apply layout: {}", e));
         }
+        // The command may have scrolled a column off-viewport (or back in);
+        // update taskbar buttons to match the new visibility.
+        self.sync_taskbar_buttons();
         if sync_focus {
             self.sync_foreground_window();
         }
@@ -954,6 +957,10 @@ impl AppState {
         if let Err(e) = self.apply_layout() {
             return IpcResponse::error(format!("Failed to apply layout: {}", e));
         }
+        // Hide the now-inactive workspace's windows from the taskbar (cloak).
+        // Mid-slide windows are skipped here and cloaked when the transition
+        // settles (see tick_animations).
+        self.sync_taskbar_buttons();
         // Restore the floating window that was focused on this
         // workspace (if it still floats here) so it regains focus on
         // return, before syncing the OS foreground.
@@ -1092,6 +1099,9 @@ impl AppState {
         if let Err(e) = self.apply_layout() {
             return IpcResponse::error(format!("Failed to apply layout: {}", e));
         }
+        // The moved window now lives on an inactive workspace; cloak it so its
+        // taskbar button goes too.
+        self.sync_taskbar_buttons();
         self.sync_foreground_window();
         info!("Moved window {} to workspace {}", focused_hwnd, index);
         IpcResponse::Ok
