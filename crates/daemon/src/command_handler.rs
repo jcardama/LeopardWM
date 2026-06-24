@@ -5,8 +5,8 @@ use crate::state::{validate_set_width_fraction, AppState};
 use leopardwm_core_layout::{Rect, Workspace};
 use leopardwm_ipc::{IpcCommand, IpcResponse};
 use leopardwm_platform_win32::{
-    enumerate_windows, get_process_executable, monitor_to_left, monitor_to_right,
-    move_window_offscreen,
+    enumerate_windows, get_process_executable, monitor_above, monitor_below, monitor_to_left,
+    monitor_to_right, move_window_offscreen, MonitorId, MonitorInfo,
 };
 use std::collections::HashMap;
 use tracing::{debug, info};
@@ -284,10 +284,14 @@ impl AppState {
                     info!("Moved window down in column");
                 })
             }
-            IpcCommand::FocusMonitorLeft => self.handle_focus_monitor_left(),
-            IpcCommand::FocusMonitorRight => self.handle_focus_monitor_right(),
-            IpcCommand::MoveWindowToMonitorLeft => self.handle_move_window_to_monitor_left(),
-            IpcCommand::MoveWindowToMonitorRight => self.handle_move_window_to_monitor_right(),
+            IpcCommand::FocusMonitorLeft => self.focus_monitor(monitor_to_left, "left"),
+            IpcCommand::FocusMonitorRight => self.focus_monitor(monitor_to_right, "right"),
+            IpcCommand::FocusMonitorUp => self.focus_monitor(monitor_above, "up"),
+            IpcCommand::FocusMonitorDown => self.focus_monitor(monitor_below, "down"),
+            IpcCommand::MoveWindowToMonitorLeft => self.move_to_monitor(monitor_to_left, "left"),
+            IpcCommand::MoveWindowToMonitorRight => self.move_to_monitor(monitor_to_right, "right"),
+            IpcCommand::MoveWindowToMonitorUp => self.move_to_monitor(monitor_above, "up"),
+            IpcCommand::MoveWindowToMonitorDown => self.move_to_monitor(monitor_below, "down"),
             IpcCommand::Resize { delta } => {
                 self.execute_workspace_command(true, false, |ws, vw| {
                     ws.resize_focused_column(delta);
@@ -449,36 +453,24 @@ impl AppState {
         }
     }
 
-    /// Handle `IpcCommand::FocusMonitorLeft`.
-    fn handle_focus_monitor_left(&mut self) -> IpcResponse {
+    /// Focus the monitor picked by `select` (left/right/above/below), if any.
+    /// `dir` labels the direction for logging.
+    fn focus_monitor(
+        &mut self,
+        select: fn(&[MonitorInfo], MonitorId) -> Option<&MonitorInfo>,
+        dir: &str,
+    ) -> IpcResponse {
         let monitors: Vec<_> = self.monitors.values().cloned().collect();
-        if let Some(target) = monitor_to_left(&monitors, self.focused_monitor) {
+        if let Some(target) = select(&monitors, self.focused_monitor) {
             let target_id = target.id;
             self.focused_monitor = target_id;
-            info!("Focused monitor left -> {}", target_id);
+            info!("Focused monitor {} -> {}", dir, target_id);
             if let Err(e) = self.apply_layout() {
                 return IpcResponse::error(format!("Failed to apply layout: {}", e));
             }
             self.sync_foreground_window();
         } else {
-            info!("No monitor to the left");
-        }
-        IpcResponse::Ok
-    }
-
-    /// Handle `IpcCommand::FocusMonitorRight`.
-    fn handle_focus_monitor_right(&mut self) -> IpcResponse {
-        let monitors: Vec<_> = self.monitors.values().cloned().collect();
-        if let Some(target) = monitor_to_right(&monitors, self.focused_monitor) {
-            let target_id = target.id;
-            self.focused_monitor = target_id;
-            info!("Focused monitor right -> {}", target_id);
-            if let Err(e) = self.apply_layout() {
-                return IpcResponse::error(format!("Failed to apply layout: {}", e));
-            }
-            self.sync_foreground_window();
-        } else {
-            info!("No monitor to the right");
+            info!("No monitor {}", dir);
         }
         IpcResponse::Ok
     }
@@ -611,19 +603,21 @@ impl AppState {
         })
     }
 
-    /// Handle `IpcCommand::MoveWindowToMonitorLeft`.
-    fn handle_move_window_to_monitor_left(&mut self) -> IpcResponse {
+    /// Move the focused window to the monitor picked by `select`
+    /// (left/right/above/below), if any. `dir` labels the direction for logging.
+    fn move_to_monitor(
+        &mut self,
+        select: fn(&[MonitorInfo], MonitorId) -> Option<&MonitorInfo>,
+        dir: &str,
+    ) -> IpcResponse {
         let monitors: Vec<_> = self.monitors.values().cloned().collect();
-        if let Some(target) = monitor_to_left(&monitors, self.focused_monitor) {
+        if let Some(target) = select(&monitors, self.focused_monitor) {
             let target_id = target.id;
             match self.move_focused_window_to_monitor_transactional(target_id) {
                 Ok(Some(hwnd)) => {
                     info!("Moved window {} to monitor {}", hwnd, target_id);
                     if let Err(e) = self.apply_layout() {
-                        return IpcResponse::error(format!(
-                            "Failed to apply layout: {}",
-                            e
-                        ));
+                        return IpcResponse::error(format!("Failed to apply layout: {}", e));
                     }
                     self.sync_foreground_window();
                 }
@@ -631,32 +625,7 @@ impl AppState {
                 Err(message) => return IpcResponse::error(message),
             }
         } else {
-            info!("No monitor to the left");
-        }
-        IpcResponse::Ok
-    }
-
-    /// Handle `IpcCommand::MoveWindowToMonitorRight`.
-    fn handle_move_window_to_monitor_right(&mut self) -> IpcResponse {
-        let monitors: Vec<_> = self.monitors.values().cloned().collect();
-        if let Some(target) = monitor_to_right(&monitors, self.focused_monitor) {
-            let target_id = target.id;
-            match self.move_focused_window_to_monitor_transactional(target_id) {
-                Ok(Some(hwnd)) => {
-                    info!("Moved window {} to monitor {}", hwnd, target_id);
-                    if let Err(e) = self.apply_layout() {
-                        return IpcResponse::error(format!(
-                            "Failed to apply layout: {}",
-                            e
-                        ));
-                    }
-                    self.sync_foreground_window();
-                }
-                Ok(None) => info!("No focused window to move"),
-                Err(message) => return IpcResponse::error(message),
-            }
-        } else {
-            info!("No monitor to the right");
+            info!("No monitor {}", dir);
         }
         IpcResponse::Ok
     }

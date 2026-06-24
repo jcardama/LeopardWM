@@ -367,10 +367,18 @@ pub enum IpcCommand {
     FocusMonitorLeft,
     /// Focus the monitor to the right.
     FocusMonitorRight,
+    /// Focus the monitor above.
+    FocusMonitorUp,
+    /// Focus the monitor below.
+    FocusMonitorDown,
     /// Move the focused window to the monitor on the left.
     MoveWindowToMonitorLeft,
     /// Move the focused window to the monitor on the right.
     MoveWindowToMonitorRight,
+    /// Move the focused window to the monitor above.
+    MoveWindowToMonitorUp,
+    /// Move the focused window to the monitor below.
+    MoveWindowToMonitorDown,
 
     /// Resize the focused column.
     Resize {

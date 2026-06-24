@@ -10,6 +10,10 @@ All notable changes to LeopardWM will be documented in this file.
   another to form a combo (for example F13+H), the same way Ctrl or Alt work,
   bindable in config and the Settings recorder. A key used this way is consumed
   by LeopardWM and won't reach the focused app. F1–F12 remain keys only.
+- **Vertical monitor navigation for stacked displays.** Focus or move the
+  focused window to the monitor above or below, picked by physical position.
+  New defaults: Ctrl+Alt+Win+Up/Down to focus, add Shift to move. Rebindable in
+  Settings.
 
 ## 0.2.3
 

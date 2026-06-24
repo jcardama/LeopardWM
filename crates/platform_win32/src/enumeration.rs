@@ -227,6 +227,38 @@ pub fn monitor_to_right(monitors: &[MonitorInfo], current_id: MonitorId) -> Opti
     }
 }
 
+/// Center point of a monitor's rect.
+fn monitor_center(m: &MonitorInfo) -> (i32, i32) {
+    (m.rect.x + m.rect.width / 2, m.rect.y + m.rect.height / 2)
+}
+
+/// Find the monitor above the given one: of those whose center sits higher
+/// (smaller y), the nearest vertically, tie-broken by horizontal proximity.
+/// Geometry-based so it works for stacked layouts regardless of enumeration
+/// order.
+pub fn monitor_above(monitors: &[MonitorInfo], current_id: MonitorId) -> Option<&MonitorInfo> {
+    let (cx, cy) = monitor_center(monitors.iter().find(|m| m.id == current_id)?);
+    monitors
+        .iter()
+        .filter(|m| m.id != current_id && monitor_center(m).1 < cy)
+        .min_by_key(|m| {
+            let (mx, my) = monitor_center(m);
+            (cy - my, (mx - cx).abs())
+        })
+}
+
+/// Find the monitor below the given one. Mirror of [`monitor_above`].
+pub fn monitor_below(monitors: &[MonitorInfo], current_id: MonitorId) -> Option<&MonitorInfo> {
+    let (cx, cy) = monitor_center(monitors.iter().find(|m| m.id == current_id)?);
+    monitors
+        .iter()
+        .filter(|m| m.id != current_id && monitor_center(m).1 > cy)
+        .min_by_key(|m| {
+            let (mx, my) = monitor_center(m);
+            (my - cy, (mx - cx).abs())
+        })
+}
+
 /// Enumerate all connected monitors.
 ///
 /// Returns information about each display including work area (usable space
@@ -843,6 +875,56 @@ mod tests {
         // From monitor 2, can't go right (edge)
         let no_right = monitor_to_right(&monitors, 2);
         assert!(no_right.is_none());
+    }
+
+    #[test]
+    fn test_monitor_above_below() {
+        // Monitor 1 stacked directly above monitor 2.
+        let monitors = vec![
+            MonitorInfo {
+                id: 1,
+                rect: Rect::new(0, 0, 1920, 1080),
+                work_area: Rect::new(0, 0, 1920, 1040),
+                is_primary: true,
+                device_name: "DISPLAY1".to_string(),
+                scale_factor: 1.0,
+            },
+            MonitorInfo {
+                id: 2,
+                rect: Rect::new(0, 1080, 1920, 1080),
+                work_area: Rect::new(0, 1080, 1920, 1080),
+                is_primary: false,
+                device_name: "DISPLAY2".to_string(),
+                scale_factor: 1.0,
+            },
+        ];
+
+        assert_eq!(monitor_below(&monitors, 1).unwrap().id, 2);
+        assert_eq!(monitor_above(&monitors, 2).unwrap().id, 1);
+        assert!(monitor_above(&monitors, 1).is_none());
+        assert!(monitor_below(&monitors, 2).is_none());
+
+        // Side-by-side monitors have nothing above or below each other.
+        let side = vec![
+            MonitorInfo {
+                id: 1,
+                rect: Rect::new(0, 0, 1920, 1080),
+                work_area: Rect::new(0, 0, 1920, 1040),
+                is_primary: true,
+                device_name: "DISPLAY1".to_string(),
+                scale_factor: 1.0,
+            },
+            MonitorInfo {
+                id: 2,
+                rect: Rect::new(1920, 0, 1920, 1080),
+                work_area: Rect::new(1920, 0, 1920, 1080),
+                is_primary: false,
+                device_name: "DISPLAY2".to_string(),
+                scale_factor: 1.0,
+            },
+        ];
+        assert!(monitor_above(&side, 1).is_none());
+        assert!(monitor_below(&side, 1).is_none());
     }
 
     #[test]

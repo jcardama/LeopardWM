@@ -646,8 +646,8 @@ impl WindowRule {
 /// (e.g., "focus_left"). Supported commands:
 /// - focus_left, focus_right, focus_up, focus_down
 /// - move_column_left, move_column_right
-/// - focus_monitor_left, focus_monitor_right
-/// - move_to_monitor_left, move_to_monitor_right
+/// - focus_monitor_left, focus_monitor_right, focus_monitor_up, focus_monitor_down
+/// - move_to_monitor_left, move_to_monitor_right, move_to_monitor_up, move_to_monitor_down
 /// - resize_grow, resize_shrink (by 50px)
 /// - scroll_left, scroll_right (by 100px)
 /// - refresh, reload
@@ -1493,7 +1493,7 @@ mod tests {
     #[test]
     fn test_hotkey_config_default() {
         let config = HotkeyConfig::default();
-        assert_eq!(config.bindings.len(), 62);
+        assert_eq!(config.bindings.len(), 66);
         assert_eq!(
             config.bindings.get("Ctrl+Alt+Space"),
             Some(&"toggle_overview".to_string())

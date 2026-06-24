@@ -227,6 +227,38 @@ fn test_to_ipc_command_move_to_monitor_right() {
 }
 
 #[test]
+fn test_to_ipc_command_focus_monitor_up_down() {
+    assert!(matches!(
+        to_ipc_command(&Commands::FocusMonitor {
+            direction: MonitorDirection::Up,
+        }),
+        IpcCommand::FocusMonitorUp
+    ));
+    assert!(matches!(
+        to_ipc_command(&Commands::FocusMonitor {
+            direction: MonitorDirection::Down,
+        }),
+        IpcCommand::FocusMonitorDown
+    ));
+}
+
+#[test]
+fn test_to_ipc_command_move_to_monitor_up_down() {
+    assert!(matches!(
+        to_ipc_command(&Commands::MoveToMonitor {
+            direction: MonitorDirection::Up,
+        }),
+        IpcCommand::MoveWindowToMonitorUp
+    ));
+    assert!(matches!(
+        to_ipc_command(&Commands::MoveToMonitor {
+            direction: MonitorDirection::Down,
+        }),
+        IpcCommand::MoveWindowToMonitorDown
+    ));
+}
+
+#[test]
 fn test_to_ipc_command_query_workspace() {
     let cmd = Commands::Query {
         what: QueryType::Workspace,

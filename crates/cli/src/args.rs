@@ -289,6 +289,10 @@ pub(crate) enum MonitorDirection {
     Left,
     /// Focus/move to the monitor on the right
     Right,
+    /// Focus/move to the monitor above
+    Up,
+    /// Focus/move to the monitor below
+    Down,
 }
 
 #[derive(Subcommand)]

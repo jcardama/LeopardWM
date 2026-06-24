@@ -46,10 +46,14 @@ pub(crate) fn to_ipc_command(cmd: &Commands) -> IpcCommand {
         Commands::FocusMonitor { direction } => match direction {
             MonitorDirection::Left => IpcCommand::FocusMonitorLeft,
             MonitorDirection::Right => IpcCommand::FocusMonitorRight,
+            MonitorDirection::Up => IpcCommand::FocusMonitorUp,
+            MonitorDirection::Down => IpcCommand::FocusMonitorDown,
         },
         Commands::MoveToMonitor { direction } => match direction {
             MonitorDirection::Left => IpcCommand::MoveWindowToMonitorLeft,
             MonitorDirection::Right => IpcCommand::MoveWindowToMonitorRight,
+            MonitorDirection::Up => IpcCommand::MoveWindowToMonitorUp,
+            MonitorDirection::Down => IpcCommand::MoveWindowToMonitorDown,
         },
         Commands::Query { what } => match what {
             QueryType::Workspace => IpcCommand::QueryWorkspace,
