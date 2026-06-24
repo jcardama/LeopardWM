@@ -9,7 +9,10 @@
 //!
 //! Mirrors the dedicated-thread + message-pump pattern in `gestures.rs`.
 
-use crate::{recover_poisoned_mutex, HotkeyEvent, HotkeyId, Modifiers, Win32Error, WM_QUIT_LLHOOK_THREAD};
+use crate::{
+    fn_mod_bit, recover_poisoned_mutex, HotkeyEvent, HotkeyId, Modifiers, Win32Error,
+    WM_QUIT_LLHOOK_THREAD,
+};
 use std::sync::mpsc;
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::Threading::GetCurrentThreadId;
@@ -41,6 +44,13 @@ static HOOK_BINDS: std::sync::Mutex<Vec<HotkeyBind>> = std::sync::Mutex::new(Vec
 /// physical press and swallow auto-repeat, tracking each key independently so a
 /// second matched key held at the same time can't reset the first.
 static HOOK_HELD: std::sync::Mutex<Vec<i32>> = std::sync::Mutex::new(Vec::new());
+/// Which F13–F24 keys any bind uses as a modifier (union of `fn_mods` across
+/// all binds). Keys in this mask are swallowed and tracked rather than passed
+/// through, so they act purely as modifiers and never reach the foreground app.
+static HOOK_FN_MOD_MASK: std::sync::Mutex<u16> = std::sync::Mutex::new(0);
+/// Which masked F13–F24 modifiers are currently held. Maintained from the hook's
+/// own key-down/up events (a swallowed key never updates `GetAsyncKeyState`).
+static HOOK_FN_HELD: std::sync::Mutex<u16> = std::sync::Mutex::new(0);
 
 // Modifier virtual-key codes (both the generic and left/right variants the
 // low-level hook reports).
@@ -103,6 +113,12 @@ impl Drop for KeyboardHookHandle {
         drop(binds);
         let mut held = HOOK_HELD.lock().unwrap_or_else(recover_poisoned_mutex);
         held.clear();
+        drop(held);
+        let mut mask = HOOK_FN_MOD_MASK.lock().unwrap_or_else(recover_poisoned_mutex);
+        *mask = 0;
+        drop(mask);
+        let mut fn_held = HOOK_FN_HELD.lock().unwrap_or_else(recover_poisoned_mutex);
+        *fn_held = 0;
         tracing::debug!("Keyboard hook stopped");
     }
 }
@@ -127,6 +143,9 @@ pub fn install_keyboard_hook(
         }
         *sender = Some(tx);
     }
+    let fn_mod_mask = binds
+        .iter()
+        .fold(0u16, |mask, b| mask | b.modifiers.fn_mods);
     {
         let mut b = HOOK_BINDS
             .lock()
@@ -134,10 +153,22 @@ pub fn install_keyboard_hook(
         *b = binds;
     }
     {
+        let mut mask = HOOK_FN_MOD_MASK.lock().map_err(|_| {
+            Win32Error::HookInstallFailed("Hook fn-mod mask mutex poisoned".to_string())
+        })?;
+        *mask = fn_mod_mask;
+    }
+    {
         let mut held = HOOK_HELD
             .lock()
             .map_err(|_| Win32Error::HookInstallFailed("Hook held mutex poisoned".to_string()))?;
         held.clear();
+    }
+    {
+        let mut fn_held = HOOK_FN_HELD.lock().map_err(|_| {
+            Win32Error::HookInstallFailed("Hook fn-held mutex poisoned".to_string())
+        })?;
+        *fn_held = 0;
     }
 
     let (init_tx, init_rx) = std::sync::mpsc::channel::<Result<u32, Win32Error>>();
@@ -227,8 +258,20 @@ unsafe fn keyboard_ll_hook_inner(ncode: i32, wparam: WPARAM, lparam: LPARAM) -> 
     let vk = kb.vkCode as i32;
 
     // On key-up, drop the key from the held set so its next press fires again.
-    // Always pass key-ups through.
     if msg == WM_KEYUP || msg == WM_SYSKEYUP {
+        // Swallow the up of an F-key we actually claimed as a held modifier (its
+        // key-down was swallowed too, so the app never sees the key at all).
+        // Gate on the held bit, not the mask: if a config reload added this key
+        // as a modifier mid-press we never swallowed its down, so let the up
+        // pass through rather than orphan the app's key state.
+        if let Some(bit) = fn_mod_bit(vk as u32) {
+            let mut fn_held = HOOK_FN_HELD.lock().unwrap_or_else(recover_poisoned_mutex);
+            if *fn_held & bit != 0 {
+                *fn_held &= !bit;
+                drop(fn_held);
+                return LRESULT(1);
+            }
+        }
         let mut held = HOOK_HELD.lock().unwrap_or_else(recover_poisoned_mutex);
         held.retain(|&k| k != vk);
         drop(held);
@@ -243,6 +286,19 @@ unsafe fn keyboard_ll_hook_inner(ncode: i32, wparam: WPARAM, lparam: LPARAM) -> 
     // modifier still works (and so Windows still sees it held).
     if is_modifier_vk(vk) {
         return CallNextHookEx(None, ncode, wparam, lparam);
+    }
+
+    // A masked F-key acting as a modifier: record it held and swallow the
+    // key-down (idempotent on auto-repeat). It never matches a bind on its own
+    // and never reaches the foreground app.
+    if let Some(bit) = fn_mod_bit(vk as u32) {
+        let mask = *HOOK_FN_MOD_MASK.lock().unwrap_or_else(recover_poisoned_mutex);
+        if mask & bit != 0 {
+            let mut fn_held = HOOK_FN_HELD.lock().unwrap_or_else(recover_poisoned_mutex);
+            *fn_held |= bit;
+            drop(fn_held);
+            return LRESULT(1);
+        }
     }
 
     // Track the physical down-state of every non-modifier key so a bind fires
@@ -274,6 +330,9 @@ unsafe fn keyboard_ll_hook_inner(ncode: i32, wparam: WPARAM, lparam: LPARAM) -> 
         alt: GetAsyncKeyState(VK_LMENU) < 0,
         shift: GetAsyncKeyState(VK_LSHIFT) < 0 || GetAsyncKeyState(VK_RSHIFT) < 0,
         win: GetAsyncKeyState(VK_LWIN) < 0 || GetAsyncKeyState(VK_RWIN) < 0,
+        // F13–F24 modifiers come from our own tracking, not GetAsyncKeyState:
+        // the masked keys were swallowed, so the OS never registered them held.
+        fn_mods: *HOOK_FN_HELD.lock().unwrap_or_else(recover_poisoned_mutex),
     };
 
     let matched = {
@@ -379,5 +438,26 @@ mod tests {
         assert!(is_modifier_vk(VK_RMENU));
         assert!(!is_modifier_vk(0x25)); // Left arrow
         assert!(!is_modifier_vk(0x41)); // 'A'
+    }
+
+    #[test]
+    fn fn_modifier_matches_exactly() {
+        let f13 = Modifiers {
+            fn_mods: fn_mod_bit(0x7C).unwrap(),
+            ..Default::default()
+        };
+        let binds = vec![bind(f13, 0x48)]; // F13+H
+        // Exact F-modifier held -> fires.
+        assert!(find_bind(&binds, f13, 0x48).is_some());
+        // No modifier held (bare H) -> no match.
+        assert!(find_bind(&binds, Modifiers::default(), 0x48).is_none());
+        // A superset F-modifier (F13+F14) does not fire an F13-only bind.
+        let f13_f14 = Modifiers {
+            fn_mods: fn_mod_bit(0x7C).unwrap() | fn_mod_bit(0x7D).unwrap(),
+            ..Default::default()
+        };
+        assert!(find_bind(&binds, f13_f14, 0x48).is_none());
+        // A standard modifier held instead of the F-key does not fire.
+        assert!(find_bind(&binds, Modifiers { ctrl: true, ..Default::default() }, 0x48).is_none());
     }
 }

@@ -46,7 +46,7 @@ use config::Config;
 use leopardwm_core_layout::Rect;
 use leopardwm_ipc::{pipe_name_candidates, preferred_pipe_name, IpcCommand, IpcResponse};
 use leopardwm_platform_win32::{
-    cascade_windows, enumerate_monitors, enumerate_windows, install_event_hooks,
+    cascade_windows, enumerate_monitors, enumerate_windows, fn_mod_bit, install_event_hooks,
     install_keyboard_hook, install_mouse_hook, overlay::OverlayWindow, parse_hotkey_string, MouseHookHandle,
     register_gestures, register_system_events, restore_windows_moved_offscreen,
     set_display_change_sender, set_dpi_awareness, set_power_state_sender,
@@ -289,6 +289,20 @@ fn setup_hotkeys(config: &Config, event_tx: mpsc::Sender<DaemonEvent>) -> Hotkey
     }
 
     let requested_count = binds.len();
+
+    // An F13–F24 key used as a modifier is swallowed by the hook, so any bind
+    // whose trigger is that same F-key can never fire. Warn rather than fail.
+    let fn_mod_mask = binds.iter().fold(0u16, |m, b| m | b.modifiers.fn_mods);
+    for (_, key_str, _, vk) in &bind_labels {
+        if let Some(bit) = fn_mod_bit(*vk) {
+            if bit & fn_mod_mask != 0 {
+                warn!(
+                    "Hotkey {} uses an F-key that is also configured as a modifier; it will never fire",
+                    key_str
+                );
+            }
+        }
+    }
 
     // The system-event window (display/work-area/power) is independent of
     // hotkeys; create it regardless so those notifications still arrive.

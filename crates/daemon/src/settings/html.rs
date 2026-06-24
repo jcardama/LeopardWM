@@ -1623,21 +1623,53 @@ function exitRecording(input) {
   input.placeholder = 'e.g. Ctrl+Alt+H';
   if (wasRecording) { postRecording(false); }
 }
+/* F13–F24 may act as modifiers (held while another key completes the chord).
+   Kept sorted F13..F24 so equivalent combos render identically. */
+function fnModList(set) {
+  return Array.from(set).sort(function(a, b) {
+    return parseInt(a.slice(1), 10) - parseInt(b.slice(1), 10);
+  });
+}
 function attachRecorder(input) {
   if (input.dataset.recBound) return;
   input.dataset.recBound = '1';
   var prevValue = '';
+  /* F13–F24 currently held as modifiers this session, and whether a real key
+     completed a chord while they were held (so a bare F-key release records the
+     F-key itself rather than a combo). */
+  var extraMods = new Set();
+  var chorded = false;
+  function resetExtra() { extraMods.clear(); chorded = false; }
   function startRecording() {
     if (input.classList.contains('recording')) return;
     prevValue = input.value;
     input.classList.add('recording');
     input.placeholder = 'Press shortcut, Esc to cancel';
     input.value = '';
+    resetExtra();
     postRecording(true);
   }
   input.addEventListener('mousedown', function(e) { if (e.button === 0) startRecording(); });
   input.addEventListener('blur', function() {
     if (input.classList.contains('recording')) { input.value = prevValue; exitRecording(input); }
+    resetExtra();
+  });
+  /* Releasing an F13–F24 with no chord completed records the bare F-key as a
+     trigger; otherwise it was only a modifier and is dropped from the held set. */
+  input.addEventListener('keyup', function(e) {
+    if (!input.classList.contains('recording')) return;
+    if (!/^F(1[3-9]|2[0-4])$/.test(e.code) || !extraMods.has(e.code)) return;
+    extraMods.delete(e.code);
+    if (extraMods.size === 0 && !chorded) {
+      e.preventDefault();
+      input.value = e.code;
+      exitRecording(input);
+      refreshDuplicateWarnings();
+      autoSave(0);
+    } else {
+      var mods = { ctrl: e.ctrlKey, alt: e.altKey, win: e.metaKey, shift: e.shiftKey };
+      input.value = chordParts(mods).concat(fnModList(extraMods)).join('+') + '+…';
+    }
   });
   input.addEventListener('keydown', function(e) {
     if (!input.classList.contains('recording')) {
@@ -1650,7 +1682,15 @@ function attachRecorder(input) {
     /* A modifier on its own: show the in-progress chord, keep recording. */
     if (/^(Control|Alt|Shift|Meta)(Left|Right)$/.test(e.code)) {
       e.preventDefault();
-      input.value = chordParts(mods).join('+') + '+…';
+      input.value = chordParts(mods).concat(fnModList(extraMods)).join('+') + '+…';
+      return;
+    }
+    /* F13–F24: hold as a modifier in progress; a bare press is finalized on
+       key-up if no real key follows. */
+    if (/^F(1[3-9]|2[0-4])$/.test(e.code)) {
+      e.preventDefault();
+      extraMods.add(e.code);
+      input.value = chordParts(mods).concat(fnModList(extraMods)).join('+') + '+…';
       return;
     }
     /* Bare Esc/Tab are control gestures, not binds. */
@@ -1669,7 +1709,8 @@ function attachRecorder(input) {
     if (!token) return; /* unmapped key: keep waiting */
     e.preventDefault();
     e.stopPropagation();
-    input.value = chordParts(mods).concat(token).join('+');
+    chorded = true;
+    input.value = chordParts(mods).concat(fnModList(extraMods)).concat(token).join('+');
     exitRecording(input);
     var wb = document.getElementById('hotkey-warn-bar');
     if (wb) wb.hidden = true; /* the warning is snapshot-stale once a bind is fixed */
@@ -1702,6 +1743,7 @@ function addHotkeyRow(key, cmd) {
    slips through. */
 function normalizeCombo(v) {
   var order = { Ctrl: 0, Alt: 1, Win: 2, Shift: 3 };
+  for (var n = 13; n <= 24; n++) { order['F' + n] = n - 9; } /* F13..F24 sort after Shift */
   var parts = v.split('+').map(function(p) { return p.trim(); }).filter(Boolean);
   var mods = parts.filter(function(p) { return p in order; }).sort(function(a, b) { return order[a] - order[b]; });
   var keys = parts.filter(function(p) { return !(p in order); });

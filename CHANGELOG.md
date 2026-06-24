@@ -2,6 +2,15 @@
 
 All notable changes to LeopardWM will be documented in this file.
 
+## 0.2.4
+
+### Improvements
+
+- **F13–F24 can be used as hotkey modifiers.** Hold one of these keys and press
+  another to form a combo (for example F13+H), the same way Ctrl or Alt work,
+  bindable in config and the Settings recorder. A key used this way is consumed
+  by LeopardWM and won't reach the focused app. F1–F12 remain keys only.
+
 ## 0.2.3
 
 ### Fixes

@@ -42,6 +42,15 @@ pub struct Modifiers {
     pub alt: bool,
     pub shift: bool,
     pub win: bool,
+    /// F13–F24 held as modifiers. Bit `i` (0..=11) is F13+`i` (vk 0x7C..=0x87).
+    pub fn_mods: u16,
+}
+
+/// Map a virtual key in the F13–F24 range (0x7C..=0x87) to its [`Modifiers::fn_mods`]
+/// bit, or `None` for any other key. F1–F12 are deliberately excluded: they are
+/// common application shortcuts and unsafe to repurpose as modifiers.
+pub fn fn_mod_bit(vk: u32) -> Option<u16> {
+    (0x7C..=0x87).contains(&vk).then(|| 1u16 << (vk - 0x7C))
 }
 
 impl Modifiers {
@@ -70,10 +79,15 @@ impl Modifiers {
         }
     }
 
-    /// Pack the four modifier flags into a 0–15 bitfield. Used to derive
-    /// stable hotkey IDs that don't depend on config iteration order.
+    /// Pack the modifier flags into a bitfield. Bits 0–3 are Ctrl/Alt/Shift/Win
+    /// (0–15, unchanged); bits 4–15 carry the F13–F24 modifier mask. Used to
+    /// derive stable hotkey IDs that don't depend on config iteration order.
     pub fn bits(&self) -> i32 {
-        (self.ctrl as i32) | (self.alt as i32) << 1 | (self.shift as i32) << 2 | (self.win as i32) << 3
+        (self.ctrl as i32)
+            | (self.alt as i32) << 1
+            | (self.shift as i32) << 2
+            | (self.win as i32) << 3
+            | (self.fn_mods as i32) << 4
     }
 }
 
@@ -95,9 +109,13 @@ impl Hotkey {
     }
 
     /// Stable ID intrinsic to the `(modifiers, vk)` combo, independent of
-    /// config iteration order. Packs the 4 modifier bits above the 8-bit
-    /// vk: `(mods << 8) | vk`. Range 0..=0xFFF, within the app hotkey
-    /// range (0x0000–0xBFFF).
+    /// config iteration order. Packs the modifier bits above the 8-bit vk:
+    /// `(mods << 8) | vk`. The `vk` (bits 0–7) and `mods` (bits 8+) partitions
+    /// are disjoint, so IDs stay unique per combo. Standard-modifier IDs are
+    /// unchanged; combos using F13–F24 as modifiers exceed the legacy
+    /// 0x0000–0xBFFF range, which is now harmless: since the move to a
+    /// keyboard hook (away from `RegisterHotKey`) these IDs are only internal
+    /// `HashMap` keys, never Win32 atoms, and are never serialized.
     ///
     /// Why: IDs were previously assigned sequentially while iterating a
     /// `HashMap`, so a config reload could remap an ID to a different
@@ -577,6 +595,9 @@ pub fn parse_vk(key: &str) -> Option<u32> {
 
 /// Parse a hotkey string like "Win+Shift+H" into modifiers and virtual key code.
 ///
+/// Modifier tokens are Ctrl/Alt/Shift/Win plus F13–F24 (e.g. "F13+H"); F1–F12
+/// are keys only, never modifiers. The final token is always the key.
+///
 /// Returns modifiers and virtual key code if valid.
 pub fn parse_hotkey_string(s: &str) -> Option<(Modifiers, u32)> {
     let parts: Vec<&str> = s.split('+').map(|p| p.trim()).collect();
@@ -593,7 +614,11 @@ pub fn parse_hotkey_string(s: &str) -> Option<(Modifiers, u32)> {
             "ALT" => modifiers.alt = true,
             "SHIFT" => modifiers.shift = true,
             "WIN" | "SUPER" | "META" => modifiers.win = true,
-            _ => return None, // Unknown modifier
+            // F13–F24 may act as modifiers; F1–F12 may not.
+            other => match parse_vk(other).and_then(fn_mod_bit) {
+                Some(bit) => modifiers.fn_mods |= bit,
+                None => return None, // Unknown modifier
+            },
         }
     }
 
@@ -633,15 +658,32 @@ mod tests {
             Hotkey::stable_id(ctrl_alt, 0x1B),
             Hotkey::stable_id(win, 0x1B)
         );
-        // All ids stay within the app hotkey range (0x0000-0xBFFF).
+        // Standard-modifier ids stay within the legacy app hotkey range
+        // (0x0000-0xBFFF).
         let all_mods = Modifiers {
             ctrl: true,
             alt: true,
             shift: true,
             win: true,
+            ..Default::default()
         };
         assert!(Hotkey::stable_id(all_mods, 0xFF) <= 0xBFFF);
         assert!(Hotkey::stable_id(all_mods, 0xFF) > 0);
+
+        // F13–F24 modifiers occupy a disjoint bit range, so they stay unique
+        // per combo (and may exceed the legacy range, which is now fine).
+        let f13 = Modifiers {
+            fn_mods: fn_mod_bit(0x7C).unwrap(),
+            ..Default::default()
+        };
+        let f14 = Modifiers {
+            fn_mods: fn_mod_bit(0x7D).unwrap(),
+            ..Default::default()
+        };
+        assert_ne!(Hotkey::stable_id(f13, 0x48), Hotkey::stable_id(f14, 0x48));
+        assert_ne!(Hotkey::stable_id(f13, 0x48), Hotkey::stable_id(ctrl_alt, 0x48));
+        // F13+H and a bare standard combo can't collide: same vk, different mods.
+        assert_ne!(Hotkey::stable_id(f13, 0x48), Hotkey::stable_id(win, 0x48));
     }
 
     #[test]
@@ -822,5 +864,29 @@ mod tests {
 
         // Invalid key
         assert!(parse_hotkey_string("Win+InvalidKey").is_none());
+
+        // F13–F24 as modifiers.
+        let (mods, vk) = parse_hotkey_string("F13+H").unwrap();
+        assert_eq!(mods.fn_mods, fn_mod_bit(0x7C).unwrap());
+        assert!(!mods.ctrl && !mods.alt && !mods.shift && !mods.win);
+        assert_eq!(vk, super::vk::H);
+
+        // Multiple F-key modifiers combine.
+        let (mods, vk) = parse_hotkey_string("F13+F14+H").unwrap();
+        assert_eq!(mods.fn_mods, fn_mod_bit(0x7C).unwrap() | fn_mod_bit(0x7D).unwrap());
+        assert_eq!(vk, super::vk::H);
+
+        // F-key modifier mixes with standard modifiers.
+        let (mods, _) = parse_hotkey_string("Ctrl+F13+H").unwrap();
+        assert!(mods.ctrl);
+        assert_eq!(mods.fn_mods, fn_mod_bit(0x7C).unwrap());
+
+        // F1–F12 are not valid modifiers.
+        assert!(parse_hotkey_string("F12+H").is_none());
+
+        // A bare F13 is a trigger, not a modifier.
+        let (mods, vk) = parse_hotkey_string("F13").unwrap();
+        assert_eq!(mods.fn_mods, 0);
+        assert_eq!(vk, 0x7C);
     }
 }
