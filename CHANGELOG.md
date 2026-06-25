@@ -14,6 +14,10 @@ All notable changes to LeopardWM will be documented in this file.
   focused window to the monitor above or below, picked by physical position.
   New defaults: Ctrl+Alt+Win+Up/Down to focus, add Shift to move. Rebindable in
   Settings.
+- **Fullscreen now follows focus.** Changing focus while a window is fullscreen
+  keeps you in fullscreen and makes the newly focused window fullscreen, instead
+  of dropping back to the tiled layout. Structural commands (moving columns or
+  windows) still exit fullscreen.
 
 ## 0.2.3
 

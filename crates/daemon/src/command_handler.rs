@@ -14,9 +14,13 @@ use tracing::{debug, info};
 /// How a command interacts with a workspace that is currently fullscreen.
 enum FullscreenPolicy {
     /// Drop fullscreen first, then run the command against the visible strip.
-    /// For focus/structural commands that would otherwise mutate the hidden
-    /// layout invisibly and dispatch focus to cloaked windows.
+    /// For structural commands that would otherwise mutate the hidden layout
+    /// invisibly and dispatch focus to cloaked windows.
     Exit,
+    /// Move focus but stay fullscreen, carrying fullscreen to the newly focused
+    /// window (monocle mode), so focus changes cycle which window is fullscreen
+    /// instead of dropping out of fullscreen.
+    FollowFocus,
     /// Ignore while fullscreen — pure sizing/scroll commands have no visible
     /// effect on a single fullscreen window, and a stray scroll gesture must
     /// not silently drop fullscreen.
@@ -30,11 +34,10 @@ fn fullscreen_policy(cmd: &IpcCommand) -> FullscreenPolicy {
     use IpcCommand::*;
     match cmd {
         FocusLeft | FocusRight | FocusUp | FocusDown | FocusNext | FocusPrev | FocusStart
-        | FocusEnd | MoveColumnLeft | MoveColumnRight | MoveColumnToStart | MoveColumnToEnd
-        | MoveWindowLeft | MoveWindowRight | MoveWindowUp | MoveWindowDown | ExpelToLeft
-        | ExpelToRight | ConsumeFromLeft | ConsumeFromRight | ToggleTabbed => {
-            FullscreenPolicy::Exit
-        }
+        | FocusEnd => FullscreenPolicy::FollowFocus,
+        MoveColumnLeft | MoveColumnRight | MoveColumnToStart | MoveColumnToEnd | MoveWindowLeft
+        | MoveWindowRight | MoveWindowUp | MoveWindowDown | ExpelToLeft | ExpelToRight
+        | ConsumeFromLeft | ConsumeFromRight | ToggleTabbed => FullscreenPolicy::Exit,
         Resize { .. } | Scroll { .. } | SetColumnWidth { .. } | CycleWidthUp | CycleWidthDown
         | CycleHeightUp | CycleHeightDown | CenterColumn | MaximizeColumn
         | EqualizeColumnWidths | EqualizeColumnHeights => FullscreenPolicy::Suppress,
@@ -113,6 +116,34 @@ impl AppState {
         true
     }
 
+    /// Handle a focus command while fullscreen: move focus and carry fullscreen
+    /// to the newly focused window (monocle mode) rather than dropping it. The
+    /// focused window becomes the fullscreen one, so focus cycles through
+    /// windows fullscreen.
+    fn focus_in_fullscreen(&mut self, cmd: &IpcCommand) -> IpcResponse {
+        let resp = self.execute_workspace_command(false, true, |ws, vw| {
+            match cmd {
+                IpcCommand::FocusLeft => ws.focus_left(),
+                IpcCommand::FocusRight => ws.focus_right(),
+                IpcCommand::FocusUp => ws.focus_up(),
+                IpcCommand::FocusDown => ws.focus_down(),
+                IpcCommand::FocusNext => ws.focus_next(),
+                IpcCommand::FocusPrev => ws.focus_prev(),
+                IpcCommand::FocusStart => ws.focus_start(),
+                IpcCommand::FocusEnd => ws.focus_end(),
+                _ => {}
+            }
+            ws.fullscreen_follow_focus();
+            // Keep scroll tracking the focused column even though the fullscreen
+            // window hides it, so toggling fullscreen off later lands on the
+            // focused window instead of a stale off-screen scroll position.
+            ws.ensure_focused_visible_animated(vw);
+        });
+        // Fullscreen hides the focus border; keep it hidden after retargeting.
+        self.hide_border();
+        resp
+    }
+
     /// Focus or move the focused column to the start/end of the strip.
     fn handle_strip_end_command(&mut self, cmd: IpcCommand) -> IpcResponse {
         match cmd {
@@ -140,22 +171,34 @@ impl AppState {
         }
     }
 
-    pub(crate) fn handle_command(&mut self, cmd: IpcCommand) -> IpcResponse {
-        // A fullscreen window cloaks the rest of the strip. Focus/structural
-        // commands must drop fullscreen first so they act on the visible layout
-        // (otherwise they mutate the hidden strip and dispatch focus to cloaked
-        // windows); pure sizing/scroll commands are ignored while fullscreen.
-        if self.focused_workspace().is_some_and(|ws| ws.is_fullscreen()) {
-            match fullscreen_policy(&cmd) {
-                FullscreenPolicy::Exit => {
-                    self.exit_fullscreen_if_active();
-                }
-                FullscreenPolicy::Suppress => {
-                    debug!("Ignoring {:?} while fullscreen", cmd);
-                    return IpcResponse::Ok;
-                }
-                FullscreenPolicy::Allow => {}
+    /// Apply the fullscreen interaction policy for `cmd`. Returns `Some` if the
+    /// command was fully handled here (suppressed, or focus moved within
+    /// fullscreen), or `None` to continue normal dispatch (possibly after
+    /// exiting fullscreen). A fullscreen window cloaks the rest of the strip, so
+    /// structural commands must drop fullscreen first to act on the visible
+    /// layout, focus commands carry fullscreen along, and sizing/scroll commands
+    /// are ignored.
+    fn apply_fullscreen_policy(&mut self, cmd: &IpcCommand) -> Option<IpcResponse> {
+        if !self.focused_workspace().is_some_and(|ws| ws.is_fullscreen()) {
+            return None;
+        }
+        match fullscreen_policy(cmd) {
+            FullscreenPolicy::Exit => {
+                self.exit_fullscreen_if_active();
+                None
             }
+            FullscreenPolicy::FollowFocus => Some(self.focus_in_fullscreen(cmd)),
+            FullscreenPolicy::Suppress => {
+                debug!("Ignoring {:?} while fullscreen", cmd);
+                Some(IpcResponse::Ok)
+            }
+            FullscreenPolicy::Allow => None,
+        }
+    }
+
+    pub(crate) fn handle_command(&mut self, cmd: IpcCommand) -> IpcResponse {
+        if let Some(resp) = self.apply_fullscreen_policy(&cmd) {
+            return resp;
         }
         match cmd {
             IpcCommand::FocusLeft => {

@@ -1917,6 +1917,29 @@ mod tests {
     }
 
     #[test]
+    fn test_fullscreen_follow_focus() {
+        let mut ws = Workspace::new();
+        ws.insert_window(1, Some(400)).unwrap(); // col 0
+        ws.insert_window(2, Some(400)).unwrap(); // col 1, focused
+        ws.toggle_fullscreen();
+        assert_eq!(ws.fullscreen_window_id(), Some(2));
+
+        // Move focus, then carry fullscreen to the newly focused window.
+        ws.focus_left();
+        assert!(ws.fullscreen_follow_focus(), "fullscreen retargeted");
+        assert!(ws.is_fullscreen());
+        assert_eq!(ws.fullscreen_window_id(), Some(1));
+
+        // No-op when focus didn't move.
+        assert!(!ws.fullscreen_follow_focus());
+
+        // No-op when not fullscreen.
+        ws.toggle_fullscreen();
+        assert!(!ws.is_fullscreen());
+        assert!(!ws.fullscreen_follow_focus());
+    }
+
+    #[test]
     fn test_fullscreen_exit_clears_min_width() {
         let mut ws = Workspace::new();
         ws.insert_window(1, Some(400)).unwrap();

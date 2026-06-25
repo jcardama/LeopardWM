@@ -712,13 +712,20 @@ fn fullscreen_state_two_columns() -> AppState {
 }
 
 #[test]
-fn test_focus_command_exits_fullscreen_and_moves_focus() {
+fn test_focus_command_carries_fullscreen_and_moves_focus() {
     let mut state = fullscreen_state_two_columns();
     let resp = state.handle_command(IpcCommand::FocusLeft);
     assert_eq!(resp, IpcResponse::Ok);
     let ws = state.focused_workspace().unwrap();
-    assert!(!ws.is_fullscreen(), "focus command must drop fullscreen");
+    // Monocle mode: focus moves but stays fullscreen, carrying fullscreen to
+    // the newly focused window.
+    assert!(ws.is_fullscreen(), "focus command keeps fullscreen");
     assert_eq!(ws.focused_column_index(), 0, "focus moved to the left column");
+    assert_eq!(
+        ws.fullscreen_window_id(),
+        Some(100),
+        "fullscreen follows focus to the left window"
+    );
 }
 
 #[test]

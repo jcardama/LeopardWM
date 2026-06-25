@@ -128,6 +128,27 @@ impl Workspace {
         }
     }
 
+    /// While fullscreen, retarget fullscreen to the currently focused visible
+    /// window so fullscreen follows focus (monocle mode). No-op when not
+    /// fullscreen or when focus didn't move. Clears the previous target's
+    /// viewport-inflated min sizes, mirroring `toggle_fullscreen`'s exit path.
+    /// Returns whether the fullscreen target changed.
+    pub fn fullscreen_follow_focus(&mut self) -> bool {
+        let Some(prev) = self.fullscreen_window else {
+            return false;
+        };
+        let Some(wid) = self.focused_visible_window() else {
+            return false;
+        };
+        if wid == prev {
+            return false;
+        }
+        self.window_min_widths.remove(&prev);
+        self.window_min_heights.remove(&prev);
+        self.fullscreen_window = Some(wid);
+        true
+    }
+
     // ========================================================================
     // Toggle Floating
     // ========================================================================
