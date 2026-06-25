@@ -19,6 +19,12 @@ All notable changes to LeopardWM will be documented in this file.
   of dropping back to the tiled layout. Structural commands (moving columns or
   windows) still exit fullscreen.
 
+### Fixes
+
+- **Sticky tiled windows keep their width across workspace switches.** A sticky
+  window in the tiled layout was re-added at the default width every time you
+  changed workspaces, shrinking it. It now carries its column width along.
+
 ## 0.2.3
 
 ### Fixes

@@ -92,8 +92,18 @@ impl AppState {
                 .is_some_and(|ws| ws.is_floating(wid));
 
             if !is_floating {
-                // Tiled sticky: remove from source, then append as a column at
-                // the END of the active workspace without stealing focus.
+                // Tiled sticky: capture its column width, remove from source,
+                // then append as a column at the END of the active workspace
+                // without stealing focus. Carrying the width keeps the window
+                // from shrinking to the default on every workspace switch.
+                let width = self
+                    .workspaces
+                    .get(&mon)
+                    .and_then(|v| v.get(ws_idx))
+                    .and_then(|ws| {
+                        ws.find_window_location(wid)
+                            .and_then(|(col, _)| ws.columns().get(col).map(|c| c.width()))
+                    });
                 let removed = self
                     .workspaces
                     .get_mut(&mon)
@@ -107,7 +117,7 @@ impl AppState {
                     .workspaces
                     .get_mut(&monitor)
                     .and_then(|v| v.get_mut(active))
-                    .map(|ws| ws.append_window_no_focus(wid, None).is_ok())
+                    .map(|ws| ws.append_window_no_focus(wid, width).is_ok())
                     .unwrap_or(false);
                 if !appended {
                     // Effectively unreachable (no duplicate possible post-remove);

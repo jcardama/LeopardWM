@@ -3349,6 +3349,26 @@ fn test_tiled_sticky_follows_switch_as_end_column() {
 }
 
 #[test]
+fn test_tiled_sticky_preserves_column_width_across_switch() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    let mon = state.focused_monitor;
+    // A non-default width (default is 800) that must survive the switch.
+    state.focused_workspace_mut().unwrap().insert_window(100, Some(500)).unwrap();
+    state.focused_workspace_mut().unwrap().focus_window(100).unwrap();
+    state.toggle_sticky();
+
+    state.ensure_workspace_exists(mon, 1);
+    state.active_workspace.insert(mon, 1);
+    state.rehome_sticky_windows();
+
+    let dest = &state.workspaces.get(&mon).unwrap()[1];
+    let width = dest
+        .find_window_location(100)
+        .and_then(|(col, _)| dest.columns().get(col).map(|c| c.width()));
+    assert_eq!(width, Some(500), "tiled sticky kept its column width, not the default");
+}
+
+#[test]
 fn test_sticky_toggle_sets_floating_pinned() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
     state
