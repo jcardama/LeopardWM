@@ -100,6 +100,7 @@ impl AppState {
                             let _ = workspace.remove_window(wid);
                         }
                         self.window_managed_at.remove(&wid);
+                        self.window_last_maximized_at.remove(&wid);
                         info!("Rule change: unmanaged window {} (ignore)", wid);
                     }
                 }

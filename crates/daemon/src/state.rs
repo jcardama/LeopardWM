@@ -416,6 +416,12 @@ pub(crate) struct AppState {
     /// distinguish transient popups (managed briefly) from real windows
     /// (managed for a long time, e.g., close-to-tray apps).
     pub(crate) window_managed_at: HashMap<u64, std::time::Instant>,
+    /// Last time each tiled window was seen maximized. Lets a window that opens
+    /// maximized and momentarily restores itself mid-burst (an app opening
+    /// several windows/tabs at once) re-assert maximize instead of being snapped
+    /// to a narrow tile. Keyed by HWND; one entry per live window, evicted with
+    /// `window_managed_at`.
+    pub(crate) window_last_maximized_at: HashMap<u64, std::time::Instant>,
     /// HWNDs whose WS_MAXIMIZEBOX was removed to suppress Snap Layouts.
     /// Lightweight daemon-side mirror — the platform-layer global static is
     /// the authoritative recovery set.
@@ -696,6 +702,7 @@ impl AppState {
             recently_hidden_hwnds: HashMap::new(),
             hidden_column_widths: HashMap::new(),
             window_managed_at: HashMap::new(),
+            window_last_maximized_at: HashMap::new(),
             snap_disabled_hwnds: HashSet::new(),
             on_battery_or_saver: leopardwm_platform_win32::is_on_battery_or_power_saver(),
             reduce_motion: !leopardwm_platform_win32::are_animations_enabled()

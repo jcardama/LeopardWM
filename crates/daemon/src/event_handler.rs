@@ -12,6 +12,32 @@ use leopardwm_platform_win32::{
 };
 use tracing::{debug, info, warn};
 
+/// How long after a window is first managed to treat it as still settling its
+/// initial geometry.
+const SNAPBACK_SETTLE_AFTER_CREATE: std::time::Duration = std::time::Duration::from_millis(2000);
+/// How recently a window must have been seen maximized to defer snapping it back
+/// while settling.
+const SNAPBACK_MAXIMIZE_GRACE: std::time::Duration = std::time::Duration::from_millis(1200);
+
+/// Whether to defer snapping a tiled window back to its layout slot because it
+/// opened maximized and is still settling. An app opening several windows/tabs
+/// at once can momentarily report a restored size between maximize passes;
+/// snapping then tiles the window narrow (the reported "shrinks to minimum").
+/// Deferred only while the window is both freshly managed and was maximized very
+/// recently, so a normal manual un-maximize of an established window still
+/// re-tiles immediately.
+fn defer_snapback_while_settling(
+    managed_at: Option<std::time::Instant>,
+    last_maximized_at: Option<std::time::Instant>,
+    now: std::time::Instant,
+) -> bool {
+    let settling =
+        managed_at.is_some_and(|t| now.saturating_duration_since(t) < SNAPBACK_SETTLE_AFTER_CREATE);
+    let recently_maximized = last_maximized_at
+        .is_some_and(|t| now.saturating_duration_since(t) < SNAPBACK_MAXIMIZE_GRACE);
+    settling && recently_maximized
+}
+
 impl AppState {
     /// Handle a window lifecycle event.
     pub(crate) fn handle_window_event(&mut self, event: WindowEvent) {
@@ -334,7 +360,15 @@ impl AppState {
                 };
 
                 if added {
-                    self.window_managed_at.insert(hwnd, std::time::Instant::now());
+                    let now = std::time::Instant::now();
+                    self.window_managed_at.insert(hwnd, now);
+                    // Seed maximize intent if it opened maximized, so a window
+                    // born maximized is protected from the settling snap-back
+                    // even if its first event is a transient restore (before any
+                    // maximized location event is observed).
+                    if leopardwm_platform_win32::is_window_maximized(hwnd) {
+                        self.window_last_maximized_at.insert(hwnd, now);
+                    }
                     info!(
                         "Window created: {} ({}) - added to monitor {} workspace {} as {:?}",
                         win_info.title,
@@ -435,6 +469,7 @@ impl AppState {
         // (minimize-to-tray patterns) would accumulate stale
         // overrides indefinitely in the persisted state.
         self.tab_title_overrides.remove(&hwnd);
+        self.window_last_maximized_at.remove(&hwnd);
 
         // Only mark as transient (suppress future re-creation) if the
         // window was managed briefly. Long-lived windows (e.g., close-to-tray
@@ -1262,8 +1297,21 @@ impl AppState {
                     self.show_border(hwnd);
                 }
             } else if leopardwm_platform_win32::is_window_maximized(hwnd) {
-                // User maximized a tiled window — let it stay maximized.
+                // User maximized a tiled window — let it stay maximized. Record
+                // the maximize so a brief restore mid-burst is treated as
+                // settling rather than a snap-back trigger.
+                self.window_last_maximized_at
+                    .insert(hwnd, std::time::Instant::now());
                 debug!("Tiled window {} maximized — allowing", hwnd);
+            } else if defer_snapback_while_settling(
+                self.window_managed_at.get(&hwnd).copied(),
+                self.window_last_maximized_at.get(&hwnd).copied(),
+                std::time::Instant::now(),
+            ) {
+                // Window opened maximized and is still settling (e.g. an app
+                // opening several windows/tabs at once): skip the snap-back so it
+                // can re-assert maximize instead of being tiled narrow.
+                debug!("Deferring snap-back for settling maximized window {}", hwnd);
             } else {
                 // Position-based false-positive filter: EVENT_OBJECT_LOCATIONCHANGE
                 // fires for many reasons besides actual movement (Z-order,
@@ -1647,5 +1695,29 @@ impl AppState {
             }
         }
         false
+    }
+}
+
+#[cfg(test)]
+mod snapback_settle_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn defers_only_while_recently_created_and_recently_maximized() {
+        let now = Instant::now();
+        let fresh = now - Duration::from_millis(500);
+        let stale_create = now - (SNAPBACK_SETTLE_AFTER_CREATE + Duration::from_millis(100));
+        let stale_max = now - (SNAPBACK_MAXIMIZE_GRACE + Duration::from_millis(100));
+
+        // Freshly created and just maximized: defer (the bug case).
+        assert!(defer_snapback_while_settling(Some(fresh), Some(fresh), now));
+        // Established window (created long ago) manually restored: snap normally.
+        assert!(!defer_snapback_while_settling(Some(stale_create), Some(fresh), now));
+        // Fresh window that hasn't been maximized recently: snap normally.
+        assert!(!defer_snapback_while_settling(Some(fresh), Some(stale_max), now));
+        // Never maximized, or unmanaged: snap normally.
+        assert!(!defer_snapback_while_settling(Some(fresh), None, now));
+        assert!(!defer_snapback_while_settling(None, Some(fresh), now));
     }
 }

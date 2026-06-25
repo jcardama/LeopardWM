@@ -24,6 +24,10 @@ All notable changes to LeopardWM will be documented in this file.
 - **Sticky tiled windows keep their width across workspace switches.** A sticky
   window in the tiled layout was re-added at the default width every time you
   changed workspaces, shrinking it. It now carries its column width along.
+- **Windows that open maximized hold it better during a burst.** An app opening
+  several windows or tabs at once could briefly report a restored size and get
+  tiled narrow. A just-opened maximized window now gets a short grace to
+  re-assert maximize before the layout snaps it back.
 
 ## 0.2.3
 
