@@ -28,6 +28,11 @@ All notable changes to LeopardWM will be documented in this file.
   several windows or tabs at once could briefly report a restored size and get
   tiled narrow. A just-opened maximized window now gets a short grace to
   re-assert maximize before the layout snaps it back.
+- **Progress and notification dialogs no longer get tiled.** A window with a
+  title bar but no minimize or maximize button (the typical dialog shape, like a
+  file-copy or progress popup) is now left floating where it opens instead of
+  taking a column, even when it is resizable. Add a window rule with the tile
+  action to override this for a specific app.
 
 ## 0.2.3
 

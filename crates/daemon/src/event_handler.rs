@@ -190,14 +190,14 @@ impl AppState {
                 return;
             }
 
-            let action = self.evaluate_window_rules(
-                &win_info.class_name,
-                &win_info.title,
-                &executable,
-            );
-            // Per-app open extras from the same (first-match) rule.
-            let (rule_workspace, rule_maximized, rule_column_width, rule_slot, rule_sticky) = self
-                .matched_rule(&win_info.class_name, &win_info.title, &executable)
+            // Match once: the action and the per-app open extras both come from
+            // the same first-matching rule (or the defaults when none matches).
+            let matched = self.matched_rule(&win_info.class_name, &win_info.title, &executable);
+            let rule_matched = matched.is_some();
+            let action = matched
+                .map(|r| r.action)
+                .unwrap_or(config::WindowAction::Tile);
+            let (rule_workspace, rule_maximized, rule_column_width, rule_slot, rule_sticky) = matched
                 .map(|r| {
                     (
                         r.open_on_workspace,
@@ -212,6 +212,19 @@ impl AppState {
             if action == config::WindowAction::Ignore {
                 debug!(
                     "Ignoring window by rule: {} ({})",
+                    win_info.title, win_info.class_name
+                );
+                return;
+            }
+
+            // No user rule matched and the window has a classic dialog shape (a
+            // title bar but no minimize or maximize button): leave it floating
+            // where Windows placed it instead of tiling it. Catches resizable
+            // progress and notification dialogs that would otherwise take a
+            // column. A user Tile/Float rule overrides this.
+            if !rule_matched && leopardwm_platform_win32::is_dialog_like_window(hwnd) {
+                debug!(
+                    "Leaving dialog-like window unmanaged: {} ({})",
                     win_info.title, win_info.class_name
                 );
                 return;

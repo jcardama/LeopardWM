@@ -6,7 +6,8 @@ use windows::Win32::Foundation::{HWND, LPARAM, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_SHIFT};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetWindowRect, IsIconic, IsWindow, IsWindowVisible,
+    GetWindowLongW, GetWindowRect, IsIconic, IsWindow, IsWindowVisible, GWL_STYLE, WS_CAPTION,
+    WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
 };
 
 /// Query DWM for the window's corner-rounding preference and map to a pixel
@@ -132,6 +133,30 @@ pub fn is_window_maximized(hwnd: WindowId) -> bool {
             IsZoomed(hwnd).as_bool()
         }
     }
+}
+
+/// Whether a window style has the classic dialog shape: a caption with neither
+/// a minimize nor a maximize button.
+fn is_dialog_like_style(style: u32) -> bool {
+    let has_caption = style & WS_CAPTION.0 == WS_CAPTION.0;
+    let has_min = style & WS_MINIMIZEBOX.0 != 0;
+    let has_max = style & WS_MAXIMIZEBOX.0 != 0;
+    has_caption && !has_min && !has_max
+}
+
+/// Whether a window looks like a dialog (a title bar but no minimize or maximize
+/// button) rather than a primary application window. Progress and notification
+/// dialogs typically have neither button, which distinguishes them even when
+/// resizable. Requiring *both* absent is deliberate: custom-titlebar apps
+/// (Chrome, Slack, Windows Terminal) draw their own controls but still keep a
+/// real `WS_MINIMIZEBOX`, so the minimize bit alone keeps them out of this set.
+/// Used to leave dialog-like windows floating instead of tiling them.
+pub fn is_dialog_like_window(hwnd: WindowId) -> bool {
+    if hwnd == 0 {
+        return false;
+    }
+    let style = unsafe { GetWindowLongW(HWND(hwnd as *mut c_void), GWL_STYLE) as u32 };
+    is_dialog_like_style(style)
 }
 
 /// Check if a window handle is still valid.
@@ -350,6 +375,23 @@ mod tests {
     #[test]
     fn test_is_valid_window_zero_returns_false() {
         assert!(!is_valid_window(0));
+    }
+
+    #[test]
+    fn test_is_dialog_like_style() {
+        // A primary app window: caption + both buttons -> not dialog-like.
+        let primary = WS_CAPTION.0 | WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0;
+        assert!(!is_dialog_like_style(primary));
+        // A dialog: caption, no min/max buttons -> dialog-like (even if resizable).
+        assert!(is_dialog_like_style(WS_CAPTION.0));
+        use windows::Win32::UI::WindowsAndMessaging::WS_THICKFRAME;
+        assert!(is_dialog_like_style(WS_CAPTION.0 | WS_THICKFRAME.0));
+        // Only one button present -> still a real window, not dialog-like.
+        assert!(!is_dialog_like_style(WS_CAPTION.0 | WS_MINIMIZEBOX.0));
+        assert!(!is_dialog_like_style(WS_CAPTION.0 | WS_MAXIMIZEBOX.0));
+        // No caption (borderless surface, splash, game) -> not dialog-like.
+        assert!(!is_dialog_like_style(0));
+        assert!(!is_dialog_like_style(WS_MINIMIZEBOX.0));
     }
 
     #[test]
