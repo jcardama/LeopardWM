@@ -216,12 +216,27 @@ impl AppState {
         // (e.g., Electron notification popups from Beeper, Slack).
         if let Some(&hidden_at) = self.recently_hidden_hwnds.get(&hwnd) {
             if hidden_at.elapsed() < RECENTLY_HIDDEN_TTL {
-                debug!(
-                    "Ignoring transient re-created window {} (hidden {}ms ago)",
-                    hwnd,
-                    hidden_at.elapsed().as_millis()
-                );
-                return;
+                // Only suppress genuinely popup-shaped re-creations (the Electron
+                // notification toasts this guard exists for). A real window the
+                // user dismissed quickly (e.g. Edge's download popup) keeps a
+                // caption/minimize box; suppressing it would leave it floating,
+                // untracked and overlaying the layout, for the whole TTL. Tests
+                // inject synthetic HWNDs with no real window style, so the shape
+                // check is production-only and suppression stays unconditional
+                // under cfg(test).
+                #[cfg(not(test))]
+                let is_popup = leopardwm_platform_win32::is_frameless_popup(hwnd);
+                #[cfg(test)]
+                let is_popup = true;
+                if is_popup {
+                    debug!(
+                        "Ignoring transient re-created popup {} (hidden {}ms ago)",
+                        hwnd,
+                        hidden_at.elapsed().as_millis()
+                    );
+                    return;
+                }
+                self.recently_hidden_hwnds.remove(&hwnd);
             }
         }
         // Lazily evict expired entries on the Created path too
@@ -554,6 +569,9 @@ impl AppState {
             // Forget an elevation-blocked window once it's truly gone, so a
             // recycled HWND for a normal window isn't wrongly skipped.
             self.elevation_blocked.remove(&hwnd);
+            // Drop any size-violation suspect state so the map stays bounded and
+            // a recycled HWND doesn't inherit it.
+            leopardwm_platform_win32::clear_suspected_oversize(hwnd);
         }
 
         // For Hidden events, verify the window is actually gone.

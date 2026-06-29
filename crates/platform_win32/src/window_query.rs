@@ -159,6 +159,33 @@ pub fn is_dialog_like_window(hwnd: WindowId) -> bool {
     is_dialog_like_style(style)
 }
 
+/// Whether a window has neither a caption nor a minimize box: the shape of an
+/// ephemeral popup (e.g. an Electron notification toast) rather than a real
+/// application window. Real top-level windows, even custom-titlebar ones
+/// (Chrome, Slack, Edge), keep a `WS_MINIMIZEBOX`; frameless transients do not
+/// (same insight as [`is_dialog_like_window`]). Used to scope transient-window
+/// suppression so a legitimate window the user dismissed quickly (e.g. Edge's
+/// download popup) is not poisoned for the suppression TTL on reopen.
+pub fn is_frameless_popup(hwnd: WindowId) -> bool {
+    if hwnd == 0 {
+        return false;
+    }
+    let style = unsafe { GetWindowLongW(HWND(hwnd as *mut c_void), GWL_STYLE) as u32 };
+    // GetWindowLongW returns 0 on failure (bad/destroying handle, access denied).
+    // A real top-level window always has some style bits, so treat 0 as "can't
+    // tell" and decline to suppress, rather than misclassifying it as frameless.
+    if style == 0 {
+        return false;
+    }
+    is_frameless_popup_style(style)
+}
+
+fn is_frameless_popup_style(style: u32) -> bool {
+    let has_caption = style & WS_CAPTION.0 == WS_CAPTION.0;
+    let has_min = style & WS_MINIMIZEBOX.0 != 0;
+    !has_caption && !has_min
+}
+
 /// Check if a window handle is still valid.
 ///
 /// This helps prevent race conditions where a window is destroyed
@@ -392,6 +419,22 @@ mod tests {
         // No caption (borderless surface, splash, game) -> not dialog-like.
         assert!(!is_dialog_like_style(0));
         assert!(!is_dialog_like_style(WS_MINIMIZEBOX.0));
+    }
+
+    #[test]
+    fn test_is_frameless_popup_style() {
+        use windows::Win32::UI::WindowsAndMessaging::WS_POPUP;
+        // Frameless ephemeral popup (no caption, no minimize) -> true.
+        assert!(is_frameless_popup_style(0));
+        assert!(is_frameless_popup_style(WS_POPUP.0));
+        // Real app window keeps a minimize box even with a custom title bar.
+        assert!(!is_frameless_popup_style(WS_MINIMIZEBOX.0));
+        assert!(!is_frameless_popup_style(WS_POPUP.0 | WS_MINIMIZEBOX.0));
+        // A captioned window (dialog or normal) is not a frameless popup.
+        assert!(!is_frameless_popup_style(WS_CAPTION.0));
+        assert!(!is_frameless_popup_style(
+            WS_CAPTION.0 | WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0
+        ));
     }
 
     #[test]

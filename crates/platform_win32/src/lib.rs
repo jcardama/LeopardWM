@@ -57,6 +57,7 @@ pub use placement::{
     ApplyPlacementsResult, HeightViolation, PlacementCache, WidthViolation,
 };
 pub use placement::apply_cloak_state;
+pub use placement::clear_suspected_oversize;
 pub use types::{MonitorId, MonitorInfo, PlatformConfig, Win32Error, WindowInfo};
 pub use focus::{
     close_window, get_foreground_window, ms_since_last_user_input, set_foreground_window,
@@ -75,8 +76,8 @@ pub use window_query::{
     cursor_is_over_window, get_cursor_pos, get_window_chrome_rect, get_window_corner_radius,
     get_window_icon,
     get_window_visible_rect, is_cursor_on_resize_border, is_dialog_like_window,
-    is_shift_key_pressed, is_valid_window, is_window_alive_and_visible, is_window_maximized,
-    is_window_shell_cloaked, is_window_valid, is_window_visible,
+    is_frameless_popup, is_shift_key_pressed, is_valid_window, is_window_alive_and_visible,
+    is_window_maximized, is_window_shell_cloaked, is_window_valid, is_window_visible,
 };
 pub use window_style::{
     remove_maximizebox, reset_window_border_color, restore_maximizebox, restore_maximizebox_all,

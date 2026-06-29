@@ -716,6 +716,61 @@ fn position_entries(entries: &[DeferEntry]) -> (u32, HashSet<u64>) {
     (applied, failed_window_ids)
 }
 
+/// Per-window suspect state for the size-violation two-pass confirmation:
+/// `(width_suspect, height_suspect)` — whether that axis's oversize looked stale
+/// (beyond the stale-bounds ratio) on the window's previous landing pass. A
+/// genuine min-size reproduces and is promoted on the second sighting; a one-off
+/// stale DWM read does not reproduce and is dropped. Module-global because
+/// `detect_size_violations` is a free function called once per settle across all
+/// workspaces, so a window is only re-measured when its workspace next lands.
+/// Entries are evicted on window destroy (`clear_suspected_oversize`) so the map
+/// stays bounded and a recycled HWND never inherits a stale suspect bit.
+static SUSPECTED_OVERSIZE: Mutex<Option<HashMap<u64, (bool, bool)>>> = Mutex::new(None);
+
+fn lock_suspected_oversize() -> std::sync::MutexGuard<'static, Option<HashMap<u64, (bool, bool)>>> {
+    SUSPECTED_OVERSIZE
+        .lock()
+        .unwrap_or_else(crate::recover_poisoned_mutex)
+}
+
+/// Drop a window's suspect state. Called when a window is destroyed/unmanaged so
+/// the set stays bounded and a recycled HWND starts fresh.
+pub fn clear_suspected_oversize(window_id: WindowId) {
+    let mut guard = lock_suspected_oversize();
+    if let Some(map) = guard.as_mut() {
+        map.remove(&window_id);
+    }
+}
+
+/// Decide how to treat one axis's oversize measurement on the landing pass.
+///
+/// `over` = visibly larger than its slot; `looks_stale` = the excess exceeds the
+/// stale-bounds ratio (a lagging app, but also a genuinely large min-size);
+/// `was_suspected` = this axis was already suspect on the window's previous
+/// landing pass; `absurd` = the excess is implausibly large for a real min-size.
+/// Returns `(record_violation, suspect_now)`.
+///
+/// A small genuine excess is recorded immediately. A moderate suspicious excess
+/// is recorded only once it reproduces across two landing passes — a true stale
+/// read resolves by the next pass and is dropped, while a genuine large min-size
+/// (e.g. a restored column saved narrower than the window's minimum) reproduces
+/// and is honored, so the column stops re-resizing on every switch. An absurd
+/// excess is never trusted, even if it reproduces, so a chronically-lagging app
+/// can't inflate the layout (the case the original ratio guard protected).
+fn classify_oversize(over: bool, looks_stale: bool, was_suspected: bool, absurd: bool) -> (bool, bool) {
+    if !over {
+        (false, false)
+    } else if !looks_stale {
+        (true, false)
+    } else if absurd {
+        (false, false)
+    } else if was_suspected {
+        (true, false)
+    } else {
+        (false, true)
+    }
+}
+
 /// Detect min-size violations on the landing pass via DWM visible bounds.
 fn detect_size_violations(
     entries: &[DeferEntry],
@@ -763,22 +818,46 @@ fn detect_size_violations(
             (ext.right - ext.left, ext.bottom - ext.top)
         };
 
-        // Sanity cap — a genuine min-size violation has the window just
-        // barely larger than requested (tens of pixels at most). If DWM
-        // reports bounds >1.5x the requested size, the target thread is
-        // almost certainly lagging behind our just-applied resize under
-        // CPU pressure (despite the DwmFlush above this can still happen
-        // for extremely unresponsive apps). Recording these as real
-        // constraints would permanently inflate future layouts. Skip them
-        // and let the next landing pass re-measure authoritatively.
-        const STALE_BOUNDS_RATIO: i32 = 3; // visible > requested * 3/2 → skip
+        // Stale-bounds ratio — a genuine min-size violation usually has the
+        // window just barely larger than requested. If DWM reports bounds >1.5x
+        // the requested size, the target thread may be lagging behind our
+        // just-applied resize under CPU pressure (despite the DwmFlush above this
+        // can still happen for unresponsive apps), and recording it would inflate
+        // future layouts. But a genuinely narrow column (e.g. a restored
+        // workspace saved narrower than the window's true minimum) also reports
+        // >1.5x and must not be discarded forever, or the column re-resizes on
+        // every switch. So a suspicious excess is confirmed across two landing
+        // passes (`classify_oversize`): a real min-size reproduces and is
+        // honored; a one-off stale read resolves by the next pass and is dropped.
+        const STALE_BOUNDS_RATIO: i32 = 3; // visible > requested * 3/2 → suspect
+        const ABSURD_BOUNDS_RATIO: i32 = 4; // visible > requested * 4 → never trust
         let looks_stale_w = entry.layout_w > 0
             && visible_w * 2 > entry.layout_w * STALE_BOUNDS_RATIO;
         let looks_stale_h = entry.layout_h > 0
             && visible_h * 2 > entry.layout_h * STALE_BOUNDS_RATIO;
+        let absurd_w = entry.layout_w > 0 && visible_w > entry.layout_w * ABSURD_BOUNDS_RATIO;
+        let absurd_h = entry.layout_h > 0 && visible_h > entry.layout_h * ABSURD_BOUNDS_RATIO;
+        let w_over = visible_w > entry.layout_w + 2;
+        let h_over = visible_h > entry.layout_h + 2;
+
+        // Read the prior-pass per-axis suspect state and update it for this
+        // window in one locked section.
+        let (record_w, suspect_w, record_h, suspect_h) = {
+            let mut guard = lock_suspected_oversize();
+            let map = guard.get_or_insert_with(HashMap::new);
+            let (was_w, was_h) = map.get(&entry.window_id).copied().unwrap_or((false, false));
+            let (record_w, suspect_w) = classify_oversize(w_over, looks_stale_w, was_w, absurd_w);
+            let (record_h, suspect_h) = classify_oversize(h_over, looks_stale_h, was_h, absurd_h);
+            if suspect_w || suspect_h {
+                map.insert(entry.window_id, (suspect_w, suspect_h));
+            } else {
+                map.remove(&entry.window_id);
+            }
+            (record_w, suspect_w, record_h, suspect_h)
+        };
 
         let mut mismatched = false;
-        if visible_w > entry.layout_w + 2 && !looks_stale_w {
+        if record_w {
             tracing::debug!(
                 "Width violation: {:?} requested {}px, visible {}px",
                 entry.hwnd, entry.layout_w, visible_w,
@@ -788,17 +867,14 @@ fn detect_size_violations(
                 min_width: visible_w,
             });
             mismatched = true;
-        } else if visible_w > entry.layout_w + 2 && looks_stale_w {
-            tracing::warn!(
-                "Skipping suspect width violation (stale DWM bounds?): {:?} \
-                 requested {}px, visible {}px ({}x reported)",
-                entry.hwnd,
-                entry.layout_w,
-                visible_w,
-                visible_w as f32 / entry.layout_w.max(1) as f32,
+        } else if suspect_w {
+            tracing::debug!(
+                "Deferring suspect width until next landing confirms: {:?} \
+                 requested {}px, visible {}px",
+                entry.hwnd, entry.layout_w, visible_w,
             );
         }
-        if visible_h > entry.layout_h + 2 && !looks_stale_h {
+        if record_h {
             tracing::debug!(
                 "Height violation: {:?} requested {}px, visible {}px",
                 entry.hwnd, entry.layout_h, visible_h,
@@ -808,14 +884,11 @@ fn detect_size_violations(
                 min_height: visible_h,
             });
             mismatched = true;
-        } else if visible_h > entry.layout_h + 2 && looks_stale_h {
-            tracing::warn!(
-                "Skipping suspect height violation (stale DWM bounds?): {:?} \
-                 requested {}px, visible {}px ({}x reported)",
-                entry.hwnd,
-                entry.layout_h,
-                visible_h,
-                visible_h as f32 / entry.layout_h.max(1) as f32,
+        } else if suspect_h {
+            tracing::debug!(
+                "Deferring suspect height until next landing confirms: {:?} \
+                 requested {}px, visible {}px",
+                entry.hwnd, entry.layout_h, visible_h,
             );
         }
 
@@ -1064,6 +1137,22 @@ pub(crate) fn invisible_border_insets(hwnd: HWND) -> (i32, i32, i32, i32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_classify_oversize() {
+        // (over, looks_stale, was_suspected, absurd)
+        // Not oversize -> never record, never suspect.
+        assert_eq!(classify_oversize(false, false, false, false), (false, false));
+        // Oversize but within the stale ratio -> genuine, record immediately.
+        assert_eq!(classify_oversize(true, false, false, false), (true, false));
+        // Suspiciously large, first sighting -> defer (suspect), don't record.
+        assert_eq!(classify_oversize(true, true, false, false), (false, true));
+        // Suspiciously large, reproduced from last pass -> confirmed, record.
+        assert_eq!(classify_oversize(true, true, true, false), (true, false));
+        // Absurdly large -> never trusted, even reproduced (chronic stale read).
+        assert_eq!(classify_oversize(true, true, true, true), (false, false));
+        assert_eq!(classify_oversize(true, true, false, true), (false, false));
+    }
 
     #[test]
     fn test_direct_cloak_is_tracked_for_recovery() {

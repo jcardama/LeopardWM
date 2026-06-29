@@ -294,7 +294,9 @@ LeopardWM is a Rust workspace with five crates:
 
 ## Platform Constraints
 
-LeopardWM is a **window controller**, not a compositor. DWM remains the compositor. Elevated or protected windows may reject placement/styling changes, and behavior can vary across app frameworks (Win32, WPF, Electron, UWP).
+LeopardWM is a **window controller**, not a compositor. DWM remains the compositor. Behavior can vary across app frameworks (Win32, WPF, Electron, UWP).
+
+LeopardWM runs unprivileged. A window running at a higher privilege level (elevated/administrator, or a protected process) can't be repositioned by an unprivileged process, so LeopardWM leaves it floating instead of reserving an empty column for it, and lists it under `lwm doctor`. Run LeopardWM as administrator if you need those windows tiled (note: an elevated WM has the inverse limitation, drag-and-drop from normal apps into it is blocked).
 
 ## Built-in Window Exclusions
 

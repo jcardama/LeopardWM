@@ -41,6 +41,16 @@ All notable changes to LeopardWM will be documented in this file.
   restart. These windows are now left floating, listed in `lwm doctor`, and
   announced with a notification. Run LeopardWM as administrator to tile elevated
   windows.
+- **A window no longer re-resizes itself every time you switch to a workspace.**
+  When a workspace's column was saved narrower than a window's minimum width, the
+  window kept snapping back to its minimum on each switch to that workspace. The
+  layout now confirms the window's real minimum and widens the column to fit, so
+  it settles instead of fighting on every switch.
+- **A reopened app window no longer floats over the layout.** A window the user
+  dismissed quickly and the app then reopened (for example Edge's download popup)
+  could be left floating on top of the tiled layout on every workspace. Only
+  genuinely frameless popups (notification toasts) are now treated as transient;
+  a real window is re-tiled normally.
 
 ## 0.2.3
 
