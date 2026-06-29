@@ -1621,6 +1621,36 @@ async fn handle_gesture_event(ctx: &mut EventLoopCtx<'_>, gesture_event: Gesture
 }
 
 /// Handle a tray menu event.
+/// Open the config file in the user's editor and arm the "Edit Config" pull, so
+/// a single-instance editor that raises an existing window on another workspace
+/// gets pulled to the active workspace (see `try_edit_config_pull`).
+async fn launch_config_editor(ctx: &mut EventLoopCtx<'_>) {
+    let Some(path) = config::config_paths()
+        .into_iter()
+        .find(|p| p.exists())
+        .or_else(|| config::config_paths().into_iter().next())
+    else {
+        return;
+    };
+    let filename = path
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    match std::process::Command::new("cmd")
+        .args(["/c", "start", "", &path.to_string_lossy()])
+        .spawn()
+    {
+        // Arm the pull only once the launch actually started, and only if we
+        // have a filename to identify the editor window by.
+        Ok(_) if !filename.is_empty() => {
+            ctx.state.lock().await.pending_edit_config_pull =
+                Some((std::time::Instant::now(), filename));
+        }
+        Ok(_) => {}
+        Err(e) => warn!("Failed to launch config editor: {}", e),
+    }
+}
+
 async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEvent) {
     match tray_event {
         tray::TrayEvent::Refresh => {
@@ -1706,15 +1736,7 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
         }
         tray::TrayEvent::EditConfig => {
             info!("Tray: Edit config requested");
-            let config_path = config::config_paths()
-                .into_iter()
-                .find(|p| p.exists())
-                .or_else(|| config::config_paths().into_iter().next());
-            if let Some(path) = config_path {
-                let _ = std::process::Command::new("cmd")
-                    .args(["/c", "start", "", &path.to_string_lossy()])
-                    .spawn();
-            }
+            launch_config_editor(ctx).await;
         }
         tray::TrayEvent::ViewLogs => {
             info!("Tray: View logs requested");

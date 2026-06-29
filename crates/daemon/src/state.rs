@@ -111,6 +111,11 @@ pub(crate) const CROSSFADE_BARRIER_MAX_AGE: Duration = Duration::from_secs(2);
 pub(crate) const TRANSIENT_WINDOW_THRESHOLD: Duration = Duration::from_secs(30);
 /// How long transient window HWNDs stay in the suppression list before expiring.
 pub(crate) const RECENTLY_HIDDEN_TTL: Duration = Duration::from_secs(300);
+/// After "Edit Config" is clicked, how long to watch for the editor window (a
+/// single-instance editor like VS Code may raise an existing window on another
+/// workspace) so it can be pulled to the active workspace. Generous because a
+/// cold editor start can take several seconds to raise its window.
+pub(crate) const EDIT_CONFIG_PULL_TTL: Duration = Duration::from_secs(10);
 
 #[cfg(test)]
 #[derive(Debug, Clone, Copy)]
@@ -407,6 +412,12 @@ pub(crate) struct AppState {
     /// re-creation of Electron popup windows (Beeper, Slack) that rapidly
     /// show/hide the same HWND.  Entries older than 5 minutes are lazily evicted.
     pub(crate) recently_hidden_hwnds: HashMap<u64, std::time::Instant>,
+    /// Armed when "Edit Config" is clicked in the tray: `(armed_at, filename)`.
+    /// A single-instance editor may raise an existing window on another
+    /// workspace; within `EDIT_CONFIG_PULL_TTL` a window whose title contains
+    /// the config `filename` is identified as the editor and pulled to the
+    /// active workspace instead of following focus to it. Never persisted.
+    pub(crate) pending_edit_config_pull: Option<(std::time::Instant, String)>,
     /// Windows skipped this session because UIPI blocks the non-elevated daemon
     /// from managing them (an elevated window). HWND -> title (for `lwm
     /// doctor`). Kept until the window dies so it's never re-tiled and the user
@@ -705,6 +716,7 @@ impl AppState {
             layout_apply_timeout: APPLY_LAYOUT_TIMEOUT,
             start_time: std::time::Instant::now(),
             recently_hidden_hwnds: HashMap::new(),
+            pending_edit_config_pull: None,
             elevation_blocked: HashMap::new(),
             hidden_column_widths: HashMap::new(),
             window_managed_at: HashMap::new(),

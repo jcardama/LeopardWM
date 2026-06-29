@@ -2,8 +2,8 @@
 
 use crate::config;
 use crate::state::{
-    AppState, DragHintAction, DragState, FALLBACK_VIEWPORT_HEIGHT, FALLBACK_VIEWPORT_WIDTH,
-    RECENTLY_HIDDEN_TTL, TRANSIENT_WINDOW_THRESHOLD,
+    AppState, DragHintAction, DragState, EDIT_CONFIG_PULL_TTL, FALLBACK_VIEWPORT_HEIGHT,
+    FALLBACK_VIEWPORT_WIDTH, RECENTLY_HIDDEN_TTL, TRANSIENT_WINDOW_THRESHOLD,
 };
 use leopardwm_core_layout::Rect;
 use leopardwm_platform_win32::{
@@ -759,6 +759,107 @@ impl AppState {
     }
 
     /// Handle a foreground-focus change event.
+    /// If an "Edit Config" pull is armed and the just-focused window `hwnd` (on
+    /// `(monitor_id, ws_idx)`) is a single-instance editor window raised on
+    /// another workspace, pull it to the active workspace and return `true` (the
+    /// caller should stop handling the focus event). Clears the arming on a
+    /// pull, on TTL expiry, or when the editor is already on the active
+    /// workspace.
+    pub(crate) fn try_edit_config_pull(
+        &mut self,
+        hwnd: u64,
+        monitor_id: leopardwm_platform_win32::MonitorId,
+        ws_idx: usize,
+    ) -> bool {
+        let Some((set_at, config_name)) = self.pending_edit_config_pull.clone() else {
+            return false;
+        };
+        if set_at.elapsed() >= EDIT_CONFIG_PULL_TTL {
+            self.pending_edit_config_pull = None;
+            return false;
+        }
+        // Identify the editor window: a single-instance editor shows the config
+        // filename in its title. Any other cross-workspace focus is left alone,
+        // since the editor may still raise within the TTL.
+        let is_editor = self
+            .lookup_window_info(hwnd)
+            .is_some_and(|i| i.title.to_lowercase().contains(&config_name.to_lowercase()));
+        if !is_editor {
+            return false;
+        }
+        // The editor was found: consume the arming so a later focus can't fire,
+        // even if the pull below ends up being a no-op (already here / floating).
+        self.pending_edit_config_pull = None;
+        let target_mid = self.focused_monitor;
+        let target_widx = self.active_workspace_idx(target_mid);
+        if monitor_id == target_mid && ws_idx == target_widx {
+            return false;
+        }
+        self.pull_window_to_workspace(hwnd, monitor_id, ws_idx, target_mid, target_widx)
+    }
+
+    /// Move the tiled window `hwnd` from `(from_mid, from_widx)` to the active
+    /// workspace `(to_mid, to_widx)` and focus it there. Used by the Edit Config
+    /// pull when a single-instance editor raised an existing window on another
+    /// workspace. Returns `false` (no move) for a floating or already-gone
+    /// window so the caller can fall back to normal focus handling.
+    pub(crate) fn pull_window_to_workspace(
+        &mut self,
+        hwnd: u64,
+        from_mid: leopardwm_platform_win32::MonitorId,
+        from_widx: usize,
+        to_mid: leopardwm_platform_win32::MonitorId,
+        to_widx: usize,
+    ) -> bool {
+        let is_tiled = self
+            .workspaces
+            .get(&from_mid)
+            .and_then(|v| v.get(from_widx))
+            .is_some_and(|ws| ws.contains_window(hwnd) && !ws.is_floating(hwnd));
+        if !is_tiled {
+            return false;
+        }
+        let snapshot = self.snapshot_layout();
+        self.ensure_workspace_exists(to_mid, to_widx);
+        let removed = self
+            .workspaces
+            .get_mut(&from_mid)
+            .and_then(|v| v.get_mut(from_widx))
+            .is_some_and(|ws| ws.remove_window(hwnd).is_ok());
+        if !removed {
+            return false;
+        }
+        // Transactional move: if the destination insert fails, put the window
+        // back in its source workspace so it is never orphaned from layout state.
+        let inserted = self
+            .workspaces
+            .get_mut(&to_mid)
+            .and_then(|v| v.get_mut(to_widx))
+            .is_some_and(|ws| ws.insert_window(hwnd, None).is_ok());
+        if !inserted {
+            if let Some(ws) = self.workspaces.get_mut(&from_mid).and_then(|v| v.get_mut(from_widx)) {
+                let _ = ws.insert_window(hwnd, None);
+            }
+            return false;
+        }
+        if let Some(ws) = self.workspaces.get_mut(&to_mid).and_then(|v| v.get_mut(to_widx)) {
+            let _ = ws.focus_window(hwnd);
+        }
+        self.focused_monitor = to_mid;
+        self.previous_focused_hwnd = Some(hwnd);
+        if let Err(e) = leopardwm_platform_win32::set_foreground_window(hwnd) {
+            debug!("Could not foreground pulled window {}: {:?}", hwnd, e);
+        }
+        self.start_layout_transition(snapshot);
+        if let Err(e) = self.apply_layout() {
+            warn!("Failed to apply layout after Edit Config pull: {}", e);
+        }
+        self.show_border(hwnd);
+        self.broadcast_focused_window_if_changed(to_mid as i64, Some(hwnd));
+        info!("Pulled Edit Config editor window {} to the active workspace", hwnd);
+        true
+    }
+
     fn on_window_focused(&mut self, hwnd: u64) {
         // Skip if this window is already our tracked focus — avoids
         // feedback loops where sync_foreground_window triggers another
@@ -835,6 +936,12 @@ impl AppState {
 
         // Update focus to match what Windows says is focused
         if let Some((monitor_id, ws_idx)) = self.find_window_workspace(hwnd) {
+            // A single-instance editor launched from the tray ("Edit Config")
+            // may have raised an existing window on another workspace; pull it
+            // to the active workspace instead of following focus there.
+            if self.try_edit_config_pull(hwnd, monitor_id, ws_idx) {
+                return;
+            }
             // Update focused monitor to match the window's monitor
             self.focused_monitor = monitor_id;
 

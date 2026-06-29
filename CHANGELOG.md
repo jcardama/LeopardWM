@@ -55,6 +55,10 @@ All notable changes to LeopardWM will be documented in this file.
   fullscreen, a newly opened window was placed behind it in the layout but still
   rendered on top. The new window now stays behind, and the fullscreen window
   keeps focus and stays on top until you leave fullscreen.
+- **Edit Config opens on the workspace you are on.** A single-instance editor
+  (like VS Code) reuses an existing window, so clicking Edit Config could switch
+  you to whichever workspace that window was on. The config file is now pulled to
+  your current workspace instead.
 
 ## 0.2.3
 

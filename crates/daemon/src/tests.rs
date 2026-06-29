@@ -2526,6 +2526,78 @@ fn test_fullscreen_focus_guard() {
 }
 
 #[test]
+fn test_pull_window_to_workspace() {
+    // The Edit Config pull moves a tiled window from another workspace onto the
+    // active one and focuses it (#57).
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    let mon = state.focused_monitor;
+    for h in [100u64, 200] {
+        state.injected_window_info.insert(h, make_test_window_info(h));
+        state.handle_window_event(WindowEvent::Created(h));
+    }
+    // Move the focused window (200) to workspace 2 (index 1).
+    state.handle_command(IpcCommand::MoveToWorkspace { index: 2 });
+    assert!(
+        state.workspaces[&mon][1].contains_window(200),
+        "precondition: window 200 is on workspace 2"
+    );
+
+    // Pull it back to the active workspace (index 0).
+    let moved = state.pull_window_to_workspace(200, mon, 1, mon, 0);
+    assert!(moved, "a tiled window should be pulled");
+    assert!(
+        state.workspaces[&mon][0].contains_window(200),
+        "window pulled onto the active workspace"
+    );
+    assert_eq!(
+        state.workspaces[&mon][0].focused_window(),
+        Some(200),
+        "pulled window is focused"
+    );
+    assert!(
+        !state.workspaces[&mon][1].contains_window(200),
+        "window removed from its source workspace"
+    );
+
+    // A window that isn't there (or floating) is not pulled.
+    assert!(!state.pull_window_to_workspace(999, mon, 1, mon, 0));
+}
+
+#[test]
+fn test_try_edit_config_pull_matches_editor_by_title() {
+    // The pull identifies the editor by its title (which shows the config
+    // filename); other cross-workspace focus events are ignored (#57).
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    let mon = state.focused_monitor;
+    state.injected_window_info.insert(100, make_test_window_info(100));
+    state.handle_window_event(WindowEvent::Created(100));
+
+    // A non-editor window and the editor window, both moved to workspace 2.
+    state.injected_window_info.insert(300, make_test_window_info(300));
+    state.handle_window_event(WindowEvent::Created(300));
+    state.handle_command(IpcCommand::MoveToWorkspace { index: 2 });
+    let mut editor = make_test_window_info(200);
+    editor.title = "config.toml - leopardwm - Visual Studio Code".to_string();
+    state.injected_window_info.insert(200, editor);
+    state.handle_window_event(WindowEvent::Created(200));
+    state.handle_command(IpcCommand::MoveToWorkspace { index: 2 });
+    assert!(state.workspaces[&mon][1].contains_window(200));
+    assert!(state.workspaces[&mon][1].contains_window(300));
+
+    state.pending_edit_config_pull = Some((std::time::Instant::now(), "config.toml".to_string()));
+
+    // A non-editor cross-workspace focus is ignored; the arming stays.
+    assert!(!state.try_edit_config_pull(300, mon, 1));
+    assert!(state.pending_edit_config_pull.is_some());
+
+    // The editor (title contains the config filename) is pulled; arming consumed.
+    assert!(state.try_edit_config_pull(200, mon, 1));
+    assert!(state.workspaces[&mon][0].contains_window(200));
+    assert!(!state.workspaces[&mon][1].contains_window(200));
+    assert!(state.pending_edit_config_pull.is_none());
+}
+
+#[test]
 fn test_new_window_while_fullscreen_keeps_fullscreen_focused() {
     // A new window opened while a window is fullscreen must join the layout
     // behind it; the fullscreen window stays focused and on top (monocle),
