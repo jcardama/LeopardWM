@@ -38,6 +38,23 @@ fn defer_snapback_while_settling(
     settling && recently_maximized
 }
 
+/// Whether to keep the fullscreen window focused instead of following a focus
+/// event to `focused_hwnd`. Returns the fullscreen window to re-assert, or
+/// `None` to let the focus change proceed. A non-user-initiated focus to a
+/// window *other than* the fullscreen one (e.g. a window self-activating behind
+/// it) is ignored to preserve monocle; a user-initiated focus is always
+/// honored.
+pub(crate) fn fullscreen_focus_guard(
+    user_initiated: bool,
+    fullscreen: Option<u64>,
+    focused_hwnd: u64,
+) -> Option<u64> {
+    if user_initiated {
+        return None;
+    }
+    fullscreen.filter(|&fs| fs != focused_hwnd)
+}
+
 /// Outcome of recording a window against the session elevation-block set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ElevationCheck {
@@ -207,6 +224,29 @@ impl AppState {
             ElevationCheck::BlockedKnown => {
                 debug!("Window {} still blocked by privilege level, ignoring", hwnd);
                 true
+            }
+        }
+    }
+
+    /// Re-assert the fullscreen window `fs_wid` as the focused, bordered, and
+    /// foreground window, after something tried to put another window in front
+    /// of it (a new window opening, or a window self-activating behind it). The
+    /// Win32 raise is always attempted (the visual fix); internal focus, border,
+    /// and the IPC broadcast follow only if the window is still in a workspace.
+    fn reassert_fullscreen_focus(&mut self, fs_wid: u64) {
+        if let Err(e) = leopardwm_platform_win32::set_foreground_window(fs_wid) {
+            debug!("Could not raise fullscreen window {} to the top: {:?}", fs_wid, e);
+        }
+        if let Some((mid, widx)) = self.find_window_workspace(fs_wid) {
+            let refocused = self
+                .workspaces
+                .get_mut(&mid)
+                .and_then(|v| v.get_mut(widx))
+                .is_some_and(|ws| ws.focus_window(fs_wid).is_ok());
+            if refocused {
+                self.previous_focused_hwnd = Some(fs_wid);
+                self.show_border(fs_wid);
+                self.broadcast_focused_window_if_changed(mid as i64, Some(fs_wid));
             }
         }
     }
@@ -537,8 +577,36 @@ impl AppState {
                     if let Err(e) = self.apply_layout() {
                         warn!("Failed to apply layout after window create: {}", e);
                     }
-                    if self.config.behavior.focus_new_windows && !opens_in_background {
+                    // In fullscreen the other tiled windows are hidden only by
+                    // the fullscreen window sitting on top of them (cloaking an
+                    // external window is a no-op), so a tiled window Windows just
+                    // raised on creation renders over the fullscreen one. Keep
+                    // monocle behavior: the new window joins the layout behind,
+                    // and the fullscreen window stays focused and on top until
+                    // the user leaves fullscreen. (A floating window is meant to
+                    // overlay, and a background one is parked off-screen, so this
+                    // is tiled-and-active only.)
+                    let keep_fullscreen_on_top = if matches!(action, config::WindowAction::Tile)
+                        && !opens_in_background
+                    {
+                        self.focused_workspace()
+                            .filter(|ws| ws.is_fullscreen())
+                            .and_then(|ws| ws.fullscreen_window_id())
+                            .filter(|&fs| fs != hwnd)
+                    } else {
+                        None
+                    };
+                    // Skip the newcomer's foreground sync when we're about to
+                    // re-raise the fullscreen window, to avoid a double focus
+                    // transition.
+                    if self.config.behavior.focus_new_windows
+                        && !opens_in_background
+                        && keep_fullscreen_on_top.is_none()
+                    {
                         self.sync_foreground_window();
+                    }
+                    if let Some(fs_wid) = keep_fullscreen_on_top {
+                        self.reassert_fullscreen_focus(fs_wid);
                     }
                 } else {
                     debug!("Failed to add window {} to workspace", hwnd);
@@ -891,6 +959,24 @@ impl AppState {
             let user_initiated = leopardwm_platform_win32::ms_since_last_user_input()
                 .map(|ms| ms <= FOCUS_INPUT_RECENT_MS)
                 .unwrap_or(false);
+            // A non-user-initiated focus event for a window other than the
+            // fullscreen one (e.g. a window that just opened behind a fullscreen
+            // window and self-activated) must not pull focus off the fullscreen
+            // window: following it desyncs the layout from what's on screen and
+            // aims the next focus command at a hidden window.
+            let fullscreen = self
+                .workspaces
+                .get(&monitor_id)
+                .and_then(|v| v.get(ws_idx))
+                .and_then(|ws| ws.fullscreen_window_id());
+            if let Some(fs_wid) = fullscreen_focus_guard(user_initiated, fullscreen, hwnd) {
+                debug!(
+                    "Keeping fullscreen window {} focused; ignoring non-user focus to {}",
+                    fs_wid, hwnd
+                );
+                self.reassert_fullscreen_focus(fs_wid);
+                return;
+            }
             if let Some(workspace) = self.workspaces.get_mut(&monitor_id).and_then(|v| v.get_mut(ws_idx)) {
                 if let Err(e) = workspace.focus_window(hwnd) {
                     // Floating windows are not in the tiled column list,

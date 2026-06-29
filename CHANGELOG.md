@@ -51,6 +51,10 @@ All notable changes to LeopardWM will be documented in this file.
   could be left floating on top of the tiled layout on every workspace. Only
   genuinely frameless popups (notification toasts) are now treated as transient;
   a real window is re-tiled normally.
+- **A new window no longer draws over a fullscreen window.** While a window was
+  fullscreen, a newly opened window was placed behind it in the layout but still
+  rendered on top. The new window now stays behind, and the fullscreen window
+  keeps focus and stays on top until you leave fullscreen.
 
 ## 0.2.3
 

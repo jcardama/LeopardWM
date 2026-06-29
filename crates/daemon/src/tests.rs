@@ -2513,6 +2513,70 @@ fn test_created_event_focus_new_windows_false_preserves_focus() {
 }
 
 #[test]
+fn test_fullscreen_focus_guard() {
+    use crate::event_handler::fullscreen_focus_guard;
+    // User-initiated focus is always honored (no override).
+    assert_eq!(fullscreen_focus_guard(true, Some(1), 2), None);
+    // Not fullscreen: nothing to keep.
+    assert_eq!(fullscreen_focus_guard(false, None, 2), None);
+    // Non-user focus to the fullscreen window itself: let it through.
+    assert_eq!(fullscreen_focus_guard(false, Some(1), 1), None);
+    // Non-user focus to a different window while fullscreen: keep fullscreen.
+    assert_eq!(fullscreen_focus_guard(false, Some(1), 2), Some(1));
+}
+
+#[test]
+fn test_new_window_while_fullscreen_keeps_fullscreen_focused() {
+    // A new window opened while a window is fullscreen must join the layout
+    // behind it; the fullscreen window stays focused and on top (monocle),
+    // rather than the newcomer stealing focus and rendering over it (#58).
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+
+    state
+        .injected_window_info
+        .insert(100, make_test_window_info(100));
+    state.handle_window_event(WindowEvent::Created(100));
+
+    // Fullscreen the first window.
+    let mid = state.focused_monitor;
+    let idx = state.active_workspace_idx(mid);
+    state
+        .workspaces
+        .get_mut(&mid)
+        .and_then(|v| v.get_mut(idx))
+        .unwrap()
+        .toggle_fullscreen();
+    assert_eq!(
+        state.focused_workspace().unwrap().fullscreen_window_id(),
+        Some(100)
+    );
+
+    // Open a second window (focus_new_windows defaults on).
+    state
+        .injected_window_info
+        .insert(200, make_test_window_info(200));
+    state.handle_window_event(WindowEvent::Created(200));
+
+    let ws = state.focused_workspace().unwrap();
+    assert!(ws.contains_window(200), "new window joins the layout");
+    assert_eq!(
+        ws.fullscreen_window_id(),
+        Some(100),
+        "fullscreen stays on the original window"
+    );
+    assert_eq!(
+        ws.focused_window(),
+        Some(100),
+        "focus returns to the fullscreen window, not the newcomer"
+    );
+    assert_eq!(
+        state.previous_focused_hwnd,
+        Some(100),
+        "tracked focus is the fullscreen window so the border/foreground follow it"
+    );
+}
+
+#[test]
 fn test_created_event_duplicate_is_ignored() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
 
