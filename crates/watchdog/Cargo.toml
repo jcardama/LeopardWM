@@ -16,10 +16,7 @@ leopardwm-platform-win32 = { path = "../platform_win32" }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-# Watchdog also needs WinRT toast bindings + XML DOM for the recovery
-# notification. These are additive over the workspace's Win32_* features.
-windows = { workspace = true, features = ["UI_Notifications", "Data_Xml_Dom"] }
-winreg = "0.56"
+windows = { workspace = true }
 
 [lints]
 workspace = true

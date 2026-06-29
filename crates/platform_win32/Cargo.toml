@@ -9,7 +9,9 @@ description = "Windows platform integration for LeopardWM (HWND manipulation, DW
 
 [dependencies]
 leopardwm-core-layout = { path = "../core_layout" }
-windows = { workspace = true }
+# UI_Notifications + Data_Xml_Dom power the WinRT toasts in toast.rs (shared by
+# the daemon and watchdog). Additive over the workspace's Win32_* features.
+windows = { workspace = true, features = ["UI_Notifications", "Data_Xml_Dom"] }
 tracing = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }

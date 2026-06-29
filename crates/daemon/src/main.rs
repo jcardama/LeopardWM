@@ -21,6 +21,7 @@ mod helpers;
 mod ipc_server;
 mod layout_apply;
 mod monitors;
+mod notify;
 mod overview;
 mod persistence;
 mod scratchpad;
@@ -2743,6 +2744,12 @@ async fn main() -> Result<()> {
 
     info!("LeopardWM daemon starting...");
     info!("Version: {}", env!("CARGO_PKG_VERSION"));
+
+    // Register the toast AppUserModelID so notify::show_toast can surface
+    // user-facing notices (e.g. "can't tile this elevated window"). Non-fatal.
+    if let Err(e) = notify::init() {
+        warn!("Toast notification setup failed (notifications disabled): {e:#}");
+    }
 
     // Check if another instance is already running
     let ipc_pipe_names = pipe_name_candidates();

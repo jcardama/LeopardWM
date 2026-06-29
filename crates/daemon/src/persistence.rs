@@ -206,18 +206,23 @@ impl AppState {
         snapshot: &StateSnapshot,
     ) -> HashSet<(MonitorId, usize)> {
         self.restore_workspace_structure_with(snapshot, |hwnd| {
+            // Keep a saved window only if it's still alive AND manageable. An
+            // elevated window a non-elevated daemon can't reposition would
+            // otherwise restore as a column we can never fill (a ghost column);
+            // dropping it here lets enumerate re-see it, record it, and notify.
             leopardwm_platform_win32::is_valid_window(hwnd)
+                && !leopardwm_platform_win32::window_manage_block(hwnd).is_blocked()
         })
     }
 
-    /// Testable core of `restore_workspace_structure`: the `is_alive`
+    /// Testable core of `restore_workspace_structure`: the `keep`
     /// predicate decides which HWNDs survive pruning. Production passes the
-    /// real `is_valid_window` Win32 call; tests pass a fake so the
+    /// real `is_valid_window` + elevation check; tests pass a fake so the
     /// structure-rebuild logic can be exercised without Win32.
     pub(crate) fn restore_workspace_structure_with(
         &mut self,
         snapshot: &StateSnapshot,
-        is_alive: impl Fn(u64) -> bool,
+        keep: impl Fn(u64) -> bool,
     ) -> HashSet<(MonitorId, usize)> {
         let mut restored_slots = HashSet::new();
 
@@ -240,12 +245,13 @@ impl AppState {
             // pathological length on startup.
             let ws_idx = ws_snapshot.workspace_index.min(8);
 
-            // Clone the saved workspace and prune windows that closed while the
-            // daemon was down. Mirror reconcile/migration pruning: use the
-            // type-preserving remove APIs (remove_window / remove_floating).
+            // Clone the saved workspace and drop windows that should not be
+            // restored (closed while the daemon was down, or now unmanageable).
+            // Mirror reconcile/migration pruning: use the type-preserving remove
+            // APIs (remove_window / remove_floating).
             let mut ws = ws_snapshot.workspace.clone();
-            let dead: Vec<u64> = ws.all_window_ids().into_iter().filter(|&w| !is_alive(w)).collect();
-            for wid in dead {
+            let to_drop: Vec<u64> = ws.all_window_ids().into_iter().filter(|&w| !keep(w)).collect();
+            for wid in to_drop {
                 if ws.is_floating(wid) {
                     ws.remove_floating(wid);
                 } else {

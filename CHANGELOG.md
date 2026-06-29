@@ -33,6 +33,14 @@ All notable changes to LeopardWM will be documented in this file.
   file-copy or progress popup) is now left floating where it opens instead of
   taking a column, even when it is resizable. Add a window rule with the tile
   action to override this for a specific app.
+- **Higher-privilege windows are left floating instead of getting an empty
+  column.** When LeopardWM runs without administrator rights, Windows blocks it
+  from moving a window that runs at a higher privilege level (an elevated or
+  administrator window, or a protected process), so tiling one reserved a column
+  that stayed empty, including when a saved layout restored such a window after a
+  restart. These windows are now left floating, listed in `lwm doctor`, and
+  announced with a notification. Run LeopardWM as administrator to tile elevated
+  windows.
 
 ## 0.2.3
 

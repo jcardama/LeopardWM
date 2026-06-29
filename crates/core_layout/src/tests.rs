@@ -10,7 +10,10 @@ impl Workspace {
     }
 }
 
+// This file is already included as `mod tests`; the inner module repeats the
+// name (module_inception). Kept rather than reindenting ~3000 lines of tests.
 #[cfg(test)]
+#[allow(clippy::module_inception)]
 mod tests {
     use super::*;
 

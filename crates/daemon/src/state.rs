@@ -407,6 +407,11 @@ pub(crate) struct AppState {
     /// re-creation of Electron popup windows (Beeper, Slack) that rapidly
     /// show/hide the same HWND.  Entries older than 5 minutes are lazily evicted.
     pub(crate) recently_hidden_hwnds: HashMap<u64, std::time::Instant>,
+    /// Windows skipped this session because UIPI blocks the non-elevated daemon
+    /// from managing them (an elevated window). HWND -> title (for `lwm
+    /// doctor`). Kept until the window dies so it's never re-tiled and the user
+    /// is notified only once. Session-only, never persisted.
+    pub(crate) elevation_blocked: HashMap<u64, String>,
     /// Column width a tiled window had when it was hidden, keyed by HWND, so a
     /// window that disappears and reappears (e.g. a third-party virtual-desktop
     /// tool hiding/showing windows on switch) re-tiles at its prior width
@@ -700,6 +705,7 @@ impl AppState {
             layout_apply_timeout: APPLY_LAYOUT_TIMEOUT,
             start_time: std::time::Instant::now(),
             recently_hidden_hwnds: HashMap::new(),
+            elevation_blocked: HashMap::new(),
             hidden_column_widths: HashMap::new(),
             window_managed_at: HashMap::new(),
             window_last_maximized_at: HashMap::new(),

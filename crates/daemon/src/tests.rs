@@ -25,6 +25,54 @@ fn test_app_state_new() {
 }
 
 #[test]
+fn test_note_elevation_block_lifecycle() {
+    use crate::event_handler::ElevationCheck;
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    let hwnd = 0xABCD_u64;
+
+    // First block: recorded + flagged as new (caller toasts).
+    assert_eq!(
+        state.note_elevation_block(hwnd, "Admin: term", true),
+        ElevationCheck::BlockedNew
+    );
+    assert_eq!(
+        state.elevation_blocked.get(&hwnd).map(String::as_str),
+        Some("Admin: term")
+    );
+
+    // Same window blocked again: already known, no re-notify.
+    assert_eq!(
+        state.note_elevation_block(hwnd, "Admin: term", true),
+        ElevationCheck::BlockedKnown
+    );
+
+    // Recycled HWND now owned by a different blocked window (title changed):
+    // re-notify and refresh the stored title.
+    assert_eq!(
+        state.note_elevation_block(hwnd, "Admin: other", true),
+        ElevationCheck::BlockedNew
+    );
+    assert_eq!(
+        state.elevation_blocked.get(&hwnd).map(String::as_str),
+        Some("Admin: other")
+    );
+
+    // Now manageable (e.g. recycled HWND owned by a normal window): record cleared.
+    assert_eq!(
+        state.note_elevation_block(hwnd, "Notepad", false),
+        ElevationCheck::Manageable
+    );
+    assert!(!state.elevation_blocked.contains_key(&hwnd));
+
+    // Manageable when never recorded is a no-op clear.
+    assert_eq!(
+        state.note_elevation_block(0x1234, "Other", false),
+        ElevationCheck::Manageable
+    );
+    assert!(state.elevation_blocked.is_empty());
+}
+
+#[test]
 fn test_app_state_skips_border_frame_under_cfg_test() {
     let state = AppState::new_with_config(test_config(), test_monitors());
     assert!(

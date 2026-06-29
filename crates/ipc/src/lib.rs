@@ -618,6 +618,12 @@ pub enum IpcResponse {
         /// animation is in flight indicates a handle leak.
         #[serde(default)]
         thumbnail_register_balance: i64,
+        /// Windows skipped this session because Windows UIPI blocks the
+        /// non-elevated daemon from managing them (higher-integrity/protected).
+        /// `(hwnd, title)` per window — hwnd disambiguates duplicate titles.
+        /// Empty in the normal case. Surfaced by `lwm doctor`.
+        #[serde(default)]
+        elevation_blocked_windows: Vec<(u64, String)>,
     },
     /// Forward-compatibility fallback for newer daemon responses unknown to this client.
     #[serde(other)]
@@ -849,6 +855,7 @@ mod tests {
                 monitors: 1,
                 paused: false,
                 thumbnail_register_balance: 0,
+                elevation_blocked_windows: vec![],
             },
         ];
 

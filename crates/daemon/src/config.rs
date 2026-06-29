@@ -1707,8 +1707,10 @@ mod tests {
 
     #[test]
     fn test_disabled_roundtrips_with_flattened_bindings() {
-        let mut hk = HotkeyConfig::default();
-        hk.disabled = vec!["consume_from_right".to_string()];
+        let mut hk = HotkeyConfig {
+            disabled: vec!["consume_from_right".to_string()],
+            ..HotkeyConfig::default()
+        };
         hk.bindings.clear();
         hk.bindings
             .insert("Ctrl+Alt+H".to_string(), "focus_left".to_string());

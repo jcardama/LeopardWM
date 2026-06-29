@@ -140,6 +140,7 @@ fn test_all_responses_roundtrip() {
             monitors: 2,
             paused: false,
             thumbnail_register_balance: 0,
+            elevation_blocked_windows: vec![],
         },
     ];
 

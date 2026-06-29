@@ -1134,6 +1134,17 @@ impl AppState {
             paused: self.paused,
             thumbnail_register_balance:
                 leopardwm_platform_win32::thumbnail::current_register_balance(),
+            elevation_blocked_windows: {
+                // (hwnd, title), sorted for stable doctor/IPC output (HashMap
+                // order is random); sort by title then hwnd.
+                let mut windows: Vec<(u64, String)> = self
+                    .elevation_blocked
+                    .iter()
+                    .map(|(&hwnd, title)| (hwnd, title.clone()))
+                    .collect();
+                windows.sort_by(|a, b| a.1.cmp(&b.1).then(a.0.cmp(&b.0)));
+                windows
+            },
         }
     }
 

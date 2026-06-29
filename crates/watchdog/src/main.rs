@@ -18,7 +18,10 @@ use windows::Win32::System::JobObjects::{
 };
 use windows::Win32::System::Threading::GetCurrentProcess;
 
-mod notification;
+/// AppUserModelID for the watchdog's recovery toasts (distinct from the
+/// daemon's so the two register independently).
+const TOAST_AUMID: &str = "jcardama.LeopardWM.Watchdog";
+const TOAST_APP_NAME: &str = "LeopardWM";
 
 const DAEMON_BIN_NAME: &str = "leopardwm.exe";
 
@@ -53,7 +56,7 @@ fn main() -> Result<()> {
     // Register AUMID + bind it to this process so toast recovery
     // notifications can render. Non-fatal on failure — we still want to
     // supervise the daemon even if toasts can't be set up.
-    if let Err(err) = notification::init() {
+    if let Err(err) = leopardwm_platform_win32::toast::init(TOAST_AUMID, TOAST_APP_NAME) {
         warn!(%err, "Toast notifications disabled (AUMID setup failed)");
     }
 
@@ -79,12 +82,11 @@ fn main() -> Result<()> {
 
         match record_crash_and_decide(&mut crashes, Instant::now(), CRASH_WINDOW, MAX_CRASHES_PER_WINDOW) {
             CrashDecision::Restart { attempt } => {
-                // Fire-and-forget: the toast renders on a worker thread
-                // so we don't delay the daemon restart.
-                let _ = notification::show_toast(
+                // Fire-and-forget: the toast renders on the shared worker
+                // thread so we don't delay the daemon restart.
+                leopardwm_platform_win32::toast::show_toast(
                     "LeopardWM recovered",
                     "The daemon crashed and was restarted automatically. Your windows are visible again.",
-                    notification::Severity::Info,
                 );
                 info!(attempt, "Restarting daemon after crash");
             }
@@ -94,14 +96,12 @@ fn main() -> Result<()> {
                     window_secs = CRASH_WINDOW.as_secs(),
                     "Crash loop detected — exiting watchdog without restart"
                 );
-                // Block on the toast worker so the user actually sees the
-                // "disabled" message before the watchdog process exits.
-                let handle = notification::show_toast(
+                // Render synchronously so the user actually sees the "disabled"
+                // message before the watchdog process exits.
+                leopardwm_platform_win32::toast::show_toast_blocking(
                     "LeopardWM disabled",
                     "Repeated crashes detected. Run `lwm collect-logs` for details.",
-                    notification::Severity::Warning,
                 );
-                let _ = handle.join();
                 return Err(anyhow::anyhow!(
                     "{} daemon crashes within {}s — watchdog refusing to restart further",
                     count,

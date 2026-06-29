@@ -175,6 +175,7 @@ pub(crate) async fn handle_doctor() -> Result<()> {
         match send_command(IpcCommand::HealthCheck).await {
             Ok(IpcResponse::HealthInfo {
                 thumbnail_register_balance,
+                elevation_blocked_windows,
                 ..
             }) => {
                 if thumbnail_register_balance == 0 {
@@ -185,6 +186,25 @@ pub(crate) async fn handle_doctor() -> Result<()> {
                     CheckResult::Warn(format!(
                         "Ghost-animation thumbnail balance is {} (expected 0 at rest; possible leak if no animation is running)",
                         thumbnail_register_balance
+                    ))
+                }
+                .print();
+
+                if elevation_blocked_windows.is_empty() {
+                    CheckResult::Pass(
+                        "No windows blocked by privilege level".to_string(),
+                    )
+                } else {
+                    CheckResult::Warn(format!(
+                        "{} window(s) left floating because they run at a higher privilege level \
+                         than the daemon (run LeopardWM as administrator to tile elevated ones; \
+                         protected processes can't be tiled regardless): {}",
+                        elevation_blocked_windows.len(),
+                        elevation_blocked_windows
+                            .iter()
+                            .map(|(hwnd, title)| format!("\"{title}\" (hwnd {hwnd:#x})"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
                     ))
                 }
                 .print();

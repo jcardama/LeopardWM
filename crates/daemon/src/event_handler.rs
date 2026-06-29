@@ -38,6 +38,17 @@ fn defer_snapback_while_settling(
     settling && recently_maximized
 }
 
+/// Outcome of recording a window against the session elevation-block set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ElevationCheck {
+    /// Window is manageable; any prior block record was cleared.
+    Manageable,
+    /// Newly blocked this session — caller should notify the user once.
+    BlockedNew,
+    /// Already known to be blocked — skip silently.
+    BlockedKnown,
+}
+
 impl AppState {
     /// Handle a window lifecycle event.
     pub(crate) fn handle_window_event(&mut self, event: WindowEvent) {
@@ -125,6 +136,81 @@ impl AppState {
         self.hidden_column_widths.remove(&hwnd).map(|(_, w)| w)
     }
 
+    /// Update the session elevation-block record for `hwnd` given the live
+    /// `blocked` verdict, returning what the caller should do. Pure map logic
+    /// (no Win32, no toast) so the dedup / clear / recycle behavior is
+    /// unit-testable; the Win32 verdict and the one-shot toast live in
+    /// `skip_if_elevation_blocked`. Always refreshes the stored title so
+    /// `lwm doctor` reflects the current window even across HWND recycle.
+    pub(crate) fn note_elevation_block(
+        &mut self,
+        hwnd: u64,
+        title: &str,
+        blocked: bool,
+    ) -> ElevationCheck {
+        if !blocked {
+            // Manageable now: clear any stale record (e.g. a recycled HWND now
+            // owned by a normal window) so it tiles again.
+            self.elevation_blocked.remove(&hwnd);
+            return ElevationCheck::Manageable;
+        }
+        match self.elevation_blocked.insert(hwnd, title.to_string()) {
+            // First sighting, or a recycled HWND now owned by a *different*
+            // window (title changed) → notify again.
+            None => ElevationCheck::BlockedNew,
+            Some(prev) if prev != title => ElevationCheck::BlockedNew,
+            Some(_) => ElevationCheck::BlockedKnown,
+        }
+    }
+
+    /// Returns true if the window owned by `pid` cannot be managed because
+    /// Windows UIPI blocks the non-elevated daemon from repositioning a
+    /// higher-integrity window. Records it (so it shows in `lwm doctor` and
+    /// stays skipped) and toasts the user once per window. Shared by the
+    /// live-create and the startup/refresh enumerate paths so the skip behaves
+    /// identically in both.
+    #[cfg(not(test))]
+    pub(crate) fn skip_if_elevation_blocked(
+        &mut self,
+        hwnd: u64,
+        pid: u32,
+        title: &str,
+        class_name: &str,
+    ) -> bool {
+        use leopardwm_platform_win32::ManageBlock;
+        let block = leopardwm_platform_win32::manage_block(pid);
+        match self.note_elevation_block(hwnd, title, block.is_blocked()) {
+            ElevationCheck::Manageable => false,
+            ElevationCheck::BlockedNew => {
+                warn!(
+                    "Cannot tile window '{}' ({}): {:?} — leaving it floating and ignoring it \
+                     for this session.",
+                    title, class_name, block
+                );
+                // Tailor remediation: elevating helps for a higher-integrity
+                // window, but not for a protected/PPL process.
+                let body = if matches!(block, ManageBlock::Protected) {
+                    format!(
+                        "\u{201c}{title}\u{201d} is a protected process LeopardWM can't manage, \
+                         so it's left floating for this session."
+                    )
+                } else {
+                    format!(
+                        "\u{201c}{title}\u{201d} runs at a higher privilege level (e.g. as \
+                         administrator). LeopardWM can't tile it unless it also runs as \
+                         administrator, so it's left floating for this session."
+                    )
+                };
+                crate::notify::show_toast("Window left floating", &body);
+                true
+            }
+            ElevationCheck::BlockedKnown => {
+                debug!("Window {} still blocked by privilege level, ignoring", hwnd);
+                true
+            }
+        }
+    }
+
     fn on_window_created(&mut self, hwnd: u64) {
         // Suppress transient windows that rapidly show/hide the same HWND
         // (e.g., Electron notification popups from Beeper, Slack).
@@ -158,6 +244,20 @@ impl AppState {
                     "Ignoring shell-cloaked window: {} ({})",
                     win_info.title, win_info.class_name
                 );
+                return;
+            }
+
+            // Windows UIPI blocks a non-elevated daemon from repositioning an
+            // elevated window: SetWindowPos is silently refused, so tiling it
+            // would reserve a column the window never occupies. Leave it
+            // floating where the OS placed it and ignore it for the session.
+            #[cfg(not(test))]
+            if self.skip_if_elevation_blocked(
+                hwnd,
+                win_info.process_id,
+                &win_info.title,
+                &win_info.class_name,
+            ) {
                 return;
             }
 
@@ -451,6 +551,9 @@ impl AppState {
             // Drop it from the taskbar hidden set so a recycled HWND isn't
             // skipped by the hide change-gate.
             leopardwm_platform_win32::taskbar::taskbar_forget(hwnd);
+            // Forget an elevation-blocked window once it's truly gone, so a
+            // recycled HWND for a normal window isn't wrongly skipped.
+            self.elevation_blocked.remove(&hwnd);
         }
 
         // For Hidden events, verify the window is actually gone.

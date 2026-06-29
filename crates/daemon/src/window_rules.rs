@@ -156,6 +156,20 @@ impl AppState {
                 continue;
             }
 
+            // Elevated window the non-elevated daemon can't reposition (UIPI):
+            // skip + notify instead of reserving a column we can't fill. Mirrors
+            // the live-create path; covers windows already open at startup and
+            // any seen via `lwm refresh`.
+            #[cfg(not(test))]
+            if self.skip_if_elevation_blocked(
+                win_info.hwnd,
+                win_info.process_id,
+                &win_info.title,
+                &win_info.class_name,
+            ) {
+                continue;
+            }
+
             // New windows land on the monitor's active workspace.
             let target_idx = self.active_workspace_idx(monitor_id);
             let _ = self.ensure_workspace_exists(monitor_id, target_idx);

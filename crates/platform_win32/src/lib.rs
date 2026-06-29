@@ -22,9 +22,11 @@ pub mod snapshot;
 pub mod tab_strip;
 pub mod taskbar;
 pub mod thumbnail;
+pub mod toast;
 
 pub use tab_strip::{TabAction, TabActionEvent, TabCloseAction};
 
+mod elevation;
 mod enumeration;
 mod event_hooks;
 mod focus;
@@ -46,6 +48,7 @@ pub use enumeration::{
     get_primary_monitor, get_process_executable, get_window_info, is_excluded_tool_window_hwnd,
     monitor_above, monitor_below, monitor_to_left, monitor_to_right, monitors_by_position,
 };
+pub use elevation::{manage_block, window_manage_block, ManageBlock};
 pub use event_hooks::{install_event_hooks, EventHookHandle, WindowEvent};
 pub use placement::{
     apply_placements, clear_inset_cache, drain_ghost_cloaked, dwm_cloak_window, dwm_uncloak_all,
