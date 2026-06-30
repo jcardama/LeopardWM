@@ -55,6 +55,28 @@ pub(crate) fn fullscreen_focus_guard(
     fullscreen.filter(|&fs| fs != focused_hwnd)
 }
 
+/// True when `title` names `filename` as a whole token, i.e. the filename
+/// appears bounded by the start/end of the title or by a separator (space, tab,
+/// dash, or a path separator). Editors title windows like `config.toml - App`
+/// or `C:\path\config.toml - App`; this matches those without false-firing on
+/// `myconfig.toml` or `config.toml.bak`, where the filename is part of a longer
+/// word. Both inputs are compared case-insensitively.
+pub(crate) fn title_names_config_file(title: &str, filename: &str) -> bool {
+    if filename.is_empty() {
+        return false;
+    }
+    let title = title.to_lowercase();
+    let filename = filename.to_lowercase();
+    let sep = |b: u8| matches!(b, b' ' | b'\t' | b'-' | b'/' | b'\\');
+    let bytes = title.as_bytes();
+    title.match_indices(&filename).any(|(start, _)| {
+        let before_ok = start == 0 || sep(bytes[start - 1]);
+        let end = start + filename.len();
+        let after_ok = end == bytes.len() || sep(bytes[end]);
+        before_ok && after_ok
+    })
+}
+
 /// Outcome of recording a window against the session elevation-block set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ElevationCheck {
@@ -795,7 +817,7 @@ impl AppState {
         // since the editor may still raise within the TTL.
         let is_editor = self
             .lookup_window_info(hwnd)
-            .is_some_and(|i| i.title.to_lowercase().contains(&config_name.to_lowercase()));
+            .is_some_and(|i| title_names_config_file(&i.title, &config_name));
         if !is_editor {
             return false;
         }
@@ -2063,5 +2085,35 @@ mod snapback_settle_tests {
         // Never maximized, or unmanaged: snap normally.
         assert!(!defer_snapback_while_settling(Some(fresh), None, now));
         assert!(!defer_snapback_while_settling(None, Some(fresh), now));
+    }
+}
+
+#[cfg(test)]
+mod edit_config_match_tests {
+    use super::title_names_config_file;
+
+    #[test]
+    fn matches_editor_titles_as_a_whole_token() {
+        // Typical editor title formats.
+        assert!(title_names_config_file("config.toml - Visual Studio Code", "config.toml"));
+        assert!(title_names_config_file("config.toml — Sublime Text", "config.toml"));
+        assert!(title_names_config_file(
+            r"C:\Users\Jose\AppData\config.toml - Notepad++",
+            "config.toml"
+        ));
+        // Bare filename and case-insensitive.
+        assert!(title_names_config_file("config.toml", "config.toml"));
+        assert!(title_names_config_file("CONFIG.TOML - Editor", "config.toml"));
+    }
+
+    #[test]
+    fn rejects_substring_of_a_longer_word() {
+        // Filename embedded in a longer word must not match.
+        assert!(!title_names_config_file("myconfig.toml - Editor", "config.toml"));
+        assert!(!title_names_config_file("config.toml.bak - Editor", "config.toml"));
+        // Unrelated window.
+        assert!(!title_names_config_file("Inbox - Mail", "config.toml"));
+        // Empty filename never matches.
+        assert!(!title_names_config_file("config.toml", ""));
     }
 }
