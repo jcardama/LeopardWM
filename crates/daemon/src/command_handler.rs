@@ -1050,6 +1050,57 @@ impl AppState {
             .and_then(|v| v.get(current_idx))
             .is_some_and(|ws| ws.is_floating(focused_hwnd));
 
+        // Capture the tiled column width before removal so the window re-tiles
+        // at its chosen width on the target workspace instead of the default.
+        let tiled_width = if is_floating {
+            None
+        } else {
+            self.tiled_column_width(monitor, current_idx, focused_hwnd)
+        };
+
+        // Capture the source column + sibling so a later move back can restore
+        // the window to its original position.
+        let source_origin = if is_floating {
+            None
+        } else {
+            self.tiled_column_origin(monitor, current_idx, focused_hwnd)
+        };
+
+        // If this window is returning to the workspace it was moved out of,
+        // resolve where it should land: rejoin a surviving sibling's column,
+        // else a new column at the remembered (clamped) index. Otherwise the
+        // normal insert (right of the focused column) applies.
+        enum Landing {
+            Default,
+            Stack(usize),
+            NewColumn(usize),
+        }
+        let landing = if is_floating {
+            Landing::Default
+        } else {
+            match self
+                .move_origins
+                .get(&focused_hwnd)
+                .copied()
+                .filter(|o| o.monitor == monitor && o.ws_idx == idx)
+            {
+                Some(o) => {
+                    let sibling_col = o.sibling.and_then(|s| {
+                        self.workspaces
+                            .get(&monitor)?
+                            .get(idx)?
+                            .find_window_location(s)
+                            .map(|(c, _)| c)
+                    });
+                    match sibling_col {
+                        Some(c) => Landing::Stack(c),
+                        None => Landing::NewColumn(o.column),
+                    }
+                }
+                None => Landing::Default,
+            }
+        };
+
         // Remove from source and insert into target.
         // For floating windows, get the rect from workspace state (canonical position).
         let floating_rect = if is_floating {
@@ -1083,13 +1134,53 @@ impl AppState {
                     }
                     return IpcResponse::error(format!("Failed to move floating window: {}", e));
                 }
-            } else if let Err(e) = workspace.insert_window(focused_hwnd, None) {
-                // Rollback: re-insert into source since target insert failed
-                if let Some(src_ws) = self.workspaces.get_mut(&monitor).and_then(|v| v.get_mut(current_idx)) {
-                    let _ = src_ws.insert_window(focused_hwnd, None);
+            } else {
+                let result = match landing {
+                    Landing::Stack(col) => workspace.insert_window_in_column(focused_hwnd, col),
+                    Landing::NewColumn(col) => {
+                        workspace.insert_window_at_column(focused_hwnd, tiled_width, col)
+                    }
+                    Landing::Default => workspace.insert_window(focused_hwnd, tiled_width),
+                };
+                if let Err(e) = result {
+                    // Rollback: restore the window to its original source position
+                    // so a failed move leaves the layout exactly as it was.
+                    if let Some(src_ws) = self.workspaces.get_mut(&monitor).and_then(|v| v.get_mut(current_idx)) {
+                        let rejoin = source_origin
+                            .and_then(|(_, sib)| sib)
+                            .and_then(|s| src_ws.find_window_location(s))
+                            .map(|(c, _)| c);
+                        let _ = match (rejoin, source_origin) {
+                            (Some(c), _) => src_ws.insert_window_in_column(focused_hwnd, c),
+                            (None, Some((col, _))) => {
+                                src_ws.insert_window_at_column(focused_hwnd, tiled_width, col)
+                            }
+                            (None, None) => src_ws.insert_window(focused_hwnd, tiled_width),
+                        };
+                    }
+                    return IpcResponse::error(format!("Failed to add window to target workspace: {}", e));
                 }
-                return IpcResponse::error(format!("Failed to add window to target workspace: {}", e));
+                // A rejoin (Stack) doesn't move focus; focus the window so it is
+                // current when the user next switches to the target workspace,
+                // matching the default insert.
+                let _ = workspace.focus_window(focused_hwnd);
             }
+        }
+
+        // Record where the window came from so moving it back restores its
+        // column; a floating move clears any stale tiled origin instead.
+        if let Some((column, sibling)) = source_origin {
+            self.move_origins.insert(
+                focused_hwnd,
+                crate::state::MoveOrigin {
+                    monitor,
+                    ws_idx: current_idx,
+                    column,
+                    sibling,
+                },
+            );
+        } else if is_floating {
+            self.move_origins.remove(&focused_hwnd);
         }
 
         // Target workspace is not active — hide the moved window

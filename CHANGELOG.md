@@ -59,6 +59,10 @@ All notable changes to LeopardWM will be documented in this file.
   (like VS Code) reuses an existing window, so clicking Edit Config could switch
   you to whichever workspace that window was on. The config file is now pulled to
   your current workspace instead.
+- **Windows keep their size and position when moved between workspaces.** Moving
+  a resized window to another workspace re-tiled it at the default width, and
+  moving it back never restored where it had been. A moved window now keeps its
+  column width, and on return it lands back on its original column.
 
 ## 0.2.3
 

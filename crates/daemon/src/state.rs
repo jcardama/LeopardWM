@@ -62,6 +62,21 @@ pub(crate) struct ScratchpadState {
     pub(crate) origin_sibling: Option<u64>,
 }
 
+/// Where a tiled window sat before it was moved off a workspace, so that
+/// moving it back lands it on its original column instead of right of focus.
+/// Mirrors the scratchpad's `origin_column`/`origin_sibling` restore.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct MoveOrigin {
+    pub(crate) monitor: MonitorId,
+    pub(crate) ws_idx: usize,
+    /// Column index occupied before the move; the clamped fallback position.
+    pub(crate) column: usize,
+    /// A window that shared the original column, if any. On return the window
+    /// rejoins this sibling's current column (robust to index shifts); `None`
+    /// means it was alone, so it returns as its own column at `column`.
+    pub(crate) sibling: Option<u64>,
+}
+
 /// Action to show/hide the drag hint overlay, communicated from event handler to main loop.
 #[derive(Debug, Clone)]
 pub(crate) enum DragHintAction {
@@ -428,6 +443,11 @@ pub(crate) struct AppState {
     /// tool hiding/showing windows on switch) re-tiles at its prior width
     /// instead of resetting to default. Entries expire after RECENTLY_HIDDEN_TTL.
     pub(crate) hidden_column_widths: HashMap<u64, (std::time::Instant, i32)>,
+    /// Where each tiled window last sat before being moved to another workspace,
+    /// keyed by HWND. Moving the window back to that workspace restores it to the
+    /// original column instead of right of focus. Cleared when consumed or when
+    /// the window dies. Session-only, never persisted.
+    pub(crate) move_origins: HashMap<u64, MoveOrigin>,
     /// Tracks when each managed window was added to a workspace. Used to
     /// distinguish transient popups (managed briefly) from real windows
     /// (managed for a long time, e.g., close-to-tray apps).
@@ -719,6 +739,7 @@ impl AppState {
             pending_edit_config_pull: None,
             elevation_blocked: HashMap::new(),
             hidden_column_widths: HashMap::new(),
+            move_origins: HashMap::new(),
             window_managed_at: HashMap::new(),
             window_last_maximized_at: HashMap::new(),
             snap_disabled_hwnds: HashSet::new(),

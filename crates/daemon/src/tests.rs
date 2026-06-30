@@ -2564,6 +2564,131 @@ fn test_pull_window_to_workspace() {
 }
 
 #[test]
+fn test_move_to_workspace_preserves_column_width() {
+    // A window resized away from the default keeps its column width when moved
+    // to another workspace and back, instead of snapping to the default (#50).
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    let mon = state.focused_monitor;
+    for h in [100u64, 200] {
+        state.injected_window_info.insert(h, make_test_window_info(h));
+        state.handle_window_event(WindowEvent::Created(h));
+    }
+    // Give the two columns DIFFERENT non-default widths (default is 800), so the
+    // assertion proves the moved window keeps *its own* column's width, not a
+    // sibling's or the default. Focus is on 200's column (created last).
+    let other_width = 500;
+    let custom_width = 640;
+    {
+        let ws = state.focused_workspace_mut().unwrap();
+        ws.set_all_column_widths(other_width);
+        ws.resize_focused_column(custom_width - other_width); // 200's column -> 640
+    }
+
+    let width_of = |state: &AppState, ws_idx: usize, hwnd: u64| -> i32 {
+        let ws = &state.workspaces[&mon][ws_idx];
+        let (col, _) = ws.find_window_location(hwnd).unwrap();
+        ws.column(col).unwrap().width()
+    };
+    assert_eq!(width_of(&state, 0, 200), custom_width, "precondition");
+    assert_eq!(width_of(&state, 0, 100), other_width, "precondition");
+
+    // Move the focused window (200) to workspace 2: its own width must carry over.
+    state.handle_command(IpcCommand::MoveToWorkspace { index: 2 });
+    assert!(state.workspaces[&mon][1].contains_window(200));
+    assert_eq!(
+        width_of(&state, 1, 200),
+        custom_width,
+        "moved window should keep its own column width, not the default or a sibling's"
+    );
+
+    // Switch to workspace 2 and move it back: width must still be preserved.
+    state.handle_command(IpcCommand::SwitchWorkspace { index: 2 });
+    state.handle_command(IpcCommand::MoveToWorkspace { index: 1 });
+    assert!(state.workspaces[&mon][0].contains_window(200));
+    assert_eq!(
+        width_of(&state, 0, 200),
+        custom_width,
+        "width should still be preserved after moving back"
+    );
+}
+
+#[test]
+fn test_move_to_workspace_restores_original_column() {
+    // A window moved off a workspace and back rejoins its original column,
+    // anchored by a surviving column-mate — something a default right-of-focus
+    // insert could never produce (#50).
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    let mon = state.focused_monitor;
+    // Build ws1 columns [100],[200],[300], then stack 150 into column 0.
+    for h in [100u64, 200, 300] {
+        state.injected_window_info.insert(h, make_test_window_info(h));
+        state.handle_window_event(WindowEvent::Created(h));
+    }
+    state.injected_window_info.insert(150, make_test_window_info(150));
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .insert_window_in_column(150, 0)
+        .unwrap();
+
+    // Focus 100 (shares column 0 with 150) and move it to workspace 2.
+    let focus_and_arm = |state: &mut AppState, ws_idx: usize, hwnd: u64| {
+        state.workspaces.get_mut(&mon).unwrap()[ws_idx]
+            .focus_window(hwnd)
+            .unwrap();
+        state.previous_focused_hwnd = Some(hwnd);
+    };
+    focus_and_arm(&mut state, 0, 100);
+    state.handle_command(IpcCommand::MoveToWorkspace { index: 2 });
+    assert!(state.workspaces[&mon][1].contains_window(100));
+    // 150 stays behind, alone in column 0.
+    assert_eq!(
+        state.workspaces[&mon][0].find_window_location(150),
+        Some((0, 0)),
+        "sibling 150 remains in column 0"
+    );
+
+    // Switch to workspace 2 and move 100 back: it must rejoin column 0 with 150.
+    state.handle_command(IpcCommand::SwitchWorkspace { index: 2 });
+    focus_and_arm(&mut state, 1, 100);
+    state.handle_command(IpcCommand::MoveToWorkspace { index: 1 });
+
+    let ws1 = &state.workspaces[&mon][0];
+    assert_eq!(
+        ws1.find_window_location(100).map(|(c, _)| c),
+        Some(0),
+        "100 rejoins its original column 0, not a new column at the end"
+    );
+    assert_eq!(
+        ws1.column(0).unwrap().windows().len(),
+        2,
+        "100 and 150 share column 0 again"
+    );
+}
+
+#[test]
+fn test_pull_clears_move_origin() {
+    // An Edit Config pull establishes a fresh placement, so it must void any
+    // prior move-back origin (else a later move could restore a stale column).
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    let mon = state.focused_monitor;
+    for h in [100u64, 200] {
+        state.injected_window_info.insert(h, make_test_window_info(h));
+        state.handle_window_event(WindowEvent::Created(h));
+    }
+    // Move 200 to workspace 2: an origin (ws1) is recorded for it.
+    state.handle_command(IpcCommand::MoveToWorkspace { index: 2 });
+    assert!(state.move_origins.contains_key(&200));
+
+    // Pull it back to the active workspace: the origin must be cleared.
+    assert!(state.pull_window_to_workspace(200, mon, 1, mon, 0));
+    assert!(
+        !state.move_origins.contains_key(&200),
+        "pull should void the stale move-back origin"
+    );
+}
+
+#[test]
 fn test_try_edit_config_pull_matches_editor_by_title() {
     // The pull identifies the editor by its title (which shows the config
     // filename); other cross-workspace focus events are ignored (#57).

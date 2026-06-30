@@ -637,6 +637,17 @@ impl AppState {
             // Forget an elevation-blocked window once it's truly gone, so a
             // recycled HWND for a normal window isn't wrongly skipped.
             self.elevation_blocked.remove(&hwnd);
+            // Drop any remembered move-back origin so a recycled HWND doesn't
+            // inherit a stale column restore.
+            self.move_origins.remove(&hwnd);
+            // This window may have anchored another's restore; drop the stale
+            // sibling so a recycled HWND can't redirect a move-back to the wrong
+            // column (it falls back to the remembered index instead).
+            for origin in self.move_origins.values_mut() {
+                if origin.sibling == Some(hwnd) {
+                    origin.sibling = None;
+                }
+            }
             // Drop any size-violation suspect state so the map stays bounded and
             // a recycled HWND doesn't inherit it.
             leopardwm_platform_win32::clear_suspected_oversize(hwnd);
@@ -819,6 +830,8 @@ impl AppState {
         if !is_tiled {
             return false;
         }
+        // Preserve the window's chosen column width across the pull.
+        let tiled_width = self.tiled_column_width(from_mid, from_widx, hwnd);
         let snapshot = self.snapshot_layout();
         self.ensure_workspace_exists(to_mid, to_widx);
         let removed = self
@@ -835,16 +848,19 @@ impl AppState {
             .workspaces
             .get_mut(&to_mid)
             .and_then(|v| v.get_mut(to_widx))
-            .is_some_and(|ws| ws.insert_window(hwnd, None).is_ok());
+            .is_some_and(|ws| ws.insert_window(hwnd, tiled_width).is_ok());
         if !inserted {
             if let Some(ws) = self.workspaces.get_mut(&from_mid).and_then(|v| v.get_mut(from_widx)) {
-                let _ = ws.insert_window(hwnd, None);
+                let _ = ws.insert_window(hwnd, tiled_width);
             }
             return false;
         }
         if let Some(ws) = self.workspaces.get_mut(&to_mid).and_then(|v| v.get_mut(to_widx)) {
             let _ = ws.focus_window(hwnd);
         }
+        // The pull establishes a fresh placement; void any prior move-back origin
+        // so a later MoveToWorkspace can't restore it to a stale column.
+        self.move_origins.remove(&hwnd);
         self.focused_monitor = to_mid;
         self.previous_focused_hwnd = Some(hwnd);
         if let Err(e) = leopardwm_platform_win32::set_foreground_window(hwnd) {

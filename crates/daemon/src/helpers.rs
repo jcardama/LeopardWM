@@ -341,6 +341,42 @@ impl AppState {
         None
     }
 
+    /// Pixel width of the tiled column currently holding `window_id` on
+    /// `(monitor, ws_idx)`, or `None` if the window isn't tiled there. Used to
+    /// carry a window's chosen width across a workspace move so it re-tiles at
+    /// the same width instead of snapping back to the default column width.
+    pub(crate) fn tiled_column_width(
+        &self,
+        monitor: MonitorId,
+        ws_idx: usize,
+        window_id: u64,
+    ) -> Option<i32> {
+        let ws = self.workspaces.get(&monitor)?.get(ws_idx)?;
+        let (col, _) = ws.find_window_location(window_id)?;
+        ws.column(col).map(|c| c.width())
+    }
+
+    /// The column index `window_id` occupies on `(monitor, ws_idx)` plus one
+    /// same-column sibling (any other window sharing it), if it is tiled there.
+    /// The sibling anchors the column so a later restore survives index shifts
+    /// from columns added or removed in the meantime.
+    pub(crate) fn tiled_column_origin(
+        &self,
+        monitor: MonitorId,
+        ws_idx: usize,
+        window_id: u64,
+    ) -> Option<(usize, Option<u64>)> {
+        let ws = self.workspaces.get(&monitor)?.get(ws_idx)?;
+        let (col, _) = ws.find_window_location(window_id)?;
+        let sibling = ws
+            .column(col)?
+            .windows()
+            .iter()
+            .copied()
+            .find(|&w| w != window_id);
+        Some((col, sibling))
+    }
+
     /// Get the rectangle of the focused column for snap hint display.
     ///
     /// Returns the absolute screen position of the focused column.
