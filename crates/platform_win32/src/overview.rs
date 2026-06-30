@@ -2119,6 +2119,23 @@ unsafe extern "system" fn overview_wnd_proc(
             }
             LRESULT(0)
         }
+        WM_WINDOWPOSCHANGING => {
+            // Pin the overlay to the monitor rect it was shown at: a third-party
+            // Alt-drag tool (e.g. AltSnap) can otherwise move this interactive
+            // overlay. Override the requested move/size back to `window_rect`
+            // while visible. `try_lock` avoids any chance of a re-entrant
+            // deadlock if a SetWindowPos on this window fires while STATE is
+            // held; SWP_NOMOVE/NOSIZE callers (the topmost re-assert) are
+            // unaffected because the system ignores the coords then.
+            let rect = STATE.try_lock().ok().filter(|s| s.visible).map(|s| s.window_rect);
+            if let (Some(r), Some(wp)) = (rect, (lparam.0 as *mut WINDOWPOS).as_mut()) {
+                wp.x = r.x;
+                wp.y = r.y;
+                wp.cx = r.width;
+                wp.cy = r.height;
+            }
+            LRESULT(0)
+        }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
 }

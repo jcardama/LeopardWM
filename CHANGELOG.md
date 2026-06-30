@@ -63,6 +63,10 @@ All notable changes to LeopardWM will be documented in this file.
   a resized window to another workspace re-tiled it at the default width, and
   moving it back never restored where it had been. A moved window now keeps its
   column width, and on return it lands back on its original column.
+- **The overview overlay stays put when an Alt-drag tool grabs it.** A
+  third-party Alt-drag window mover (such as AltSnap) could drag the overview
+  overlay out of place while it was open. The overlay now holds its position for
+  as long as it is shown.
 
 ## 0.2.3
 
