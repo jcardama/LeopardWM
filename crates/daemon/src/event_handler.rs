@@ -228,11 +228,12 @@ impl AppState {
         }
     }
 
-    /// Re-assert the fullscreen window `fs_wid` as the focused, bordered, and
-    /// foreground window, after something tried to put another window in front
-    /// of it (a new window opening, or a window self-activating behind it). The
-    /// Win32 raise is always attempted (the visual fix); internal focus, border,
-    /// and the IPC broadcast follow only if the window is still in a workspace.
+    /// Re-assert the fullscreen window `fs_wid` as the focused and foreground
+    /// window, after something tried to put another window in front of it (a new
+    /// window opening, or a window self-activating behind it). The Win32 raise is
+    /// always attempted (the visual fix); internal focus and the IPC broadcast
+    /// follow only if the window is still in a workspace. The border stays hidden:
+    /// monocle fullscreen has no focus ring, matching `focus_in_fullscreen`.
     fn reassert_fullscreen_focus(&mut self, fs_wid: u64) {
         if let Err(e) = leopardwm_platform_win32::set_foreground_window(fs_wid) {
             debug!("Could not raise fullscreen window {} to the top: {:?}", fs_wid, e);
@@ -245,7 +246,7 @@ impl AppState {
                 .is_some_and(|ws| ws.focus_window(fs_wid).is_ok());
             if refocused {
                 self.previous_focused_hwnd = Some(fs_wid);
-                self.show_border(fs_wid);
+                self.hide_border();
                 self.broadcast_focused_window_if_changed(mid as i64, Some(fs_wid));
             }
         }
