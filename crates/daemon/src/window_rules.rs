@@ -120,6 +120,9 @@ impl AppState {
 
             let action =
                 self.evaluate_window_rules(&win_info.class_name, &win_info.title, &executable);
+            let rule_matched = self
+                .matched_rule(&win_info.class_name, &win_info.title, &executable)
+                .is_some();
 
             if action == config::WindowAction::Ignore {
                 debug!(
@@ -167,6 +170,19 @@ impl AppState {
                 &win_info.title,
                 &win_info.class_name,
             ) {
+                continue;
+            }
+
+            // No user rule matched and the window has a classic dialog shape (a
+            // title bar but no minimize or maximize button): leave it floating
+            // instead of reserving a column. Mirrors the live-create path so a
+            // dialog already open at startup or seen via `lwm refresh` is treated
+            // the same. A user Tile/Float rule overrides this.
+            if !rule_matched && leopardwm_platform_win32::is_dialog_like_window(win_info.hwnd) {
+                debug!(
+                    "Leaving dialog-like window unmanaged: {} ({})",
+                    win_info.title, win_info.class_name
+                );
                 continue;
             }
 
