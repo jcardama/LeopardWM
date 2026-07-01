@@ -954,11 +954,16 @@ impl AppState {
             ));
         }
 
-        if !start_rects.is_empty() {
+        // Animate only when there is something to move and motion isn't reduced.
+        // Otherwise hide the leaving windows immediately: reduce_motion (e.g. on
+        // battery) skips the transition, and the transition is the only path that
+        // would otherwise move them off-screen, so without this they linger as
+        // ghosts on top of the new workspace.
+        let animating = !start_rects.is_empty() && !self.reduce_motion;
+        if animating {
             let duration = self.config.animation.workspace_switch_duration_ms;
             self.start_workspace_switch_transition(start_rects, exit_rects, duration);
         } else {
-            // No windows to animate — hide old immediately
             for (wid, _) in &old_placements {
                 let _ = move_window_offscreen(*wid);
             }

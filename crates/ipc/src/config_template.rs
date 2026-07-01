@@ -116,6 +116,10 @@ workspace_switch_duration_ms = 200  # switching workspaces
 scroll_duration_ms = 200            # scrolling a column into view
 overview_duration_ms = 150          # overview open/close zoom
 easing = "ease_out"
+# Skip animations while on battery / Windows power saver (saves power).
+# Set false to keep animations on battery. The Windows "show animations"
+# accessibility setting is always honored regardless.
+reduce_motion_on_battery = true
 
 [overview]
 # Workspace overview card bodies: "live" (default) shows DWM window

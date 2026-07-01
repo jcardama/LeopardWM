@@ -1082,7 +1082,12 @@ impl AppState {
                     ));
                 }
 
-                if !start_rects.is_empty() {
+                // As in handle_switch_workspace: animate only when motion isn't
+                // reduced, otherwise hide the leaving windows immediately so they
+                // don't linger as ghosts (reduce_motion skips the transition that
+                // would otherwise move them off-screen).
+                let animating = !start_rects.is_empty() && !self.reduce_motion;
+                if animating {
                     let duration =
                         self.config.animation.workspace_switch_duration_ms;
                     self.start_workspace_switch_transition(
@@ -1090,6 +1095,10 @@ impl AppState {
                         exit_rects,
                         duration,
                     );
+                } else {
+                    for (wid, _) in &old_placements {
+                        let _ = leopardwm_platform_win32::move_window_offscreen(*wid);
+                    }
                 }
             }
 

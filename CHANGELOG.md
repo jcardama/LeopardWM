@@ -73,6 +73,12 @@ All notable changes to LeopardWM will be documented in this file.
   reset by morning. A disconnected monitor's layout is now saved and restored
   when it returns, matched by a stable device name. Its windows stay usable on
   the primary monitor while it is away and snap back on reconnect.
+- **Switching workspaces no longer leaves ghost windows on battery.** On battery
+  or in Windows power saver, LeopardWM turns off animations, but the outgoing
+  workspace's windows were only hidden as part of that animation, so they stayed
+  on screen. They are now hidden immediately when animations are off. A new
+  `reduce_motion_on_battery` setting under `[animation]` (default true) keeps
+  animations off on battery to save power; set it false to keep them running.
 
 ## 0.2.3
 

@@ -827,6 +827,13 @@ pub struct AnimationConfig {
     /// Easing curve applied to all of the above.
     #[serde(default)]
     pub easing: leopardwm_core_layout::Easing,
+
+    /// Reduce motion (skip animations) while on battery or in Windows power
+    /// saver. On by default to save power; set `false` to keep animations
+    /// running on battery. The Windows "show animations" accessibility setting
+    /// is always honored regardless of this.
+    #[serde(default = "default_reduce_motion_on_battery")]
+    pub reduce_motion_on_battery: bool,
 }
 
 /// Upper bound for any configured animation duration (ms). Guards against
@@ -849,6 +856,10 @@ fn default_overview_duration() -> u64 {
     150
 }
 
+fn default_reduce_motion_on_battery() -> bool {
+    true
+}
+
 impl Default for AnimationConfig {
     fn default() -> Self {
         Self {
@@ -857,6 +868,7 @@ impl Default for AnimationConfig {
             scroll_duration_ms: default_scroll_duration(),
             overview_duration_ms: default_overview_duration(),
             easing: leopardwm_core_layout::Easing::default(),
+            reduce_motion_on_battery: default_reduce_motion_on_battery(),
         }
     }
 }
@@ -2270,6 +2282,18 @@ mod tests {
             config.animation.easing,
             leopardwm_core_layout::Easing::EaseOut
         );
+        // Reducing motion on battery is on by default (power saving).
+        assert!(config.animation.reduce_motion_on_battery);
+    }
+
+    #[test]
+    fn test_reduce_motion_on_battery_parses_from_toml() {
+        let toml = "[animation]\nreduce_motion_on_battery = false\n";
+        let config: Config = toml::from_str(toml).expect("parse");
+        assert!(!config.animation.reduce_motion_on_battery);
+        // A config that omits the field keeps the power-saving default.
+        let config: Config = toml::from_str("[animation]\n").expect("parse");
+        assert!(config.animation.reduce_motion_on_battery);
     }
 
     #[test]
