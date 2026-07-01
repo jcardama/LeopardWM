@@ -448,6 +448,14 @@ pub(crate) struct AppState {
     /// original column instead of right of focus. Cleared when consumed or when
     /// the window dies. Session-only, never persisted.
     pub(crate) move_origins: HashMap<u64, MoveOrigin>,
+    /// Layout of monitors that disconnected this session, keyed by the stable
+    /// `device_name` (e.g. `\\.\DISPLAY2`) rather than the volatile HMONITOR.
+    /// When a monitor with a matching device name reconnects, its saved
+    /// workspaces (columns, widths, minimized state) and active index are
+    /// restored, so a screen powering off overnight or an undock/redock no
+    /// longer flattens the layout. Windows are migrated to primary while the
+    /// monitor is gone and pulled back on return. Session-only, never persisted.
+    pub(crate) stashed_monitor_layouts: HashMap<String, (Vec<Workspace>, usize)>,
     /// Tracks when each managed window was added to a workspace. Used to
     /// distinguish transient popups (managed briefly) from real windows
     /// (managed for a long time, e.g., close-to-tray apps).
@@ -740,6 +748,7 @@ impl AppState {
             elevation_blocked: HashMap::new(),
             hidden_column_widths: HashMap::new(),
             move_origins: HashMap::new(),
+            stashed_monitor_layouts: HashMap::new(),
             window_managed_at: HashMap::new(),
             window_last_maximized_at: HashMap::new(),
             snap_disabled_hwnds: HashSet::new(),

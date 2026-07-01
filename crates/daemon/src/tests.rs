@@ -991,6 +991,82 @@ fn test_reconcile_remove_monitor() {
 }
 
 #[test]
+fn test_reconcile_restores_stashed_layout_on_monitor_return() {
+    // A monitor that disconnects and reconnects with a NEW HMONITOR but the same
+    // device_name gets its exact layout back (columns + widths) instead of a
+    // flattened default — the overnight screen-off reset bug.
+    let mut state = AppState::new_with_config(test_config(), two_monitors());
+    // Two windows with distinct non-default widths on monitor 2 (DISPLAY2).
+    {
+        let ws = state.workspaces.get_mut(&2).unwrap().get_mut(0).unwrap();
+        ws.insert_window(100, Some(500)).unwrap();
+        ws.insert_window(200, Some(650)).unwrap();
+    }
+    let width_on = |st: &AppState, mid: MonitorId, h: u64| -> Option<i32> {
+        let ws = st.workspaces.get(&mid)?.first()?;
+        let (c, _) = ws.find_window_location(h)?;
+        ws.column(c).map(|col| col.width())
+    };
+    assert_eq!(width_on(&state, 2, 100), Some(500));
+    assert_eq!(width_on(&state, 2, 200), Some(650));
+
+    // Monitor 2 disconnects: windows migrate to primary, layout stashed.
+    state.reconcile_monitors(test_monitors()); // only DISPLAY1 remains
+    assert!(!state.workspaces.contains_key(&2));
+    assert!(state.workspaces[&1][0].contains_window(100));
+    assert!(state.workspaces[&1][0].contains_window(200));
+    assert!(state.stashed_monitor_layouts.contains_key("DISPLAY2"));
+
+    // Monitor 2 returns with a NEW HMONITOR (id 99) but the same device_name.
+    let mut returned = two_monitors();
+    returned[1].id = 99;
+    state.reconcile_monitors(returned);
+
+    // The stashed layout is restored on the new id with original widths...
+    assert!(state.workspaces.contains_key(&99));
+    assert_eq!(width_on(&state, 99, 100), Some(500), "width restored on return");
+    assert_eq!(width_on(&state, 99, 200), Some(650), "width restored on return");
+    // ...the windows are no longer duplicated on primary...
+    assert!(!state.workspaces[&1][0].contains_window(100));
+    assert!(!state.workspaces[&1][0].contains_window(200));
+    // ...and the stash is consumed.
+    assert!(!state.stashed_monitor_layouts.contains_key("DISPLAY2"));
+}
+
+#[test]
+fn test_reconcile_adopts_layout_on_same_pass_handle_change() {
+    // A single reconcile where a monitor's HMONITOR changes AND the count
+    // changes (e.g. a dock event) must preserve the layout, not flatten it.
+    let mut state = AppState::new_with_config(test_config(), two_monitors());
+    {
+        let ws = state.workspaces.get_mut(&2).unwrap().get_mut(0).unwrap();
+        ws.insert_window(100, Some(500)).unwrap();
+        ws.insert_window(200, Some(650)).unwrap();
+    }
+    // DISPLAY2 returns with a new handle (99) and a third monitor appears in the
+    // same pass, so the count changes and the safe re-key branch is skipped.
+    let mut next = two_monitors();
+    next[1].id = 99;
+    next.push(MonitorInfo {
+        id: 3,
+        rect: Rect::new(3840, 0, 1920, 1080),
+        work_area: Rect::new(3840, 0, 1920, 1040),
+        is_primary: false,
+        device_name: "DISPLAY3".to_string(),
+        scale_factor: 1.0,
+    });
+    state.reconcile_monitors(next);
+
+    let ws = state.workspaces.get(&99).unwrap().first().unwrap();
+    let col100 = ws.find_window_location(100).unwrap().0;
+    let col200 = ws.find_window_location(200).unwrap().0;
+    assert_eq!(ws.column(col100).unwrap().width(), 500, "adopted layout keeps width");
+    assert_eq!(ws.column(col200).unwrap().width(), 650, "adopted layout keeps width");
+    // Adopted live, so nothing was stashed or flattened onto another monitor.
+    assert!(state.stashed_monitor_layouts.is_empty());
+}
+
+#[test]
 fn test_reconcile_remove_focused_monitor() {
     let mut state = AppState::new_with_config(test_config(), two_monitors());
     state.focused_monitor = 2; // Focus on secondary

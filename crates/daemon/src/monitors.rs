@@ -94,6 +94,63 @@ impl AppState {
         // targets exist even when all old monitors are replaced with new ones.
         for monitor in &new_monitors {
             if !old_ids.contains(&monitor.id) {
+                // A monitor whose stable device_name was stashed on disconnect is
+                // returning (e.g. it woke from sleep or was re-docked). Restore its
+                // saved layout instead of a fresh one, and pull its windows back off
+                // whatever monitor they were migrated to while it was gone.
+                if let Some((stashed_ws, active_idx)) =
+                    self.stashed_monitor_layouts.remove(&monitor.device_name)
+                {
+                    let returning: HashSet<u64> =
+                        stashed_ws.iter().flat_map(|w| w.all_window_ids()).collect();
+                    for ws_vec in self.workspaces.values_mut() {
+                        for ws in ws_vec.iter_mut() {
+                            for &wid in &returning {
+                                let _ = ws.remove_window(wid);
+                                ws.remove_floating(wid);
+                            }
+                        }
+                    }
+                    let clamped = active_idx.min(stashed_ws.len().saturating_sub(1));
+                    info!(
+                        "Restored {} stashed workspace(s) for reconnected monitor {} ({})",
+                        stashed_ws.len(),
+                        monitor.id,
+                        monitor.device_name
+                    );
+                    self.workspaces.insert(monitor.id, stashed_ws);
+                    self.active_workspace.insert(monitor.id, clamped);
+                    continue;
+                }
+                // Same-pass handle change: the same physical monitor (matched by
+                // device_name) is being removed elsewhere in this reconcile with a
+                // different HMONITOR. Adopt its live layout directly instead of
+                // recreating it, generalizing the count-unchanged re-key branch to
+                // the count-changed case (e.g. a dock event that also adds a
+                // monitor). The removed loop then finds nothing to migrate for it.
+                let adopt_from = old_ids.iter().copied().find(|&oid| {
+                    !new_ids.contains(&oid)
+                        && self
+                            .monitors
+                            .get(&oid)
+                            .is_some_and(|m| m.device_name == monitor.device_name)
+                });
+                if let Some(old_id) = adopt_from {
+                    if let Some(ws) = self.workspaces.remove(&old_id) {
+                        let idx = self.active_workspace.remove(&old_id).unwrap_or(0);
+                        let clamped = idx.min(ws.len().saturating_sub(1));
+                        if self.focused_monitor == old_id {
+                            self.focused_monitor = monitor.id;
+                        }
+                        info!(
+                            "Adopted live layout from monitor {} to {} ({}) across a handle change",
+                            old_id, monitor.id, monitor.device_name
+                        );
+                        self.workspaces.insert(monitor.id, ws);
+                        self.active_workspace.insert(monitor.id, clamped);
+                        continue;
+                    }
+                }
                 let params = ScaledLayoutParams::from_config(
                     &self.config.layout,
                     &self.config.appearance,
@@ -124,6 +181,10 @@ impl AppState {
 
         // Handle removed monitors - migrate ALL workspaces' windows to primary's active workspace
         for removed_id in old_ids.difference(&new_ids) {
+            // The stable device_name and active index, captured before the
+            // monitor info is dropped, so a reconnect can restore this layout.
+            let device_name = self.monitors.get(removed_id).map(|m| m.device_name.clone());
+            let active_idx = self.active_workspace.get(removed_id).copied().unwrap_or(0);
             if let Some(old_ws_vec) = self.workspaces.remove(removed_id) {
                 // Collect tiled and floating windows separately to preserve their type
                 let mut tiled_window_ids = Vec::new();
@@ -186,6 +247,15 @@ impl AppState {
                             floating_windows.len(),
                             removed_id
                         );
+                    }
+                }
+                // Stash this monitor's layout by stable device_name so a
+                // reconnect restores it; the windows migrated above stay on
+                // primary meanwhile and are pulled back when it returns.
+                if let Some(name) = device_name {
+                    if !tiled_window_ids.is_empty() || !floating_windows.is_empty() {
+                        self.stashed_monitor_layouts
+                            .insert(name, (old_ws_vec, active_idx));
                     }
                 }
             }

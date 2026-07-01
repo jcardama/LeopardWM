@@ -67,6 +67,12 @@ All notable changes to LeopardWM will be documented in this file.
   third-party Alt-drag window mover (such as AltSnap) could drag the overview
   overlay out of place while it was open. The overlay now holds its position for
   as long as it is shown.
+- **The layout survives a monitor sleeping or being unplugged.** When a screen
+  powered off long enough to drop from Windows, its windows were flattened onto
+  the primary monitor at default widths and never restored, so the layout looked
+  reset by morning. A disconnected monitor's layout is now saved and restored
+  when it returns, matched by a stable device name. Its windows stay usable on
+  the primary monitor while it is away and snap back on reconnect.
 
 ## 0.2.3
 
