@@ -163,6 +163,18 @@ pub fn hotkey_catalog() -> Vec<HotkeyAction> {
         action("toggle_overview", Some("Ctrl+Alt+Space"), "Toggle overview", "Workspaces"),
         action("workspace_prev", Some("Ctrl+Alt+Shift+Left"), "Previous workspace", "Workspaces"),
         action("workspace_next", Some("Ctrl+Alt+Shift+Right"), "Next workspace", "Workspaces"),
+        action(
+            "move_to_workspace_prev",
+            Some("Ctrl+Alt+Shift+PageUp"),
+            "Move window to previous workspace",
+            "Move window to workspace",
+        ),
+        action(
+            "move_to_workspace_next",
+            Some("Ctrl+Alt+Shift+PageDown"),
+            "Move window to next workspace",
+            "Move window to workspace",
+        ),
     ];
     for i in 1..=9u8 {
         v.push(action(
@@ -205,10 +217,16 @@ pub fn command_for_action(id: &str) -> Option<crate::IpcCommand> {
             .then_some(IpcCommand::SwitchWorkspace { index });
     }
     if let Some(suffix) = id.strip_prefix("move_to_workspace_") {
-        let index: u8 = suffix.parse().ok()?;
-        return (1..=9)
-            .contains(&index)
-            .then_some(IpcCommand::MoveToWorkspace { index });
+        return match suffix {
+            "prev" => Some(IpcCommand::MoveToWorkspacePrev),
+            "next" => Some(IpcCommand::MoveToWorkspaceNext),
+            _ => {
+                let index: u8 = suffix.parse().ok()?;
+                (1..=9)
+                    .contains(&index)
+                    .then_some(IpcCommand::MoveToWorkspace { index })
+            }
+        };
     }
 
     Some(match id {
@@ -326,7 +344,7 @@ mod tests {
     fn test_default_bindings_match_frozen_expected_set() {
         // Golden set: the complete key-chord -> action map the catalog must
         // produce. Guards against transcription drift (a typo would keep the
-        // count at 57 but change a binding). Update deliberately when the
+        // count at 59 but change a binding). Update deliberately when the
         // intended defaults change.
         let expected: &[(&str, &str)] = &[
             ("Ctrl+Alt+H", "focus_left"),
@@ -377,6 +395,8 @@ mod tests {
             ("Ctrl+Alt+Space", "toggle_overview"),
             ("Ctrl+Alt+Shift+Left", "workspace_prev"),
             ("Ctrl+Alt+Shift+Right", "workspace_next"),
+            ("Ctrl+Alt+Shift+PageUp", "move_to_workspace_prev"),
+            ("Ctrl+Alt+Shift+PageDown", "move_to_workspace_next"),
             ("Ctrl+Alt+1", "switch_workspace_1"),
             ("Ctrl+Alt+2", "switch_workspace_2"),
             ("Ctrl+Alt+3", "switch_workspace_3"),
@@ -426,6 +446,15 @@ mod tests {
         assert_eq!(
             command_for_action("move_to_workspace_9"),
             Some(IpcCommand::MoveToWorkspace { index: 9 })
+        );
+        // Relative next/prev must not be swallowed by the numeric suffix parse.
+        assert_eq!(
+            command_for_action("move_to_workspace_next"),
+            Some(IpcCommand::MoveToWorkspaceNext)
+        );
+        assert_eq!(
+            command_for_action("move_to_workspace_prev"),
+            Some(IpcCommand::MoveToWorkspacePrev)
         );
         assert_eq!(command_for_action("switch_workspace_0"), None);
         assert_eq!(command_for_action("switch_workspace_10"), None);

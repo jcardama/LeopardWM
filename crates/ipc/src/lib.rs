@@ -474,6 +474,10 @@ pub enum IpcCommand {
     WorkspacePrev,
     /// Switch to the next workspace (cycles 9 → 1 on wrap).
     WorkspaceNext,
+    /// Move the focused window to the previous workspace (cycles 1 → 9 on wrap).
+    MoveToWorkspacePrev,
+    /// Move the focused window to the next workspace (cycles 9 → 1 on wrap).
+    MoveToWorkspaceNext,
     /// Toggle the workspace overview overlay (a map of the focused
     /// monitor's non-empty workspaces).
     ToggleOverview,

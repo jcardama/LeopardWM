@@ -191,6 +191,10 @@ pub(crate) enum Commands {
     WorkspaceNext,
     /// Switch to the previous workspace (wraps 1 -> 9)
     WorkspacePrev,
+    /// Move the focused window to the next workspace (wraps 9 -> 1)
+    MoveToWorkspaceNext,
+    /// Move the focused window to the previous workspace (wraps 1 -> 9)
+    MoveToWorkspacePrev,
     /// Toggle the workspace overview (map of non-empty workspaces)
     ToggleOverview,
     /// Query daemon status

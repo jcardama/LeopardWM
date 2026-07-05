@@ -41,8 +41,11 @@ outer_gap_top = {outer_gap}
 outer_gap_bottom = {outer_gap}
 
 # Width presets (fractions of usable viewport width).
-# First preset is used as the default width for new columns.
 width_presets = [0.333, 0.5, 0.667]
+
+# Which preset new columns open at (1-based index into width_presets).
+# 1 = first preset. Out-of-range values fall back to the first preset.
+default_width_preset = 1
 
 # Height presets (fractions of column height / weight).
 height_presets = [0.333, 0.5, 0.667]
@@ -91,6 +94,15 @@ focus_follows_mouse = false
 # (on another workspace, or scrolled out of view). Floating and minimized
 # windows always keep their button. Default true.
 # hide_offscreen_taskbar_buttons = true
+
+# Wrap vertical focus/move at a column's top or bottom edge into the adjacent
+# workspace. When on, focus_up/focus_down at the edge switch workspaces and
+# move_window_up/move_window_down at the edge move the window there. Default false.
+# workspace_edge_wrap = false
+
+# Warp the mouse cursor onto the focused window after a focus-navigation command
+# (the inverse of focus_follows_mouse). Default false.
+# mouse_follows_focus = false
 
 [hotkeys]
 {hotkeys}

@@ -794,6 +794,30 @@ impl Workspace {
         self.focused_window_in_column
     }
 
+    /// Whether the focused window is at the top of its column, so `focus_up` /
+    /// `move_window_up_in_column` can't move it within the column. A Tabbed
+    /// column with 2+ windows cycles its tabs, so it is never at an edge.
+    /// Used by the workspace edge-wrap behavior.
+    pub fn at_column_top(&self) -> bool {
+        match self.columns.get(self.focused_column) {
+            Some(col) if col.is_tabbed() && col.len() >= 2 => false,
+            Some(_) => self.focused_window_in_column == 0,
+            None => false,
+        }
+    }
+
+    /// Whether the focused window is at the bottom of its column, so
+    /// `focus_down` / `move_window_down_in_column` can't move it within the
+    /// column. A Tabbed column with 2+ windows cycles its tabs, so it is never
+    /// at an edge. Used by the workspace edge-wrap behavior.
+    pub fn at_column_bottom(&self) -> bool {
+        match self.columns.get(self.focused_column) {
+            Some(col) if col.is_tabbed() && col.len() >= 2 => false,
+            Some(col) => self.focused_window_in_column + 1 >= col.len().max(1),
+            None => false,
+        }
+    }
+
     /// Set focus to a specific column and window index with validation.
     ///
     /// # Errors

@@ -3,10 +3,11 @@
 use crate::types::Win32Error;
 use crate::window_id_to_hwnd;
 use leopardwm_core_layout::WindowId;
+use windows::Win32::Foundation::RECT;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::WindowsAndMessaging::{
-    BringWindowToTop, GetForegroundWindow, GetWindowThreadProcessId, IsIconic, IsWindow,
-    PostMessageW, SetForegroundWindow, ShowWindow, SW_RESTORE,
+    BringWindowToTop, GetForegroundWindow, GetWindowRect, GetWindowThreadProcessId, IsIconic,
+    IsWindow, PostMessageW, SetCursorPos, SetForegroundWindow, ShowWindow, SW_RESTORE,
 };
 
 /// The current OS foreground window as a `WindowId`, if any. This is
@@ -36,6 +37,29 @@ pub fn ms_since_last_user_input() -> Option<u32> {
             return None;
         }
         Some(GetTickCount().wrapping_sub(lii.dwTime))
+    }
+}
+
+/// Move the mouse cursor to the center of `hwnd` (the "mouse follows focus"
+/// behavior). Best-effort: does nothing if the handle is invalid or its rect
+/// can't be read.
+pub fn warp_cursor_to_window(hwnd: WindowId) {
+    let Ok(hwnd) = window_id_to_hwnd(hwnd) else {
+        return;
+    };
+    unsafe {
+        // A minimized window reports off-screen (-32000, -32000) coordinates,
+        // so warping to its rect would fling the cursor into the void.
+        if !IsWindow(Some(hwnd)).as_bool() || IsIconic(hwnd).as_bool() {
+            return;
+        }
+        let mut rect = RECT::default();
+        if GetWindowRect(hwnd, &mut rect).is_err() {
+            return;
+        }
+        let cx = rect.left + (rect.right - rect.left) / 2;
+        let cy = rect.top + (rect.bottom - rect.top) / 2;
+        let _ = SetCursorPos(cx, cy);
     }
 }
 

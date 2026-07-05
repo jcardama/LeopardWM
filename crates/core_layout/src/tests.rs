@@ -309,6 +309,39 @@ mod tests {
     }
 
     #[test]
+    fn test_column_edge_detection() {
+        // Single-window column: at both the top and bottom edge.
+        let mut ws = Workspace::new();
+        ws.insert_window(1, Some(400)).unwrap();
+        assert!(ws.at_column_top());
+        assert!(ws.at_column_bottom());
+
+        // Stack into [1, 2, 3]; focus index determines which edge (if any).
+        ws.insert_window_in_column(2, 0).unwrap();
+        ws.insert_window_in_column(3, 0).unwrap();
+        assert_eq!(ws.columns()[0].len(), 3);
+
+        ws.set_focus(0, 0).unwrap();
+        assert!(ws.at_column_top());
+        assert!(!ws.at_column_bottom());
+
+        ws.set_focus(0, 1).unwrap();
+        assert!(!ws.at_column_top());
+        assert!(!ws.at_column_bottom());
+
+        ws.set_focus(0, 2).unwrap();
+        assert!(!ws.at_column_top());
+        assert!(ws.at_column_bottom());
+
+        // A tabbed column with 2+ windows cycles its tabs, so it is never at
+        // an edge regardless of which tab is active.
+        ws.toggle_focused_column_tabbed_mode();
+        ws.set_focus(0, 0).unwrap();
+        assert!(!ws.at_column_top());
+        assert!(!ws.at_column_bottom());
+    }
+
+    #[test]
     fn test_resize_column() {
         let mut ws = Workspace::new();
         ws.insert_window(1, Some(400)).unwrap();

@@ -141,9 +141,14 @@ pub struct LayoutConfig {
     pub center_past_edges: bool,
 
     /// Width presets for cycling (fractions of usable viewport width).
-    /// The first preset is also used as the default width for new columns.
     #[serde(default = "default_width_presets")]
     pub width_presets: Vec<f64>,
+
+    /// Which width preset new columns open at, as a 1-based index into
+    /// `width_presets`. Defaults to 1 (the first preset). Out-of-range values
+    /// fall back to the first preset.
+    #[serde(default = "default_width_preset")]
+    pub default_width_preset: usize,
 
     /// Height presets for cycling (fractions of column height / weight).
     #[serde(default = "default_height_presets")]
@@ -168,6 +173,10 @@ fn default_width_presets() -> Vec<f64> {
     vec![0.333, 0.5, 0.667]
 }
 
+fn default_width_preset() -> usize {
+    1
+}
+
 fn default_height_presets() -> Vec<f64> {
     vec![0.333, 0.5, 0.667]
 }
@@ -183,6 +192,7 @@ impl Default for LayoutConfig {
             centering_mode: CenteringModeConfig::default(),
             center_past_edges: false,
             width_presets: default_width_presets(),
+            default_width_preset: default_width_preset(),
             height_presets: default_height_presets(),
             outer_gap: None,
             default_column_width: None,
@@ -193,8 +203,19 @@ impl Default for LayoutConfig {
 }
 
 impl LayoutConfig {
+    /// The width fraction new columns open at: the `default_width_preset`-th
+    /// preset (1-based), falling back to the first preset if out of range.
+    pub fn default_width_fraction(&self) -> f64 {
+        let idx = self.default_width_preset.saturating_sub(1);
+        self.width_presets
+            .get(idx)
+            .or_else(|| self.width_presets.first())
+            .copied()
+            .unwrap_or(0.5)
+    }
+
     /// Compute the default column width in pixels for a given viewport width,
-    /// using the first width preset as a fraction.
+    /// using the configured default width preset as a fraction.
     /// Formula: `width = fraction * (viewport - OL - OR + gap) - gap`
     /// This is independent of column count — same result whether 1 or 10 columns.
     pub fn default_column_width_px(&self, viewport_width: i32) -> i32 {
@@ -203,7 +224,7 @@ impl LayoutConfig {
             .saturating_sub(self.outer_gap_right.max(0))
             .saturating_add(self.gap.max(0));
         let gap = self.gap.max(0);
-        let frac = self.width_presets.first().copied().unwrap_or(0.5);
+        let frac = self.default_width_fraction();
         (base as f64 * frac - gap as f64).floor().max(100.0) as i32
     }
 
@@ -404,6 +425,20 @@ pub struct BehaviorConfig {
     /// minimized windows always keep their button.
     #[serde(default = "default_true")]
     pub hide_offscreen_taskbar_buttons: bool,
+
+    /// Wrap vertical focus/move at a column's top or bottom edge into the
+    /// adjacent workspace. When on, focus_up/focus_down at the edge switch to
+    /// the previous/next workspace, and move_window_up/move_window_down at the
+    /// edge move the focused window there. Off by default.
+    #[serde(default = "default_false")]
+    pub workspace_edge_wrap: bool,
+
+    /// Warp the mouse cursor onto the focused window after a focus-navigation
+    /// command (focus left/right/up/down/next/prev/start/end and the monitor
+    /// focus/move commands). The inverse of `focus_follows_mouse`. Off by
+    /// default.
+    #[serde(default = "default_false")]
+    pub mouse_follows_focus: bool,
 }
 
 /// Placement for newly opened tiled windows.
@@ -432,6 +467,8 @@ impl Default for BehaviorConfig {
             swap_chain_ghost_animation: true,
             new_window_placement: NewWindowPlacement::default(),
             hide_offscreen_taskbar_buttons: true,
+            workspace_edge_wrap: false,
+            mouse_follows_focus: false,
         }
     }
 }
@@ -1075,6 +1112,19 @@ impl Config {
             self.layout.width_presets = default_width_presets();
         }
 
+        // default_width_preset must be a valid 1-based index into width_presets
+        let preset_count = self.layout.width_presets.len();
+        if self.layout.default_width_preset == 0 || self.layout.default_width_preset > preset_count {
+            warnings.push(ConfigWarning {
+                field: "layout.default_width_preset".to_string(),
+                message: format!(
+                    "default_width_preset ({}) out of range 1..={}, using 1",
+                    self.layout.default_width_preset, preset_count
+                ),
+            });
+            self.layout.default_width_preset = 1;
+        }
+
         // height_presets must not be empty
         if self.layout.height_presets.is_empty() {
             warnings.push(ConfigWarning {
@@ -1505,7 +1555,7 @@ mod tests {
     #[test]
     fn test_hotkey_config_default() {
         let config = HotkeyConfig::default();
-        assert_eq!(config.bindings.len(), 66);
+        assert_eq!(config.bindings.len(), 68);
         assert_eq!(
             config.bindings.get("Ctrl+Alt+Space"),
             Some(&"toggle_overview".to_string())
@@ -1751,6 +1801,36 @@ mod tests {
         let width = config.default_column_width_px(1920);
         let base = 1920 - config.outer_gap_left - config.outer_gap_right + config.gap;
         assert_eq!(width, (base as f64 * 0.333 - config.gap as f64).round() as i32);
+    }
+
+    #[test]
+    fn test_default_width_preset_selects_fraction() {
+        let mut config = LayoutConfig::default();
+        // Default is preset 1 (0.333).
+        assert_eq!(config.default_width_fraction(), 0.333);
+
+        // Selecting the 2nd/3rd preset picks the matching fraction.
+        config.default_width_preset = 2;
+        assert_eq!(config.default_width_fraction(), 0.5);
+        config.default_width_preset = 3;
+        assert_eq!(config.default_width_fraction(), 0.667);
+
+        // Out-of-range (0 or beyond the list) falls back to the first preset.
+        config.default_width_preset = 0;
+        assert_eq!(config.default_width_fraction(), 0.333);
+        config.default_width_preset = 99;
+        assert_eq!(config.default_width_fraction(), 0.333);
+    }
+
+    #[test]
+    fn test_default_width_preset_out_of_range_warns_and_clamps() {
+        let mut config = Config::default();
+        config.layout.default_width_preset = 5; // only 3 presets
+        let warnings = config.validate();
+        assert!(warnings
+            .iter()
+            .any(|w| w.field == "layout.default_width_preset"));
+        assert_eq!(config.layout.default_width_preset, 1);
     }
 
     #[test]

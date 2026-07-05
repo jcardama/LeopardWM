@@ -965,7 +965,7 @@ input[type="range"]::-webkit-slider-thumb {
           </div>
         </div>
         <h3 class="section-subtitle">Width presets</h3>
-        <p class="section-desc">Column width presets as viewport fractions. The first preset is the default width for new columns.</p>
+        <p class="section-desc">Column width presets as viewport fractions, used for width cycling.</p>
         <div class="table-wrap">
           <table>
             <thead><tr><th>Fraction</th><th style="width:36px"></th></tr></thead>
@@ -973,6 +973,10 @@ input[type="range"]::-webkit-slider-thumb {
           </table>
         </div>
         <div class="table-actions"><button class="btn btn-sm" onclick="addPresetRow('width',null)">+ Add preset</button></div>
+        <div class="field">
+          <div class="field-info"><div class="field-label">Default preset for new windows</div><div class="field-desc">Which width preset new windows open at (1 = first preset)</div></div>
+          <input type="number" id="layout-default_width_preset" min="1" max="20">
+        </div>
         <h3 class="section-subtitle">Height presets</h3>
         <p class="section-desc">Window height presets as column fractions for cycling window heights.</p>
         <div class="table-wrap">
@@ -1072,6 +1076,14 @@ input[type="range"]::-webkit-slider-thumb {
           <div class="field">
             <div class="field-info"><div class="field-label">Focus delay</div><div class="field-desc">Delay before focus change on mouse enter (ms)</div></div>
             <input type="number" id="behavior-focus_follows_mouse_delay_ms" min="50" max="2000">
+          </div>
+          <div class="field">
+            <div class="field-info"><div class="field-label">Mouse follows focus</div><div class="field-desc">Move the cursor onto the focused window after focus commands (inverse of focus follows mouse)</div></div>
+            <label class="toggle"><input type="checkbox" id="behavior-mouse_follows_focus"><span class="track"></span><span class="thumb"></span></label>
+          </div>
+          <div class="field">
+            <div class="field-info"><div class="field-label">Workspace edge wrap</div><div class="field-desc">Focus or move up/down past a column's top or bottom edge switches to the adjacent workspace</div></div>
+            <label class="toggle"><input type="checkbox" id="behavior-workspace_edge_wrap"><span class="track"></span><span class="thumb"></span></label>
           </div>
           <div class="field">
             <div class="field-info"><div class="field-label">Disable snap layouts</div><div class="field-desc">Prevent Windows 11 edge-drag snapping for tiled windows</div></div>
@@ -1429,6 +1441,7 @@ function init(cfg) {
   setVal('layout-outer_gap_bottom', cfg.layout.outer_gap_bottom);
   document.getElementById('width-presets-body').innerHTML = '';
   (cfg.layout.width_presets || [0.333,0.5,0.667]).forEach(function(v) { addPresetRow('width', v); });
+  setVal('layout-default_width_preset', cfg.layout.default_width_preset || 1);
   document.getElementById('height-presets-body').innerHTML = '';
   (cfg.layout.height_presets || [0.333,0.5,0.667]).forEach(function(v) { addPresetRow('height', v); });
   setCb('cb-layout-centering_mode', cfg.layout.centering_mode);
@@ -1455,6 +1468,8 @@ function init(cfg) {
   setChecked('behavior-track_focus_changes', cfg.behavior.track_focus_changes);
   setChecked('behavior-focus_follows_mouse', cfg.behavior.focus_follows_mouse);
   setVal('behavior-focus_follows_mouse_delay_ms', cfg.behavior.focus_follows_mouse_delay_ms);
+  setChecked('behavior-mouse_follows_focus', cfg.behavior.mouse_follows_focus === true);
+  setChecked('behavior-workspace_edge_wrap', cfg.behavior.workspace_edge_wrap === true);
   setChecked('behavior-disable_snap_layouts', cfg.behavior.disable_snap_layouts !== false);
   setChecked('behavior-swap_chain_ghost_animation', cfg.behavior.swap_chain_ghost_animation === true);
   setChecked('behavior-hide_offscreen_taskbar_buttons', cfg.behavior.hide_offscreen_taskbar_buttons !== false);
@@ -1589,9 +1604,11 @@ function humanizeKey(chord) {
    Bare Esc/Tab leave the field, bare Backspace clears the bind. */
 var CODE_TO_KEY = {
   ArrowLeft: 'Left', ArrowRight: 'Right', ArrowUp: 'Up', ArrowDown: 'Down',
-  Home: 'Home', End: 'End',
+  Home: 'Home', End: 'End', PageUp: 'PageUp', PageDown: 'PageDown',
   Space: 'Space', Enter: 'Enter', Tab: 'Tab', Escape: 'Escape',
-  Minus: '-', Equal: '=', Comma: ',', Period: '.', BracketLeft: '[', BracketRight: ']'
+  Minus: '-', Equal: '=', Comma: ',', Period: '.', BracketLeft: '[', BracketRight: ']',
+  NumpadAdd: 'NumpadAdd', NumpadSubtract: 'NumpadSubtract', NumpadMultiply: 'NumpadMultiply',
+  NumpadDivide: 'NumpadDivide', NumpadDecimal: 'NumpadDecimal'
 };
 function codeToKey(code, key) {
   if (/^Key[A-Z]$/.test(code)) {
@@ -1601,6 +1618,7 @@ function codeToKey(code, key) {
     return code.slice(3);
   }
   if (/^Digit[0-9]$/.test(code)) return code.slice(5);
+  if (/^Numpad[0-9]$/.test(code)) return code;
   if (/^F([1-9]|1[0-9]|2[0-4])$/.test(code)) return code;
   return CODE_TO_KEY[code];
 }
@@ -2019,6 +2037,7 @@ function readConfig() {
       outer_gap_bottom: num('layout-outer_gap_bottom'),
       width_presets: readPresets('width'),
       height_presets: readPresets('height'),
+      default_width_preset: num('layout-default_width_preset'),
       centering_mode: cbVal('cb-layout-centering_mode'),
       center_past_edges: checked('layout-center_past_edges')
     },
@@ -2039,6 +2058,8 @@ function readConfig() {
       track_focus_changes: checked('behavior-track_focus_changes'),
       focus_follows_mouse: checked('behavior-focus_follows_mouse'),
       focus_follows_mouse_delay_ms: num('behavior-focus_follows_mouse_delay_ms'),
+      mouse_follows_focus: checked('behavior-mouse_follows_focus'),
+      workspace_edge_wrap: checked('behavior-workspace_edge_wrap'),
       disable_snap_layouts: checked('behavior-disable_snap_layouts'),
       swap_chain_ghost_animation: checked('behavior-swap_chain_ghost_animation'),
       hide_offscreen_taskbar_buttons: checked('behavior-hide_offscreen_taskbar_buttons'),

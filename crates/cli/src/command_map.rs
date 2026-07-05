@@ -85,6 +85,8 @@ pub(crate) fn to_ipc_command(cmd: &Commands) -> IpcCommand {
         Commands::MoveToWorkspace { number } => IpcCommand::MoveToWorkspace { index: *number },
         Commands::WorkspaceNext => IpcCommand::WorkspaceNext,
         Commands::WorkspacePrev => IpcCommand::WorkspacePrev,
+        Commands::MoveToWorkspaceNext => IpcCommand::MoveToWorkspaceNext,
+        Commands::MoveToWorkspacePrev => IpcCommand::MoveToWorkspacePrev,
         Commands::ToggleOverview => IpcCommand::ToggleOverview,
         Commands::Status => IpcCommand::QueryStatus,
         Commands::PanicRevert => IpcCommand::PanicRevert,

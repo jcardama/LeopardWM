@@ -528,6 +528,16 @@ pub mod vk {
     pub const DOWN: u32 = 0x28;
     pub const HOME: u32 = 0x24;
     pub const END: u32 = 0x23;
+    pub const PAGE_UP: u32 = 0x21; // VK_PRIOR
+    pub const PAGE_DOWN: u32 = 0x22; // VK_NEXT
+
+    // Numpad (fire only with NumLock on; NumLock-off sends nav VKs instead)
+    pub const NUMPAD0: u32 = 0x60;
+    pub const NUMPAD_MULTIPLY: u32 = 0x6A;
+    pub const NUMPAD_ADD: u32 = 0x6B;
+    pub const NUMPAD_SUBTRACT: u32 = 0x6D;
+    pub const NUMPAD_DECIMAL: u32 = 0x6E;
+    pub const NUMPAD_DIVIDE: u32 = 0x6F;
 
     // Other
     pub const TAB: u32 = 0x09;
@@ -546,8 +556,10 @@ pub mod vk {
 
 /// Parse a virtual key code from a key name string.
 ///
-/// Supports single letters (A-Z), numbers (0-9), function keys (F1-F12),
-/// and special keys (Left, Right, Up, Down, Tab, Space, Enter, Escape).
+/// Supports single letters (A-Z), numbers (0-9), function keys (F1-F24),
+/// numpad keys (Numpad0-Numpad9, NumpadAdd/Subtract/Multiply/Divide/Decimal),
+/// and special keys (Left, Right, Up, Down, Home, End, PageUp, PageDown, Tab,
+/// Space, Enter, Escape).
 pub fn parse_vk(key: &str) -> Option<u32> {
     let key = key.trim().to_uppercase();
 
@@ -571,6 +583,24 @@ pub fn parse_vk(key: &str) -> Option<u32> {
         }
     }
 
+    // Numpad keys. The trailing operator token can't reach here as "Numpad+"
+    // (the '+' is the chord separator), so word/symbol aliases are accepted.
+    if let Some(rest) = key.strip_prefix("NUMPAD") {
+        if let Ok(n) = rest.parse::<u32>() {
+            if n <= 9 {
+                return Some(vk::NUMPAD0 + n); // Numpad0=0x60 .. Numpad9=0x69
+            }
+        }
+        return match rest {
+            "ADD" | "PLUS" | "+" => Some(vk::NUMPAD_ADD),
+            "SUBTRACT" | "MINUS" | "-" => Some(vk::NUMPAD_SUBTRACT),
+            "MULTIPLY" | "STAR" | "*" => Some(vk::NUMPAD_MULTIPLY),
+            "DIVIDE" | "SLASH" | "/" => Some(vk::NUMPAD_DIVIDE),
+            "DECIMAL" | "DOT" | "." => Some(vk::NUMPAD_DECIMAL),
+            _ => None,
+        };
+    }
+
     // Named keys
     match key.as_str() {
         "LEFT" => Some(vk::LEFT),
@@ -579,6 +609,8 @@ pub fn parse_vk(key: &str) -> Option<u32> {
         "DOWN" => Some(vk::DOWN),
         "HOME" => Some(vk::HOME),
         "END" => Some(vk::END),
+        "PAGEUP" | "PGUP" => Some(vk::PAGE_UP),
+        "PAGEDOWN" | "PGDN" => Some(vk::PAGE_DOWN),
         "TAB" => Some(vk::TAB),
         "SPACE" => Some(vk::SPACE),
         "ENTER" | "RETURN" => Some(vk::ENTER),
@@ -826,6 +858,22 @@ mod tests {
         assert_eq!(parse_vk("Enter"), Some(vk::ENTER));
         assert_eq!(parse_vk("Escape"), Some(vk::ESCAPE));
 
+        // Page keys
+        assert_eq!(parse_vk("PageUp"), Some(vk::PAGE_UP));
+        assert_eq!(parse_vk("pgup"), Some(vk::PAGE_UP));
+        assert_eq!(parse_vk("PageDown"), Some(vk::PAGE_DOWN));
+        assert_eq!(parse_vk("PGDN"), Some(vk::PAGE_DOWN));
+
+        // Numpad
+        assert_eq!(parse_vk("Numpad0"), Some(vk::NUMPAD0));
+        assert_eq!(parse_vk("numpad9"), Some(0x69));
+        assert_eq!(parse_vk("NumpadAdd"), Some(vk::NUMPAD_ADD));
+        assert_eq!(parse_vk("Numpad-"), Some(vk::NUMPAD_SUBTRACT));
+        assert_eq!(parse_vk("NumpadMultiply"), Some(vk::NUMPAD_MULTIPLY));
+        assert_eq!(parse_vk("Numpad/"), Some(vk::NUMPAD_DIVIDE));
+        assert_eq!(parse_vk("NumpadDecimal"), Some(vk::NUMPAD_DECIMAL));
+        assert_eq!(parse_vk("Numpad10"), None);
+
         // Invalid
         assert_eq!(parse_vk("Invalid"), None);
         assert_eq!(parse_vk("F25"), None);
@@ -858,6 +906,15 @@ mod tests {
         let (mods, _) = parse_hotkey_string("win+shift+h").unwrap();
         assert!(mods.win);
         assert!(mods.shift);
+
+        // PageUp/PageDown and Numpad as the final key token
+        let (mods, vk) = parse_hotkey_string("Ctrl+Alt+PageDown").unwrap();
+        assert!(mods.ctrl && mods.alt);
+        assert_eq!(vk, super::vk::PAGE_DOWN);
+        let (_, vk) = parse_hotkey_string("Ctrl+NumpadAdd").unwrap();
+        assert_eq!(vk, super::vk::NUMPAD_ADD);
+        let (_, vk) = parse_hotkey_string("Alt+Numpad5").unwrap();
+        assert_eq!(vk, 0x65);
 
         // Invalid modifier
         assert!(parse_hotkey_string("Foo+H").is_none());

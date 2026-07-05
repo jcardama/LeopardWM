@@ -50,7 +50,7 @@ impl ScaledLayoutParams {
             .saturating_sub(outer_gap_left.max(0))
             .saturating_sub(outer_gap_right.max(0))
             .saturating_add(gap.max(0));
-        let frac = layout.width_presets.first().copied().unwrap_or(0.5);
+        let frac = layout.default_width_fraction();
         let default_column_width = (base as f64 * frac - gap as f64).floor().max(100.0) as i32;
 
         Self {

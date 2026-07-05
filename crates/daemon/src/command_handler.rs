@@ -29,6 +29,36 @@ enum FullscreenPolicy {
     Allow,
 }
 
+/// Whether `cmd` navigates focus to a (possibly different) window, so the
+/// cursor should follow it when `mouse_follows_focus` is on. Covers in-column
+/// and cross-column focus, cross-monitor focus, and cross-monitor window moves
+/// (focus travels with the window). The explicit workspace-switch commands are
+/// excluded here; the caller only warps when the focused window actually
+/// changed, so an edge-wrap focus command that crosses into another workspace
+/// still warps onto the window it lands on.
+fn is_focus_navigation(cmd: &IpcCommand) -> bool {
+    use IpcCommand::*;
+    matches!(
+        cmd,
+        FocusLeft
+            | FocusRight
+            | FocusUp
+            | FocusDown
+            | FocusNext
+            | FocusPrev
+            | FocusStart
+            | FocusEnd
+            | FocusMonitorLeft
+            | FocusMonitorRight
+            | FocusMonitorUp
+            | FocusMonitorDown
+            | MoveWindowToMonitorLeft
+            | MoveWindowToMonitorRight
+            | MoveWindowToMonitorUp
+            | MoveWindowToMonitorDown
+    )
+}
+
 /// Classify how `cmd` should behave when the focused workspace is fullscreen.
 fn fullscreen_policy(cmd: &IpcCommand) -> FullscreenPolicy {
     use IpcCommand::*;
@@ -200,7 +230,14 @@ impl AppState {
         if let Some(resp) = self.apply_fullscreen_policy(&cmd) {
             return resp;
         }
-        match cmd {
+        // "Mouse follows focus" (#43): warp the cursor onto the focused window
+        // after a focus-navigation command, but only if focus actually moved to
+        // a different window. Snapshot the focused HWND before `cmd` is moved
+        // into the match; `sync_foreground_window` refreshes it during dispatch.
+        let focus_before =
+            (self.config.behavior.mouse_follows_focus && is_focus_navigation(&cmd))
+                .then_some(self.previous_focused_hwnd);
+        let resp = match cmd {
             IpcCommand::FocusLeft => {
                 self.execute_workspace_command(false, true, |ws, vw| {
                     ws.focus_left();
@@ -215,24 +252,8 @@ impl AppState {
                     info!("Focus right -> column {}", ws.focused_column_index());
                 })
             }
-            IpcCommand::FocusUp => {
-                self.execute_workspace_command(false, true, |ws, _vw| {
-                    ws.focus_up();
-                    info!(
-                        "Focus up -> window {}",
-                        ws.focused_window_index_in_column()
-                    );
-                })
-            }
-            IpcCommand::FocusDown => {
-                self.execute_workspace_command(false, true, |ws, _vw| {
-                    ws.focus_down();
-                    info!(
-                        "Focus down -> window {}",
-                        ws.focused_window_index_in_column()
-                    );
-                })
-            }
+            IpcCommand::FocusUp => self.focus_vertical(true),
+            IpcCommand::FocusDown => self.focus_vertical(false),
             IpcCommand::FocusNext => {
                 self.execute_workspace_command(false, true, |ws, vw| {
                     ws.focus_next();
@@ -315,18 +336,8 @@ impl AppState {
                     info!("Consumed window from right");
                 })
             }
-            IpcCommand::MoveWindowUp => {
-                self.execute_workspace_command(true, true, |ws, _vw| {
-                    ws.move_window_up_in_column();
-                    info!("Moved window up in column");
-                })
-            }
-            IpcCommand::MoveWindowDown => {
-                self.execute_workspace_command(true, true, |ws, _vw| {
-                    ws.move_window_down_in_column();
-                    info!("Moved window down in column");
-                })
-            }
+            IpcCommand::MoveWindowUp => self.move_window_vertical(true),
+            IpcCommand::MoveWindowDown => self.move_window_vertical(false),
             IpcCommand::FocusMonitorLeft => self.focus_monitor(monitor_to_left, "left"),
             IpcCommand::FocusMonitorRight => self.focus_monitor(monitor_to_right, "right"),
             IpcCommand::FocusMonitorUp => self.focus_monitor(monitor_above, "up"),
@@ -461,6 +472,8 @@ impl AppState {
             IpcCommand::WorkspacePrev | IpcCommand::WorkspaceNext => {
                 self.handle_workspace_prev_next(cmd)
             }
+            IpcCommand::MoveToWorkspacePrev => self.handle_move_to_workspace_relative(false),
+            IpcCommand::MoveToWorkspaceNext => self.handle_move_to_workspace_relative(true),
             IpcCommand::SwitchWorkspace { index } => self.handle_switch_workspace(index),
             IpcCommand::MoveToWorkspace { index } => self.handle_move_to_workspace(index),
             IpcCommand::HealthCheck => self.handle_health_check(),
@@ -493,7 +506,15 @@ impl AppState {
                 })
             }
             IpcCommand::SetActiveTab { column, tab } => self.handle_set_active_tab(column, tab),
+        };
+        if let Some(before) = focus_before {
+            if let Some(hwnd) = self.previous_focused_hwnd {
+                if Some(hwnd) != before {
+                    leopardwm_platform_win32::warp_cursor_to_window(hwnd);
+                }
+            }
         }
+        resp
     }
 
     /// Focus the monitor picked by `select` (left/right/above/below), if any.
@@ -643,6 +664,75 @@ impl AppState {
         };
         self.handle_command(IpcCommand::SwitchWorkspace {
             index: (target + 1) as u8,
+        })
+    }
+
+    /// Move the focused window to the previous (`forward = false`) or next
+    /// (`forward = true`) workspace, wrapping 1 ↔ 9. Handles
+    /// `IpcCommand::MoveToWorkspacePrev` / `MoveToWorkspaceNext`.
+    fn handle_move_to_workspace_relative(&mut self, forward: bool) -> IpcResponse {
+        const COUNT: usize = 9;
+        let monitor = self.focused_monitor;
+        let current = self.active_workspace_idx(monitor);
+        let target = if forward {
+            (current + 1) % COUNT
+        } else {
+            (current + COUNT - 1) % COUNT
+        };
+        self.handle_move_to_workspace((target + 1) as u8)
+    }
+
+    /// Vertical focus (`focus_up`/`focus_down`). With `workspace_edge_wrap` on,
+    /// a press at the column's top/bottom edge switches to the adjacent
+    /// workspace instead of no-oping. `up` selects up vs down.
+    fn focus_vertical(&mut self, up: bool) -> IpcResponse {
+        if self.config.behavior.workspace_edge_wrap && self.focus_at_vertical_edge(up) {
+            return self.handle_workspace_prev_next(if up {
+                IpcCommand::WorkspacePrev
+            } else {
+                IpcCommand::WorkspaceNext
+            });
+        }
+        self.execute_workspace_command(false, true, |ws, _vw| {
+            if up {
+                ws.focus_up();
+            } else {
+                ws.focus_down();
+            }
+            info!(
+                "Focus {} -> window {}",
+                if up { "up" } else { "down" },
+                ws.focused_window_index_in_column()
+            );
+        })
+    }
+
+    /// Vertical move (`move_window_up`/`move_window_down` within a column). With
+    /// `workspace_edge_wrap` on, a press at the column's top/bottom edge moves
+    /// the focused window to the adjacent workspace instead of no-oping.
+    fn move_window_vertical(&mut self, up: bool) -> IpcResponse {
+        if self.config.behavior.workspace_edge_wrap && self.focus_at_vertical_edge(up) {
+            return self.handle_move_to_workspace_relative(!up);
+        }
+        self.execute_workspace_command(true, true, |ws, _vw| {
+            if up {
+                ws.move_window_up_in_column();
+            } else {
+                ws.move_window_down_in_column();
+            }
+            info!("Moved window {} in column", if up { "up" } else { "down" });
+        })
+    }
+
+    /// Whether vertical focus/move is pinned at the top (`up = true`) or bottom
+    /// (`up = false`) of the focused column, so it can't move within it.
+    fn focus_at_vertical_edge(&self, up: bool) -> bool {
+        self.focused_workspace().is_some_and(|ws| {
+            if up {
+                ws.at_column_top()
+            } else {
+                ws.at_column_bottom()
+            }
         })
     }
 
@@ -1295,5 +1385,51 @@ impl AppState {
         self.sync_foreground_window();
         info!("Set active tab: column={}, tab={}", column, tab);
         IpcResponse::Ok
+    }
+}
+
+#[cfg(test)]
+mod focus_nav_tests {
+    use super::is_focus_navigation;
+    use leopardwm_ipc::IpcCommand;
+
+    #[test]
+    fn focus_navigation_covers_focus_and_monitor_commands() {
+        for cmd in [
+            IpcCommand::FocusLeft,
+            IpcCommand::FocusRight,
+            IpcCommand::FocusUp,
+            IpcCommand::FocusDown,
+            IpcCommand::FocusNext,
+            IpcCommand::FocusPrev,
+            IpcCommand::FocusStart,
+            IpcCommand::FocusEnd,
+            IpcCommand::FocusMonitorLeft,
+            IpcCommand::FocusMonitorRight,
+            IpcCommand::FocusMonitorUp,
+            IpcCommand::FocusMonitorDown,
+            IpcCommand::MoveWindowToMonitorLeft,
+            IpcCommand::MoveWindowToMonitorRight,
+            IpcCommand::MoveWindowToMonitorUp,
+            IpcCommand::MoveWindowToMonitorDown,
+        ] {
+            assert!(is_focus_navigation(&cmd), "{cmd:?} should warp the cursor");
+        }
+    }
+
+    #[test]
+    fn focus_navigation_excludes_workspace_and_structural_commands() {
+        for cmd in [
+            IpcCommand::WorkspaceNext,
+            IpcCommand::WorkspacePrev,
+            IpcCommand::MoveToWorkspaceNext,
+            IpcCommand::MoveToWorkspacePrev,
+            IpcCommand::MoveToWorkspace { index: 3 },
+            IpcCommand::MoveWindowLeft,
+            IpcCommand::MoveWindowUp,
+            IpcCommand::CloseWindow,
+        ] {
+            assert!(!is_focus_navigation(&cmd), "{cmd:?} should not warp the cursor");
+        }
     }
 }

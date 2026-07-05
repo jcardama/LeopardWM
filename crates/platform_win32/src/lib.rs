@@ -61,6 +61,7 @@ pub use placement::clear_suspected_oversize;
 pub use types::{MonitorId, MonitorInfo, PlatformConfig, Win32Error, WindowInfo};
 pub use focus::{
     close_window, get_foreground_window, ms_since_last_user_input, set_foreground_window,
+    warp_cursor_to_window,
 };
 pub use system::{
     are_animations_enabled, get_system_highlight_color_bgr, is_high_contrast_enabled,

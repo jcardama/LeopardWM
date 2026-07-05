@@ -2,6 +2,34 @@
 
 All notable changes to LeopardWM will be documented in this file.
 
+## Unreleased
+
+### Improvements
+
+- **More keys can be bound to hotkeys.** PageUp, PageDown, and the numpad keys
+  (Numpad0-Numpad9, plus +, -, *, /, and decimal) are now accepted in hotkey
+  bindings, in config and the Settings recorder. Numpad keys fire with NumLock
+  on.
+- **The default width for new windows is configurable.** A new
+  `default_width_preset` setting under `[layout]` picks which width preset new
+  windows open at (1-based index into `width_presets`, default 1). Previously
+  new windows always opened at the first preset.
+- **Move the focused window to the next or previous workspace.** New
+  `move_to_workspace_next` / `move_to_workspace_prev` commands (bound to
+  Ctrl+Alt+Shift+PageDown / PageUp by default) shift the focused window one
+  workspace over, wrapping 1 to 9. Previously only the numbered
+  move-to-workspace shortcuts existed.
+- **Optional workspace edge-wrap for vertical navigation.** With
+  `workspace_edge_wrap = true` under `[behavior]` (off by default), focus_up /
+  focus_down at a column's top / bottom edge switch to the previous / next
+  workspace, and move_window_up / move_window_down at the edge move the focused
+  window there.
+- **Optional mouse-follows-focus.** With `mouse_follows_focus = true` under
+  `[behavior]` (off by default), the cursor warps onto the focused window after
+  a focus-navigation command, including the monitor focus/move commands. This
+  is the inverse of `focus_follows_mouse` and completes the vertical-monitor
+  navigation request.
+
 ## 0.2.4
 
 ### Improvements
