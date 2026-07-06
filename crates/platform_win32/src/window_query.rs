@@ -121,6 +121,29 @@ pub fn get_window_icon(hwnd: WindowId) -> Option<isize> {
     }
 }
 
+/// The minimized (iconic) state of a window: `None` if the handle is dead or
+/// invalid, otherwise `Some(is_iconic)`. Bundles the validity check with the
+/// state read so a caller gets one snapshot rather than probing separately.
+pub fn window_minimized_state(hwnd: WindowId) -> Option<bool> {
+    if hwnd == 0 {
+        return None;
+    }
+    unsafe {
+        let hwnd = HWND(hwnd as *mut c_void);
+        if !IsWindow(Some(hwnd)).as_bool() {
+            return None;
+        }
+        let iconic = IsIconic(hwnd).as_bool();
+        // `IsIconic` also returns false for a window destroyed between the check
+        // above and here, which would read as "restored" and wrongly clear its
+        // minimized flag. Re-check liveness on a false result and report dead.
+        if !iconic && !IsWindow(Some(hwnd)).as_bool() {
+            return None;
+        }
+        Some(iconic)
+    }
+}
+
 /// Check if a window is in the maximized (zoomed) state.
 pub fn is_window_maximized(hwnd: WindowId) -> bool {
     if hwnd == 0 {

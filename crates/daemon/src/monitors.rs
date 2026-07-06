@@ -295,6 +295,41 @@ impl AppState {
         }
     }
 
+    /// Reconcile every managed window's minimized flag with the OS.
+    ///
+    /// A monitor sleep/wake cycle desyncs this: a stashed workspace restored on
+    /// wake carries the pre-sleep minimized state, but Windows un-minimizes the
+    /// windows when the monitor returns and those restore events land on the
+    /// migrated copies (on the primary), which are then discarded. The result is
+    /// a window that is visible on screen but still flagged minimized, so it is
+    /// never tiled. The stale flag also persists in saved layout state across a
+    /// restart, so this runs both after a display-change reconcile and once at
+    /// startup, before the first layout is applied.
+    pub(crate) fn resync_minimized_from_os(&mut self) {
+        self.resync_minimized_with(leopardwm_platform_win32::window_minimized_state);
+    }
+
+    /// Core of [`resync_minimized_from_os`], parameterized on the per-window OS
+    /// state (`None` = dead window, left alone; `Some(minimized)` otherwise) so
+    /// the flag-correction logic is testable without real window handles.
+    pub(crate) fn resync_minimized_with(&mut self, os_minimized: impl Fn(u64) -> Option<bool>) {
+        for ws_vec in self.workspaces.values_mut() {
+            for ws in ws_vec.iter_mut() {
+                for wid in ws.all_window_ids() {
+                    match os_minimized(wid) {
+                        Some(true) if !ws.is_minimized(wid) => {
+                            ws.mark_minimized(wid);
+                        }
+                        Some(false) if ws.is_minimized(wid) => {
+                            ws.mark_restored(wid);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
     /// Move the focused window to another monitor using an all-or-nothing update.
     ///
     /// The source and target workspaces are mutated on cloned snapshots first and

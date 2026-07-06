@@ -1837,6 +1837,12 @@ impl AppState {
                 // Reconcile workspaces with new monitor configuration
                 self.reconcile_monitors(new_monitors);
 
+                // Correct any window whose minimized flag went stale across the
+                // topology change (e.g. a monitor waking un-minimizes its
+                // windows but the restored stash still has them flagged), so the
+                // re-apply below tiles what is actually on screen.
+                self.resync_minimized_from_os();
+
                 // Re-apply layout with updated monitor configuration
                 if let Err(e) = self.apply_layout() {
                     warn!("Failed to apply layout after display change: {}", e);

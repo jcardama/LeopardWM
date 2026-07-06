@@ -30,6 +30,16 @@ All notable changes to LeopardWM will be documented in this file.
   is the inverse of `focus_follows_mouse` and completes the vertical-monitor
   navigation request.
 
+### Fixes
+
+- **Windows retile correctly after a monitor wakes from sleep.** A screen
+  powered off long enough to drop from Windows would come back with some of its
+  windows left untiled and gaps in the layout: the windows Windows un-minimized
+  on wake were still flagged minimized internally, so they were skipped by the
+  tiler. Window minimized state is now re-synced against the OS after a display
+  change and on startup (the stale flags could persist in saved layout state
+  across a restart), so the layout tiles what is actually on screen.
+
 ## 0.2.4
 
 ### Improvements

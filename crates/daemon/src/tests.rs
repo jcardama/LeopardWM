@@ -1442,6 +1442,43 @@ fn test_minimize_unmanaged_window_noop() {
 }
 
 #[test]
+fn test_resync_minimized_from_os_corrects_stale_flags() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    let ws = state.focused_workspace_mut().unwrap();
+    ws.insert_window(100, Some(800)).unwrap(); // flagged minimized, OS says visible
+    ws.insert_window(200, Some(800)).unwrap(); // visible, stays visible
+    ws.insert_window(300, Some(800)).unwrap(); // OS minimized, not yet flagged
+    ws.insert_window(400, Some(800)).unwrap(); // genuinely minimized, stays so
+    ws.mark_minimized(100);
+    ws.mark_minimized(400);
+
+    // OS truth after a monitor wake: 100 was restored, 300 got minimized.
+    state.resync_minimized_with(|wid| match wid {
+        300 | 400 => Some(true),
+        _ => Some(false),
+    });
+
+    let ws = state.focused_workspace().unwrap();
+    assert!(!ws.is_minimized(100), "stale-minimized window should be restored");
+    assert!(!ws.is_minimized(200));
+    assert!(ws.is_minimized(300), "OS-minimized window should be flagged");
+    assert!(ws.is_minimized(400), "genuinely minimized window stays minimized");
+}
+
+#[test]
+fn test_resync_minimized_leaves_dead_windows_untouched() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    let ws = state.focused_workspace_mut().unwrap();
+    ws.insert_window(100, Some(800)).unwrap();
+    ws.mark_minimized(100);
+
+    // A dead handle reports None; the flag must be left for pruning to handle.
+    state.resync_minimized_with(|_| None);
+
+    assert!(state.focused_workspace().unwrap().is_minimized(100));
+}
+
+#[test]
 fn test_minimized_event_updates_focused_monitor_to_source_monitor() {
     let mut state = AppState::new_with_config(test_config(), two_monitors());
     state.workspaces.get_mut(&1).unwrap()[0]

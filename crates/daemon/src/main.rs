@@ -2943,6 +2943,11 @@ async fn main() -> Result<()> {
     // Apply initial layout so windows are tiled on startup
     {
         let mut state = state.lock().await;
+        // Saved layout state can carry stale minimized flags (e.g. a window
+        // minimized while a monitor slept, then restored by the OS before the
+        // daemon restarted), which would leave the window untiled. Reconcile
+        // against the OS before the first layout so it tiles what's on screen.
+        state.resync_minimized_from_os();
         if let Err(e) = state.apply_layout() {
             warn!("Failed to apply initial layout: {}", e);
         }
