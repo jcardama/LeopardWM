@@ -2707,6 +2707,71 @@ fn test_pull_window_to_workspace() {
 }
 
 #[test]
+fn test_move_to_workspace_relative_wraps_around() {
+    // Prev from the first workspace wraps to the last (index 8 = workspace 9).
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    let mon = state.focused_monitor;
+    state.injected_window_info.insert(100, make_test_window_info(100));
+    state.handle_window_event(WindowEvent::Created(100));
+    state.handle_command(IpcCommand::MoveToWorkspacePrev);
+    assert!(
+        state.workspaces[&mon][8].contains_window(100),
+        "prev from workspace 1 wraps the window to workspace 9"
+    );
+    assert!(!state.workspaces[&mon][0].contains_window(100), "window left workspace 1");
+
+    // Next from the last workspace wraps back to the first.
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    let mon = state.focused_monitor;
+    state.handle_command(IpcCommand::SwitchWorkspace { index: 9 });
+    state.injected_window_info.insert(200, make_test_window_info(200));
+    state.handle_window_event(WindowEvent::Created(200));
+    state.handle_command(IpcCommand::MoveToWorkspaceNext);
+    assert!(
+        state.workspaces[&mon][0].contains_window(200),
+        "next from workspace 9 wraps the window to workspace 1"
+    );
+}
+
+#[test]
+fn test_edge_wrap_focus_switches_workspace_only_when_enabled() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    let mon = state.focused_monitor;
+    state.injected_window_info.insert(100, make_test_window_info(100));
+    state.handle_window_event(WindowEvent::Created(100));
+
+    // A single-window column is at both the top and bottom edge. With edge-wrap
+    // disabled (default), FocusDown at the edge stays on the current workspace.
+    state.handle_command(IpcCommand::FocusDown);
+    assert_eq!(state.active_workspace_idx(mon), 0, "no edge-wrap when disabled");
+
+    // Enabled: FocusDown at the bottom edge switches to the next workspace.
+    state.config.behavior.workspace_edge_wrap = true;
+    state.handle_command(IpcCommand::FocusDown);
+    assert_eq!(
+        state.active_workspace_idx(mon),
+        1,
+        "FocusDown at the bottom edge switches to the next workspace when enabled"
+    );
+}
+
+#[test]
+fn test_edge_wrap_move_crosses_window_to_adjacent_workspace() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.config.behavior.workspace_edge_wrap = true;
+    let mon = state.focused_monitor;
+    state.injected_window_info.insert(100, make_test_window_info(100));
+    state.handle_window_event(WindowEvent::Created(100));
+
+    // MoveWindowDown at the bottom edge moves the window to the next workspace.
+    state.handle_command(IpcCommand::MoveWindowDown);
+    assert!(state.workspaces[&mon][1].contains_window(100), "window crossed to workspace 2");
+    assert!(!state.workspaces[&mon][0].contains_window(100), "window left workspace 1");
+    // Moving a window does not switch the active workspace.
+    assert_eq!(state.active_workspace_idx(mon), 0, "the user stays on workspace 1");
+}
+
+#[test]
 fn test_move_to_workspace_preserves_column_width() {
     // A window resized away from the default keeps its column width when moved
     // to another workspace and back, instead of snapping to the default (#50).

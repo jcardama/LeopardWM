@@ -697,6 +697,22 @@ mod park_tests {
     }
 
     #[test]
+    fn parks_to_the_left_when_below_above_and_right_are_all_taken() {
+        // Owner boxed on below, above, and right, so the left edge is the only
+        // one that clears every monitor.
+        let owner = Rect::new(2000, 0, 1000, 1000);
+        let below = Rect::new(2000, 1000, 1000, 1000);
+        let above = Rect::new(2000, -1000, 1000, 1000);
+        let right = Rect::new(3000, 0, 1000, 1000);
+        let parked = offscreen_park_rect(WIN, owner, &[owner, below, above, right]);
+        assert_eq!(parked.x, owner.x - WIN.width - 4, "parked just left of the owner");
+        assert!(
+            ![owner, below, above, right].iter().any(|m| parked.intersects(m)),
+            "clears every monitor"
+        );
+    }
+
+    #[test]
     fn falls_back_to_the_far_sentinel_when_boxed_in_on_all_sides() {
         let owner = Rect::new(0, 0, 1000, 1000);
         let neighbors = [

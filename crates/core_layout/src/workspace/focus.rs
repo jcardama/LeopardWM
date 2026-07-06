@@ -800,6 +800,7 @@ impl Workspace {
     /// Used by the workspace edge-wrap behavior.
     pub fn at_column_top(&self) -> bool {
         match self.columns.get(self.focused_column) {
+            Some(col) if col.is_empty() => false,
             Some(col) if col.is_tabbed() && col.len() >= 2 => false,
             Some(_) => self.focused_window_in_column == 0,
             None => false,
@@ -812,8 +813,9 @@ impl Workspace {
     /// at an edge. Used by the workspace edge-wrap behavior.
     pub fn at_column_bottom(&self) -> bool {
         match self.columns.get(self.focused_column) {
+            Some(col) if col.is_empty() => false,
             Some(col) if col.is_tabbed() && col.len() >= 2 => false,
-            Some(col) => self.focused_window_in_column + 1 >= col.len().max(1),
+            Some(col) => self.focused_window_in_column + 1 >= col.len(),
             None => false,
         }
     }

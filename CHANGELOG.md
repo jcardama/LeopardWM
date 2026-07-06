@@ -28,12 +28,13 @@ All notable changes to LeopardWM will be documented in this file.
   `workspace_edge_wrap = true` under `[behavior]` (off by default), focus_up /
   focus_down at a column's top / bottom edge switch to the previous / next
   workspace, and move_window_up / move_window_down at the edge move the focused
-  window there.
+  window there. Applies in the tiled layout, not while a window is fullscreen.
 - **Optional mouse-follows-focus.** With `mouse_follows_focus = true` under
   `[behavior]` (off by default), the cursor warps onto the focused window after
   a focus-navigation command, including the monitor focus/move commands. This
   is the inverse of `focus_follows_mouse` and completes the vertical-monitor
-  navigation request.
+  navigation request. Applies in the tiled layout, not while a window is
+  fullscreen.
 - **Smarter off-screen parking on multi-monitor setups.** A window scrolled off
   one monitor's edge is parked just off the nearest edge that has no adjacent
   monitor (below/above for side-by-side monitors, to the sides for stacked ones)
