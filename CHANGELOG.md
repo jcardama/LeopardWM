@@ -6,6 +6,11 @@ All notable changes to LeopardWM will be documented in this file.
 
 ### Improvements
 
+- **Optional fullscreen-follows-focus (monocle).** By default, changing focus
+  while a window is fullscreen carries fullscreen to the newly focused window.
+  With `fullscreen_follows_focus = false` under `[behavior]`, a focus command
+  instead drops back to the tiled layout, so fullscreen only ever affects the
+  one window it was toggled on.
 - **More keys can be bound to hotkeys.** PageUp, PageDown, and the numpad keys
   (Numpad0-Numpad9, plus +, -, *, /, and decimal) are now accepted in hotkey
   bindings, in config and the Settings recorder. Numpad keys fire with NumLock
@@ -32,6 +37,11 @@ All notable changes to LeopardWM will be documented in this file.
 
 ### Fixes
 
+- **.NET Framework windows animate smoothly instead of stuttering.** WinForms
+  and WPF windows (Visual Studio, many .NET tools) were left out of the DWM
+  thumbnail animation path, so they moved via per-frame repaints during layout
+  changes, which made switching to them laggy and could leave them visually
+  corrupted. They now use the same ghost-animation path as Chromium and Firefox.
 - **Windows retile correctly after a monitor wakes from sleep.** A screen
   powered off long enough to drop from Windows would come back with some of its
   windows left untiled and gaps in the layout: the windows Windows un-minimized

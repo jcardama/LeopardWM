@@ -78,10 +78,11 @@ focus_follows_mouse = false
 # api.github.com on startup + every 24h. Disable to skip entirely.
 # check_for_updates = false
 
-# Animate Chromium / Electron / Mozilla / Cascadia windows via DWM thumbnails
-# instead of per-frame SetWindowPos during column scrolls. Eliminates the
-# 1px wobble and renderer stutter on swap-chain-sensitive apps (Chrome,
-# Edge, Slack, Discord, Beeper, Spotify, VS Code, Firefox, Windows Terminal).
+# Animate Chromium / Electron / Mozilla / Cascadia / .NET windows via DWM
+# thumbnails instead of per-frame SetWindowPos during column scrolls. Eliminates
+# the 1px wobble and renderer stutter on apps that repaint poorly under
+# per-frame moves (Chrome, Edge, Slack, Discord, Beeper, Spotify, VS Code,
+# Firefox, Windows Terminal, and .NET Framework WinForms/WPF apps).
 # Default on since v0.1.18. Set to false to fall back to the legacy
 # per-frame SetWindowPos path.
 # swap_chain_ghost_animation = false
@@ -103,6 +104,11 @@ focus_follows_mouse = false
 # Warp the mouse cursor onto the focused window after a focus-navigation command
 # (the inverse of focus_follows_mouse). Default false.
 # mouse_follows_focus = false
+
+# When a window is fullscreen, carry fullscreen to the next focused window
+# (monocle mode) instead of dropping to the tiled layout. Turn off so fullscreen
+# only affects the one window it was toggled on. Default true.
+# fullscreen_follows_focus = true
 
 [hotkeys]
 {hotkeys}

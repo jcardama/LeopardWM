@@ -439,6 +439,13 @@ pub struct BehaviorConfig {
     /// default.
     #[serde(default = "default_false")]
     pub mouse_follows_focus: bool,
+
+    /// When a window is fullscreen, carry fullscreen to the newly focused
+    /// window on a focus command (monocle mode) instead of dropping back to the
+    /// tiled layout. On by default. Turn off so fullscreen only ever affects
+    /// the one window it was toggled on.
+    #[serde(default = "default_true")]
+    pub fullscreen_follows_focus: bool,
 }
 
 /// Placement for newly opened tiled windows.
@@ -469,6 +476,7 @@ impl Default for BehaviorConfig {
             hide_offscreen_taskbar_buttons: true,
             workspace_edge_wrap: false,
             mouse_follows_focus: false,
+            fullscreen_follows_focus: true,
         }
     }
 }

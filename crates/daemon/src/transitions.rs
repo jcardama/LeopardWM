@@ -279,7 +279,7 @@ impl AppState {
                 continue;
             }
             let class = leopardwm_platform_win32::thumbnail::class_name(wid);
-            if !leopardwm_platform_win32::thumbnail::is_swap_chain_class_str(&class) {
+            if !leopardwm_platform_win32::thumbnail::is_ghost_animation_class_str(&class) {
                 continue;
             }
             match leopardwm_platform_win32::thumbnail::register(wid) {

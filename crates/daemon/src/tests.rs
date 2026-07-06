@@ -777,6 +777,36 @@ fn test_focus_command_carries_fullscreen_and_moves_focus() {
 }
 
 #[test]
+fn test_focus_command_exits_fullscreen_when_monocle_follow_disabled() {
+    let mut state = fullscreen_state_two_columns();
+    state.config.behavior.fullscreen_follows_focus = false;
+
+    let resp = state.handle_command(IpcCommand::FocusLeft);
+    assert_eq!(resp, IpcResponse::Ok);
+    {
+        let ws = state.focused_workspace().unwrap();
+        assert!(
+            !ws.is_fullscreen(),
+            "focus command drops fullscreen when monocle-follow is off"
+        );
+        assert_eq!(ws.focused_column_index(), 0, "focus still moved to the left column");
+        assert_eq!(ws.column_count(), 2, "tiled layout is intact after exiting fullscreen");
+    }
+
+    // The gate is on the fullscreen policy, so any focus command exits the same
+    // way, not just FocusLeft. Re-enter and check the opposite direction.
+    assert!(
+        state.focused_workspace_mut().unwrap().toggle_fullscreen(),
+        "re-entered fullscreen"
+    );
+    let resp = state.handle_command(IpcCommand::FocusRight);
+    assert_eq!(resp, IpcResponse::Ok);
+    let ws = state.focused_workspace().unwrap();
+    assert!(!ws.is_fullscreen(), "FocusRight also drops fullscreen when off");
+    assert_eq!(ws.focused_column_index(), 1, "focus moved to the right column");
+}
+
+#[test]
 fn test_structural_command_exits_fullscreen() {
     let mut state = fullscreen_state_two_columns();
     let resp = state.handle_command(IpcCommand::ConsumeFromLeft);

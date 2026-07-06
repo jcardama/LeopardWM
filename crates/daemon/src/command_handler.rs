@@ -217,7 +217,17 @@ impl AppState {
                 self.exit_fullscreen_if_active();
                 None
             }
-            FullscreenPolicy::FollowFocus => Some(self.focus_in_fullscreen(cmd)),
+            FullscreenPolicy::FollowFocus => {
+                if self.config.behavior.fullscreen_follows_focus {
+                    Some(self.focus_in_fullscreen(cmd))
+                } else {
+                    // Monocle-follow disabled: navigating away drops fullscreen
+                    // and applies the focus command to the visible tiled layout,
+                    // so fullscreen only ever affects the one window.
+                    self.exit_fullscreen_if_active();
+                    None
+                }
+            }
             FullscreenPolicy::Suppress => {
                 debug!("Ignoring {:?} while fullscreen", cmd);
                 Some(IpcResponse::Ok)

@@ -316,24 +316,29 @@ pub fn screen_to_host_client(screen: Rect, host_origin: (i32, i32)) -> Rect {
     }
 }
 
-/// Predicate: does this window's class name match a swap-chain-sensitive
-/// window family that benefits from ghost animation?
+/// Predicate: does this window's class belong to a family that renders poorly
+/// under per-frame `SetWindowPos` during layout moves, so it should be animated
+/// via a cloaked DWM thumbnail (the "ghost" path) instead?
 ///
 /// Matches:
 /// - `Chrome_WidgetWin_*` — Chromium / Electron (Chrome, Edge, Slack,
 ///   Discord, Beeper, Spotify, VS Code, Cursor, Notion, ...)
 /// - `MozillaWindowClass` — Firefox, Zen
 /// - `CASCADIA_HOSTING_WINDOW_CLASS` — Windows Terminal Preview
-pub fn is_swap_chain_class(wid: WindowId) -> bool {
-    is_swap_chain_class_str(&class_name(wid))
+/// - `WindowsForms10.*` — .NET Framework WinForms
+/// - `HwndWrapper*` — .NET WPF top-level windows
+pub fn is_ghost_animation_class(wid: WindowId) -> bool {
+    is_ghost_animation_class_str(&class_name(wid))
 }
 
-/// String variant of [`is_swap_chain_class`] for callers that have
+/// String variant of [`is_ghost_animation_class`] for callers that have
 /// already read the class name (avoids a redundant `GetClassNameW` call).
-pub fn is_swap_chain_class_str(class: &str) -> bool {
+pub fn is_ghost_animation_class_str(class: &str) -> bool {
     class.starts_with("Chrome_WidgetWin_")
         || class == "MozillaWindowClass"
         || class == "CASCADIA_HOSTING_WINDOW_CLASS"
+        || class.starts_with("WindowsForms10.")
+        || class.starts_with("HwndWrapper")
 }
 
 /// Read the class name of a window. Returns empty string on failure
@@ -723,18 +728,22 @@ mod tests {
     }
 
     #[test]
-    fn test_is_swap_chain_class_str() {
-        assert!(is_swap_chain_class_str("Chrome_WidgetWin_1"));
-        assert!(is_swap_chain_class_str("Chrome_WidgetWin_2"));
-        assert!(is_swap_chain_class_str("Chrome_WidgetWin_100"));
-        assert!(is_swap_chain_class_str("MozillaWindowClass"));
-        assert!(is_swap_chain_class_str("CASCADIA_HOSTING_WINDOW_CLASS"));
+    fn test_is_ghost_animation_class_str() {
+        assert!(is_ghost_animation_class_str("Chrome_WidgetWin_1"));
+        assert!(is_ghost_animation_class_str("Chrome_WidgetWin_2"));
+        assert!(is_ghost_animation_class_str("Chrome_WidgetWin_100"));
+        assert!(is_ghost_animation_class_str("MozillaWindowClass"));
+        assert!(is_ghost_animation_class_str("CASCADIA_HOSTING_WINDOW_CLASS"));
+        // .NET Framework: WinForms and WPF top-level windows.
+        assert!(is_ghost_animation_class_str("WindowsForms10.Window.8.app.0.1a2b3c"));
+        assert!(is_ghost_animation_class_str("HwndWrapper[MyApp.exe;;abc-123]"));
 
-        assert!(!is_swap_chain_class_str("Notepad"));
-        assert!(!is_swap_chain_class_str(""));
-        assert!(!is_swap_chain_class_str("Chrome_RenderWidgetHostHWND")); // internal widget; skipped earlier
-        assert!(!is_swap_chain_class_str("Chrome_Widget")); // prefix-only match avoided
-        assert!(!is_swap_chain_class_str("CASCADIA")); // partial match avoided
+        assert!(!is_ghost_animation_class_str("Notepad"));
+        assert!(!is_ghost_animation_class_str(""));
+        assert!(!is_ghost_animation_class_str("Chrome_RenderWidgetHostHWND")); // internal widget; skipped earlier
+        assert!(!is_ghost_animation_class_str("Chrome_Widget")); // prefix-only match avoided
+        assert!(!is_ghost_animation_class_str("CASCADIA")); // partial match avoided
+        assert!(!is_ghost_animation_class_str("WindowsForms")); // needs the version + dot
     }
 
     #[test]
