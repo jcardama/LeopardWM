@@ -34,6 +34,11 @@ All notable changes to LeopardWM will be documented in this file.
   a focus-navigation command, including the monitor focus/move commands. This
   is the inverse of `focus_follows_mouse` and completes the vertical-monitor
   navigation request.
+- **Smarter off-screen parking on multi-monitor setups.** A window scrolled off
+  one monitor's edge is parked just off the nearest edge that has no adjacent
+  monitor (below/above for side-by-side monitors, to the sides for stacked ones)
+  so it can't render on a neighboring monitor, adapting to the monitor
+  arrangement instead of using a fixed far-off-screen point.
 
 ### Fixes
 

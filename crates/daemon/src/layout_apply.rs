@@ -13,17 +13,21 @@ type ApplyWorkerMsg = (
     Vec<leopardwm_platform_win32::HeightViolation>,
 );
 
-/// Park any off-screen placement that would land on a NEIGHBOR monitor at the
-/// off-screen sentinel, so it is physically off every desktop.
+/// Re-park any off-screen placement that would land on a NEIGHBOR monitor to an
+/// off-screen spot that clears every monitor, so it doesn't render there (the
+/// cross-monitor bleed).
 ///
 /// Off-screen hiding relies on physical position, not DWM cloak: cloaking an
 /// external (other-process) window fails with access-denied, so the cloak is a
-/// no-op for managed windows. On a single monitor an off-screen column sits at
-/// a negative / past-edge x that is off the desktop, but on a side-by-side
-/// monitor "off the virtual monitor's edge" lands on the neighbor and renders
-/// there (the cross-monitor bleed). Moving it to the sentinel hides it the same
-/// way scratchpad / workspace-switch hiding already does.
-fn sentinel_offscreen_on_neighbor(
+/// no-op for managed windows. On a single monitor an off-screen column sits at a
+/// negative / past-edge x that is off the desktop, but on a side-by-side monitor
+/// "off the virtual monitor's edge" lands on the neighbor.
+///
+/// The park spot is picked by [`offscreen_park_rect`]: the first edge of the
+/// owning monitor (below, above, right, left) whose off-screen strip clears
+/// every monitor. Side-by-side monitors park windows off the top/bottom; a
+/// stacked monitor parks them off whichever perpendicular edge is free.
+fn park_offscreen_avoiding_neighbors(
     placements: &mut [leopardwm_core_layout::WindowPlacement],
     owner_id: leopardwm_platform_win32::MonitorId,
     monitors: &std::collections::HashMap<
@@ -31,7 +35,10 @@ fn sentinel_offscreen_on_neighbor(
         leopardwm_platform_win32::MonitorInfo,
     >,
 ) {
-    const SENTINEL: i32 = leopardwm_platform_win32::MOVE_OFFSCREEN_SENTINEL_COORD;
+    let Some(owner) = monitors.get(&owner_id).map(|m| m.rect) else {
+        return;
+    };
+    let monitor_rects: Vec<_> = monitors.values().map(|m| m.rect).collect();
     for p in placements.iter_mut() {
         if p.visibility == leopardwm_core_layout::Visibility::Visible {
             continue;
@@ -41,14 +48,35 @@ fn sentinel_offscreen_on_neighbor(
             .filter(|(id, _)| **id != owner_id)
             .any(|(_, m)| p.rect.intersects(&m.rect));
         if bleeds {
-            p.rect = leopardwm_core_layout::Rect::new(
-                SENTINEL,
-                SENTINEL,
-                p.rect.width,
-                p.rect.height,
-            );
+            p.rect = offscreen_park_rect(p.rect, owner, &monitor_rects);
         }
     }
+}
+
+/// Pick an off-screen rect for `window` that clears every monitor, tried along
+/// the owning monitor's edges in order (below, above, right, left) and picking
+/// the first that lands on no monitor. Falls back to the far sentinel only if
+/// the owner is boxed in on all four sides.
+fn offscreen_park_rect(
+    window: leopardwm_core_layout::Rect,
+    owner: leopardwm_core_layout::Rect,
+    monitor_rects: &[leopardwm_core_layout::Rect],
+) -> leopardwm_core_layout::Rect {
+    use leopardwm_core_layout::Rect;
+    const MARGIN: i32 = 4;
+    let candidates = [
+        Rect::new(owner.x, owner.y.saturating_add(owner.height).saturating_add(MARGIN), window.width, window.height),
+        Rect::new(owner.x, owner.y.saturating_sub(window.height).saturating_sub(MARGIN), window.width, window.height),
+        Rect::new(owner.x.saturating_add(owner.width).saturating_add(MARGIN), owner.y, window.width, window.height),
+        Rect::new(owner.x.saturating_sub(window.width).saturating_sub(MARGIN), owner.y, window.width, window.height),
+    ];
+    for candidate in candidates {
+        if !monitor_rects.iter().any(|m| candidate.intersects(m)) {
+            return candidate;
+        }
+    }
+    const SENTINEL: i32 = leopardwm_platform_win32::MOVE_OFFSCREEN_SENTINEL_COORD;
+    Rect::new(SENTINEL, SENTINEL, window.width, window.height)
 }
 
 impl AppState {
@@ -129,7 +157,7 @@ impl AppState {
                 if self.monitors.contains_key(monitor_id) {
                     let viewport = self.layout_viewport(*monitor_id);
                     let mut placements = workspace.compute_placements_animated(viewport);
-                    sentinel_offscreen_on_neighbor(&mut placements, *monitor_id, &self.monitors);
+                    park_offscreen_avoiding_neighbors(&mut placements, *monitor_id, &self.monitors);
                     all_placements.extend(placements);
                 }
             }
@@ -355,7 +383,7 @@ impl AppState {
                     // Use animated placements to support smooth scrolling
                     let viewport = self.layout_viewport(*monitor_id);
                     let mut placements = workspace.compute_placements_animated(viewport);
-                    sentinel_offscreen_on_neighbor(&mut placements, *monitor_id, &self.monitors);
+                    park_offscreen_avoiding_neighbors(&mut placements, *monitor_id, &self.monitors);
                     debug!(
                         "Monitor {}: {} placements for viewport {}x{} (animating: {}, scroll: {:.1}, minimized: {})",
                         monitor_id,
@@ -630,5 +658,114 @@ impl AppState {
         // Signature dedup + the background debounce coalesce animation
         // frames and rapid structural changes into at most ~one write/sec.
         self.request_save_if_changed();
+    }
+}
+
+#[cfg(test)]
+mod park_tests {
+    use super::offscreen_park_rect;
+    use leopardwm_core_layout::Rect;
+
+    // A window scrolled off the owning monitor keeps its size when re-parked.
+    const WIN: Rect = Rect { x: 6000, y: 10, width: 800, height: 600 };
+
+    #[test]
+    fn parks_below_when_a_horizontal_neighbor_blocks_the_side() {
+        // Ultrawide at origin, second monitor to its right. Nothing above/below,
+        // so the nearest free edge is below the owner.
+        let owner = Rect::new(0, 0, 5120, 1440);
+        let right = Rect::new(5120, 0, 1920, 1080);
+        let parked = offscreen_park_rect(WIN, owner, &[owner, right]);
+        assert_eq!(parked.y, owner.y + owner.height + 4, "parked just below the owner");
+        assert_eq!((parked.width, parked.height), (WIN.width, WIN.height));
+        assert!(![owner, right].iter().any(|m| parked.intersects(m)), "clears every monitor");
+    }
+
+    #[test]
+    fn parks_to_the_side_when_stacked_vertically_boxes_top_and_bottom() {
+        // Three monitors stacked; the owner is the middle one, so above and
+        // below are both taken and the park falls to the right edge.
+        let owner = Rect::new(0, 1080, 1920, 1080);
+        let above = Rect::new(0, 0, 1920, 1080);
+        let below = Rect::new(0, 2160, 1920, 1080);
+        let parked = offscreen_park_rect(WIN, owner, &[owner, above, below]);
+        assert_eq!(parked.x, owner.x + owner.width + 4, "parked just right of the owner");
+        assert!(
+            ![owner, above, below].iter().any(|m| parked.intersects(m)),
+            "clears every monitor"
+        );
+    }
+
+    #[test]
+    fn falls_back_to_the_far_sentinel_when_boxed_in_on_all_sides() {
+        let owner = Rect::new(0, 0, 1000, 1000);
+        let neighbors = [
+            owner,
+            Rect::new(-2000, 0, 2000, 1000),  // left
+            Rect::new(1000, 0, 2000, 1000),   // right
+            Rect::new(0, -2000, 1000, 2000),  // above
+            Rect::new(0, 1000, 1000, 2000),   // below
+        ];
+        let parked = offscreen_park_rect(WIN, owner, &neighbors);
+        let sentinel = leopardwm_platform_win32::MOVE_OFFSCREEN_SENTINEL_COORD;
+        assert_eq!((parked.x, parked.y), (sentinel, sentinel));
+    }
+
+    use super::park_offscreen_avoiding_neighbors;
+    use leopardwm_core_layout::{Visibility, WindowPlacement};
+    use leopardwm_platform_win32::{MonitorId, MonitorInfo};
+    use std::collections::HashMap;
+
+    fn monitor(id: MonitorId, x: i32, y: i32, w: i32, h: i32) -> MonitorInfo {
+        MonitorInfo {
+            id,
+            rect: Rect::new(x, y, w, h),
+            work_area: Rect::new(x, y, w, h),
+            is_primary: false,
+            device_name: String::new(),
+            scale_factor: 1.0,
+        }
+    }
+
+    fn placement(wid: u64, rect: Rect, visibility: Visibility) -> WindowPlacement {
+        WindowPlacement { window_id: wid, rect, visibility, column_index: 0 }
+    }
+
+    #[test]
+    fn wrapper_reparks_only_bleeding_offscreen_placements() {
+        let owner = monitor(1, 0, 0, 5120, 1440);
+        let right = monitor(2, 5120, 0, 1920, 1080);
+        let monitors: HashMap<MonitorId, MonitorInfo> =
+            [(1, owner.clone()), (2, right.clone())].into_iter().collect();
+
+        let visible = Rect::new(5200, 10, 400, 400); // overlaps neighbor but Visible
+        let non_bleed = Rect::new(-500, 10, 400, 400); // off-screen, on owner only
+        let bleeding = Rect::new(5300, 10, 400, 400); // off-screen, on neighbor
+        let mut placements = vec![
+            placement(10, visible, Visibility::Visible),
+            placement(20, non_bleed, Visibility::OffScreenLeft),
+            placement(30, bleeding, Visibility::OffScreenRight),
+        ];
+
+        park_offscreen_avoiding_neighbors(&mut placements, 1, &monitors);
+
+        assert_eq!(placements[0].rect, visible, "visible placement untouched");
+        assert_eq!(placements[1].rect, non_bleed, "non-bleeding off-screen untouched");
+        assert_ne!(placements[2].rect, bleeding, "bleeding placement re-parked");
+        assert!(
+            ![owner.rect, right.rect].iter().any(|m| placements[2].rect.intersects(m)),
+            "re-parked clear of every monitor"
+        );
+    }
+
+    #[test]
+    fn wrapper_is_a_no_op_when_the_owner_monitor_is_missing() {
+        let right = monitor(2, 5120, 0, 1920, 1080);
+        let monitors: HashMap<MonitorId, MonitorInfo> = [(2, right)].into_iter().collect();
+        let orig = Rect::new(5300, 10, 400, 400);
+        let mut placements = vec![placement(30, orig, Visibility::OffScreenRight)];
+        // owner_id 1 isn't in the map -> early return, nothing changes.
+        park_offscreen_avoiding_neighbors(&mut placements, 1, &monitors);
+        assert_eq!(placements[0].rect, orig);
     }
 }
