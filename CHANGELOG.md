@@ -2,7 +2,7 @@
 
 All notable changes to LeopardWM will be documented in this file.
 
-## Unreleased
+## 0.2.5
 
 ### Improvements
 
