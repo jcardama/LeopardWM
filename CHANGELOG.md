@@ -7,7 +7,7 @@ All notable changes to LeopardWM will be documented in this file.
 ### Fixes
 
 - **Trackpad modifier-scroll navigation no longer races through focus.** Rapid
-  wheel-message bursts are normalized and rate-limited while conventional mouse
+  wheel-message bursts are normalized and rate-limited while separated mouse
   wheel notches remain responsive.
 - **Battery animation preference is available and preserved in Settings.** The
   option now controls battery and Windows power saver motion reduction without

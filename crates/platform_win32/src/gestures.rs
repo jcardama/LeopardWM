@@ -35,10 +35,8 @@ const LLMHF_INJECTED: u32 = 0x01;
 /// 3 * WHEEL_DELTA (120) = 360.
 const GESTURE_SCROLL_THRESHOLD: i32 = 360;
 const WHEEL_DELTA: i32 = 120;
-const STREAM_INTERVAL_MS: u128 = 30;
 const STREAM_END_MS: u128 = 80;
 const NAVIGATION_COOLDOWN_MS: u128 = 150;
-const SWIPE_COOLDOWN_MS: u128 = 200;
 
 /// Timeout in milliseconds: if no swipe event arrives within this window,
 /// partial accumulators are reset.
@@ -103,8 +101,6 @@ struct WheelGestureEngine {
     swipe_accum_x: i32,
     swipe_accum_y: i32,
     swipe_last_event_ms: Option<u128>,
-    swipe_cooldown_x_until_ms: Option<u128>,
-    swipe_cooldown_y_until_ms: Option<u128>,
 }
 
 impl WheelGestureEngine {
@@ -122,8 +118,6 @@ impl WheelGestureEngine {
             swipe_accum_x: 0,
             swipe_accum_y: 0,
             swipe_last_event_ms: None,
-            swipe_cooldown_x_until_ms: None,
-            swipe_cooldown_y_until_ms: None,
         }
     }
 
@@ -142,6 +136,14 @@ impl WheelGestureEngine {
     }
 
     fn process_navigation(&mut self, input: WheelGestureInput) -> WheelGestureResult {
+        if input.delta == 0 {
+            return WheelGestureResult {
+                event: None,
+                consume: false,
+                trace: EngineTrace::default(),
+            };
+        }
+
         let mut trace = EngineTrace::default();
         if let Some(last_event_ms) = self.navigation_last_event_ms {
             let gap_ms = input.now_ms.saturating_sub(last_event_ms);
@@ -159,43 +161,41 @@ impl WheelGestureEngine {
                 }
                 self.reset_navigation_stream();
                 self.navigation_burst_count = 1;
-            } else if gap_ms < STREAM_INTERVAL_MS {
-                self.navigation_burst_count += 1;
             } else {
-                self.navigation_burst_count = 1;
+                self.navigation_burst_count += 1;
             }
         } else {
             self.navigation_burst_count = 1;
         }
         self.navigation_last_event_ms = Some(input.now_ms);
+        self.navigation_stream_flags |= input.flags;
 
-        if self.navigation_mode == WheelMode::Discrete && self.navigation_burst_count >= 3 {
+        if self.navigation_mode == WheelMode::Discrete && self.navigation_burst_count >= 2 {
             self.navigation_mode = WheelMode::Stream;
             self.navigation_stream_started_ms = Some(input.now_ms);
-            self.navigation_stream_flags = input.flags;
             trace.mode_transition = Some((WheelMode::Discrete, WheelMode::Stream));
         }
 
-        let event = if self.navigation_mode == WheelMode::Discrete {
-            Some(scroll_event(input.delta))
-        } else {
-            self.navigation_stream_flags |= input.flags;
-            self.navigation_accum += input.delta;
-            if self.navigation_accum.abs() < WHEEL_DELTA {
-                None
-            } else if self
-                .navigation_cooldown_until_ms
-                .is_some_and(|until_ms| input.now_ms < until_ms)
-            {
-                self.navigation_accum = 0;
+        let event = if self
+            .navigation_cooldown_until_ms
+            .is_some_and(|until_ms| input.now_ms < until_ms)
+        {
+            if self.navigation_mode == WheelMode::Stream {
                 self.navigation_stream_suppressed += 1;
                 trace.cooldown_suppressed = true;
+            }
+            None
+        } else {
+            self.navigation_accum += input.delta;
+            if self.navigation_accum.abs() < WHEEL_DELTA {
                 None
             } else {
                 let event = scroll_event(self.navigation_accum);
                 self.navigation_accum -= self.navigation_accum.signum() * WHEEL_DELTA;
                 self.navigation_cooldown_until_ms = Some(input.now_ms + NAVIGATION_COOLDOWN_MS);
-                self.navigation_stream_emitted += 1;
+                if self.navigation_mode == WheelMode::Stream {
+                    self.navigation_stream_emitted += 1;
+                }
                 Some(event)
             }
         };
@@ -219,19 +219,13 @@ impl WheelGestureEngine {
         }
         self.swipe_last_event_ms = Some(input.now_ms);
 
-        let (accum, cooldown_until) = match input.axis {
-            WheelAxis::Horizontal => (&mut self.swipe_accum_x, &mut self.swipe_cooldown_x_until_ms),
-            WheelAxis::Vertical => (&mut self.swipe_accum_y, &mut self.swipe_cooldown_y_until_ms),
+        let accum = match input.axis {
+            WheelAxis::Horizontal => &mut self.swipe_accum_x,
+            WheelAxis::Vertical => &mut self.swipe_accum_y,
         };
+        *accum += input.delta;
 
-        if cooldown_until.is_some_and(|until_ms| input.now_ms < until_ms) {
-            *accum = 0;
-            trace.cooldown_suppressed = true;
-        } else {
-            *accum += input.delta;
-        }
-
-        let event = if !trace.cooldown_suppressed && accum.abs() >= GESTURE_SCROLL_THRESHOLD {
+        let event = if accum.abs() >= GESTURE_SCROLL_THRESHOLD {
             let event = match input.axis {
                 WheelAxis::Horizontal if *accum > 0 => GestureEvent::SwipeRight,
                 WheelAxis::Horizontal => GestureEvent::SwipeLeft,
@@ -239,7 +233,6 @@ impl WheelGestureEngine {
                 WheelAxis::Vertical => GestureEvent::SwipeUp,
             };
             *accum = 0;
-            *cooldown_until = Some(input.now_ms + SWIPE_COOLDOWN_MS);
             Some(event)
         } else {
             None
@@ -612,17 +605,76 @@ mod tests {
     }
 
     #[test]
-    fn modifier_stream_is_cooldown_bound() {
+    fn modifier_stream_at_40ms_is_cooldown_bound() {
         let mut engine = WheelGestureEngine::new();
         let mut emitted = 0;
 
-        for index in 0..20 {
-            let result = engine.process(input(index * 10, WheelAxis::Vertical, 120, true, 0));
+        for index in 0..9 {
+            let result = engine.process(input(index * 40, WheelAxis::Vertical, 120, true, 0));
             assert!(result.consume);
             emitted += usize::from(result.event.is_some());
         }
 
-        assert!(emitted < 6, "stream emitted {emitted} navigation actions");
+        assert_eq!(emitted, 3);
+    }
+
+    #[test]
+    fn partial_ticks_do_not_emit_before_reaching_a_notch() {
+        let mut engine = WheelGestureEngine::new();
+
+        let first = engine.process(input(0, WheelAxis::Vertical, 10, true, 0));
+        let second = engine.process(input(10, WheelAxis::Vertical, 10, true, 0));
+        let third = engine.process(input(20, WheelAxis::Vertical, 10, true, 0));
+
+        assert_eq!(first.event, None);
+        assert_eq!(second.event, None);
+        assert_eq!(third.event, None);
+        assert_eq!(engine.navigation_mode, WheelMode::Stream);
+        assert_eq!(engine.navigation_accum, 30);
+    }
+
+    #[test]
+    fn navigation_stream_preserves_remainder_during_cooldown() {
+        let mut engine = WheelGestureEngine::new();
+
+        let first = engine.process(input(0, WheelAxis::Vertical, 240, true, 0));
+        let suppressed = engine.process(input(40, WheelAxis::Vertical, 480, true, 0));
+
+        assert_eq!(first.event, Some(GestureEvent::ScrollUp));
+        assert_eq!(engine.navigation_mode, WheelMode::Stream);
+        assert_eq!(suppressed.event, None);
+        assert!(suppressed.trace.cooldown_suppressed);
+        assert_eq!(engine.navigation_accum, 120);
+
+        let still_suppressed = engine.process(input(120, WheelAxis::Vertical, 1, true, 0));
+        let second = engine.process(input(160, WheelAxis::Vertical, 1, true, 0));
+
+        assert_eq!(still_suppressed.event, None);
+        assert!(still_suppressed.trace.cooldown_suppressed);
+        assert_eq!(second.event, Some(GestureEvent::ScrollUp));
+        assert_eq!(engine.navigation_accum, 1);
+    }
+
+    #[test]
+    fn navigation_sign_reversal_cancels_partial_accumulation() {
+        let mut engine = WheelGestureEngine::new();
+
+        engine.process(input(0, WheelAxis::Vertical, 80, true, 0));
+        let result = engine.process(input(40, WheelAxis::Vertical, -80, true, 0));
+
+        assert_eq!(result.event, None);
+        assert_eq!(engine.navigation_accum, 0);
+    }
+
+    #[test]
+    fn zero_delta_navigation_passes_through() {
+        let mut engine = WheelGestureEngine::new();
+
+        let result = engine.process(input(0, WheelAxis::Vertical, 0, true, 0));
+
+        assert_eq!(result.event, None);
+        assert!(!result.consume);
+        assert_eq!(engine.navigation_last_event_ms, None);
     }
 
     #[test]
@@ -635,21 +687,17 @@ mod tests {
         let result = engine.process(input(200, WheelAxis::Vertical, 120, true, 0));
 
         assert_eq!(result.event, Some(GestureEvent::ScrollUp));
-        assert_eq!(result.trace.stream_end.unwrap().emitted, 0);
+        assert_eq!(result.trace.stream_end.unwrap().emitted, 1);
     }
 
     #[test]
-    fn swipe_refractory_limits_continuous_candidate() {
+    fn rapid_swipes_remain_independent() {
         let mut engine = WheelGestureEngine::new();
 
         let first = engine.process(input(0, WheelAxis::Vertical, 360, false, LLMHF_INJECTED));
-        let suppressed = engine.process(input(10, WheelAxis::Vertical, 360, false, LLMHF_INJECTED));
-        let second = engine.process(input(210, WheelAxis::Vertical, 360, false, LLMHF_INJECTED));
+        let second = engine.process(input(10, WheelAxis::Vertical, 360, false, LLMHF_INJECTED));
 
         assert_eq!(first.event, Some(GestureEvent::SwipeDown));
-        assert!(!first.consume);
-        assert_eq!(suppressed.event, None);
-        assert!(suppressed.trace.cooldown_suppressed);
         assert_eq!(second.event, Some(GestureEvent::SwipeDown));
     }
 
@@ -706,13 +754,13 @@ mod tests {
         for index in 0..6 {
             unflagged_events.push(
                 unflagged
-                    .process(input(index * 10, WheelAxis::Vertical, 120, true, 0))
+                    .process(input(index * 40, WheelAxis::Vertical, 120, true, 0))
                     .event,
             );
             injected_events.push(
                 injected
                     .process(input(
-                        index * 10,
+                        index * 40,
                         WheelAxis::Vertical,
                         120,
                         true,
