@@ -191,7 +191,7 @@ impl WheelGestureEngine {
                 None
             } else {
                 let event = scroll_event(self.navigation_accum);
-                self.navigation_accum -= self.navigation_accum.signum() * WHEEL_DELTA;
+                self.navigation_accum %= WHEEL_DELTA;
                 self.navigation_cooldown_until_ms = Some(input.now_ms + NAVIGATION_COOLDOWN_MS);
                 if self.navigation_mode == WheelMode::Stream {
                     self.navigation_stream_emitted += 1;
@@ -540,7 +540,7 @@ unsafe extern "system" fn gesture_mouse_hook_proc(
                     );
                 }
                 if result.trace.cooldown_suppressed {
-                    tracing::debug!(
+                    tracing::trace!(
                         ?axis,
                         delta,
                         hook_flags = mouse_struct.flags,
@@ -634,25 +634,33 @@ mod tests {
     }
 
     #[test]
-    fn navigation_stream_preserves_remainder_during_cooldown() {
+    fn navigation_stream_retains_only_partial_remainder_during_cooldown() {
         let mut engine = WheelGestureEngine::new();
 
         let first = engine.process(input(0, WheelAxis::Vertical, 240, true, 0));
-        let suppressed = engine.process(input(40, WheelAxis::Vertical, 480, true, 0));
-
         assert_eq!(first.event, Some(GestureEvent::ScrollUp));
-        assert_eq!(engine.navigation_mode, WheelMode::Stream);
-        assert_eq!(suppressed.event, None);
-        assert!(suppressed.trace.cooldown_suppressed);
-        assert_eq!(engine.navigation_accum, 120);
+        assert_eq!(engine.navigation_accum, 0);
 
-        let still_suppressed = engine.process(input(120, WheelAxis::Vertical, 1, true, 0));
-        let second = engine.process(input(160, WheelAxis::Vertical, 1, true, 0));
-
-        assert_eq!(still_suppressed.event, None);
-        assert!(still_suppressed.trace.cooldown_suppressed);
-        assert_eq!(second.event, Some(GestureEvent::ScrollUp));
+        for now_ms in [40, 80, 120] {
+            let suppressed = engine.process(input(now_ms, WheelAxis::Vertical, 1, true, 0));
+            assert_eq!(suppressed.event, None);
+            assert!(suppressed.trace.cooldown_suppressed);
+            assert_eq!(engine.navigation_accum, 0);
+        }
+        let residual = engine.process(input(160, WheelAxis::Vertical, 1, true, 0));
+        assert_eq!(residual.event, None);
         assert_eq!(engine.navigation_accum, 1);
+
+        let mut multi_notch_engine = WheelGestureEngine::new();
+        let multi_notch = multi_notch_engine.process(input(0, WheelAxis::Vertical, 250, true, 0));
+        assert_eq!(multi_notch.event, Some(GestureEvent::ScrollUp));
+        assert_eq!(multi_notch_engine.navigation_accum, 10);
+
+        let partial_suppressed =
+            multi_notch_engine.process(input(40, WheelAxis::Vertical, 1, true, 0));
+        assert_eq!(partial_suppressed.event, None);
+        assert!(partial_suppressed.trace.cooldown_suppressed);
+        assert_eq!(multi_notch_engine.navigation_accum, 10);
     }
 
     #[test]
