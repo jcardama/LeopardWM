@@ -29,29 +29,258 @@ pub enum GestureEvent {
 /// Wheel message constants (not all exposed by windows-rs).
 const WM_MOUSEWHEEL: u32 = 0x020A;
 const WM_MOUSEHWHEEL: u32 = 0x020E;
+const LLMHF_INJECTED: u32 = 0x01;
 
-/// Threshold for accumulated wheel delta before firing a gesture event.
+/// Threshold for accumulated wheel delta before firing a swipe gesture.
 /// 3 * WHEEL_DELTA (120) = 360.
 const GESTURE_SCROLL_THRESHOLD: i32 = 360;
+const WHEEL_DELTA: i32 = 120;
+const STREAM_INTERVAL_MS: u128 = 30;
+const STREAM_END_MS: u128 = 80;
+const NAVIGATION_COOLDOWN_MS: u128 = 150;
+const SWIPE_COOLDOWN_MS: u128 = 200;
 
-/// Timeout in milliseconds: if no scroll event arrives within this window,
-/// accumulators are reset.
+/// Timeout in milliseconds: if no swipe event arrives within this window,
+/// partial accumulators are reset.
 const GESTURE_TIMEOUT_MS: u128 = 300;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WheelAxis {
+    Horizontal,
+    Vertical,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WheelMode {
+    Discrete,
+    Stream,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct WheelGestureInput {
+    now_ms: u128,
+    axis: WheelAxis,
+    delta: i32,
+    flags: u32,
+    mods_held: bool,
+    swipe_candidate: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct StreamSummary {
+    emitted: u32,
+    suppressed: u32,
+    duration_ms: u128,
+    flags_seen: u32,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct EngineTrace {
+    mode_transition: Option<(WheelMode, WheelMode)>,
+    stream_end: Option<StreamSummary>,
+    cooldown_suppressed: bool,
+    mode: Option<WheelMode>,
+    accumulation: Option<i32>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct WheelGestureResult {
+    event: Option<GestureEvent>,
+    consume: bool,
+    trace: EngineTrace,
+}
+
+struct WheelGestureEngine {
+    navigation_mode: WheelMode,
+    navigation_burst_count: u32,
+    navigation_last_event_ms: Option<u128>,
+    navigation_stream_started_ms: Option<u128>,
+    navigation_accum: i32,
+    navigation_cooldown_until_ms: Option<u128>,
+    navigation_stream_emitted: u32,
+    navigation_stream_suppressed: u32,
+    navigation_stream_flags: u32,
+    swipe_accum_x: i32,
+    swipe_accum_y: i32,
+    swipe_last_event_ms: Option<u128>,
+    swipe_cooldown_x_until_ms: Option<u128>,
+    swipe_cooldown_y_until_ms: Option<u128>,
+}
+
+impl WheelGestureEngine {
+    fn new() -> Self {
+        Self {
+            navigation_mode: WheelMode::Discrete,
+            navigation_burst_count: 0,
+            navigation_last_event_ms: None,
+            navigation_stream_started_ms: None,
+            navigation_accum: 0,
+            navigation_cooldown_until_ms: None,
+            navigation_stream_emitted: 0,
+            navigation_stream_suppressed: 0,
+            navigation_stream_flags: 0,
+            swipe_accum_x: 0,
+            swipe_accum_y: 0,
+            swipe_last_event_ms: None,
+            swipe_cooldown_x_until_ms: None,
+            swipe_cooldown_y_until_ms: None,
+        }
+    }
+
+    fn process(&mut self, input: WheelGestureInput) -> WheelGestureResult {
+        if input.axis == WheelAxis::Vertical && input.mods_held {
+            return self.process_navigation(input);
+        }
+        if input.swipe_candidate {
+            return self.process_swipe(input);
+        }
+        WheelGestureResult {
+            event: None,
+            consume: false,
+            trace: EngineTrace::default(),
+        }
+    }
+
+    fn process_navigation(&mut self, input: WheelGestureInput) -> WheelGestureResult {
+        let mut trace = EngineTrace::default();
+        if let Some(last_event_ms) = self.navigation_last_event_ms {
+            let gap_ms = input.now_ms.saturating_sub(last_event_ms);
+            if gap_ms > STREAM_END_MS {
+                if self.navigation_mode == WheelMode::Stream {
+                    trace.stream_end = Some(StreamSummary {
+                        emitted: self.navigation_stream_emitted,
+                        suppressed: self.navigation_stream_suppressed,
+                        duration_ms: input.now_ms.saturating_sub(
+                            self.navigation_stream_started_ms.unwrap_or(last_event_ms),
+                        ),
+                        flags_seen: self.navigation_stream_flags,
+                    });
+                    trace.mode_transition = Some((WheelMode::Stream, WheelMode::Discrete));
+                }
+                self.reset_navigation_stream();
+                self.navigation_burst_count = 1;
+            } else if gap_ms < STREAM_INTERVAL_MS {
+                self.navigation_burst_count += 1;
+            } else {
+                self.navigation_burst_count = 1;
+            }
+        } else {
+            self.navigation_burst_count = 1;
+        }
+        self.navigation_last_event_ms = Some(input.now_ms);
+
+        if self.navigation_mode == WheelMode::Discrete && self.navigation_burst_count >= 3 {
+            self.navigation_mode = WheelMode::Stream;
+            self.navigation_stream_started_ms = Some(input.now_ms);
+            self.navigation_stream_flags = input.flags;
+            trace.mode_transition = Some((WheelMode::Discrete, WheelMode::Stream));
+        }
+
+        let event = if self.navigation_mode == WheelMode::Discrete {
+            Some(scroll_event(input.delta))
+        } else {
+            self.navigation_stream_flags |= input.flags;
+            self.navigation_accum += input.delta;
+            if self.navigation_accum.abs() < WHEEL_DELTA {
+                None
+            } else if self
+                .navigation_cooldown_until_ms
+                .is_some_and(|until_ms| input.now_ms < until_ms)
+            {
+                self.navigation_accum = 0;
+                self.navigation_stream_suppressed += 1;
+                trace.cooldown_suppressed = true;
+                None
+            } else {
+                let event = scroll_event(self.navigation_accum);
+                self.navigation_accum -= self.navigation_accum.signum() * WHEEL_DELTA;
+                self.navigation_cooldown_until_ms = Some(input.now_ms + NAVIGATION_COOLDOWN_MS);
+                self.navigation_stream_emitted += 1;
+                Some(event)
+            }
+        };
+
+        trace.mode = Some(self.navigation_mode);
+        trace.accumulation = Some(self.navigation_accum);
+        WheelGestureResult {
+            event,
+            consume: true,
+            trace,
+        }
+    }
+
+    fn process_swipe(&mut self, input: WheelGestureInput) -> WheelGestureResult {
+        let mut trace = EngineTrace::default();
+        if self.swipe_last_event_ms.is_some_and(|last_event_ms| {
+            input.now_ms.saturating_sub(last_event_ms) > GESTURE_TIMEOUT_MS
+        }) {
+            self.swipe_accum_x = 0;
+            self.swipe_accum_y = 0;
+        }
+        self.swipe_last_event_ms = Some(input.now_ms);
+
+        let (accum, cooldown_until) = match input.axis {
+            WheelAxis::Horizontal => (&mut self.swipe_accum_x, &mut self.swipe_cooldown_x_until_ms),
+            WheelAxis::Vertical => (&mut self.swipe_accum_y, &mut self.swipe_cooldown_y_until_ms),
+        };
+
+        if cooldown_until.is_some_and(|until_ms| input.now_ms < until_ms) {
+            *accum = 0;
+            trace.cooldown_suppressed = true;
+        } else {
+            *accum += input.delta;
+        }
+
+        let event = if !trace.cooldown_suppressed && accum.abs() >= GESTURE_SCROLL_THRESHOLD {
+            let event = match input.axis {
+                WheelAxis::Horizontal if *accum > 0 => GestureEvent::SwipeRight,
+                WheelAxis::Horizontal => GestureEvent::SwipeLeft,
+                WheelAxis::Vertical if *accum > 0 => GestureEvent::SwipeDown,
+                WheelAxis::Vertical => GestureEvent::SwipeUp,
+            };
+            *accum = 0;
+            *cooldown_until = Some(input.now_ms + SWIPE_COOLDOWN_MS);
+            Some(event)
+        } else {
+            None
+        };
+
+        trace.accumulation = Some(*accum);
+        WheelGestureResult {
+            event,
+            consume: false,
+            trace,
+        }
+    }
+
+    fn reset_navigation_stream(&mut self) {
+        self.navigation_mode = WheelMode::Discrete;
+        self.navigation_accum = 0;
+        self.navigation_cooldown_until_ms = None;
+        self.navigation_stream_started_ms = None;
+        self.navigation_stream_emitted = 0;
+        self.navigation_stream_suppressed = 0;
+        self.navigation_stream_flags = 0;
+    }
+}
+
+fn scroll_event(delta: i32) -> GestureEvent {
+    if delta > 0 {
+        GestureEvent::ScrollUp
+    } else {
+        GestureEvent::ScrollDown
+    }
+}
 
 /// Gesture accumulator state for the low-level mouse hook.
 struct GestureAccumState {
-    /// Accumulated horizontal wheel delta.
-    accum_x: i32,
-    /// Accumulated vertical wheel delta.
-    accum_y: i32,
-    /// Timestamp of the last scroll event.
-    last_scroll_time: std::time::Instant,
+    engine: WheelGestureEngine,
+    started_at: std::time::Instant,
 }
 
 /// Modifier flags for scroll wheel navigation, stored as a bitmask.
 /// Bit 0 = Ctrl, Bit 1 = Alt, Bit 2 = Shift, Bit 3 = Win.
-static SCROLL_MODIFIER_FLAGS: std::sync::atomic::AtomicU8 =
-    std::sync::atomic::AtomicU8::new(0x03); // default: Ctrl + Alt
+static SCROLL_MODIFIER_FLAGS: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0x03); // default: Ctrl + Alt
 
 /// Global sender for gesture events.
 static GESTURE_SENDER: std::sync::Mutex<Option<mpsc::Sender<GestureEvent>>> =
@@ -123,7 +352,11 @@ pub fn set_scroll_modifier(modifier_str: &str) {
         flags = 0x03;
     }
     SCROLL_MODIFIER_FLAGS.store(flags, std::sync::atomic::Ordering::Relaxed);
-    tracing::debug!("Scroll modifier set to: {} (flags=0x{:02x})", modifier_str, flags);
+    tracing::debug!(
+        "Scroll modifier set to: {} (flags=0x{:02x})",
+        modifier_str,
+        flags
+    );
 }
 
 /// Register a low-level mouse hook for gesture detection via wheel events.
@@ -158,9 +391,8 @@ pub fn register_gestures() -> Result<(GestureHandle, mpsc::Receiver<GestureEvent
             Win32Error::HookInstallFailed("Gesture state mutex poisoned".to_string())
         })?;
         *state = Some(GestureAccumState {
-            accum_x: 0,
-            accum_y: 0,
-            last_scroll_time: std::time::Instant::now(),
+            engine: WheelGestureEngine::new(),
+            started_at: std::time::Instant::now(),
         });
     }
 
@@ -178,21 +410,17 @@ pub fn register_gestures() -> Result<(GestureHandle, mpsc::Receiver<GestureEvent
                 let _ = PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE);
 
                 // Install the low-level mouse hook on this thread
-                let hook = match SetWindowsHookExW(
-                    WH_MOUSE_LL,
-                    Some(gesture_mouse_hook_proc),
-                    None,
-                    0,
-                ) {
-                    Ok(h) => h,
-                    Err(e) => {
-                        let _ = init_tx.send(Err(Win32Error::HookInstallFailed(format!(
-                            "SetWindowsHookExW for gesture hook failed: {}",
-                            e
-                        ))));
-                        return;
-                    }
-                };
+                let hook =
+                    match SetWindowsHookExW(WH_MOUSE_LL, Some(gesture_mouse_hook_proc), None, 0) {
+                        Ok(h) => h,
+                        Err(e) => {
+                            let _ = init_tx.send(Err(Win32Error::HookInstallFailed(format!(
+                                "SetWindowsHookExW for gesture hook failed: {}",
+                                e
+                            ))));
+                            return;
+                        }
+                    };
 
                 let _ = init_tx.send(Ok(thread_id));
 
@@ -231,9 +459,32 @@ pub fn register_gestures() -> Result<(GestureHandle, mpsc::Receiver<GestureEvent
     ))
 }
 
+fn scroll_modifiers_held(flags: u8) -> bool {
+    const VK_CONTROL: i32 = 0x11;
+    const VK_MENU: i32 = 0x12;
+    const VK_SHIFT: i32 = 0x10;
+    const VK_LWIN: i32 = 0x5B;
+    const VK_RWIN: i32 = 0x5C;
+
+    flags != 0
+        && (flags & 0x01 == 0 || unsafe { GetAsyncKeyState(VK_CONTROL) } < 0)
+        && (flags & 0x02 == 0 || unsafe { GetAsyncKeyState(VK_MENU) } < 0)
+        && (flags & 0x04 == 0 || unsafe { GetAsyncKeyState(VK_SHIFT) } < 0)
+        && (flags & 0x08 == 0
+            || unsafe { GetAsyncKeyState(VK_LWIN) } < 0
+            || unsafe { GetAsyncKeyState(VK_RWIN) } < 0)
+}
+
+fn send_gesture_event(event: GestureEvent) {
+    let sender_guard = GESTURE_SENDER.lock().unwrap_or_else(recover_poisoned_mutex);
+    if let Some(sender) = sender_guard.as_ref() {
+        let _ = sender.send(event);
+    }
+}
+
 /// Low-level mouse hook callback for gesture detection.
 ///
-/// Handles WM_MOUSEWHEEL and WM_MOUSEHWHEEL to accumulate scroll deltas
+/// Handles WM_MOUSEWHEEL and WM_MOUSEHWHEEL to normalize modifier navigation
 /// and fire swipe gesture events when the threshold is exceeded.
 unsafe extern "system" fn gesture_mouse_hook_proc(
     ncode: i32,
@@ -242,103 +493,236 @@ unsafe extern "system" fn gesture_mouse_hook_proc(
 ) -> windows::Win32::Foundation::LRESULT {
     if ncode >= 0 {
         let msg = wparam.0 as u32;
-        if msg == WM_MOUSEHWHEEL || msg == WM_MOUSEWHEEL {
+        let axis = match msg {
+            WM_MOUSEHWHEEL => Some(WheelAxis::Horizontal),
+            WM_MOUSEWHEEL => Some(WheelAxis::Vertical),
+            _ => None,
+        };
+        if let Some(axis) = axis {
             let mouse_struct = &*(lparam.0 as *const MSLLHOOKSTRUCT);
-
-            // The high word of mouseData contains the wheel delta (signed).
             let delta = (mouse_struct.mouseData >> 16) as i16 as i32;
+            let modifier_flags = SCROLL_MODIFIER_FLAGS.load(std::sync::atomic::Ordering::Relaxed);
+            let mods_held = axis == WheelAxis::Vertical && scroll_modifiers_held(modifier_flags);
+            let swipe_candidate = mouse_struct.flags & LLMHF_INJECTED != 0;
 
-            // Check if this is a physical mouse wheel event (not injected by
-            // touchpad driver). Physical events with Ctrl+Alt held trigger
-            // modifier+scroll navigation instead of touchpad gestures.
-            const LLMHF_INJECTED: u32 = 0x01;
-            let is_physical = mouse_struct.flags & LLMHF_INJECTED == 0;
-
-            if is_physical {
-                // Check if the configured scroll modifier keys are held
-                const VK_CONTROL: i32 = 0x11;
-                const VK_MENU: i32 = 0x12; // Alt
-                const VK_SHIFT: i32 = 0x10;
-                const VK_LWIN: i32 = 0x5B;
-                const VK_RWIN: i32 = 0x5C;
-
-                let flags = SCROLL_MODIFIER_FLAGS
-                    .load(std::sync::atomic::Ordering::Relaxed);
-                let mods_held = (flags & 0x01 == 0 || GetAsyncKeyState(VK_CONTROL) < 0)
-                    && (flags & 0x02 == 0 || GetAsyncKeyState(VK_MENU) < 0)
-                    && (flags & 0x04 == 0 || GetAsyncKeyState(VK_SHIFT) < 0)
-                    && (flags & 0x08 == 0
-                        || GetAsyncKeyState(VK_LWIN) < 0
-                        || GetAsyncKeyState(VK_RWIN) < 0);
-
-                if mods_held && flags != 0 && msg == WM_MOUSEWHEEL {
-                    // Modifier+scroll: emit ScrollUp/ScrollDown per wheel notch
-                    let event = if delta > 0 {
-                        GestureEvent::ScrollUp
-                    } else {
-                        GestureEvent::ScrollDown
-                    };
-                    let sender_guard =
-                        GESTURE_SENDER.lock().unwrap_or_else(recover_poisoned_mutex);
-                    if let Some(sender) = sender_guard.as_ref() {
-                        let _ = sender.send(event);
-                    }
-                    // Consume the event so it doesn't scroll the window
-                    return windows::Win32::Foundation::LRESULT(1);
-                }
-
-                // Physical mouse wheel without modifier — pass through
-                return CallNextHookEx(None, ncode, wparam, lparam);
-            }
-
-            // Recover from mutex poisoning for both state and sender
             let mut state_guard = GESTURE_STATE.lock().unwrap_or_else(recover_poisoned_mutex);
             if let Some(state) = state_guard.as_mut() {
-                let now = std::time::Instant::now();
+                let result = state.engine.process(WheelGestureInput {
+                    now_ms: state.started_at.elapsed().as_millis(),
+                    axis,
+                    delta,
+                    flags: mouse_struct.flags,
+                    mods_held,
+                    swipe_candidate,
+                });
 
-                // Reset accumulators if timeout exceeded
-                if now.duration_since(state.last_scroll_time).as_millis() > GESTURE_TIMEOUT_MS {
-                    state.accum_x = 0;
-                    state.accum_y = 0;
+                tracing::trace!(
+                    ?axis,
+                    delta,
+                    hook_flags = mouse_struct.flags,
+                    modifier_flags,
+                    mods_held,
+                    swipe_candidate,
+                    mode = ?result.trace.mode,
+                    accumulation = ?result.trace.accumulation,
+                    consume = result.consume,
+                    "Wheel hook decision"
+                );
+                if let Some((from, to)) = result.trace.mode_transition {
+                    tracing::debug!(
+                        ?from,
+                        ?to,
+                        delta,
+                        hook_flags = mouse_struct.flags,
+                        "Wheel navigation mode changed"
+                    );
                 }
-                state.last_scroll_time = now;
-
-                if msg == WM_MOUSEHWHEEL {
-                    state.accum_x += delta;
-                } else {
-                    state.accum_y += delta;
+                if let Some(summary) = result.trace.stream_end {
+                    tracing::debug!(
+                        emitted = summary.emitted,
+                        suppressed = summary.suppressed,
+                        duration_ms = summary.duration_ms,
+                        flags_seen = summary.flags_seen,
+                        "Wheel navigation stream ended"
+                    );
                 }
-
-                // Check thresholds and determine gesture
-                let gesture = if state.accum_x.abs() >= GESTURE_SCROLL_THRESHOLD {
-                    let g = if state.accum_x > 0 {
-                        GestureEvent::SwipeRight
-                    } else {
-                        GestureEvent::SwipeLeft
-                    };
-                    state.accum_x = 0;
-                    Some(g)
-                } else if state.accum_y.abs() >= GESTURE_SCROLL_THRESHOLD {
-                    let g = if state.accum_y > 0 {
-                        GestureEvent::SwipeDown
-                    } else {
-                        GestureEvent::SwipeUp
-                    };
-                    state.accum_y = 0;
-                    Some(g)
-                } else {
-                    None
-                };
-
-                if let Some(event) = gesture {
-                    let sender_guard = GESTURE_SENDER.lock().unwrap_or_else(recover_poisoned_mutex);
-                    if let Some(sender) = sender_guard.as_ref() {
-                        let _ = sender.send(event);
-                    }
+                if result.trace.cooldown_suppressed {
+                    tracing::debug!(
+                        ?axis,
+                        delta,
+                        hook_flags = mouse_struct.flags,
+                        "Wheel gesture suppressed during cooldown"
+                    );
+                }
+                if let Some(event) = result.event {
+                    tracing::debug!(
+                        ?event,
+                        ?axis,
+                        delta,
+                        hook_flags = mouse_struct.flags,
+                        "Wheel gesture emitted"
+                    );
+                    send_gesture_event(event);
+                }
+                if result.consume {
+                    return windows::Win32::Foundation::LRESULT(1);
                 }
             }
         }
     }
 
     CallNextHookEx(None, ncode, wparam, lparam)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn input(
+        now_ms: u128,
+        axis: WheelAxis,
+        delta: i32,
+        mods_held: bool,
+        flags: u32,
+    ) -> WheelGestureInput {
+        WheelGestureInput {
+            now_ms,
+            axis,
+            delta,
+            flags,
+            mods_held,
+            swipe_candidate: flags & LLMHF_INJECTED != 0,
+        }
+    }
+
+    #[test]
+    fn modifier_notches_remain_one_to_one() {
+        let mut engine = WheelGestureEngine::new();
+
+        let up = engine.process(input(0, WheelAxis::Vertical, 120, true, 0));
+        let down = engine.process(input(100, WheelAxis::Vertical, -120, true, 0));
+        let passthrough = engine.process(input(200, WheelAxis::Vertical, 120, false, 0));
+
+        assert_eq!(up.event, Some(GestureEvent::ScrollUp));
+        assert!(up.consume);
+        assert_eq!(down.event, Some(GestureEvent::ScrollDown));
+        assert!(down.consume);
+        assert_eq!(passthrough.event, None);
+        assert!(!passthrough.consume);
+    }
+
+    #[test]
+    fn modifier_stream_is_cooldown_bound() {
+        let mut engine = WheelGestureEngine::new();
+        let mut emitted = 0;
+
+        for index in 0..20 {
+            let result = engine.process(input(index * 10, WheelAxis::Vertical, 120, true, 0));
+            assert!(result.consume);
+            emitted += usize::from(result.event.is_some());
+        }
+
+        assert!(emitted < 6, "stream emitted {emitted} navigation actions");
+    }
+
+    #[test]
+    fn navigation_stream_resets_after_pause() {
+        let mut engine = WheelGestureEngine::new();
+        for index in 0..3 {
+            engine.process(input(index * 10, WheelAxis::Vertical, 40, true, 0));
+        }
+
+        let result = engine.process(input(200, WheelAxis::Vertical, 120, true, 0));
+
+        assert_eq!(result.event, Some(GestureEvent::ScrollUp));
+        assert_eq!(result.trace.stream_end.unwrap().emitted, 0);
+    }
+
+    #[test]
+    fn swipe_refractory_limits_continuous_candidate() {
+        let mut engine = WheelGestureEngine::new();
+
+        let first = engine.process(input(0, WheelAxis::Vertical, 360, false, LLMHF_INJECTED));
+        let suppressed = engine.process(input(10, WheelAxis::Vertical, 360, false, LLMHF_INJECTED));
+        let second = engine.process(input(210, WheelAxis::Vertical, 360, false, LLMHF_INJECTED));
+
+        assert_eq!(first.event, Some(GestureEvent::SwipeDown));
+        assert!(!first.consume);
+        assert_eq!(suppressed.event, None);
+        assert!(suppressed.trace.cooldown_suppressed);
+        assert_eq!(second.event, Some(GestureEvent::SwipeDown));
+    }
+
+    #[test]
+    fn horizontal_swipe_accumulates_independently() {
+        let mut engine = WheelGestureEngine::new();
+
+        engine.process(input(0, WheelAxis::Vertical, 240, false, LLMHF_INJECTED));
+        let result = engine.process(input(
+            10,
+            WheelAxis::Horizontal,
+            -360,
+            false,
+            LLMHF_INJECTED,
+        ));
+
+        assert_eq!(result.event, Some(GestureEvent::SwipeLeft));
+        assert_eq!(engine.swipe_accum_y, 240);
+    }
+
+    #[test]
+    fn non_candidate_unmodified_wheel_passes_through() {
+        let mut engine = WheelGestureEngine::new();
+
+        let result = engine.process(input(0, WheelAxis::Vertical, 120, false, 0));
+
+        assert_eq!(result.event, None);
+        assert!(!result.consume);
+    }
+
+    #[test]
+    fn swipe_timeout_clears_partial_accumulation() {
+        let mut engine = WheelGestureEngine::new();
+
+        engine.process(input(0, WheelAxis::Vertical, 240, false, LLMHF_INJECTED));
+        let result = engine.process(input(
+            GESTURE_TIMEOUT_MS + 1,
+            WheelAxis::Vertical,
+            120,
+            false,
+            LLMHF_INJECTED,
+        ));
+
+        assert_eq!(result.event, None);
+    }
+
+    #[test]
+    fn injection_flag_does_not_change_navigation_stream_mode() {
+        let mut unflagged = WheelGestureEngine::new();
+        let mut injected = WheelGestureEngine::new();
+        let mut unflagged_events = Vec::new();
+        let mut injected_events = Vec::new();
+
+        for index in 0..6 {
+            unflagged_events.push(
+                unflagged
+                    .process(input(index * 10, WheelAxis::Vertical, 120, true, 0))
+                    .event,
+            );
+            injected_events.push(
+                injected
+                    .process(input(
+                        index * 10,
+                        WheelAxis::Vertical,
+                        120,
+                        true,
+                        LLMHF_INJECTED,
+                    ))
+                    .event,
+            );
+        }
+
+        assert_eq!(unflagged_events, injected_events);
+        assert_eq!(unflagged.navigation_mode, injected.navigation_mode);
+    }
 }
