@@ -2,6 +2,15 @@
 
 All notable changes to LeopardWM will be documented in this file.
 
+## 0.2.6
+
+### Fixes
+
+- **Battery animation preference is available and preserved in Settings.** The
+  option now controls battery and Windows power saver motion reduction without
+  being reset by unrelated saves; disabling it takes effect at startup, while
+  Windows Accessibility animation settings still override it.
+
 ## 0.2.5
 
 ### Improvements

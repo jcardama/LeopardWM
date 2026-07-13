@@ -1177,6 +1177,10 @@ input[type="range"]::-webkit-slider-thumb {
               </div>
             </div>
           </div>
+          <div class="field">
+            <div class="field-info"><div class="field-label">Reduce motion on battery</div><div class="field-desc">Also applies in Windows power saver. Windows Accessibility animation effects always override this setting.</div></div>
+            <label class="toggle"><input type="checkbox" id="animation-reduce_motion_on_battery"><span class="track"></span><span class="thumb"></span></label>
+          </div>
         </div>
       </div>
 
@@ -1520,6 +1524,7 @@ function init(cfg) {
   setVal('animation-scroll_duration_ms', anim.scroll_duration_ms != null ? anim.scroll_duration_ms : 200);
   setVal('animation-overview_duration_ms', anim.overview_duration_ms != null ? anim.overview_duration_ms : 150);
   setCb('cb-animation-easing', anim.easing || 'ease_out');
+  setChecked('animation-reduce_motion_on_battery', anim.reduce_motion_on_battery !== false);
 
   var wsNames = (cfg.workspaces && cfg.workspaces.names) || [];
   var wsCard = document.getElementById('workspace-names-card');
@@ -2094,7 +2099,8 @@ function readConfig() {
       workspace_switch_duration_ms: num('animation-workspace_switch_duration_ms'),
       scroll_duration_ms: num('animation-scroll_duration_ms'),
       overview_duration_ms: num('animation-overview_duration_ms'),
-      easing: cbVal('cb-animation-easing')
+      easing: cbVal('cb-animation-easing'),
+      reduce_motion_on_battery: checked('animation-reduce_motion_on_battery')
     },
     workspaces: {
       names: readWorkspaceNames()
@@ -2225,3 +2231,18 @@ document.querySelectorAll('input[type="text"], input[type="number"]').forEach(fu
 </body>
 </html>
 "##;
+
+#[cfg(test)]
+mod tests {
+    use super::SETTINGS_HTML;
+
+    #[test]
+    fn reduce_motion_on_battery_is_wired_into_settings_config() {
+        assert!(SETTINGS_HTML.contains("id=\"animation-reduce_motion_on_battery\""));
+        assert!(SETTINGS_HTML.contains(
+            "setChecked('animation-reduce_motion_on_battery', anim.reduce_motion_on_battery !== false);"
+        ));
+        assert!(SETTINGS_HTML
+            .contains("reduce_motion_on_battery: checked('animation-reduce_motion_on_battery')"));
+    }
+}

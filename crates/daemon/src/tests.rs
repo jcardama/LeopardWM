@@ -25,6 +25,27 @@ fn test_app_state_new() {
 }
 
 #[test]
+fn test_app_state_startup_reduce_motion_matches_all_workspaces() {
+    let mut monitors = test_monitors();
+    monitors.push(MonitorInfo {
+        id: 2,
+        rect: Rect::new(1920, 0, 1920, 1080),
+        work_area: Rect::new(1920, 0, 1920, 1040),
+        is_primary: false,
+        device_name: "DISPLAY2".to_string(),
+        scale_factor: 1.0,
+    });
+
+    let state = AppState::new_with_config(test_config(), monitors);
+
+    for workspaces in state.workspaces.values() {
+        for workspace in workspaces {
+            assert_eq!(workspace.reduce_motion(), state.reduce_motion);
+        }
+    }
+}
+
+#[test]
 fn test_note_elevation_block_lifecycle() {
     use crate::event_handler::ElevationCheck;
     let mut state = AppState::new_with_config(test_config(), test_monitors());

@@ -5,6 +5,28 @@ use crate::state::*;
 use std::collections::HashMap;
 use tracing::info;
 
+pub(crate) fn reduce_motion_enabled(
+    animations_enabled: bool,
+    on_battery_or_saver: bool,
+    reduce_motion_on_battery: bool,
+) -> bool {
+    !animations_enabled || (on_battery_or_saver && reduce_motion_on_battery)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reduce_motion_enabled;
+
+    #[test]
+    fn reduce_motion_policy_honors_accessibility_and_battery_preference() {
+        assert!(!reduce_motion_enabled(true, true, false));
+        assert!(reduce_motion_enabled(true, true, true));
+        assert!(!reduce_motion_enabled(true, false, true));
+        assert!(reduce_motion_enabled(false, false, false));
+        assert!(reduce_motion_enabled(false, true, false));
+    }
+}
+
 impl AppState {
     /// Check if any workspace has an active animation or layout transition.
     pub(crate) fn is_animating(&self) -> bool {
@@ -402,10 +424,11 @@ impl AppState {
     /// Recompute `reduce_motion` from the accessibility setting and power state,
     /// propagating to all workspaces when the value changes.
     pub(crate) fn refresh_reduce_motion(&mut self) {
-        let reduce_for_power =
-            self.on_battery_or_saver && self.config.animation.reduce_motion_on_battery;
-        let should_reduce =
-            !leopardwm_platform_win32::are_animations_enabled() || reduce_for_power;
+        let should_reduce = reduce_motion_enabled(
+            leopardwm_platform_win32::are_animations_enabled(),
+            self.on_battery_or_saver,
+            self.config.animation.reduce_motion_on_battery,
+        );
         if should_reduce != self.reduce_motion {
             self.reduce_motion = should_reduce;
             for ws_vec in self.workspaces.values_mut() {

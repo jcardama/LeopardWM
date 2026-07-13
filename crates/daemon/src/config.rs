@@ -2385,6 +2385,18 @@ mod tests {
     }
 
     #[test]
+    fn test_reduce_motion_on_battery_survives_settings_json_round_trip() {
+        let mut config = Config::default();
+        config.animation.reduce_motion_on_battery = false;
+
+        let saved: Config =
+            serde_json::from_value(serde_json::to_value(config).expect("serialize"))
+                .expect("deserialize");
+
+        assert!(!saved.animation.reduce_motion_on_battery);
+    }
+
+    #[test]
     fn test_validate_animation_duration_clamped() {
         let mut config = Config::default();
         config.animation.layout_duration_ms = 99_999;

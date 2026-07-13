@@ -635,6 +635,13 @@ impl AppState {
     pub(crate) fn new_with_config(config: Config, monitors: Vec<MonitorInfo>) -> Self {
         use crate::helpers::ScaledLayoutParams;
 
+        let animations_enabled = leopardwm_platform_win32::are_animations_enabled();
+        let on_battery_or_saver = leopardwm_platform_win32::is_on_battery_or_power_saver();
+        let initial_reduce_motion = crate::transitions::reduce_motion_enabled(
+            animations_enabled,
+            on_battery_or_saver,
+            config.animation.reduce_motion_on_battery,
+        );
         let mut workspaces = HashMap::new();
         let mut active_workspace_map = HashMap::new();
         let mut monitor_map = HashMap::new();
@@ -658,10 +665,7 @@ impl AppState {
             workspace.set_tab_strip_reserve_px(params.tab_strip_reserve_px);
             workspace.set_centering_mode(config.layout.centering_mode.into());
             workspace.set_center_past_edges(config.layout.center_past_edges);
-            workspace.set_reduce_motion(
-                !leopardwm_platform_win32::are_animations_enabled()
-                    || leopardwm_platform_win32::is_on_battery_or_power_saver(),
-            );
+            workspace.set_reduce_motion(initial_reduce_motion);
             workspace.set_scroll_animation(
                 config.animation.scroll_duration_ms,
                 config.animation.easing,
@@ -752,9 +756,8 @@ impl AppState {
             window_managed_at: HashMap::new(),
             window_last_maximized_at: HashMap::new(),
             snap_disabled_hwnds: HashSet::new(),
-            on_battery_or_saver: leopardwm_platform_win32::is_on_battery_or_power_saver(),
-            reduce_motion: !leopardwm_platform_win32::are_animations_enabled()
-                || leopardwm_platform_win32::is_on_battery_or_power_saver(),
+            on_battery_or_saver,
+            reduce_motion: initial_reduce_motion,
             high_contrast: leopardwm_platform_win32::is_high_contrast_enabled(),
             layout_transition: None,
             ghost_handles: HashMap::new(),

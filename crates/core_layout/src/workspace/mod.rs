@@ -457,6 +457,11 @@ impl Workspace {
         self.centering_mode = mode;
     }
 
+    /// Get whether scroll animations are skipped.
+    pub fn reduce_motion(&self) -> bool {
+        self.reduce_motion
+    }
+
     /// Set whether to skip scroll animations (snap instantly).
     pub fn set_reduce_motion(&mut self, reduce: bool) {
         self.reduce_motion = reduce;
