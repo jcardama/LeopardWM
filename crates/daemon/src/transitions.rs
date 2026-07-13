@@ -13,20 +13,6 @@ pub(crate) fn reduce_motion_enabled(
     !animations_enabled || (on_battery_or_saver && reduce_motion_on_battery)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::reduce_motion_enabled;
-
-    #[test]
-    fn reduce_motion_policy_honors_accessibility_and_battery_preference() {
-        assert!(!reduce_motion_enabled(true, true, false));
-        assert!(reduce_motion_enabled(true, true, true));
-        assert!(!reduce_motion_enabled(true, false, true));
-        assert!(reduce_motion_enabled(false, false, false));
-        assert!(reduce_motion_enabled(false, true, false));
-    }
-}
-
 impl AppState {
     /// Check if any workspace has an active animation or layout transition.
     pub(crate) fn is_animating(&self) -> bool {
@@ -441,5 +427,19 @@ impl AppState {
                 if should_reduce { "disabled" } else { "enabled" }
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reduce_motion_enabled;
+
+    #[test]
+    fn reduce_motion_policy_honors_accessibility_and_battery_preference() {
+        assert!(!reduce_motion_enabled(true, true, false));
+        assert!(reduce_motion_enabled(true, true, true));
+        assert!(!reduce_motion_enabled(true, false, true));
+        assert!(reduce_motion_enabled(false, false, false));
+        assert!(reduce_motion_enabled(false, true, false));
     }
 }
