@@ -320,6 +320,7 @@ html, body {
   padding: 2px 16px;
   margin-bottom: 12px;
 }
+#default-width-preset-card { margin-top: 12px; }
 
 /* ── Settings Row ─────────────────────────────────────────────────── */
 .field {
@@ -399,7 +400,8 @@ select:focus {
   border-bottom-color: transparent;
 }
 input[type="number"] { width: 100px; }
-input[type="text"], select { width: 180px; }
+input[type="text"] { width: 180px; }
+select { width: 140px; }
 
 /* Hide native number spinners */
 input[type="number"]::-webkit-inner-spin-button,
@@ -1459,7 +1461,7 @@ function refreshDefaultWidthPresetOptions(selectedValue) {
   entries.forEach(function(entry, index) {
     var option = document.createElement('option');
     option.value = String(index + 1);
-    option.textContent = 'Preset ' + (index + 1) + ' — ' + (entry.value * 100).toFixed(1).replace(/\.0$/, '') + '%';
+    option.textContent = 'Preset ' + (index + 1) + ' (' + (entry.value * 100).toFixed(1).replace(/\.0$/, '') + '%)';
     option.presetRow = entry.row;
     select.appendChild(option);
   });
@@ -2332,6 +2334,7 @@ mod tests {
         assert!(SETTINGS_HTML
             .contains("refreshDefaultWidthPresetOptions(cfg.layout.default_width_preset || 1);"));
         assert!(SETTINGS_HTML.contains("option.presetRow = entry.row;"));
+        assert!(SETTINGS_HTML.contains("'Preset ' + (index + 1) + ' ('"));
         assert!(SETTINGS_HTML
             .contains("row.querySelector('.row-delete').disabled = row === onlyValidRow;"));
         assert!(SETTINGS_HTML.contains("widthPresets = lastValidWidthPresets.slice();"));
