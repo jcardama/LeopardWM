@@ -369,9 +369,10 @@ html, body {
 .hk-dup-note { display: block; margin-top: 4px; font-size: 11px; line-height: 14px; color: var(--warning-stroke); }
 .hk-dup-note:empty { display: none; }
 
-/* ── Text / Number Inputs ─────────────────────────────────────────── */
+/* ── Inputs / Selects ─────────────────────────────────────────────── */
 input[type="text"],
-input[type="number"] {
+input[type="number"],
+select {
   font-family: var(--font);
   font-size: 14px;
   line-height: 20px;
@@ -386,17 +387,19 @@ input[type="number"] {
   transition: background 0.08s, border-color 0.08s;
 }
 input[type="text"]:hover,
-input[type="number"]:hover {
+input[type="number"]:hover,
+select:hover {
   background: var(--ctrl-fill-secondary);
 }
 input[type="text"]:focus,
-input[type="number"]:focus {
+input[type="number"]:focus,
+select:focus {
   background: var(--ctrl-fill-input-active);
   border-color: var(--ctrl-stroke);
   border-bottom-color: transparent;
 }
 input[type="number"] { width: 100px; }
-input[type="text"] { width: 180px; }
+input[type="text"], select { width: 180px; }
 
 /* Hide native number spinners */
 input[type="number"]::-webkit-inner-spin-button,
@@ -774,6 +777,8 @@ td .combobox-trigger:hover { background: var(--ctrl-fill-secondary); }
   transition: background 0.08s, color 0.08s;
 }
 .row-delete:hover { color: var(--danger); background: var(--subtle-secondary); }
+.row-delete:disabled { opacity: 0.4; cursor: default; }
+.row-delete:disabled:hover { color: var(--text-tertiary); background: none; }
 .row-delete svg { width: 12px; height: 12px; stroke: currentColor; fill: none; stroke-width: 1.5; stroke-linecap: round; }
 
 /* ── Slider ───────────────────────────────────────────────────────── */
@@ -973,9 +978,11 @@ input[type="range"]::-webkit-slider-thumb {
           </table>
         </div>
         <div class="table-actions"><button class="btn btn-sm" onclick="addPresetRow('width',null)">+ Add preset</button></div>
-        <div class="field">
-          <div class="field-info"><div class="field-label">Default preset for new windows</div><div class="field-desc">Which width preset new windows open at (1 = first preset)</div></div>
-          <input type="number" id="layout-default_width_preset" min="1" max="20">
+        <div class="card" id="default-width-preset-card">
+          <div class="field">
+            <div class="field-info"><div class="field-label">Default preset for new windows</div><div class="field-desc">Which configured width preset new windows use</div></div>
+            <select id="layout-default_width_preset" aria-label="Default width preset for new windows"></select>
+          </div>
         </div>
         <h3 class="section-subtitle">Height presets</h3>
         <p class="section-desc">Window height presets as column fractions for cycling window heights.</p>
@@ -1398,25 +1405,87 @@ if (window.matchMedia) {
 /* ── Helpers ─────────────────────────────────────────────────────────── */
 function val(id) { return document.getElementById(id).value; }
 function num(id) { return parseInt(document.getElementById(id).value, 10) || 0; }
+var selectedWidthPresetRow = null;
+var lastValidWidthPresets = [0.333, 0.5, 0.667];
+var lastValidDefaultWidthPreset = 1;
 function addPresetRow(kind, value) {
   var tbody = document.getElementById(kind + '-presets-body');
   var tr = document.createElement('tr');
   var v = (value != null) ? value : '';
   tr.innerHTML =
     '<td><input type="text" class="preset-val" value="' + v + '" placeholder="0.5"></td>' +
-    '<td><button class="row-delete" onclick="this.closest(\'tr\').remove();autoSave(0)">' + deleteIcon + '</button></td>';
+    '<td><button class="row-delete" onclick="removePresetRow(this,\'' + kind + '\')">' + deleteIcon + '</button></td>';
   tbody.appendChild(tr);
   wrapAllInputs(tr);
-  tr.querySelector('input').addEventListener('input', function() { autoSave(500); });
+  tr.querySelector('input').addEventListener('input', function() {
+    if (kind === 'width') refreshDefaultWidthPresetOptions();
+    autoSave(500);
+  });
+}
+function removePresetRow(button, kind) {
+  var row = button.closest('tr');
+  if (row === selectedWidthPresetRow) selectedWidthPresetRow = null;
+  row.remove();
+  if (kind === 'width') refreshDefaultWidthPresetOptions();
+  autoSave(0);
+}
+function readPresetEntries(kind) {
+  var entries = [];
+  document.querySelectorAll('#' + kind + '-presets-body tr').forEach(function(row) {
+    var value = parseFloat(row.querySelector('.preset-val').value.trim());
+    if (!isNaN(value) && value > 0 && value <= 1) entries.push({ row: row, value: value });
+  });
+  return entries;
 }
 function readPresets(kind) {
-  var vals = [];
-  document.querySelectorAll('#' + kind + '-presets-body tr').forEach(function(tr) {
-    var v = parseFloat(tr.querySelector('.preset-val').value.trim());
-    if (!isNaN(v) && v > 0 && v <= 1) vals.push(v);
-  });
-  return vals;
+  return readPresetEntries(kind).map(function(entry) { return entry.value; });
 }
+function refreshDefaultWidthPresetOptions(selectedValue) {
+  var select = document.getElementById('layout-default_width_preset');
+  var entries = readPresetEntries('width');
+  var selectedIndex = entries.findIndex(function(entry) { return entry.row === selectedWidthPresetRow; });
+  var trackedRowIsInvalid = selectedWidthPresetRow && selectedWidthPresetRow.isConnected && selectedIndex === -1;
+
+  if (selectedValue != null) {
+    var requested = parseInt(selectedValue, 10);
+    selectedIndex = requested >= 1 && requested <= entries.length ? requested - 1 : (entries.length ? 0 : -1);
+    selectedWidthPresetRow = selectedIndex >= 0 ? entries[selectedIndex].row : null;
+  } else if (selectedIndex === -1) {
+    selectedIndex = entries.length ? 0 : -1;
+    if (!trackedRowIsInvalid) selectedWidthPresetRow = selectedIndex >= 0 ? entries[selectedIndex].row : null;
+  }
+
+  select.innerHTML = '';
+  entries.forEach(function(entry, index) {
+    var option = document.createElement('option');
+    option.value = String(index + 1);
+    option.textContent = 'Preset ' + (index + 1) + ' — ' + (entry.value * 100).toFixed(1).replace(/\.0$/, '') + '%';
+    option.presetRow = entry.row;
+    select.appendChild(option);
+  });
+  if (selectedIndex >= 0) {
+    select.selectedIndex = selectedIndex;
+    select.disabled = false;
+    lastValidWidthPresets = entries.map(function(entry) { return entry.value; });
+    lastValidDefaultWidthPreset = selectedIndex + 1;
+  } else {
+    var emptyOption = document.createElement('option');
+    emptyOption.textContent = 'No valid presets';
+    select.appendChild(emptyOption);
+    select.disabled = true;
+  }
+
+  var onlyValidRow = entries.length === 1 ? entries[0].row : null;
+  document.querySelectorAll('#width-presets-body tr').forEach(function(row) {
+    row.querySelector('.row-delete').disabled = row === onlyValidRow;
+  });
+}
+document.getElementById('layout-default_width_preset').addEventListener('change', function(e) {
+  var option = e.target.options[e.target.selectedIndex];
+  selectedWidthPresetRow = option ? option.presetRow : null;
+  lastValidDefaultWidthPreset = e.target.selectedIndex + 1;
+  autoSave(0);
+});
 function checked(id) { return document.getElementById(id).checked; }
 function setVal(id, v) { document.getElementById(id).value = v; }
 function setChecked(id, v) { document.getElementById(id).checked = !!v; }
@@ -1449,7 +1518,7 @@ function init(cfg) {
   setVal('layout-outer_gap_bottom', cfg.layout.outer_gap_bottom);
   document.getElementById('width-presets-body').innerHTML = '';
   (cfg.layout.width_presets || [0.333,0.5,0.667]).forEach(function(v) { addPresetRow('width', v); });
-  setVal('layout-default_width_preset', cfg.layout.default_width_preset || 1);
+  refreshDefaultWidthPresetOptions(cfg.layout.default_width_preset || 1);
   document.getElementById('height-presets-body').innerHTML = '';
   (cfg.layout.height_presets || [0.333,0.5,0.667]).forEach(function(v) { addPresetRow('height', v); });
   setCb('cb-layout-centering_mode', cfg.layout.centering_mode);
@@ -2038,6 +2107,12 @@ function initRuleOptions(tr) {
 function escAttr(s) { return (s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
 
 function readConfig() {
+  var widthPresets = readPresets('width');
+  var defaultWidthPreset = num('layout-default_width_preset');
+  if (!widthPresets.length) {
+    widthPresets = lastValidWidthPresets.slice();
+    defaultWidthPreset = lastValidDefaultWidthPreset;
+  }
   return {
     layout: {
       gap: num('layout-gap'),
@@ -2045,9 +2120,9 @@ function readConfig() {
       outer_gap_right: num('layout-outer_gap_right'),
       outer_gap_top: num('layout-outer_gap_top'),
       outer_gap_bottom: num('layout-outer_gap_bottom'),
-      width_presets: readPresets('width'),
+      width_presets: widthPresets,
       height_presets: readPresets('height'),
-      default_width_preset: num('layout-default_width_preset'),
+      default_width_preset: defaultWidthPreset,
       centering_mode: cbVal('cb-layout-centering_mode'),
       center_past_edges: checked('layout-center_past_edges')
     },
@@ -2244,5 +2319,22 @@ mod tests {
         ));
         assert!(SETTINGS_HTML
             .contains("reduce_motion_on_battery: checked('animation-reduce_motion_on_battery')"));
+    }
+
+    #[test]
+    fn default_width_preset_is_a_bounded_dynamic_select() {
+        assert!(SETTINGS_HTML.contains("class=\"card\" id=\"default-width-preset-card\""));
+        assert!(SETTINGS_HTML
+            .contains("<select id=\"layout-default_width_preset\" aria-label=\"Default width preset for new windows\"></select>"));
+        assert!(
+            !SETTINGS_HTML.contains("<input type=\"number\" id=\"layout-default_width_preset\"")
+        );
+        assert!(SETTINGS_HTML
+            .contains("refreshDefaultWidthPresetOptions(cfg.layout.default_width_preset || 1);"));
+        assert!(SETTINGS_HTML.contains("option.presetRow = entry.row;"));
+        assert!(SETTINGS_HTML
+            .contains("row.querySelector('.row-delete').disabled = row === onlyValidRow;"));
+        assert!(SETTINGS_HTML.contains("widthPresets = lastValidWidthPresets.slice();"));
+        assert!(SETTINGS_HTML.contains("default_width_preset: defaultWidthPreset"));
     }
 }

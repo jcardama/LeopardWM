@@ -13,6 +13,9 @@ All notable changes to LeopardWM will be documented in this file.
   option now controls battery and Windows power saver motion reduction without
   being reset by unrelated saves; disabling it takes effect at startup, while
   Windows Accessibility animation settings still override it.
+- **Layout Settings no longer overflows horizontally.** The default width for
+  new windows is now selected from the configured width presets instead of an
+  unbounded numeric index, and stays valid as presets are edited or removed.
 
 ## 0.2.5
 
