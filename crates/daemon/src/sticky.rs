@@ -27,7 +27,11 @@ impl AppState {
         if self.sticky_windows.remove(&wid) {
             // Un-pin: stop following workspaces, but leave it floating.
             if let Some((mon, ws_idx)) = self.find_window_workspace(wid) {
-                if let Some(ws) = self.workspaces.get_mut(&mon).and_then(|v| v.get_mut(ws_idx)) {
+                if let Some(ws) = self
+                    .workspaces
+                    .get_mut(&mon)
+                    .and_then(|v| v.get_mut(ws_idx))
+                {
                     ws.set_floating_pinned(wid, false);
                 }
             }
@@ -122,8 +126,15 @@ impl AppState {
                 if !appended {
                     // Effectively unreachable (no duplicate possible post-remove);
                     // recover the window into its source workspace if it ever fires.
-                    warn!("Sticky: could not re-home tiled window {}; rolled back to source", wid);
-                    if let Some(ws) = self.workspaces.get_mut(&mon).and_then(|v| v.get_mut(ws_idx)) {
+                    warn!(
+                        "Sticky: could not re-home tiled window {}; rolled back to source",
+                        wid
+                    );
+                    if let Some(ws) = self
+                        .workspaces
+                        .get_mut(&mon)
+                        .and_then(|v| v.get_mut(ws_idx))
+                    {
                         let _ = ws.insert_window(wid, None);
                     }
                 }
@@ -135,7 +146,12 @@ impl AppState {
                 .workspaces
                 .get(&mon)
                 .and_then(|v| v.get(ws_idx))
-                .and_then(|ws| ws.floating_windows().iter().find(|f| f.id == wid).map(|f| f.rect))
+                .and_then(|ws| {
+                    ws.floating_windows()
+                        .iter()
+                        .find(|f| f.id == wid)
+                        .map(|f| f.rect)
+                })
                 .unwrap_or_else(|| self.centered_float_rect());
             // Add to the active workspace FIRST; only detach from the source
             // once that succeeds, so a failed move never loses the window.
@@ -152,7 +168,10 @@ impl AppState {
                 })
                 .unwrap_or(false);
             if !added {
-                warn!("Sticky: could not re-home window {}; left on its workspace", wid);
+                warn!(
+                    "Sticky: could not re-home window {}; left on its workspace",
+                    wid
+                );
                 continue;
             }
             let detached = self
@@ -165,8 +184,15 @@ impl AppState {
                 // Could not remove from the source after adding to the
                 // destination. Roll back the add so the window never lives
                 // in two workspaces at once.
-                warn!("Sticky: re-home of window {} could not detach source; rolled back", wid);
-                if let Some(ws) = self.workspaces.get_mut(&monitor).and_then(|v| v.get_mut(active)) {
+                warn!(
+                    "Sticky: re-home of window {} could not detach source; rolled back",
+                    wid
+                );
+                if let Some(ws) = self
+                    .workspaces
+                    .get_mut(&monitor)
+                    .and_then(|v| v.get_mut(active))
+                {
                     ws.remove_floating(wid);
                 }
             }
@@ -202,7 +228,11 @@ impl AppState {
         if tiled_here {
             // Align the workspace's tiled focus with the foreground we assert
             // so the post-switch focus sync doesn't recompute and fight it.
-            if let Some(ws) = self.workspaces.get_mut(&monitor).and_then(|v| v.get_mut(active)) {
+            if let Some(ws) = self
+                .workspaces
+                .get_mut(&monitor)
+                .and_then(|v| v.get_mut(active))
+            {
                 let _ = ws.focus_window(wid);
             }
         }

@@ -11,8 +11,8 @@
 use crate::state::AppState;
 use leopardwm_core_layout::{Rect, Visibility, Workspace};
 use leopardwm_platform_win32::overview::{
-    OverviewCard, OverviewModel, OverviewOverlay, OverviewRow, DEFAULT_ACCENT_BGR,
-    PANEL_INNER_PAD, SELECT_PAD, VIEWPORT_RING_PAD,
+    OverviewCard, OverviewModel, OverviewOverlay, OverviewRow, DEFAULT_ACCENT_BGR, PANEL_INNER_PAD,
+    SELECT_PAD, VIEWPORT_RING_PAD,
 };
 use tracing::{info, warn};
 
@@ -98,8 +98,7 @@ impl StripTransform {
     fn fit(content: &Rect, strip: &Rect) -> Self {
         let content_w = f64::from(content.width.max(1));
         let content_h = f64::from(content.height.max(1));
-        let scale =
-            (f64::from(strip.height) / content_h).min(f64::from(strip.width) / content_w);
+        let scale = (f64::from(strip.height) / content_h).min(f64::from(strip.width) / content_w);
         StripTransform {
             scale,
             min_x: content.x,
@@ -113,7 +112,9 @@ impl StripTransform {
     /// Width of the scaled content, i.e. how much of the strip's width
     /// the content actually occupies after fitting.
     fn scaled_width(&self, content: &Rect) -> i32 {
-        (f64::from(content.width.max(1)) * self.scale).round().max(1.0) as i32
+        (f64::from(content.width.max(1)) * self.scale)
+            .round()
+            .max(1.0) as i32
     }
 
     fn apply(&self, r: &Rect) -> Rect {
@@ -232,8 +233,7 @@ impl AppState {
                 None => geom.panel.width, // no visible content: keep full width
             };
             let panel = Rect::new(geom.panel.x, geom.panel.y, panel_w, geom.panel.height);
-            let label_strip =
-                Rect::new(panel.x, panel.y, panel_w, geom.label_strip.height);
+            let label_strip = Rect::new(panel.x, panel.y, panel_w, geom.label_strip.height);
             rows.push(OverviewRow {
                 workspace_index: ws_idx,
                 label,
@@ -582,7 +582,11 @@ impl AppState {
         // `overview_open` stays true until `Dismissed` lands, but pushing
         // models at a closing (or already-hidden) overlay would flash the
         // map back. Belt-and-braces over `update_model`'s own no-op guard.
-        if self.overview_overlay.as_ref().is_some_and(OverviewOverlay::is_closing) {
+        if self
+            .overview_overlay
+            .as_ref()
+            .is_some_and(OverviewOverlay::is_closing)
+        {
             return;
         }
         match self.build_overview_model() {
@@ -784,9 +788,15 @@ mod tests {
         let (_, model) = state.build_overview_model().expect("model");
         let cards = &model.rows[0].cards;
         assert_eq!(cards.len(), 2, "tabbed column collapses to its active tab");
-        let tabbed = cards.iter().find(|c| c.window_id == 101).expect("active tab card");
+        let tabbed = cards
+            .iter()
+            .find(|c| c.window_id == 101)
+            .expect("active tab card");
         assert_eq!(tabbed.tab_count, Some(3));
-        let vertical = cards.iter().find(|c| c.window_id == 104).expect("vertical card");
+        let vertical = cards
+            .iter()
+            .find(|c| c.window_id == 104)
+            .expect("vertical card");
         assert_eq!(vertical.tab_count, None);
     }
 
@@ -815,7 +825,12 @@ mod tests {
         let b = before.rows[0].viewport;
         let a = after.rows[0].viewport;
         assert!(a.width > 0 && a.height > 0, "marker must be non-empty");
-        assert!(a.x > b.x, "marker must move right with scroll: {:?} -> {:?}", b, a);
+        assert!(
+            a.x > b.x,
+            "marker must move right with scroll: {:?} -> {:?}",
+            b,
+            a
+        );
         let panel = after.rows[0].panel;
         assert!(
             a.x >= panel.x
@@ -859,7 +874,10 @@ mod tests {
             .iter()
             .filter(|c| c.rect.x >= ring.x && c.rect.x + c.rect.width <= ring.x + ring.width)
             .collect();
-        assert!(!inside.is_empty(), "expected at least one card inside the ring");
+        assert!(
+            !inside.is_empty(),
+            "expected at least one card inside the ring"
+        );
         for card in inside {
             assert!(
                 card.rect.x >= ring.x + VIEWPORT_RING_PAD
@@ -877,9 +895,7 @@ mod tests {
         assert!(ring.x >= row.panel.x + ROW_INNER_PAD);
         assert!(ring.x + ring.width <= row.panel.x + row.panel.width - ROW_INNER_PAD + 2);
         assert!(ring.y >= row.label_strip.y + row.label_strip.height + ROW_INNER_PAD);
-        assert!(
-            ring.y + ring.height <= row.panel.y + row.panel.height - ROW_INNER_PAD - 1 + 2
-        );
+        assert!(ring.y + ring.height <= row.panel.y + row.panel.height - ROW_INNER_PAD - 1 + 2);
     }
 
     #[test]
@@ -1211,7 +1227,11 @@ mod tests {
 
         let (_, model) = state.build_overview_model().expect("model");
         let row = &model.rows[0];
-        assert_eq!(row.cards.len(), 1, "fullscreen collapses the row to one card");
+        assert_eq!(
+            row.cards.len(),
+            1,
+            "fullscreen collapses the row to one card"
+        );
         let card = &row.cards[0];
         assert_eq!(card.window_id, fs_wid);
         // The single card shows the full viewport: work-area aspect.
@@ -1443,7 +1463,11 @@ mod tests {
         // from_rect (the would-be placement when that workspace shows).
         for row in &model.rows {
             for card in &row.cards {
-                assert!(card.from_rect.is_some(), "card {} lacks from_rect", card.window_id);
+                assert!(
+                    card.from_rect.is_some(),
+                    "card {} lacks from_rect",
+                    card.window_id
+                );
             }
         }
     }

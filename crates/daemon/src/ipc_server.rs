@@ -78,8 +78,7 @@ pub(crate) async fn run_ipc_server(event_tx: mpsc::Sender<DaemonEvent>) {
             },
             None => opts.create(&pipe_name),
         };
-        let server = match create_result
-        {
+        let server = match create_result {
             Ok(s) => {
                 is_first_instance = false; // Subsequent instances don't need this flag
                 s

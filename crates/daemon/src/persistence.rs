@@ -250,7 +250,11 @@ impl AppState {
             // Mirror reconcile/migration pruning: use the type-preserving remove
             // APIs (remove_window / remove_floating).
             let mut ws = ws_snapshot.workspace.clone();
-            let to_drop: Vec<u64> = ws.all_window_ids().into_iter().filter(|&w| !keep(w)).collect();
+            let to_drop: Vec<u64> = ws
+                .all_window_ids()
+                .into_iter()
+                .filter(|&w| !keep(w))
+                .collect();
             for wid in to_drop {
                 if ws.is_floating(wid) {
                     ws.remove_floating(wid);
@@ -263,7 +267,11 @@ impl AppState {
             // defaults; re-apply them exactly like reconcile_monitors does.
             // apply_to sets gaps + default_column_width + tab_strip_reserve_px
             // WITHOUT touching per-column widths, so the saved widths survive.
-            let scale = self.monitors.get(&monitor_id).map(|m| m.scale_factor).unwrap_or(1.0);
+            let scale = self
+                .monitors
+                .get(&monitor_id)
+                .map(|m| m.scale_factor)
+                .unwrap_or(1.0);
             let vw = self
                 .monitors
                 .get(&monitor_id)
@@ -344,8 +352,14 @@ impl AppState {
                 let ws_idx = ws_snapshot.workspace_index;
                 if let Some(ws_vec) = self.workspaces.get_mut(&id) {
                     // Extend the vec with empty workspaces if needed
-                    let scale = self.monitors.get(&id).map(|m| m.scale_factor).unwrap_or(1.0);
-                    let vw = self.monitors.get(&id)
+                    let scale = self
+                        .monitors
+                        .get(&id)
+                        .map(|m| m.scale_factor)
+                        .unwrap_or(1.0);
+                    let vw = self
+                        .monitors
+                        .get(&id)
                         .map(|m| m.work_area.width)
                         .unwrap_or(FALLBACK_VIEWPORT_WIDTH);
                     let params = ScaledLayoutParams::from_config(
@@ -398,7 +412,9 @@ impl AppState {
                 .find(|(_, m)| &m.device_name == device_name)
             {
                 // Clamp to valid range — index must be within the workspace vec
-                let max_idx = self.workspaces.get(&id)
+                let max_idx = self
+                    .workspaces
+                    .get(&id)
                     .map(|v| v.len().saturating_sub(1))
                     .unwrap_or(0);
                 self.active_workspace.insert(id, ws_idx.min(max_idx));

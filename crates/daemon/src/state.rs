@@ -139,6 +139,20 @@ pub(crate) enum TestApplyPlacementsBehavior {
     SleepAndFail(Duration),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LayoutApplyTimeoutCandidate {
+    pub(crate) hwnd: u64,
+    pub(crate) class_name: Option<String>,
+    pub(crate) title: Option<String>,
+    pub(crate) executable: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LayoutApplyTimeoutReport {
+    pub(crate) timeout: Duration,
+    pub(crate) candidates: Vec<LayoutApplyTimeoutCandidate>,
+}
+
 /// Request for the main loop to spawn a resize preview animation thread.
 pub(crate) struct ResizeAnimationRequest {
     pub(crate) start_rect: Rect,
@@ -339,11 +353,8 @@ pub(crate) struct AppState {
     /// strip overlays on demand. Set once during startup (in `state.rs`
     /// `init_tab_strip_overlay`) and reused for every strip created
     /// afterward.
-    pub(crate) tab_strip_action_tx: Option<
-        std::sync::mpsc::Sender<
-            leopardwm_platform_win32::tab_strip::TabActionEvent,
-        >,
-    >,
+    pub(crate) tab_strip_action_tx:
+        Option<std::sync::mpsc::Sender<leopardwm_platform_win32::tab_strip::TabActionEvent>>,
     /// Whether the workspace overview overlay is currently shown.
     pub(crate) overview_open: bool,
     /// Overview overlay. NOT constructed in `new` — lazily created on the
@@ -421,6 +432,8 @@ pub(crate) struct AppState {
     pub(crate) pending_apply_workers: Vec<std::thread::JoinHandle<()>>,
     /// Max time allowed for Win32 placement calls before auto-pausing tiling.
     pub(crate) layout_apply_timeout: Duration,
+    /// One-shot report consumed by the main loop after an automatic timeout pause.
+    pub(crate) pending_layout_apply_timeout_report: Option<LayoutApplyTimeoutReport>,
     /// Daemon start time for uptime reporting.
     pub(crate) start_time: std::time::Instant,
     /// HWNDs of transient windows (managed briefly then hidden), used to suppress
@@ -516,8 +529,7 @@ pub(crate) struct AppState {
     /// worker from `abort_active_crossfade` (which is called by many
     /// paths that don't have direct access to the owning worker).
     /// Installed once at daemon startup via `install_animation_worker_control`.
-    pub(crate) animation_worker_control:
-        Option<crate::animation_worker::AnimationWorkerControl>,
+    pub(crate) animation_worker_control: Option<crate::animation_worker::AnimationWorkerControl>,
     /// True when the next sync `apply_layout` is the landing pass after an
     /// animation (scroll or layout transition) and therefore needs the
     /// `(w-1 → w)` nudge to repair sticky-compositor swap-chain desyncs.
@@ -571,8 +583,7 @@ pub(crate) struct AppState {
     /// startup (parallel to `install_tab_strip`); the spawned dialog
     /// thread posts a `TabRenameResult` here, which a forwarder thread
     /// translates to `DaemonEvent::TabRenameSubmitted`.
-    pub(crate) rename_result_tx:
-        Option<std::sync::mpsc::Sender<crate::events::TabRenameResult>>,
+    pub(crate) rename_result_tx: Option<std::sync::mpsc::Sender<crate::events::TabRenameResult>>,
 }
 
 /// Tracks an in-flight tab focus change synthesized by the tab strip
@@ -666,10 +677,8 @@ impl AppState {
             workspace.set_centering_mode(config.layout.centering_mode.into());
             workspace.set_center_past_edges(config.layout.center_past_edges);
             workspace.set_reduce_motion(initial_reduce_motion);
-            workspace.set_scroll_animation(
-                config.animation.scroll_duration_ms,
-                config.animation.easing,
-            );
+            workspace
+                .set_scroll_animation(config.animation.scroll_duration_ms, config.animation.easing);
 
             if monitor.is_primary {
                 focused_monitor = monitor.id;
@@ -746,6 +755,7 @@ impl AppState {
             apply_epoch: Arc::new(AtomicU64::new(0)),
             pending_apply_workers: Vec::new(),
             layout_apply_timeout: APPLY_LAYOUT_TIMEOUT,
+            pending_layout_apply_timeout_report: None,
             start_time: std::time::Instant::now(),
             recently_hidden_hwnds: HashMap::new(),
             pending_edit_config_pull: None,
@@ -786,6 +796,10 @@ impl AppState {
         }
     }
 
+    pub(crate) fn take_layout_apply_timeout_report(&mut self) -> Option<LayoutApplyTimeoutReport> {
+        self.pending_layout_apply_timeout_report.take()
+    }
+
     /// Get the active workspace index (0-based) for a given monitor.
     pub(crate) fn active_workspace_idx(&self, monitor_id: MonitorId) -> usize {
         self.active_workspace.get(&monitor_id).copied().unwrap_or(0)
@@ -804,11 +818,7 @@ impl AppState {
     /// focus paths emit through the same gate. Looks up window info for
     /// the title/class/executable payload; pass `hwnd: None` when focus
     /// was cleared.
-    pub(crate) fn broadcast_focused_window_if_changed(
-        &mut self,
-        monitor: i64,
-        hwnd: Option<u64>,
-    ) {
+    pub(crate) fn broadcast_focused_window_if_changed(&mut self, monitor: i64, hwnd: Option<u64>) {
         if self.last_broadcast_focused == Some((monitor, hwnd)) {
             return;
         }
@@ -961,9 +971,7 @@ impl AppState {
     /// Skipped in test builds (would create real layered DWM windows).
     pub(crate) fn install_tab_strip(
         &mut self,
-        tab_action_tx: std::sync::mpsc::Sender<
-            leopardwm_platform_win32::tab_strip::TabActionEvent,
-        >,
+        tab_action_tx: std::sync::mpsc::Sender<leopardwm_platform_win32::tab_strip::TabActionEvent>,
     ) {
         if cfg!(test) {
             drop(tab_action_tx);
@@ -1043,11 +1051,21 @@ impl AppState {
 
     /// Ensure workspace index exists for a monitor, creating empty workspaces as needed.
     /// Returns a mutable reference to the workspace at the given index.
-    pub(crate) fn ensure_workspace_exists(&mut self, monitor_id: MonitorId, idx: usize) -> Option<&mut Workspace> {
+    pub(crate) fn ensure_workspace_exists(
+        &mut self,
+        monitor_id: MonitorId,
+        idx: usize,
+    ) -> Option<&mut Workspace> {
         use crate::helpers::ScaledLayoutParams;
 
-        let scale = self.monitors.get(&monitor_id).map(|m| m.scale_factor).unwrap_or(1.0);
-        let vw = self.monitors.get(&monitor_id)
+        let scale = self
+            .monitors
+            .get(&monitor_id)
+            .map(|m| m.scale_factor)
+            .unwrap_or(1.0);
+        let vw = self
+            .monitors
+            .get(&monitor_id)
             .map(|m| m.work_area.width)
             .unwrap_or(FALLBACK_VIEWPORT_WIDTH);
         let params = ScaledLayoutParams::from_config(
@@ -1072,10 +1090,7 @@ impl AppState {
             ws.set_centering_mode(config.layout.centering_mode.into());
             ws.set_center_past_edges(config.layout.center_past_edges);
             ws.set_reduce_motion(self.reduce_motion);
-            ws.set_scroll_animation(
-                config.animation.scroll_duration_ms,
-                config.animation.easing,
-            );
+            ws.set_scroll_animation(config.animation.scroll_duration_ms, config.animation.easing);
             ws_vec.push(ws);
         }
         ws_vec.get_mut(idx)
@@ -1096,7 +1111,6 @@ impl AppState {
             .map(|m| m.work_area.width)
             .unwrap_or(FALLBACK_VIEWPORT_WIDTH)
     }
-
 }
 
 pub(crate) fn validate_set_width_fraction(fraction: f64) -> std::result::Result<(), String> {

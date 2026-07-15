@@ -16,10 +16,10 @@ use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Dwm::{
     DwmExtendFrameIntoClientArea, DwmSetWindowAttribute, DWMWINDOWATTRIBUTE,
 };
-use windows::Win32::UI::Controls::MARGINS;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::GetCurrentThreadId;
+use windows::Win32::UI::Controls::MARGINS;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use raw_window_handle::{
@@ -82,11 +82,10 @@ struct Win32Handle(isize);
 impl HasWindowHandle for Win32Handle {
     fn window_handle(
         &self,
-        ) -> std::result::Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError>
+    ) -> std::result::Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError>
     {
-        let mut handle = Win32WindowHandle::new(unsafe {
-            std::num::NonZero::new_unchecked(self.0)
-        });
+        let mut handle =
+            Win32WindowHandle::new(unsafe { std::num::NonZero::new_unchecked(self.0) });
         handle.hinstance = None;
         let raw = RawWindowHandle::Win32(handle);
         Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(raw) })
@@ -195,10 +194,17 @@ pub fn run_settings_window(
         let win_handle = Win32Handle(hwnd.0 as isize);
         let auto_start = leopardwm_platform_win32::autostart::get_autostart().unwrap_or(false);
         let config_json = {
-            let mut val = serde_json::to_value(&config).unwrap_or(serde_json::Value::Object(Default::default()));
+            let mut val = serde_json::to_value(&config)
+                .unwrap_or(serde_json::Value::Object(Default::default()));
             if let serde_json::Value::Object(ref mut map) = val {
-                map.insert("high_contrast".to_string(), serde_json::Value::Bool(high_contrast));
-                map.insert("auto_start".to_string(), serde_json::Value::Bool(auto_start));
+                map.insert(
+                    "high_contrast".to_string(),
+                    serde_json::Value::Bool(high_contrast),
+                );
+                map.insert(
+                    "auto_start".to_string(),
+                    serde_json::Value::Bool(auto_start),
+                );
             }
             serde_json::to_string(&val).unwrap_or_else(|_| "{}".to_string())
         };
@@ -310,7 +316,10 @@ fn handle_ipc(body: &str, event_tx: &mpsc::Sender<SettingsEvent>, _hwnd: HWND) {
             }
         }
         "set_recording" => {
-            let recording = msg.get("recording").and_then(|v| v.as_bool()).unwrap_or(false);
+            let recording = msg
+                .get("recording")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             let _ = event_tx.send(SettingsEvent::SetRecording(recording));
         }
         "set_auto_start" => {
@@ -328,10 +337,7 @@ fn handle_ipc(body: &str, event_tx: &mpsc::Sender<SettingsEvent>, _hwnd: HWND) {
                 autostart::disable_autostart().map(|()| None)
             };
             match result {
-                Ok(Some(exe)) => info!(
-                    "Auto-start enabled via Settings (path: {})",
-                    exe.display()
-                ),
+                Ok(Some(exe)) => info!("Auto-start enabled via Settings (path: {})", exe.display()),
                 Ok(None) => info!("Auto-start disabled via Settings"),
                 Err(e) => warn!("Settings: failed to update auto-start: {}", e),
             }

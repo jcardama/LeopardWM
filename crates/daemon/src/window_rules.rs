@@ -21,17 +21,17 @@ impl AppState {
             for (ws_idx, workspace) in ws_vec.iter().enumerate() {
                 for wid in workspace.all_window_ids() {
                     let is_floating = workspace.is_floating(wid);
-                if let Some(win_info) = self.lookup_window_info(wid) {
-                    let executable =
-                        get_process_executable(win_info.process_id).unwrap_or_default();
-                    let action = self.evaluate_window_rules(
-                        &win_info.class_name,
-                        &win_info.title,
-                        &executable,
-                    );
-                    transitions.push((wid, monitor_id, ws_idx, action, is_floating));
+                    if let Some(win_info) = self.lookup_window_info(wid) {
+                        let executable =
+                            get_process_executable(win_info.process_id).unwrap_or_default();
+                        let action = self.evaluate_window_rules(
+                            &win_info.class_name,
+                            &win_info.title,
+                            &executable,
+                        );
+                        transitions.push((wid, monitor_id, ws_idx, action, is_floating));
+                    }
                 }
-            }
             }
         }
 
@@ -43,8 +43,7 @@ impl AppState {
             })
             .filter_map(|(wid, monitor_id, _, _, _)| {
                 let win_info = self.lookup_window_info(*wid)?;
-                let executable =
-                    get_process_executable(win_info.process_id).unwrap_or_default();
+                let executable = get_process_executable(win_info.process_id).unwrap_or_default();
                 let rect = self.get_floating_rect_from_rules(
                     &win_info.class_name,
                     &win_info.title,
@@ -76,7 +75,11 @@ impl AppState {
                             600,
                         )
                     });
-                    if let Some(workspace) = self.workspaces.get_mut(&monitor_id).and_then(|v| v.get_mut(ws_idx)) {
+                    if let Some(workspace) = self
+                        .workspaces
+                        .get_mut(&monitor_id)
+                        .and_then(|v| v.get_mut(ws_idx))
+                    {
                         let _ = workspace.remove_window(wid);
                         let _ = workspace.add_floating(wid, rect);
                         info!("Rule change: moved window {} to floating", wid);
@@ -84,7 +87,11 @@ impl AppState {
                 }
                 config::WindowAction::Tile if is_floating => {
                     // Currently floating, should be tiled
-                    if let Some(workspace) = self.workspaces.get_mut(&monitor_id).and_then(|v| v.get_mut(ws_idx)) {
+                    if let Some(workspace) = self
+                        .workspaces
+                        .get_mut(&monitor_id)
+                        .and_then(|v| v.get_mut(ws_idx))
+                    {
                         workspace.unfloat_window(wid);
                         self.disable_snap_for_window(wid);
                         info!("Rule change: moved window {} to tiled", wid);
@@ -93,7 +100,11 @@ impl AppState {
                 config::WindowAction::Ignore => {
                     // Should no longer be managed — restore snap and remove from workspace
                     self.restore_snap_for_window(wid);
-                    if let Some(workspace) = self.workspaces.get_mut(&monitor_id).and_then(|v| v.get_mut(ws_idx)) {
+                    if let Some(workspace) = self
+                        .workspaces
+                        .get_mut(&monitor_id)
+                        .and_then(|v| v.get_mut(ws_idx))
+                    {
                         if is_floating {
                             workspace.remove_floating(wid);
                         } else {
@@ -189,7 +200,11 @@ impl AppState {
             // New windows land on the monitor's active workspace.
             let target_idx = self.active_workspace_idx(monitor_id);
             let _ = self.ensure_workspace_exists(monitor_id, target_idx);
-            if let Some(workspace) = self.workspaces.get_mut(&monitor_id).and_then(|v| v.get_mut(target_idx)) {
+            if let Some(workspace) = self
+                .workspaces
+                .get_mut(&monitor_id)
+                .and_then(|v| v.get_mut(target_idx))
+            {
                 match action {
                     config::WindowAction::Float => {
                         // Use rule dimensions or default to centered 800x600 window
@@ -216,7 +231,8 @@ impl AppState {
 
                         match workspace.add_floating(win_info.hwnd, rule_rect) {
                             Ok(()) => {
-                                self.window_managed_at.insert(win_info.hwnd, std::time::Instant::now());
+                                self.window_managed_at
+                                    .insert(win_info.hwnd, std::time::Instant::now());
                                 info!(
                                     "Added floating window: {} ({}) to monitor {} - {}x{}",
                                     win_info.title,
@@ -235,7 +251,8 @@ impl AppState {
                     config::WindowAction::Tile => {
                         match workspace.insert_window(win_info.hwnd, None) {
                             Ok(()) => {
-                                self.window_managed_at.insert(win_info.hwnd, std::time::Instant::now());
+                                self.window_managed_at
+                                    .insert(win_info.hwnd, std::time::Instant::now());
                                 self.disable_snap_for_window(win_info.hwnd);
                                 info!(
                                     "Added tiled window: {} ({}) to monitor {} - {}x{}",
@@ -306,8 +323,14 @@ impl AppState {
                 // Only scale rule-provided dimensions (config logical pixels).
                 // If a dimension is not specified, use the original rect value
                 // which is already in physical pixels from the OS.
-                let width = rule.width.map(|w| scale_px(w, scale)).unwrap_or(original_rect.width);
-                let height = rule.height.map(|h| scale_px(h, scale)).unwrap_or(original_rect.height);
+                let width = rule
+                    .width
+                    .map(|w| scale_px(w, scale))
+                    .unwrap_or(original_rect.width);
+                let height = rule
+                    .height
+                    .map(|h| scale_px(h, scale))
+                    .unwrap_or(original_rect.height);
                 return leopardwm_core_layout::Rect::new(
                     original_rect.x,
                     original_rect.y,

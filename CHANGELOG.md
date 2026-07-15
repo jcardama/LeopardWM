@@ -17,6 +17,12 @@ All notable changes to LeopardWM will be documented in this file.
   new windows is now selected from a compact dropdown of configured width
   presets instead of an unbounded numeric index. Options show their percentage,
   and the selection stays valid as presets are edited or removed.
+- **Automatic placement timeouts now show the correct paused state.** When a
+  five-second Win32 placement batch auto-pauses tiling, the tray immediately
+  changes to Resume Tiling, its tooltip reports Paused, and a notification
+  explains what happened. Logs now include every candidate window from the
+  timed-out batch with best-effort class, title, and executable details, without
+  claiming one was the blocker.
 
 ## 0.2.5
 

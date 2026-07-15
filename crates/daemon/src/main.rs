@@ -26,9 +26,9 @@ mod overview;
 mod persistence;
 mod scratchpad;
 mod settings;
-mod sticky;
 mod startup;
 mod state;
+mod sticky;
 #[cfg(test)]
 mod tests;
 mod transitions;
@@ -48,11 +48,11 @@ use leopardwm_core_layout::Rect;
 use leopardwm_ipc::{pipe_name_candidates, preferred_pipe_name, IpcCommand, IpcResponse};
 use leopardwm_platform_win32::{
     cascade_windows, enumerate_monitors, enumerate_windows, fn_mod_bit, install_event_hooks,
-    install_keyboard_hook, install_mouse_hook, overlay::OverlayWindow, parse_hotkey_string, MouseHookHandle,
+    install_keyboard_hook, install_mouse_hook, overlay::OverlayWindow, parse_hotkey_string,
     register_gestures, register_system_events, restore_windows_moved_offscreen,
     set_display_change_sender, set_dpi_awareness, set_power_state_sender,
-    uncloak_all_visible_windows, GestureEvent, Hotkey, HotkeyBind, HotkeyId, KeyboardHookHandle, Modifiers,
-    MonitorId, MonitorInfo, WindowEvent,
+    uncloak_all_visible_windows, GestureEvent, Hotkey, HotkeyBind, HotkeyId, KeyboardHookHandle,
+    Modifiers, MonitorId, MonitorInfo, MouseHookHandle, WindowEvent,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -80,7 +80,6 @@ impl Args {
 }
 
 pub(crate) use events::DaemonEvent;
-
 
 /// Retry count for shutdown visibility recovery when an apply worker fails to exit in time.
 const SHUTDOWN_RECOVERY_RETRY_ATTEMPTS: usize = 3;
@@ -188,7 +187,11 @@ async fn reload_config_and_hotkeys(
     *hotkey_state = setup_hotkeys(&new_config, event_tx.clone());
     // Apply a focus-follows-mouse change from the reloaded config (e.g. the
     // Settings toggle) without waiting for a restart.
-    sync_mouse_hook(new_config.behavior.focus_follows_mouse, mouse_hook_handle, event_tx);
+    sync_mouse_hook(
+        new_config.behavior.focus_follows_mouse,
+        mouse_hook_handle,
+        event_tx,
+    );
     // Refresh the rejected-hotkey warning in an open settings window so it
     // reflects the new registration instead of the snapshot taken at open.
     settings::push_failed_binds(&hotkey_state.failed_binds);
@@ -339,7 +342,10 @@ fn setup_hotkeys(config: &Config, event_tx: mpsc::Sender<DaemonEvent>) -> Hotkey
     let hook = install_hotkey_hook(binds, event_tx);
     let registered_count = if hook.is_some() { requested_count } else { 0 };
     if hook.is_some() {
-        info!("Matching {} global hotkeys via the keyboard hook", requested_count);
+        info!(
+            "Matching {} global hotkeys via the keyboard hook",
+            requested_count
+        );
     } else {
         warn!("Keyboard hook unavailable; global shortcuts are disabled.");
     }
@@ -499,6 +505,73 @@ struct EventLoopCtx<'a> {
     mouse_hook_handle: &'a mut Option<MouseHookHandle>,
 }
 
+async fn sync_pending_layout_apply_timeout_ui(
+    state: &Arc<Mutex<AppState>>,
+    tray_manager: &Option<tray::TrayManager>,
+    hotkey_state: &HotkeyState,
+) {
+    let pending = {
+        let mut state = state.lock().await;
+        state.take_layout_apply_timeout_report().map(|report| {
+            let window_count = state.all_managed_window_ids().len();
+            let monitor_count = state.monitors.len();
+            let active_workspace = (state.active_workspace_idx(state.focused_monitor) + 1) as u8;
+            (
+                report,
+                state.paused,
+                window_count,
+                monitor_count,
+                active_workspace,
+            )
+        })
+    };
+    let Some((report, paused, window_count, monitor_count, active_workspace)) = pending else {
+        return;
+    };
+    if !paused {
+        return;
+    }
+
+    if let Some(manager) = tray_manager {
+        manager.update_pause_text(true);
+        manager.update_tooltip(
+            window_count,
+            monitor_count,
+            true,
+            Some((hotkey_state.registered_count, hotkey_state.requested_count)),
+            active_workspace,
+        );
+    }
+
+    notify::show_toast(
+        "Tiling paused",
+        &format!(
+            "Window placement did not finish within {} seconds, so tiling was automatically paused. Choose Resume Tiling from the tray after the windows settle.",
+            report.timeout.as_secs()
+        ),
+    );
+}
+
+async fn apply_initial_layout(
+    state: &Arc<Mutex<AppState>>,
+    tray_manager: &Option<tray::TrayManager>,
+    hotkey_state: &HotkeyState,
+) {
+    {
+        let mut state = state.lock().await;
+        state.resync_minimized_from_os();
+        if let Err(e) = state.apply_layout() {
+            warn!("Failed to apply initial layout: {}", e);
+        }
+        for wid in state.all_managed_window_ids() {
+            leopardwm_platform_win32::taskbar::taskbar_restore(wid);
+        }
+        state.sync_taskbar_buttons();
+        state.sync_foreground_window();
+    }
+    sync_pending_layout_apply_timeout_ui(state, tray_manager, hotkey_state).await;
+}
+
 /// Set DPI awareness, ensure a config file exists, load and validate config, and init logging.
 fn bootstrap_config() -> Result<(Config, Vec<config::ConfigWarning>)> {
     // Set DPI awareness before any window/GDI operations
@@ -540,7 +613,9 @@ fn bootstrap_config() -> Result<(Config, Vec<config::ConfigWarning>)> {
     let _ = std::fs::create_dir_all(&log_dir);
     let file_appender = tracing_appender::rolling::never(&log_dir, "leopardwm-daemon.log");
     tracing_subscriber::registry()
-        .with(tracing_subscriber::filter::LevelFilter::from_level(log_level))
+        .with(tracing_subscriber::filter::LevelFilter::from_level(
+            log_level,
+        ))
         .with(tracing_subscriber::fmt::layer().with_writer(std::io::stdout))
         .with(
             tracing_subscriber::fmt::layer()
@@ -675,12 +750,18 @@ fn init_workspace_state(state: &mut AppState) {
     }
 
     // Log workspace state for all monitors
-    let total_windows: usize = state.workspaces.values()
+    let total_windows: usize = state
+        .workspaces
+        .values()
         .flat_map(|ws_vec| ws_vec.iter())
-        .map(|w| w.window_count()).sum();
-    let total_columns: usize = state.workspaces.values()
+        .map(|w| w.window_count())
+        .sum();
+    let total_columns: usize = state
+        .workspaces
+        .values()
         .flat_map(|ws_vec| ws_vec.iter())
-        .map(|w| w.column_count()).sum();
+        .map(|w| w.column_count())
+        .sum();
     info!(
         "Workspaces initialized across {} monitors: {} total columns, {} total windows",
         state.workspaces.len(),
@@ -939,7 +1020,9 @@ fn setup_window_hooks(
                 "power-fwd",
                 power_rx,
                 event_tx.clone(),
-                |on_battery_or_saver| DaemonEvent::PowerStateChanged { on_battery_or_saver },
+                |on_battery_or_saver| DaemonEvent::PowerStateChanged {
+                    on_battery_or_saver,
+                },
             ) {
                 Ok(handle) => thread_handles.push(handle),
                 Err(e) => warn!("{}", e),
@@ -980,7 +1063,10 @@ fn install_ffm_hook(
             Some(handle)
         }
         Err(e) => {
-            warn!("Failed to install mouse hook: {}. Focus-follows-mouse disabled.", e);
+            warn!(
+                "Failed to install mouse hook: {}. Focus-follows-mouse disabled.",
+                e
+            );
             None
         }
     }
@@ -1104,13 +1190,13 @@ async fn print_banner(
         .iter()
         .map(|m| m.device_name.clone())
         .collect();
-    let monitor_dpi: Vec<f64> = monitors_ordered
-        .iter()
-        .map(|m| m.scale_factor)
-        .collect();
-    let window_count: usize = state.workspaces.values()
+    let monitor_dpi: Vec<f64> = monitors_ordered.iter().map(|m| m.scale_factor).collect();
+    let window_count: usize = state
+        .workspaces
+        .values()
         .flat_map(|ws_vec| ws_vec.iter())
-        .map(|w| w.window_count()).sum();
+        .map(|w| w.window_count())
+        .sum();
     let config_path = config::config_paths()
         .into_iter()
         .find(|p| p.exists())
@@ -1263,9 +1349,14 @@ async fn handle_ipc_command(
     // If config was reloaded successfully, also reload hotkeys
     if is_reload && matches!(response, IpcResponse::Ok) {
         reload_config_and_hotkeys(
-            ctx.state, ctx.hotkey_state, ctx.event_tx,
-            ctx.tray_manager, ctx.snap_hint_overlay, ctx.mouse_hook_handle,
-        ).await;
+            ctx.state,
+            ctx.hotkey_state,
+            ctx.event_tx,
+            ctx.tray_manager,
+            ctx.snap_hint_overlay,
+            ctx.mouse_hook_handle,
+        )
+        .await;
         info!("Hotkeys reloaded after config reload");
     }
 
@@ -1285,7 +1376,10 @@ async fn handle_ipc_command(
                 wc,
                 mc,
                 state.paused,
-                Some((ctx.hotkey_state.registered_count, ctx.hotkey_state.requested_count)),
+                Some((
+                    ctx.hotkey_state.registered_count,
+                    ctx.hotkey_state.requested_count,
+                )),
                 aws,
             );
         }
@@ -1306,8 +1400,7 @@ async fn handle_ipc_command(
             let hide_tx = ctx.event_tx.clone();
             let duration = hint_duration;
             *ctx.snap_hint_timer_handle = Some(tokio::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_millis(duration as u64))
-                    .await;
+                tokio::time::sleep(std::time::Duration::from_millis(duration as u64)).await;
                 let _ = hide_tx.send(DaemonEvent::HideSnapHint).await;
             }));
         }
@@ -1391,8 +1484,7 @@ async fn process_window_event(ctx: &mut EventLoopCtx<'_>, win_event: WindowEvent
             let focus_tx = ctx.event_tx.clone();
             let delay = delay_ms;
             *ctx.focus_follows_mouse_timer = Some(tokio::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_millis(delay as u64))
-                    .await;
+                tokio::time::sleep(std::time::Duration::from_millis(delay as u64)).await;
                 let _ = focus_tx
                     .send(DaemonEvent::FocusFollowsMouse { window_id: hwnd })
                     .await;
@@ -1431,11 +1523,12 @@ async fn process_window_event(ctx: &mut EventLoopCtx<'_>, win_event: WindowEvent
                 if let Some(ref overlay) = ctx.snap_hint_overlay {
                     match hint {
                         crate::state::DragHintAction::ShowGhost { rect } => {
-                            overlay.show_snap_target(
-                                leopardwm_core_layout::Rect::new(
-                                    rect.x, rect.y, rect.width, rect.height,
-                                ),
-                            );
+                            overlay.show_snap_target(leopardwm_core_layout::Rect::new(
+                                rect.x,
+                                rect.y,
+                                rect.width,
+                                rect.height,
+                            ));
                         }
                         crate::state::DragHintAction::Hide => {
                             overlay.hide();
@@ -1453,7 +1546,10 @@ async fn process_window_event(ctx: &mut EventLoopCtx<'_>, win_event: WindowEvent
                     wc,
                     mc,
                     state.paused,
-                    Some((ctx.hotkey_state.registered_count, ctx.hotkey_state.requested_count)),
+                    Some((
+                        ctx.hotkey_state.registered_count,
+                        ctx.hotkey_state.requested_count,
+                    )),
                     aws,
                 );
             }
@@ -1461,7 +1557,9 @@ async fn process_window_event(ctx: &mut EventLoopCtx<'_>, win_event: WindowEvent
             if let Some(req) = state.pending_resize_animation.take() {
                 if let Some(ref overlay) = ctx.snap_hint_overlay {
                     // Cancel any running preview animation thread.
-                    state.resize_preview_cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                    state
+                        .resize_preview_cancel
+                        .store(true, std::sync::atomic::Ordering::Relaxed);
                     let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
                     state.resize_preview_cancel = cancel.clone();
                     let active = state.resize_animation_active.clone();
@@ -1551,8 +1649,7 @@ async fn handle_hotkey_event(
             let hide_tx = ctx.event_tx.clone();
             let duration = hint_duration;
             *ctx.snap_hint_timer_handle = Some(tokio::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_millis(duration as u64))
-                    .await;
+                tokio::time::sleep(std::time::Duration::from_millis(duration as u64)).await;
                 let _ = hide_tx.send(DaemonEvent::HideSnapHint).await;
             }));
         }
@@ -1671,9 +1768,14 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
             // If config was reloaded successfully, also reload hotkeys
             if matches!(response, IpcResponse::Ok) {
                 reload_config_and_hotkeys(
-                    ctx.state, ctx.hotkey_state, ctx.event_tx,
-                    ctx.tray_manager, ctx.snap_hint_overlay, ctx.mouse_hook_handle,
-                ).await;
+                    ctx.state,
+                    ctx.hotkey_state,
+                    ctx.event_tx,
+                    ctx.tray_manager,
+                    ctx.snap_hint_overlay,
+                    ctx.mouse_hook_handle,
+                )
+                .await;
                 info!("Hotkeys reloaded after tray config reload");
             } else if let IpcResponse::Error { message } = response {
                 warn!("Reload failed: {}", message);
@@ -1699,7 +1801,10 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
                     wc,
                     mc,
                     state.paused,
-                    Some((ctx.hotkey_state.registered_count, ctx.hotkey_state.requested_count)),
+                    Some((
+                        ctx.hotkey_state.registered_count,
+                        ctx.hotkey_state.requested_count,
+                    )),
                     aws,
                 );
             }
@@ -1769,10 +1874,10 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
             // 3. Ask user if they want to restart tiling
             let event_tx_clone = ctx.event_tx.clone();
             std::thread::spawn(move || {
+                use windows::core::w;
                 use windows::Win32::UI::WindowsAndMessaging::{
                     MessageBoxW, IDYES, MB_ICONQUESTION, MB_YESNO,
                 };
-                use windows::core::w;
                 let result = unsafe {
                     MessageBoxW(
                         None,
@@ -1782,16 +1887,14 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
                     )
                 };
                 if result == IDYES {
-                    let _ = event_tx_clone.blocking_send(
-                        DaemonEvent::Tray(tray::TrayEvent::TogglePause),
-                    );
+                    let _ = event_tx_clone
+                        .blocking_send(DaemonEvent::Tray(tray::TrayEvent::TogglePause));
                 }
             });
         }
         tray::TrayEvent::ToggleActiveBorder => {
             let mut state = ctx.state.lock().await;
-            state.config.appearance.active_border =
-                !state.config.appearance.active_border;
+            state.config.appearance.active_border = !state.config.appearance.active_border;
             let on = state.config.appearance.active_border;
             info!("Tray: Active border toggled to {}", on);
             if on {
@@ -1805,8 +1908,7 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
         }
         tray::TrayEvent::ToggleFocusNewWindows => {
             let mut state = ctx.state.lock().await;
-            state.config.behavior.focus_new_windows =
-                !state.config.behavior.focus_new_windows;
+            state.config.behavior.focus_new_windows = !state.config.behavior.focus_new_windows;
             info!(
                 "Tray: Focus new windows toggled to {}",
                 state.config.behavior.focus_new_windows
@@ -1869,11 +1971,8 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
         }
         tray::TrayEvent::SetCenteringCenter => {
             let mut state = ctx.state.lock().await;
-            if state.config.layout.centering_mode
-                != config::CenteringModeConfig::Center
-            {
-                state.config.layout.centering_mode =
-                    config::CenteringModeConfig::Center;
+            if state.config.layout.centering_mode != config::CenteringModeConfig::Center {
+                state.config.layout.centering_mode = config::CenteringModeConfig::Center;
                 info!("Tray: Centering mode set to Center");
                 let cfg = state.config.clone();
                 state.apply_config(cfg);
@@ -1895,11 +1994,8 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
         }
         tray::TrayEvent::SetCenteringJustInView => {
             let mut state = ctx.state.lock().await;
-            if state.config.layout.centering_mode
-                != config::CenteringModeConfig::JustInView
-            {
-                state.config.layout.centering_mode =
-                    config::CenteringModeConfig::JustInView;
+            if state.config.layout.centering_mode != config::CenteringModeConfig::JustInView {
+                state.config.layout.centering_mode = config::CenteringModeConfig::JustInView;
                 info!("Tray: Centering mode set to JustInView");
                 let cfg = state.config.clone();
                 state.apply_config(cfg);
@@ -1912,11 +2008,8 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
         }
         tray::TrayEvent::SetCenteringOnOverflow => {
             let mut state = ctx.state.lock().await;
-            if state.config.layout.centering_mode
-                != config::CenteringModeConfig::OnOverflow
-            {
-                state.config.layout.centering_mode =
-                    config::CenteringModeConfig::OnOverflow;
+            if state.config.layout.centering_mode != config::CenteringModeConfig::OnOverflow {
+                state.config.layout.centering_mode = config::CenteringModeConfig::OnOverflow;
                 info!("Tray: Centering mode set to OnOverflow");
                 let cfg = state.config.clone();
                 state.apply_config(cfg);
@@ -1929,11 +2022,8 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
         }
         tray::TrayEvent::SetPlacementNewColumn => {
             let mut state = ctx.state.lock().await;
-            if state.config.behavior.new_window_placement
-                != config::NewWindowPlacement::NewColumn
-            {
-                state.config.behavior.new_window_placement =
-                    config::NewWindowPlacement::NewColumn;
+            if state.config.behavior.new_window_placement != config::NewWindowPlacement::NewColumn {
+                state.config.behavior.new_window_placement = config::NewWindowPlacement::NewColumn;
                 info!("Tray: New-window placement set to NewColumn");
                 let _ = state.config.save();
             }
@@ -1941,11 +2031,8 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
         }
         tray::TrayEvent::SetPlacementInColumn => {
             let mut state = ctx.state.lock().await;
-            if state.config.behavior.new_window_placement
-                != config::NewWindowPlacement::InColumn
-            {
-                state.config.behavior.new_window_placement =
-                    config::NewWindowPlacement::InColumn;
+            if state.config.behavior.new_window_placement != config::NewWindowPlacement::InColumn {
+                state.config.behavior.new_window_placement = config::NewWindowPlacement::InColumn;
                 info!("Tray: New-window placement set to InColumn");
                 let _ = state.config.save();
             }
@@ -1965,8 +2052,7 @@ async fn handle_tab_strip_icon_poll(state: &Arc<Mutex<AppState>>) {
         && !s.paused
         && s.focused_workspace().is_some_and(|ws| {
             !ws.is_fullscreen()
-                && (0..ws.column_count())
-                    .any(|i| ws.column(i).is_some_and(|c| c.is_tabbed()))
+                && (0..ws.column_count()).any(|i| ws.column(i).is_some_and(|c| c.is_tabbed()))
         });
     if needs_refresh {
         s.update_tab_strip();
@@ -2115,9 +2201,7 @@ async fn handle_tab_action(
                         warn!("Untab set_active_tab failed: {}", e);
                         false
                     } else {
-                        let col_len = ws
-                            .column(column_idx)
-                            .map_or(0, |c| c.windows().len());
+                        let col_len = ws.column(column_idx).map_or(0, |c| c.windows().len());
                         col_len > 1
                     }
                 }
@@ -2135,32 +2219,24 @@ async fn handle_tab_action(
         TabAction::Rename => {
             let s = state.lock().await;
             // Only one rename popup in flight at a time.
-            if s.rename_dialog_active.swap(
-                true,
-                std::sync::atomic::Ordering::SeqCst,
-            ) {
+            if s.rename_dialog_active
+                .swap(true, std::sync::atomic::Ordering::SeqCst)
+            {
                 debug!("Rename popup already active, ignoring duplicate request");
             } else {
-                let initial = s.tab_title_for(
-                    monitor,
-                    workspace_idx,
-                    column_idx,
-                    tab_idx,
-                );
+                let initial = s.tab_title_for(monitor, workspace_idx, column_idx, tab_idx);
                 // Resolve the strip overlay that owns this
                 // column so the rename popup lands precisely
                 // over the right tab cell. With per-column
                 // overlays the lookup is keyed by identity.
-                let (tab_rect, colors) = match s
-                    .tab_strip_overlays
-                    .get(&(monitor, workspace_idx, column_idx))
-                {
-                    Some(strip) => (
-                        strip.tab_screen_rect(tab_idx),
-                        strip.current_colors(),
-                    ),
-                    None => (None, None),
-                };
+                let (tab_rect, colors) =
+                    match s
+                        .tab_strip_overlays
+                        .get(&(monitor, workspace_idx, column_idx))
+                    {
+                        Some(strip) => (strip.tab_screen_rect(tab_idx), strip.current_colors()),
+                        None => (None, None),
+                    };
                 // Resolve the tab's HWND ONCE at spawn —
                 // this is the authoritative rename target.
                 // Capturing the HWND here means a column
@@ -2174,8 +2250,7 @@ async fn handle_tab_action(
                     .and_then(|wss| wss.get(workspace_idx))
                     .and_then(|ws| ws.column(column_idx))
                     .and_then(|col| col.get(tab_idx));
-                let icon = target_hwnd_opt
-                    .and_then(leopardwm_platform_win32::get_window_icon);
+                let icon = target_hwnd_opt.and_then(leopardwm_platform_win32::get_window_icon);
                 let tx = s.rename_result_tx.clone();
                 let guard = s.rename_dialog_active.clone();
                 // Second clone — needed for the spawn-failure
@@ -2200,16 +2275,14 @@ async fn handle_tab_action(
                                         None
                                     });
                                 if let Some(sender) = tx {
-                                    let _ = sender.send(
-                                        crate::events::TabRenameResult {
-                                            monitor,
-                                            workspace_idx,
-                                            column_idx,
-                                            tab_idx,
-                                            target_hwnd,
-                                            new_title: result,
-                                        },
-                                    );
+                                    let _ = sender.send(crate::events::TabRenameResult {
+                                        monitor,
+                                        workspace_idx,
+                                        column_idx,
+                                        tab_idx,
+                                        target_hwnd,
+                                        new_title: result,
+                                    });
                                 }
                                 guard.store(false, std::sync::atomic::Ordering::SeqCst);
                             });
@@ -2344,9 +2417,7 @@ async fn handle_tab_rename_submitted(
     }
     if title.is_empty() {
         s.tab_title_overrides.remove(&hwnd);
-    } else if title.len()
-        > leopardwm_platform_win32::dialog::TAB_TITLE_MAX_BYTES
-    {
+    } else if title.len() > leopardwm_platform_win32::dialog::TAB_TITLE_MAX_BYTES {
         // The dialog already rejects over-length input, but
         // belt-and-suspenders in case a future surface bypasses it.
         warn!(
@@ -2377,9 +2448,14 @@ async fn handle_settings_event(
             };
             if matches!(response, IpcResponse::Ok) {
                 reload_config_and_hotkeys(
-                    ctx.state, ctx.hotkey_state, ctx.event_tx,
-                    ctx.tray_manager, ctx.snap_hint_overlay, ctx.mouse_hook_handle,
-                ).await;
+                    ctx.state,
+                    ctx.hotkey_state,
+                    ctx.event_tx,
+                    ctx.tray_manager,
+                    ctx.snap_hint_overlay,
+                    ctx.mouse_hook_handle,
+                )
+                .await;
                 info!("Hotkeys reloaded after settings save");
             } else if let IpcResponse::Error { message } = response {
                 warn!("Reload after settings save failed: {}", message);
@@ -2399,9 +2475,14 @@ async fn handle_settings_event(
             if ctx.hotkey_state.recording {
                 debug!("Settings: recording ended, resuming hotkeys");
                 reload_config_and_hotkeys(
-                    ctx.state, ctx.hotkey_state, ctx.event_tx,
-                    ctx.tray_manager, ctx.snap_hint_overlay, ctx.mouse_hook_handle,
-                ).await;
+                    ctx.state,
+                    ctx.hotkey_state,
+                    ctx.event_tx,
+                    ctx.tray_manager,
+                    ctx.snap_hint_overlay,
+                    ctx.mouse_hook_handle,
+                )
+                .await;
             }
         }
     }
@@ -2422,7 +2503,8 @@ async fn handle_animation_frame_applied(
                 // Skip violations where min_width >= viewport width —
                 // the window is temporarily fullscreen/maximized by
                 // the app, not enforcing a genuine minimum.
-                let vw = state.find_window_workspace(violation.window_id)
+                let vw = state
+                    .find_window_workspace(violation.window_id)
                     .map(|(mid, _)| state.viewport_width_for(mid))
                     .unwrap_or(i32::MAX);
                 if violation.min_width >= vw {
@@ -2435,10 +2517,7 @@ async fn handle_animation_frame_applied(
                 for ws_vec in state.workspaces.values_mut() {
                     for ws in ws_vec.iter_mut() {
                         if ws.contains_window(violation.window_id) {
-                            ws.set_window_min_width(
-                                violation.window_id,
-                                violation.min_width,
-                            );
+                            ws.set_window_min_width(violation.window_id, violation.min_width);
                         }
                     }
                 }
@@ -2463,7 +2542,10 @@ async fn handle_animation_frame_applied(
                     let idx = state.active_workspace_idx(monitor_id);
                     let vw = state.monitors.get(&monitor_id).map(|m| m.work_area.width);
                     if let (Some(ws), Some(vw)) = (
-                        state.workspaces.get_mut(&monitor_id).and_then(|v| v.get_mut(idx)),
+                        state
+                            .workspaces
+                            .get_mut(&monitor_id)
+                            .and_then(|v| v.get_mut(idx)),
                         vw,
                     ) {
                         if ws.is_animating() {
@@ -2482,7 +2564,8 @@ async fn handle_animation_frame_applied(
                 // height — the window is temporarily fullscreen
                 // /maximized by the app, not enforcing a genuine
                 // minimum that large.
-                let vh = state.find_window_workspace(violation.window_id)
+                let vh = state
+                    .find_window_workspace(violation.window_id)
                     .and_then(|(mid, _)| state.monitors.get(&mid).map(|m| m.work_area.height))
                     .unwrap_or(i32::MAX);
                 if violation.min_height >= vh {
@@ -2495,10 +2578,7 @@ async fn handle_animation_frame_applied(
                 for ws_vec in state.workspaces.values_mut() {
                     for ws in ws_vec.iter_mut() {
                         if ws.contains_window(violation.window_id) {
-                            ws.set_window_min_height(
-                                violation.window_id,
-                                violation.min_height,
-                            );
+                            ws.set_window_min_height(violation.window_id, violation.min_height);
                         }
                     }
                 }
@@ -2509,7 +2589,8 @@ async fn handle_animation_frame_applied(
         warn!("Animation frame failed: {}", e);
     }
     // Measure real elapsed time (cap at 100ms to prevent jump from stalls)
-    let delta_ms = ctx.last_frame_instant
+    let delta_ms = ctx
+        .last_frame_instant
         .map(|t| t.elapsed().as_millis().min(100) as u64)
         .unwrap_or(16);
     *ctx.last_frame_instant = Some(std::time::Instant::now());
@@ -2533,10 +2614,7 @@ async fn handle_animation_frame_applied(
             }
         }
         if running || state.is_animating() {
-            matches!(
-                state.send_animation_frame(ctx.animation_worker),
-                Ok(true)
-            )
+            matches!(state.send_animation_frame(ctx.animation_worker), Ok(true))
         } else {
             false
         }
@@ -2556,13 +2634,11 @@ async fn handle_animation_frame_applied(
             // source class changed since registration, the HWND
             // was recycled or the window died — drop the entry
             // (GhostEntry::Drop unregisters) without uncloaking.
-            let ghost_wids: Vec<u64> =
-                state.ghost_handles.keys().copied().collect();
+            let ghost_wids: Vec<u64> = state.ghost_handles.keys().copied().collect();
             let mut surviving: Vec<u64> = Vec::with_capacity(ghost_wids.len());
             for wid in ghost_wids {
                 let still_valid = {
-                    let class_now =
-                        leopardwm_platform_win32::thumbnail::class_name(wid);
+                    let class_now = leopardwm_platform_win32::thumbnail::class_name(wid);
                     state
                         .ghost_handles
                         .get(&wid)
@@ -2609,8 +2685,7 @@ async fn handle_animation_frame_applied(
             // a fade over a misaligned source produces a
             // visible duplicate.
             if landing_ok && !surviving.is_empty() {
-                state.crossfade_epoch_counter =
-                    state.crossfade_epoch_counter.saturating_add(1);
+                state.crossfade_epoch_counter = state.crossfade_epoch_counter.saturating_add(1);
                 let epoch = state.crossfade_epoch_counter;
                 let mut entries: Vec<animation_worker::CrossfadeEntry> =
                     Vec::with_capacity(surviving.len());
@@ -2634,15 +2709,12 @@ async fn handle_animation_frame_applied(
                 state
                     .crossfade_sources
                     .insert(epoch, (sources, std::time::Instant::now()));
-                state.active_crossfade =
-                    Some(crate::state::CrossfadeState { epoch });
+                state.active_crossfade = Some(crate::state::CrossfadeState { epoch });
                 debug!(
                     "ghost: crossfade epoch {} dispatched for {} source(s)",
                     epoch, entry_count
                 );
-                if let Err(e) =
-                    ctx.animation_worker.send_crossfade(epoch, entries, 8)
-                {
+                if let Err(e) = ctx.animation_worker.send_crossfade(epoch, entries, 8) {
                     warn!("Failed to send crossfade to worker: {}", e);
                     // No worker: clear state so next transition
                     // isn't stuck waiting for a CrossfadeComplete
@@ -2856,11 +2928,22 @@ async fn main() -> Result<()> {
     let snap_hint_overlay: Option<OverlayWindow> = match OverlayWindow::new() {
         Ok(overlay) => {
             overlay.set_opacity(config.snap_hints.opacity);
-            info!("Overlay initialized (snap hints {}, opacity {})", if config.snap_hints.enabled { "enabled" } else { "disabled" }, config.snap_hints.opacity);
+            info!(
+                "Overlay initialized (snap hints {}, opacity {})",
+                if config.snap_hints.enabled {
+                    "enabled"
+                } else {
+                    "disabled"
+                },
+                config.snap_hints.opacity
+            );
             Some(overlay)
         }
         Err(e) => {
-            warn!("Failed to create overlay: {}. Snap hints and drag ghost disabled.", e);
+            warn!(
+                "Failed to create overlay: {}. Snap hints and drag ghost disabled.",
+                e
+            );
             None
         }
     };
@@ -2941,26 +3024,7 @@ async fn main() -> Result<()> {
     let _taskbar_handle = leopardwm_platform_win32::taskbar::init_taskbar();
 
     // Apply initial layout so windows are tiled on startup
-    {
-        let mut state = state.lock().await;
-        // Saved layout state can carry stale minimized flags (e.g. a window
-        // minimized while a monitor slept, then restored by the OS before the
-        // daemon restarted), which would leave the window untiled. Reconcile
-        // against the OS before the first layout so it tiles what's on screen.
-        state.resync_minimized_from_os();
-        if let Err(e) = state.apply_layout() {
-            warn!("Failed to apply initial layout: {}", e);
-        }
-        // Restore any taskbar buttons a crashed prior instance left deleted
-        // (unconditional AddTab, harmless on present buttons), then hide the
-        // ones that should be hidden for the current layout.
-        for wid in state.all_managed_window_ids() {
-            leopardwm_platform_win32::taskbar::taskbar_restore(wid);
-        }
-        state.sync_taskbar_buttons();
-        // Set the DWM active border color on the focused window immediately
-        state.sync_foreground_window();
-    }
+    apply_initial_layout(&state, &tray_manager, &hotkey_state).await;
 
     info!("Ready. Use leopardwm-cli to send commands.");
 
@@ -3105,7 +3169,9 @@ async fn main() -> Result<()> {
             DaemonEvent::FocusFollowsMouse { window_id } => {
                 handle_focus_follows_mouse(&mut ctx, window_id).await;
             }
-            DaemonEvent::PowerStateChanged { on_battery_or_saver } => {
+            DaemonEvent::PowerStateChanged {
+                on_battery_or_saver,
+            } => {
                 let mut state = state.lock().await;
                 state.on_battery_or_saver = on_battery_or_saver;
                 state.refresh_reduce_motion();
@@ -3119,6 +3185,8 @@ async fn main() -> Result<()> {
                 break;
             }
         }
+
+        sync_pending_layout_apply_timeout_ui(ctx.state, ctx.tray_manager, &*ctx.hotkey_state).await;
     }
 
     // Stop the update-checker worker so it doesn't hold up shutdown.

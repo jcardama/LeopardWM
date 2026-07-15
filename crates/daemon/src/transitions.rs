@@ -17,7 +17,10 @@ impl AppState {
     /// Check if any workspace has an active animation or layout transition.
     pub(crate) fn is_animating(&self) -> bool {
         self.layout_transition.is_some()
-            || self.workspaces.values().any(|ws_vec| ws_vec.iter().any(|w| w.is_animating()))
+            || self
+                .workspaces
+                .values()
+                .any(|ws_vec| ws_vec.iter().any(|w| w.is_animating()))
     }
 
     /// Tick all active animations by the given delta time.
@@ -64,7 +67,9 @@ impl AppState {
 
     /// Snapshot the current placement rects for all tiled windows.
     /// Call this *before* a structural layout change.
-    pub(crate) fn snapshot_layout(&self) -> std::collections::HashMap<u64, leopardwm_core_layout::Rect> {
+    pub(crate) fn snapshot_layout(
+        &self,
+    ) -> std::collections::HashMap<u64, leopardwm_core_layout::Rect> {
         let mut rects = std::collections::HashMap::new();
         for (monitor_id, ws_vec) in &self.workspaces {
             let idx = self.active_workspace_idx(*monitor_id);
@@ -235,7 +240,10 @@ impl AppState {
         // animated placements on each monitor's active workspace.
         let mut targets: std::collections::HashMap<
             u64,
-            (leopardwm_core_layout::Rect, leopardwm_platform_win32::MonitorId),
+            (
+                leopardwm_core_layout::Rect,
+                leopardwm_platform_win32::MonitorId,
+            ),
         > = std::collections::HashMap::new();
         for (monitor_id, ws_vec) in &self.workspaces {
             let idx = self.active_workspace_idx(*monitor_id);
@@ -296,11 +304,8 @@ impl AppState {
                         target_rect,
                         host_origin,
                     );
-                    let entry = crate::state::GhostEntry::new(
-                        handle.into_isize(),
-                        class,
-                        final_dest,
-                    );
+                    let entry =
+                        crate::state::GhostEntry::new(handle.into_isize(), class, final_dest);
                     self.ghost_handles.insert(wid, entry);
                     leopardwm_platform_win32::mark_ghost_cloaked(wid);
                     leopardwm_platform_win32::apply_cloak_state(wid);
@@ -346,8 +351,7 @@ impl AppState {
                         start.x + ((target.x - start.x) as f64 * t).round() as i32,
                         start.y + ((target.y - start.y) as f64 * t).round() as i32,
                         start.width + ((target.width - start.width) as f64 * t).round() as i32,
-                        start.height
-                            + ((target.height - start.height) as f64 * t).round() as i32,
+                        start.height + ((target.height - start.height) as f64 * t).round() as i32,
                     ),
                     visibility: leopardwm_core_layout::Visibility::Visible,
                     column_index: 0,

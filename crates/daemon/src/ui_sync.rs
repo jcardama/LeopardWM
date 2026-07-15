@@ -46,7 +46,8 @@ impl AppState {
 
     /// Compute the DPI-scaled border width for a window's monitor.
     pub(crate) fn scaled_border_width(&self, hwnd: u64) -> u32 {
-        let scale = self.find_window_workspace(hwnd)
+        let scale = self
+            .find_window_workspace(hwnd)
             .and_then(|(mid, _)| self.monitors.get(&mid))
             .map(|m| m.scale_factor)
             .unwrap_or(1.0);
@@ -59,7 +60,11 @@ impl AppState {
     pub(crate) fn show_border(&self, hwnd: u64) {
         if let Some(ref frame) = self.border_frame {
             // No border while paused or in fullscreen.
-            if self.paused || self.focused_workspace().is_some_and(|ws| ws.is_fullscreen()) {
+            if self.paused
+                || self
+                    .focused_workspace()
+                    .is_some_and(|ws| ws.is_fullscreen())
+            {
                 frame.hide();
                 return;
             }
@@ -176,10 +181,7 @@ impl AppState {
 
         // 1. User-rule override always wins.
         if let Some(ref info) = info {
-            let any_corner_overrides = self
-                .compiled_rules
-                .iter()
-                .any(|r| r.corner_style.is_some());
+            let any_corner_overrides = self.compiled_rules.iter().any(|r| r.corner_style.is_some());
             if any_corner_overrides {
                 let exe = get_process_executable(info.process_id).unwrap_or_default();
                 for rule in &self.compiled_rules {
@@ -275,9 +277,7 @@ impl AppState {
             crate::config::TabCloseAction::CloseWindow => {
                 leopardwm_platform_win32::TabCloseAction::CloseWindow
             }
-            crate::config::TabCloseAction::Untab => {
-                leopardwm_platform_win32::TabCloseAction::Untab
-            }
+            crate::config::TabCloseAction::Untab => leopardwm_platform_win32::TabCloseAction::Untab,
         };
 
         // First pass: figure out the desired key set + per-key show args.
@@ -299,7 +299,9 @@ impl AppState {
             let Some(ws_vec) = self.workspaces.get(&monitor) else {
                 continue;
             };
-            let Some(ws) = ws_vec.get(ws_idx) else { continue };
+            let Some(ws) = ws_vec.get(ws_idx) else {
+                continue;
+            };
             if ws.is_fullscreen() {
                 continue;
             }
@@ -309,24 +311,23 @@ impl AppState {
                 .map(|m| m.scale_factor)
                 .unwrap_or(1.0);
             for col_idx in 0..ws.column_count() {
-                let Some(col) = ws.column(col_idx) else { continue };
+                let Some(col) = ws.column(col_idx) else {
+                    continue;
+                };
                 if !col.is_tabbed() {
                     continue;
                 }
-                let Some(visible_tab) =
-                    col.effective_visible_tab(|w| ws.is_minimized(w))
-                else {
+                let Some(visible_tab) = col.effective_visible_tab(|w| ws.is_minimized(w)) else {
                     continue;
                 };
-                let Some(visible_hwnd) = col.get(visible_tab) else { continue };
+                let Some(visible_hwnd) = col.get(visible_tab) else {
+                    continue;
+                };
                 let Some(rect) = self.compute_window_layout_rect(visible_hwnd) else {
                     continue;
                 };
                 let stored_active = col.active_tab_idx().unwrap_or(visible_tab);
-                let active_idx = if col
-                    .get(stored_active)
-                    .is_some_and(|w| !ws.is_minimized(w))
-                {
+                let active_idx = if col.get(stored_active).is_some_and(|w| !ws.is_minimized(w)) {
                     stored_active
                 } else {
                     visible_tab
@@ -365,8 +366,7 @@ impl AppState {
             .retain(|key, _| desired.contains_key(key));
 
         // For each desired key, ensure an overlay exists and call show.
-        let strip_height =
-            (self.config.appearance.tab_strip_height as f64 * 1.0).round() as u32;
+        let strip_height = (self.config.appearance.tab_strip_height as f64 * 1.0).round() as u32;
         let bottom_gap_px = self.config.layout.gap.max(0) as u32;
         let _ = strip_height; // per-strip scaling done below
         let _ = bottom_gap_px;
@@ -383,16 +383,14 @@ impl AppState {
                         self.tab_strip_overlays.insert(key, overlay);
                     }
                     Err(e) => {
-                        tracing::warn!(
-                            "Failed to create TabStripOverlay for {:?}: {}",
-                            key,
-                            e
-                        );
+                        tracing::warn!("Failed to create TabStripOverlay for {:?}: {}", key, e);
                         continue;
                     }
                 }
             }
-            let Some(strip) = self.tab_strip_overlays.get(&key) else { continue };
+            let Some(strip) = self.tab_strip_overlays.get(&key) else {
+                continue;
+            };
             let scaled_strip_height =
                 (self.config.appearance.tab_strip_height as f64 * show.scale).round() as u32;
             let scaled_bottom_gap_px =

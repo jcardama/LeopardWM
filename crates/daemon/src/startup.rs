@@ -31,14 +31,19 @@ pub fn format_startup_banner(info: &StartupInfo) -> String {
     if info.monitor_names.is_empty() {
         writeln!(out, "  Monitors: 0 (fallback mode)").unwrap();
     } else {
-        let labels: Vec<String> = info.monitor_names.iter().enumerate().map(|(i, name)| {
-            let dpi = info.monitor_dpi.get(i).copied().unwrap_or(1.0);
-            if (dpi - 1.0).abs() < 0.01 {
-                name.clone()
-            } else {
-                format!("{} ({:.0}%)", name, dpi * 100.0)
-            }
-        }).collect();
+        let labels: Vec<String> = info
+            .monitor_names
+            .iter()
+            .enumerate()
+            .map(|(i, name)| {
+                let dpi = info.monitor_dpi.get(i).copied().unwrap_or(1.0);
+                if (dpi - 1.0).abs() < 0.01 {
+                    name.clone()
+                } else {
+                    format!("{} ({:.0}%)", name, dpi * 100.0)
+                }
+            })
+            .collect();
         writeln!(
             out,
             "  Monitors: {} ({})",
@@ -73,7 +78,11 @@ pub fn format_startup_banner(info: &StartupInfo) -> String {
         writeln!(out, "  Motion:   reduced (animations disabled)").unwrap();
     }
     if info.on_battery_or_saver {
-        writeln!(out, "  Power:    battery / power saver (animations disabled)").unwrap();
+        writeln!(
+            out,
+            "  Power:    battery / power saver (animations disabled)"
+        )
+        .unwrap();
     }
     if info.high_contrast {
         writeln!(out, "  Display:  high contrast").unwrap();

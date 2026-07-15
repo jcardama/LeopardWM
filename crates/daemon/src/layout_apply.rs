@@ -3,8 +3,31 @@
 use crate::animation_worker;
 use crate::state::*;
 use anyhow::{anyhow, Result};
+use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use tracing::{debug, warn};
+
+const MAX_TIMEOUT_DIAGNOSTIC_CHARS: usize = 256;
+
+fn bounded_timeout_diagnostic(value: String) -> Option<String> {
+    if value.is_empty() {
+        return None;
+    }
+
+    let mut chars = value.chars();
+    let mut bounded: String = chars.by_ref().take(MAX_TIMEOUT_DIAGNOSTIC_CHARS).collect();
+    if chars.next().is_some() {
+        bounded.push('…');
+    }
+    Some(bounded)
+}
+
+fn run_layout_apply_recovery_pass(window_ids: &[u64], context: &str) {
+    #[cfg(not(test))]
+    run_visibility_recovery_pass(window_ids, context);
+    #[cfg(test)]
+    let _ = (window_ids, context);
+}
 
 /// Message sent back from the apply-layout worker thread.
 type ApplyWorkerMsg = (
@@ -65,10 +88,30 @@ fn offscreen_park_rect(
     use leopardwm_core_layout::Rect;
     const MARGIN: i32 = 4;
     let candidates = [
-        Rect::new(owner.x, owner.y.saturating_add(owner.height).saturating_add(MARGIN), window.width, window.height),
-        Rect::new(owner.x, owner.y.saturating_sub(window.height).saturating_sub(MARGIN), window.width, window.height),
-        Rect::new(owner.x.saturating_add(owner.width).saturating_add(MARGIN), owner.y, window.width, window.height),
-        Rect::new(owner.x.saturating_sub(window.width).saturating_sub(MARGIN), owner.y, window.width, window.height),
+        Rect::new(
+            owner.x,
+            owner.y.saturating_add(owner.height).saturating_add(MARGIN),
+            window.width,
+            window.height,
+        ),
+        Rect::new(
+            owner.x,
+            owner.y.saturating_sub(window.height).saturating_sub(MARGIN),
+            window.width,
+            window.height,
+        ),
+        Rect::new(
+            owner.x.saturating_add(owner.width).saturating_add(MARGIN),
+            owner.y,
+            window.width,
+            window.height,
+        ),
+        Rect::new(
+            owner.x.saturating_sub(window.width).saturating_sub(MARGIN),
+            owner.y,
+            window.width,
+            window.height,
+        ),
     ];
     for candidate in candidates {
         if !monitor_rects.iter().any(|m| candidate.intersects(m)) {
@@ -162,7 +205,12 @@ impl AppState {
                 }
             }
         }
-        if all_placements.is_empty() && self.layout_transition.as_ref().is_none_or(|t| t.exit_rects.is_empty()) {
+        if all_placements.is_empty()
+            && self
+                .layout_transition
+                .as_ref()
+                .is_none_or(|t| t.exit_rects.is_empty())
+        {
             return Ok(false);
         }
 
@@ -176,8 +224,7 @@ impl AppState {
         if let Some(ref drag) = self.drag_state {
             if drag.is_tiled {
                 all_placements.retain(|p| {
-                    p.window_id != drag.hwnd
-                        && p.window_id != crate::state::DRAG_PLACEHOLDER_HWND
+                    p.window_id != drag.hwnd && p.window_id != crate::state::DRAG_PLACEHOLDER_HWND
                 });
             }
         }
@@ -220,6 +267,41 @@ impl AppState {
         Ok(true)
     }
 
+    fn collect_layout_apply_timeout_candidates(
+        &self,
+        window_ids: &[u64],
+    ) -> Vec<LayoutApplyTimeoutCandidate> {
+        let mut executable_by_pid: HashMap<u32, Option<String>> = HashMap::new();
+
+        window_ids
+            .iter()
+            .map(|&hwnd| {
+                let Some(info) = self.lookup_window_info(hwnd) else {
+                    return LayoutApplyTimeoutCandidate {
+                        hwnd,
+                        class_name: None,
+                        title: None,
+                        executable: None,
+                    };
+                };
+                let executable = executable_by_pid
+                    .entry(info.process_id)
+                    .or_insert_with(|| {
+                        leopardwm_platform_win32::get_process_executable(info.process_id)
+                    })
+                    .clone()
+                    .and_then(bounded_timeout_diagnostic);
+
+                LayoutApplyTimeoutCandidate {
+                    hwnd,
+                    class_name: bounded_timeout_diagnostic(info.class_name),
+                    title: bounded_timeout_diagnostic(info.title),
+                    executable,
+                }
+            })
+            .collect()
+    }
+
     /// Recalculate layout and apply placements for all monitors.
     /// Uses animated offsets if any workspace has an active animation.
     /// No-op when tiling is paused.
@@ -227,7 +309,7 @@ impl AppState {
         let reaped_workers = self.reap_finished_pending_apply_workers();
         if reaped_workers > 0 {
             let managed_window_ids = self.all_managed_window_ids();
-            run_visibility_recovery_pass(&managed_window_ids, "late-apply-worker");
+            run_layout_apply_recovery_pass(&managed_window_ids, "late-apply-worker");
         }
 
         if self.paused {
@@ -271,8 +353,7 @@ impl AppState {
         if let Some(ref drag) = self.drag_state {
             if drag.is_tiled {
                 all_placements.retain(|p| {
-                    p.window_id != drag.hwnd
-                        && p.window_id != crate::state::DRAG_PLACEHOLDER_HWND
+                    p.window_id != drag.hwnd && p.window_id != crate::state::DRAG_PLACEHOLDER_HWND
                 });
             }
         }
@@ -298,6 +379,11 @@ impl AppState {
             self.applying_layout = false;
             return Ok(());
         }
+
+        let timeout_candidate_ids: Vec<u64> = all_placements
+            .iter()
+            .map(|placement| placement.window_id)
+            .collect();
 
         self.arm_moved_or_resized_suppression(all_placements.iter().map(|p| p.window_id));
 
@@ -349,9 +435,28 @@ impl AppState {
                 self.pending_apply_workers.push(worker_handle);
                 self.moved_or_resized_suppression.clear();
                 let msg = layout_apply_timeout_message(timeout);
-                warn!("{}", msg);
+                let report = LayoutApplyTimeoutReport {
+                    timeout,
+                    candidates: self
+                        .collect_layout_apply_timeout_candidates(&timeout_candidate_ids),
+                };
+                warn!(
+                    "{} Timed-out placement batch contained {} candidate window(s); batch membership does not prove which window blocked placement.",
+                    msg,
+                    report.candidates.len()
+                );
+                for candidate in &report.candidates {
+                    warn!(
+                        "Timed-out placement batch candidate (not a proven blocker): hwnd={:#x} class={:?} title={:?} executable={:?}",
+                        candidate.hwnd,
+                        candidate.class_name,
+                        candidate.title,
+                        candidate.executable
+                    );
+                }
+                self.pending_layout_apply_timeout_report = Some(report);
                 let managed_window_ids = self.all_managed_window_ids();
-                run_visibility_recovery_pass(&managed_window_ids, "apply-timeout");
+                run_layout_apply_recovery_pass(&managed_window_ids, "apply-timeout");
                 Err(anyhow!(msg))
             }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
@@ -398,8 +503,12 @@ impl AppState {
                         if p.visibility == leopardwm_core_layout::Visibility::Visible {
                             debug!(
                                 "  placement hwnd={:#x} col={} rect=({},{} {}x{}) vis={:?}",
-                                p.window_id, p.column_index,
-                                p.rect.x, p.rect.y, p.rect.width, p.rect.height,
+                                p.window_id,
+                                p.column_index,
+                                p.rect.x,
+                                p.rect.y,
+                                p.rect.width,
+                                p.rect.height,
                                 p.visibility,
                             );
                         }
@@ -468,7 +577,10 @@ impl AppState {
     fn spawn_apply_worker(
         &mut self,
         all_placements: Vec<leopardwm_core_layout::WindowPlacement>,
-    ) -> Result<(std::sync::mpsc::Receiver<ApplyWorkerMsg>, std::thread::JoinHandle<()>)> {
+    ) -> Result<(
+        std::sync::mpsc::Receiver<ApplyWorkerMsg>,
+        std::thread::JoinHandle<()>,
+    )> {
         let platform_config = self.platform_config.clone();
         let apply_worker_cancelled = self.apply_worker_cancelled.clone();
         let apply_epoch_ref = self.apply_epoch.clone();
@@ -511,7 +623,7 @@ impl AppState {
                         }
                     };
                     if should_cancel() {
-                        run_visibility_recovery_pass(
+                        run_layout_apply_recovery_pass(
                             &apply_window_ids,
                             "apply-cancelled-late-worker",
                         );
@@ -539,7 +651,10 @@ impl AppState {
                         Err(e) => (Err(anyhow!(e.to_string())), Vec::new(), Vec::new()),
                     };
                 if should_cancel() {
-                    run_visibility_recovery_pass(&apply_window_ids, "apply-cancelled-late-worker");
+                    run_layout_apply_recovery_pass(
+                        &apply_window_ids,
+                        "apply-cancelled-late-worker",
+                    );
                     #[cfg(test)]
                     late_worker_recovery_count.fetch_add(1, Ordering::SeqCst);
                     let _ = tx.send((Ok(()), Vec::new(), Vec::new()));
@@ -569,7 +684,8 @@ impl AppState {
         let mut constraints_changed = false;
         if !width_violations.is_empty() {
             for v in width_violations {
-                let vw = self.find_window_workspace(v.window_id)
+                let vw = self
+                    .find_window_workspace(v.window_id)
                     .map(|(mid, _)| self.viewport_width_for(mid))
                     .unwrap_or(i32::MAX);
                 if v.min_width >= vw {
@@ -598,7 +714,8 @@ impl AppState {
         }
         if !height_violations.is_empty() {
             for v in height_violations {
-                let vh = self.find_window_workspace(v.window_id)
+                let vh = self
+                    .find_window_workspace(v.window_id)
                     .and_then(|(mid, _)| self.monitors.get(&mid).map(|m| m.work_area.height))
                     .unwrap_or(i32::MAX);
                 if v.min_height >= vh {
@@ -667,7 +784,12 @@ mod park_tests {
     use leopardwm_core_layout::Rect;
 
     // A window scrolled off the owning monitor keeps its size when re-parked.
-    const WIN: Rect = Rect { x: 6000, y: 10, width: 800, height: 600 };
+    const WIN: Rect = Rect {
+        x: 6000,
+        y: 10,
+        width: 800,
+        height: 600,
+    };
 
     #[test]
     fn parks_below_when_a_horizontal_neighbor_blocks_the_side() {
@@ -676,9 +798,16 @@ mod park_tests {
         let owner = Rect::new(0, 0, 5120, 1440);
         let right = Rect::new(5120, 0, 1920, 1080);
         let parked = offscreen_park_rect(WIN, owner, &[owner, right]);
-        assert_eq!(parked.y, owner.y + owner.height + 4, "parked just below the owner");
+        assert_eq!(
+            parked.y,
+            owner.y + owner.height + 4,
+            "parked just below the owner"
+        );
         assert_eq!((parked.width, parked.height), (WIN.width, WIN.height));
-        assert!(![owner, right].iter().any(|m| parked.intersects(m)), "clears every monitor");
+        assert!(
+            ![owner, right].iter().any(|m| parked.intersects(m)),
+            "clears every monitor"
+        );
     }
 
     #[test]
@@ -689,7 +818,11 @@ mod park_tests {
         let above = Rect::new(0, 0, 1920, 1080);
         let below = Rect::new(0, 2160, 1920, 1080);
         let parked = offscreen_park_rect(WIN, owner, &[owner, above, below]);
-        assert_eq!(parked.x, owner.x + owner.width + 4, "parked just right of the owner");
+        assert_eq!(
+            parked.x,
+            owner.x + owner.width + 4,
+            "parked just right of the owner"
+        );
         assert!(
             ![owner, above, below].iter().any(|m| parked.intersects(m)),
             "clears every monitor"
@@ -705,9 +838,15 @@ mod park_tests {
         let above = Rect::new(2000, -1000, 1000, 1000);
         let right = Rect::new(3000, 0, 1000, 1000);
         let parked = offscreen_park_rect(WIN, owner, &[owner, below, above, right]);
-        assert_eq!(parked.x, owner.x - WIN.width - 4, "parked just left of the owner");
+        assert_eq!(
+            parked.x,
+            owner.x - WIN.width - 4,
+            "parked just left of the owner"
+        );
         assert!(
-            ![owner, below, above, right].iter().any(|m| parked.intersects(m)),
+            ![owner, below, above, right]
+                .iter()
+                .any(|m| parked.intersects(m)),
             "clears every monitor"
         );
     }
@@ -717,10 +856,10 @@ mod park_tests {
         let owner = Rect::new(0, 0, 1000, 1000);
         let neighbors = [
             owner,
-            Rect::new(-2000, 0, 2000, 1000),  // left
-            Rect::new(1000, 0, 2000, 1000),   // right
-            Rect::new(0, -2000, 1000, 2000),  // above
-            Rect::new(0, 1000, 1000, 2000),   // below
+            Rect::new(-2000, 0, 2000, 1000), // left
+            Rect::new(1000, 0, 2000, 1000),  // right
+            Rect::new(0, -2000, 1000, 2000), // above
+            Rect::new(0, 1000, 1000, 2000),  // below
         ];
         let parked = offscreen_park_rect(WIN, owner, &neighbors);
         let sentinel = leopardwm_platform_win32::MOVE_OFFSCREEN_SENTINEL_COORD;
@@ -744,15 +883,21 @@ mod park_tests {
     }
 
     fn placement(wid: u64, rect: Rect, visibility: Visibility) -> WindowPlacement {
-        WindowPlacement { window_id: wid, rect, visibility, column_index: 0 }
+        WindowPlacement {
+            window_id: wid,
+            rect,
+            visibility,
+            column_index: 0,
+        }
     }
 
     #[test]
     fn wrapper_reparks_only_bleeding_offscreen_placements() {
         let owner = monitor(1, 0, 0, 5120, 1440);
         let right = monitor(2, 5120, 0, 1920, 1080);
-        let monitors: HashMap<MonitorId, MonitorInfo> =
-            [(1, owner.clone()), (2, right.clone())].into_iter().collect();
+        let monitors: HashMap<MonitorId, MonitorInfo> = [(1, owner.clone()), (2, right.clone())]
+            .into_iter()
+            .collect();
 
         let visible = Rect::new(5200, 10, 400, 400); // overlaps neighbor but Visible
         let non_bleed = Rect::new(-500, 10, 400, 400); // off-screen, on owner only
@@ -766,10 +911,15 @@ mod park_tests {
         park_offscreen_avoiding_neighbors(&mut placements, 1, &monitors);
 
         assert_eq!(placements[0].rect, visible, "visible placement untouched");
-        assert_eq!(placements[1].rect, non_bleed, "non-bleeding off-screen untouched");
+        assert_eq!(
+            placements[1].rect, non_bleed,
+            "non-bleeding off-screen untouched"
+        );
         assert_ne!(placements[2].rect, bleeding, "bleeding placement re-parked");
         assert!(
-            ![owner.rect, right.rect].iter().any(|m| placements[2].rect.intersects(m)),
+            ![owner.rect, right.rect]
+                .iter()
+                .any(|m| placements[2].rect.intersects(m)),
             "re-parked clear of every monitor"
         );
     }

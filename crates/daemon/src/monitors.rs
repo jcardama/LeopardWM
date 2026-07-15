@@ -35,9 +35,7 @@ impl AppState {
             // this is a handle change, not a topology change.
             let remap: HashMap<MonitorId, MonitorId> = old_by_name
                 .iter()
-                .filter_map(|(name, &old_id)| {
-                    new_by_name.get(name).map(|&new_id| (old_id, new_id))
-                })
+                .filter_map(|(name, &old_id)| new_by_name.get(name).map(|&new_id| (old_id, new_id)))
                 .collect();
 
             if remap.len() == self.monitors.len() {
@@ -62,8 +60,14 @@ impl AppState {
                 self.monitors = new_monitors.into_iter().map(|m| (m.id, m)).collect();
                 // Re-apply scaled gaps in case DPI or work area changed
                 for (&monitor_id, ws_vec) in self.workspaces.iter_mut() {
-                    let scale = self.monitors.get(&monitor_id).map(|m| m.scale_factor).unwrap_or(1.0);
-                    let viewport_width = self.monitors.get(&monitor_id)
+                    let scale = self
+                        .monitors
+                        .get(&monitor_id)
+                        .map(|m| m.scale_factor)
+                        .unwrap_or(1.0);
+                    let viewport_width = self
+                        .monitors
+                        .get(&monitor_id)
                         .map(|m| m.work_area.width)
                         .unwrap_or(FALLBACK_VIEWPORT_WIDTH);
                     let params = ScaledLayoutParams::from_config(
@@ -211,7 +215,11 @@ impl AppState {
                     // Source monitor info is still available (removed from self.monitors later).
                     let source_wa = self.monitors.get(removed_id).map(|m| m.work_area);
                     let target_wa = self.monitors.get(&primary).map(|m| m.work_area);
-                    if let Some(primary_ws) = self.workspaces.get_mut(&primary).and_then(|v| v.get_mut(primary_active_idx)) {
+                    if let Some(primary_ws) = self
+                        .workspaces
+                        .get_mut(&primary)
+                        .and_then(|v| v.get_mut(primary_active_idx))
+                    {
                         for window_id in &tiled_window_ids {
                             if let Err(e) = primary_ws.insert_window(*window_id, None) {
                                 warn!("Failed to migrate tiled window {}: {}", window_id, e);
@@ -270,8 +278,14 @@ impl AppState {
         // area may have changed even if the monitor ID stayed the same (e.g.,
         // Windows scaling change, or work area resize from taskbar move).
         for (&monitor_id, ws_vec) in self.workspaces.iter_mut() {
-            let scale = self.monitors.get(&monitor_id).map(|m| m.scale_factor).unwrap_or(1.0);
-            let viewport_width = self.monitors.get(&monitor_id)
+            let scale = self
+                .monitors
+                .get(&monitor_id)
+                .map(|m| m.scale_factor)
+                .unwrap_or(1.0);
+            let viewport_width = self
+                .monitors
+                .get(&monitor_id)
                 .map(|m| m.work_area.width)
                 .unwrap_or(FALLBACK_VIEWPORT_WIDTH);
             let params = ScaledLayoutParams::from_config(
@@ -348,7 +362,8 @@ impl AppState {
         let tgt_idx = self.active_workspace_idx(target_monitor);
 
         let os_focus = self.previous_focused_hwnd.and_then(|hwnd| {
-            self.workspaces.get(&source_monitor)
+            self.workspaces
+                .get(&source_monitor)
                 .and_then(|v| v.get(src_idx))
                 .filter(|ws| ws.contains_window(hwnd))
                 .map(|_| hwnd)
@@ -385,7 +400,8 @@ impl AppState {
 
         let is_floating = source_workspace.is_floating(window_id);
         if is_floating {
-            let rect = source_workspace.floating_windows()
+            let rect = source_workspace
+                .floating_windows()
                 .iter()
                 .find(|f| f.id == window_id)
                 .map(|f| f.rect)
@@ -398,8 +414,10 @@ impl AppState {
                 (Some(src_mon), Some(tgt_mon)) => {
                     let dx = tgt_mon.work_area.x - src_mon.work_area.x;
                     let dy = tgt_mon.work_area.y - src_mon.work_area.y;
-                    let max_x = (tgt_mon.work_area.x + tgt_mon.work_area.width - rect.width).max(tgt_mon.work_area.x);
-                    let max_y = (tgt_mon.work_area.y + tgt_mon.work_area.height - rect.height).max(tgt_mon.work_area.y);
+                    let max_x = (tgt_mon.work_area.x + tgt_mon.work_area.width - rect.width)
+                        .max(tgt_mon.work_area.x);
+                    let max_y = (tgt_mon.work_area.y + tgt_mon.work_area.height - rect.height)
+                        .max(tgt_mon.work_area.y);
                     leopardwm_core_layout::Rect::new(
                         (rect.x + dx).clamp(tgt_mon.work_area.x, max_x),
                         (rect.y + dy).clamp(tgt_mon.work_area.y, max_y),
@@ -440,8 +458,6 @@ impl AppState {
         self.monitors
             .get(&monitor_id)
             .map(|m| m.work_area)
-            .unwrap_or_else(|| {
-                Rect::new(0, 0, FALLBACK_VIEWPORT_WIDTH, FALLBACK_VIEWPORT_HEIGHT)
-            })
+            .unwrap_or_else(|| Rect::new(0, 0, FALLBACK_VIEWPORT_WIDTH, FALLBACK_VIEWPORT_HEIGHT))
     }
 }

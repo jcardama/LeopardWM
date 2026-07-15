@@ -258,7 +258,10 @@ impl AppState {
     /// monocle fullscreen has no focus ring, matching `focus_in_fullscreen`.
     fn reassert_fullscreen_focus(&mut self, fs_wid: u64) {
         if let Err(e) = leopardwm_platform_win32::set_foreground_window(fs_wid) {
-            debug!("Could not raise fullscreen window {} to the top: {:?}", fs_wid, e);
+            debug!(
+                "Could not raise fullscreen window {} to the top: {:?}",
+                fs_wid, e
+            );
         }
         if let Some((mid, widx)) = self.find_window_workspace(fs_wid) {
             let refocused = self
@@ -339,8 +342,7 @@ impl AppState {
                 return;
             }
 
-            let executable =
-                get_process_executable(win_info.process_id).unwrap_or_default();
+            let executable = get_process_executable(win_info.process_id).unwrap_or_default();
 
             // Skip transient script-runner windows whose title is just
             // the executable path. PowerShell, cmd, and similar console
@@ -356,11 +358,8 @@ impl AppState {
             // affect normal terminal usage.
             let title_lower = win_info.title.to_ascii_lowercase();
             let title_looks_like_exe_path = title_lower.ends_with(".exe")
-                || (!executable.is_empty()
-                    && title_lower == executable.to_ascii_lowercase());
-            if title_looks_like_exe_path
-                && win_info.class_name == "ConsoleWindowClass"
-            {
+                || (!executable.is_empty() && title_lower == executable.to_ascii_lowercase());
+            if title_looks_like_exe_path && win_info.class_name == "ConsoleWindowClass" {
                 debug!(
                     "Skipping transient console-host window with exe-path title: {} ({})",
                     win_info.title, win_info.class_name
@@ -375,17 +374,18 @@ impl AppState {
             let action = matched
                 .map(|r| r.action)
                 .unwrap_or(config::WindowAction::Tile);
-            let (rule_workspace, rule_maximized, rule_column_width, rule_slot, rule_sticky) = matched
-                .map(|r| {
-                    (
-                        r.open_on_workspace,
-                        r.open_maximized,
-                        r.column_width,
-                        r.open_in_column,
-                        r.sticky,
-                    )
-                })
-                .unwrap_or((None, false, None, None, false));
+            let (rule_workspace, rule_maximized, rule_column_width, rule_slot, rule_sticky) =
+                matched
+                    .map(|r| {
+                        (
+                            r.open_on_workspace,
+                            r.open_maximized,
+                            r.column_width,
+                            r.open_in_column,
+                            r.sticky,
+                        )
+                    })
+                    .unwrap_or((None, false, None, None, false));
 
             if action == config::WindowAction::Ignore {
                 debug!(
@@ -450,8 +450,7 @@ impl AppState {
             // Snapshot before structural change for tiled window
             // animation. A background open doesn't change the active
             // layout, so no transition is needed.
-            let snapshot = if action == config::WindowAction::Tile && !opens_in_background
-            {
+            let snapshot = if action == config::WindowAction::Tile && !opens_in_background {
                 Some(self.snapshot_layout())
             } else {
                 None
@@ -464,7 +463,11 @@ impl AppState {
                 rule_column_width.map(|f| ((f * f64::from(viewport_width)).round() as i32).max(100))
             });
 
-            if let Some(workspace) = self.workspaces.get_mut(&monitor_id).and_then(|v| v.get_mut(target_idx)) {
+            if let Some(workspace) = self
+                .workspaces
+                .get_mut(&monitor_id)
+                .and_then(|v| v.get_mut(target_idx))
+            {
                 let added = match action {
                     config::WindowAction::Float => {
                         // Use rule dimensions or default to centered 800x600 window
@@ -498,7 +501,9 @@ impl AppState {
                             // A slot rule opens the window as its own column at
                             // that slot, overriding in-column stacking.
                             if self.config.behavior.focus_new_windows || opens_in_background {
-                                workspace.insert_window_at_column(hwnd, rule_width_px, slot).is_ok()
+                                workspace
+                                    .insert_window_at_column(hwnd, rule_width_px, slot)
+                                    .is_ok()
                             } else {
                                 workspace
                                     .insert_window_at_column_no_focus(hwnd, rule_width_px, slot)
@@ -511,21 +516,14 @@ impl AppState {
                             // appending at the bottom of the stack).
                             let col = workspace.focused_column_index();
                             let row = workspace.focused_window_index_in_column() + 1;
-                            let ok = workspace
-                                .insert_window_in_column_at(hwnd, col, row)
-                                .is_ok();
+                            let ok = workspace.insert_window_in_column_at(hwnd, col, row).is_ok();
                             if ok && self.config.behavior.focus_new_windows {
                                 if let Err(e) = workspace.focus_window(hwnd) {
-                                    warn!(
-                                        "Focusing new in-column window {} failed: {:?}",
-                                        hwnd, e
-                                    );
+                                    warn!("Focusing new in-column window {} failed: {:?}", hwnd, e);
                                 }
                             }
                             ok
-                        } else if self.config.behavior.focus_new_windows
-                            || opens_in_background
-                        {
+                        } else if self.config.behavior.focus_new_windows || opens_in_background {
                             // A background open still takes the target
                             // workspace's local focus (so it's focused
                             // when that workspace is activated); OS
@@ -539,10 +537,7 @@ impl AppState {
                         // Per-app open_maximized: only when the new
                         // window's column is the focused one (always
                         // true for the focused new-column path).
-                        if ok
-                            && rule_maximized
-                            && workspace.focused_window() == Some(hwnd)
-                        {
+                        if ok && rule_maximized && workspace.focused_window() == Some(hwnd) {
                             workspace.maximize_focused_column(viewport_width);
                         }
                         ok
@@ -609,16 +604,15 @@ impl AppState {
                     // the user leaves fullscreen. (A floating window is meant to
                     // overlay, and a background one is parked off-screen, so this
                     // is tiled-and-active only.)
-                    let keep_fullscreen_on_top = if matches!(action, config::WindowAction::Tile)
-                        && !opens_in_background
-                    {
-                        self.focused_workspace()
-                            .filter(|ws| ws.is_fullscreen())
-                            .and_then(|ws| ws.fullscreen_window_id())
-                            .filter(|&fs| fs != hwnd)
-                    } else {
-                        None
-                    };
+                    let keep_fullscreen_on_top =
+                        if matches!(action, config::WindowAction::Tile) && !opens_in_background {
+                            self.focused_workspace()
+                                .filter(|ws| ws.is_fullscreen())
+                                .and_then(|ws| ws.fullscreen_window_id())
+                                .filter(|&fs| fs != hwnd)
+                        } else {
+                            None
+                        };
                     // Skip the newcomer's foreground sync when we're about to
                     // re-raise the fullscreen window, to avoid a double focus
                     // transition.
@@ -640,7 +634,11 @@ impl AppState {
 
     /// Shared handler for destroyed and hidden window events.
     fn on_window_destroyed_or_hidden(&mut self, hwnd: u64, is_hidden_event: bool) {
-        let event_name = if is_hidden_event { "hidden" } else { "destroyed" };
+        let event_name = if is_hidden_event {
+            "hidden"
+        } else {
+            "destroyed"
+        };
 
         // A stashed scratchpad window lives outside all workspaces and
         // is cloaked, so only a real destroy (not a spurious Hidden
@@ -732,7 +730,8 @@ impl AppState {
                     hwnd,
                     managed_at.elapsed().as_millis()
                 );
-                self.recently_hidden_hwnds.insert(hwnd, std::time::Instant::now());
+                self.recently_hidden_hwnds
+                    .insert(hwnd, std::time::Instant::now());
             } else {
                 debug!(
                     "Window {} was managed {}s, not marking as transient",
@@ -762,7 +761,11 @@ impl AppState {
             // window (e.g. a virtual-desktop tool that hides/shows on switch)
             // re-tiles at its prior width instead of the default.
             let mut hidden_width: Option<i32> = None;
-            if let Some(workspace) = self.workspaces.get_mut(&monitor_id).and_then(|v| v.get_mut(ws_idx)) {
+            if let Some(workspace) = self
+                .workspaces
+                .get_mut(&monitor_id)
+                .and_then(|v| v.get_mut(ws_idx))
+            {
                 if is_hidden_event {
                     hidden_width = workspace
                         .find_window_location(hwnd)
@@ -888,12 +891,20 @@ impl AppState {
             .and_then(|v| v.get_mut(to_widx))
             .is_some_and(|ws| ws.insert_window(hwnd, tiled_width).is_ok());
         if !inserted {
-            if let Some(ws) = self.workspaces.get_mut(&from_mid).and_then(|v| v.get_mut(from_widx)) {
+            if let Some(ws) = self
+                .workspaces
+                .get_mut(&from_mid)
+                .and_then(|v| v.get_mut(from_widx))
+            {
                 let _ = ws.insert_window(hwnd, tiled_width);
             }
             return false;
         }
-        if let Some(ws) = self.workspaces.get_mut(&to_mid).and_then(|v| v.get_mut(to_widx)) {
+        if let Some(ws) = self
+            .workspaces
+            .get_mut(&to_mid)
+            .and_then(|v| v.get_mut(to_widx))
+        {
             let _ = ws.focus_window(hwnd);
         }
         // The pull establishes a fresh placement; void any prior move-back origin
@@ -910,7 +921,10 @@ impl AppState {
         }
         self.show_border(hwnd);
         self.broadcast_focused_window_if_changed(to_mid as i64, Some(hwnd));
-        info!("Pulled Edit Config editor window {} to the active workspace", hwnd);
+        info!(
+            "Pulled Edit Config editor window {} to the active workspace",
+            hwnd
+        );
         true
     }
 
@@ -952,8 +966,8 @@ impl AppState {
                                     // matches this event. If it does, consume the
                                     // flag and fall through (the focus change is
                                     // expected, not noisy churn).
-                                    let consumed = self
-                                        .consume_pending_tab_focus_for(mon_a, ws_a, hwnd);
+                                    let consumed =
+                                        self.consume_pending_tab_focus_for(mon_a, ws_a, hwnd);
                                     if !consumed {
                                         debug!(
                                             "Suppressed rapid same-column focus switch: {} -> {}",
@@ -976,14 +990,20 @@ impl AppState {
         // Reconcile: prune windows that vanished without events
         // (e.g., Electron close-to-tray apps).
         // Throttle to at most once per second to avoid per-event overhead.
-        if self.last_prune_at.is_none_or(|t| now.duration_since(t).as_secs() >= 1) {
+        if self
+            .last_prune_at
+            .is_none_or(|t| now.duration_since(t).as_secs() >= 1)
+        {
             self.last_prune_at = Some(now);
             let pre_count = self.all_managed_window_ids().len();
             self.prune_stale_windows();
             let pruned = pre_count - self.all_managed_window_ids().len();
             if pruned > 0 {
                 if let Err(e) = self.apply_layout() {
-                    warn!("Failed to apply layout after pruning {} stale window(s): {}", pruned, e);
+                    warn!(
+                        "Failed to apply layout after pruning {} stale window(s): {}",
+                        pruned, e
+                    );
                 }
             }
         }
@@ -1003,16 +1023,23 @@ impl AppState {
             // (e.g., user Alt+Tabbed to it)
             let active_idx = self.active_workspace_idx(monitor_id);
             if ws_idx != active_idx {
-                info!("Auto-switching to workspace {} on monitor {} (focus follows window)", ws_idx + 1, monitor_id);
+                info!(
+                    "Auto-switching to workspace {} on monitor {} (focus follows window)",
+                    ws_idx + 1,
+                    monitor_id
+                );
 
                 // Clean up any in-progress drag: reinsert window if it was
                 // removed from source during live preview, then remove placeholders.
                 // Only reinsert if the window still exists (it may have been closed).
                 if let Some(drag) = self.drag_state.take() {
-                    if drag.removed_from_source && drag.is_tiled
+                    if drag.removed_from_source
+                        && drag.is_tiled
                         && leopardwm_platform_win32::is_valid_window(drag.hwnd)
                     {
-                        if let Some(ws) = self.workspaces.get_mut(&drag.source_monitor)
+                        if let Some(ws) = self
+                            .workspaces
+                            .get_mut(&drag.source_monitor)
                             .and_then(|v| v.get_mut(drag.source_workspace_idx))
                         {
                             let _ = ws.insert_window(drag.hwnd, None);
@@ -1034,52 +1061,72 @@ impl AppState {
                 self.abort_active_ghost_transition();
                 self.layout_transition = None;
 
-                let slide_height = self.monitors.get(&monitor_id)
+                let slide_height = self
+                    .monitors
+                    .get(&monitor_id)
                     .map(|m| m.work_area.height)
                     .unwrap_or(crate::state::FALLBACK_WORK_AREA_HEIGHT);
-                let y_offset = if ws_idx > active_idx { slide_height } else { -slide_height };
+                let y_offset = if ws_idx > active_idx {
+                    slide_height
+                } else {
+                    -slide_height
+                };
 
                 let viewport = self.layout_viewport(monitor_id);
 
                 // Snapshot old workspace positions for exit animation.
-                let old_placements: Vec<(u64, leopardwm_core_layout::Rect)> =
-                    self.workspaces.get(&monitor_id)
-                        .and_then(|v| v.get(active_idx))
-                        .map(|ws| {
-                            ws.compute_placements_animated(viewport)
-                                .into_iter()
-                                .map(|p| (p.window_id, p.rect))
-                                .collect()
-                        })
-                        .unwrap_or_default();
+                let old_placements: Vec<(u64, leopardwm_core_layout::Rect)> = self
+                    .workspaces
+                    .get(&monitor_id)
+                    .and_then(|v| v.get(active_idx))
+                    .map(|ws| {
+                        ws.compute_placements_animated(viewport)
+                            .into_iter()
+                            .map(|p| (p.window_id, p.rect))
+                            .collect()
+                    })
+                    .unwrap_or_default();
 
                 self.active_workspace.insert(monitor_id, ws_idx);
 
                 // Compute new workspace's final placements for enter animation.
-                let new_placements: Vec<(u64, leopardwm_core_layout::Rect)> =
-                    self.workspaces.get(&monitor_id)
-                        .and_then(|v| v.get(ws_idx))
-                        .map(|ws| {
-                            ws.compute_placements_animated(viewport)
-                                .into_iter()
-                                .map(|p| (p.window_id, p.rect))
-                                .collect()
-                        })
-                        .unwrap_or_default();
+                let new_placements: Vec<(u64, leopardwm_core_layout::Rect)> = self
+                    .workspaces
+                    .get(&monitor_id)
+                    .and_then(|v| v.get(ws_idx))
+                    .map(|ws| {
+                        ws.compute_placements_animated(viewport)
+                            .into_iter()
+                            .map(|p| (p.window_id, p.rect))
+                            .collect()
+                    })
+                    .unwrap_or_default();
 
                 let mut start_rects = std::collections::HashMap::new();
                 let mut exit_rects = std::collections::HashMap::new();
 
                 for (wid, rect) in &new_placements {
-                    start_rects.insert(*wid, leopardwm_core_layout::Rect::new(
-                        rect.x, rect.y + y_offset, rect.width, rect.height,
-                    ));
+                    start_rects.insert(
+                        *wid,
+                        leopardwm_core_layout::Rect::new(
+                            rect.x,
+                            rect.y + y_offset,
+                            rect.width,
+                            rect.height,
+                        ),
+                    );
                 }
                 for (wid, rect) in &old_placements {
                     start_rects.insert(*wid, *rect);
-                    exit_rects.insert(*wid, leopardwm_core_layout::Rect::new(
-                        rect.x, rect.y - y_offset, rect.width, rect.height,
-                    ));
+                    exit_rects.insert(
+                        *wid,
+                        leopardwm_core_layout::Rect::new(
+                            rect.x,
+                            rect.y - y_offset,
+                            rect.width,
+                            rect.height,
+                        ),
+                    );
                 }
 
                 // As in handle_switch_workspace: animate only when motion isn't
@@ -1088,13 +1135,8 @@ impl AppState {
                 // would otherwise move them off-screen).
                 let animating = !start_rects.is_empty() && !self.reduce_motion;
                 if animating {
-                    let duration =
-                        self.config.animation.workspace_switch_duration_ms;
-                    self.start_workspace_switch_transition(
-                        start_rects,
-                        exit_rects,
-                        duration,
-                    );
+                    let duration = self.config.animation.workspace_switch_duration_ms;
+                    self.start_workspace_switch_transition(start_rects, exit_rects, duration);
                 } else {
                     for (wid, _) in &old_placements {
                         let _ = leopardwm_platform_win32::move_window_offscreen(*wid);
@@ -1147,7 +1189,11 @@ impl AppState {
                 self.reassert_fullscreen_focus(fs_wid);
                 return;
             }
-            if let Some(workspace) = self.workspaces.get_mut(&monitor_id).and_then(|v| v.get_mut(ws_idx)) {
+            if let Some(workspace) = self
+                .workspaces
+                .get_mut(&monitor_id)
+                .and_then(|v| v.get_mut(ws_idx))
+            {
                 if let Err(e) = workspace.focus_window(hwnd) {
                     // Floating windows are not in the tiled column list,
                     // so focus_window fails for them — that's expected.
@@ -1199,13 +1245,9 @@ impl AppState {
         // ages it out).
         if self.recently_hidden_hwnds.contains_key(&hwnd) {
             if let Some(win_info) = self.lookup_window_info(hwnd) {
-                let executable =
-                    get_process_executable(win_info.process_id).unwrap_or_default();
-                let action = self.evaluate_window_rules(
-                    &win_info.class_name,
-                    &win_info.title,
-                    &executable,
-                );
+                let executable = get_process_executable(win_info.process_id).unwrap_or_default();
+                let action =
+                    self.evaluate_window_rules(&win_info.class_name, &win_info.title, &executable);
                 if action != config::WindowAction::Ignore {
                     info!(
                         "Recovering suppressed window: {} ({}) - user focused it",
@@ -1221,7 +1263,9 @@ impl AppState {
                     // floating windows, which is fine.
                     let recovery_monitor =
                         if let Some((mid, widx)) = self.find_window_workspace(hwnd) {
-                            if let Some(ws) = self.workspaces.get_mut(&mid).and_then(|v| v.get_mut(widx)) {
+                            if let Some(ws) =
+                                self.workspaces.get_mut(&mid).and_then(|v| v.get_mut(widx))
+                            {
                                 let _ = ws.focus_window(hwnd);
                             }
                             mid
@@ -1230,10 +1274,7 @@ impl AppState {
                         };
                     self.previous_focused_hwnd = Some(hwnd);
                     self.show_border(hwnd);
-                    self.broadcast_focused_window_if_changed(
-                        recovery_monitor as i64,
-                        Some(hwnd),
-                    );
+                    self.broadcast_focused_window_if_changed(recovery_monitor as i64, Some(hwnd));
                     return;
                 }
             }
@@ -1249,12 +1290,10 @@ impl AppState {
         // scheduled-task spawn.
         if let Some(win_info) = self.lookup_window_info(hwnd) {
             if win_info.class_name == "ConsoleWindowClass" {
-                let executable = get_process_executable(win_info.process_id)
-                    .unwrap_or_default();
+                let executable = get_process_executable(win_info.process_id).unwrap_or_default();
                 let title_lower = win_info.title.to_ascii_lowercase();
                 let title_still_exe_path = title_lower.ends_with(".exe")
-                    || (!executable.is_empty()
-                        && title_lower == executable.to_ascii_lowercase());
+                    || (!executable.is_empty() && title_lower == executable.to_ascii_lowercase());
                 if !title_still_exe_path {
                     let action = self.evaluate_window_rules(
                         &win_info.class_name,
@@ -1269,7 +1308,9 @@ impl AppState {
                         self.handle_window_event(WindowEvent::Created(hwnd));
                         let recovery_monitor =
                             if let Some((mid, widx)) = self.find_window_workspace(hwnd) {
-                                if let Some(ws) = self.workspaces.get_mut(&mid).and_then(|v| v.get_mut(widx)) {
+                                if let Some(ws) =
+                                    self.workspaces.get_mut(&mid).and_then(|v| v.get_mut(widx))
+                                {
                                     let _ = ws.focus_window(hwnd);
                                 }
                                 mid
@@ -1307,14 +1348,20 @@ impl AppState {
             // If the minimized window is a floating window tracked as
             // previous_focused_hwnd, clear it so sync_foreground_window
             // doesn't try to re-focus a minimized floating window.
-            let is_floating = self.workspaces.get(&monitor_id)
+            let is_floating = self
+                .workspaces
+                .get(&monitor_id)
                 .and_then(|v| v.get(ws_idx))
                 .is_some_and(|ws| ws.is_floating(hwnd));
             if is_floating && self.previous_focused_hwnd == Some(hwnd) {
                 self.previous_focused_hwnd = None;
             }
 
-            if let Some(workspace) = self.workspaces.get_mut(&monitor_id).and_then(|v| v.get_mut(ws_idx)) {
+            if let Some(workspace) = self
+                .workspaces
+                .get_mut(&monitor_id)
+                .and_then(|v| v.get_mut(ws_idx))
+            {
                 let cleared_fullscreen = workspace.clear_fullscreen_if_window(hwnd);
                 // mark_minimized only handles tiled windows; floating windows
                 // are not in the minimized set. Handle both paths.
@@ -1322,14 +1369,18 @@ impl AppState {
                     let col_loc = workspace.find_window_location(hwnd);
                     let col_info = col_loc.map(|(ci, _)| {
                         let col = &workspace.columns()[ci];
-                        let visible = col.windows().iter()
+                        let visible = col
+                            .windows()
+                            .iter()
                             .filter(|w| !workspace.is_minimized(**w))
                             .count();
                         (ci, col.len(), visible)
                     });
                     info!(
                         "Window {} minimized (col={:?}, minimized_total={})",
-                        hwnd, col_info, workspace.minimized_count()
+                        hwnd,
+                        col_info,
+                        workspace.minimized_count()
                     );
 
                     // If the minimized window was the focused window, move focus
@@ -1355,8 +1406,7 @@ impl AppState {
                         for p in &post_placements {
                             info!(
                                 "  post-minimize placement: hwnd={} rect=({},{} {}x{})",
-                                p.window_id, p.rect.x, p.rect.y,
-                                p.rect.width, p.rect.height,
+                                p.window_id, p.rect.x, p.rect.y, p.rect.width, p.rect.height,
                             );
                         }
                     }
@@ -1383,7 +1433,11 @@ impl AppState {
             let snapshot = self.snapshot_layout();
             let mut should_sync_foreground = false;
             let mut was_tiled_restore = false;
-            if let Some(workspace) = self.workspaces.get_mut(&monitor_id).and_then(|v| v.get_mut(ws_idx)) {
+            if let Some(workspace) = self
+                .workspaces
+                .get_mut(&monitor_id)
+                .and_then(|v| v.get_mut(ws_idx))
+            {
                 if workspace.mark_restored(hwnd) {
                     info!("Window {} restored from minimized", hwnd);
                     if workspace.is_floating(hwnd) {
@@ -1458,7 +1512,12 @@ impl AppState {
                 };
                 (!is_floating, monitor_id, ws_idx, col_idx)
             } else {
-                (false, self.focused_monitor, self.active_workspace_idx(self.focused_monitor), 0)
+                (
+                    false,
+                    self.focused_monitor,
+                    self.active_workspace_idx(self.focused_monitor),
+                    0,
+                )
             };
         self.drag_state = Some(DragState {
             hwnd,
@@ -1509,7 +1568,10 @@ impl AppState {
         // Verify this MoveSizeEnd matches the active drag — a mismatched
         // event for a different window should not tear down the drag state.
         if self.drag_state.as_ref().is_some_and(|d| d.hwnd != hwnd) {
-            debug!("Ignoring MoveSizeEnd for {} — drag active for different window", hwnd);
+            debug!(
+                "Ignoring MoveSizeEnd for {} — drag active for different window",
+                hwnd
+            );
             // Mismatched event — re-enable transitions on the hwnd
             // we just got the event for; the original drag's hwnd
             // will re-enable on its own MoveSizeEnd.
@@ -1532,13 +1594,15 @@ impl AppState {
             // Using the outer GetWindowRect here made apply_placements re-add the
             // border insets on each drop, growing the window ~14px per cycle.
             if let Some((monitor_id, ws_idx)) = self.find_window_workspace(hwnd) {
-                if let Some(visible_rect) = leopardwm_platform_win32::get_window_visible_rect(hwnd) {
-                    if let Some(workspace) = self.workspaces.get_mut(&monitor_id).and_then(|v| v.get_mut(ws_idx)) {
+                if let Some(visible_rect) = leopardwm_platform_win32::get_window_visible_rect(hwnd)
+                {
+                    if let Some(workspace) = self
+                        .workspaces
+                        .get_mut(&monitor_id)
+                        .and_then(|v| v.get_mut(ws_idx))
+                    {
                         workspace.update_floating(hwnd, visible_rect);
-                        debug!(
-                            "Floating window {} dropped at {:?}",
-                            hwnd, visible_rect
-                        );
+                        debug!("Floating window {} dropped at {:?}", hwnd, visible_rect);
                     }
                 }
             }
@@ -1580,12 +1644,7 @@ impl AppState {
             if target_monitor == drag.source_monitor {
                 self.snap_back_tiled(drag.source_monitor, drag.source_workspace_idx);
             } else {
-                self.execute_cross_monitor_drag(
-                    hwnd,
-                    &drag,
-                    target_monitor,
-                    &win_info.rect,
-                );
+                self.execute_cross_monitor_drag(hwnd, &drag, target_monitor, &win_info.rect);
             }
         } else {
             // Default drop: swap placeholder with real window in-place.
@@ -1615,8 +1674,14 @@ impl AppState {
         // During active border resize: show ghost preview of the snap target
         // for tiled windows, or update border for floating windows.
         if self.resize_hwnd == Some(hwnd) {
-            let is_floating = self.find_window_workspace(hwnd)
-                .and_then(|(mid, wsi)| self.workspaces.get(&mid)?.get(wsi).map(|ws| ws.is_floating(hwnd)))
+            let is_floating = self
+                .find_window_workspace(hwnd)
+                .and_then(|(mid, wsi)| {
+                    self.workspaces
+                        .get(&mid)?
+                        .get(wsi)
+                        .map(|ws| ws.is_floating(hwnd))
+                })
                 .unwrap_or(false);
             if is_floating {
                 // Throttle floating border updates to ~60fps
@@ -1772,8 +1837,7 @@ impl AppState {
                             (a.x - expected.x).abs() > POSITION_EPSILON_PX
                                 || (a.y - expected.y).abs() > POSITION_EPSILON_PX
                         });
-                        let swap_chain_bug =
-                            chrome_position_ok && dwm_position_displaced;
+                        let swap_chain_bug = chrome_position_ok && dwm_position_displaced;
                         let result = dwm_ok || swap_chain_bug;
                         if !result {
                             debug!(
@@ -1917,9 +1981,7 @@ impl AppState {
         }
 
         // Snap target changed — request a vsync-aligned animation.
-        let start_rect = self
-            .resize_preview_display_rect
-            .unwrap_or(target_rect);
+        let start_rect = self.resize_preview_display_rect.unwrap_or(target_rect);
         self.resize_preview_target = Some(target_rect);
         self.resize_preview_display_rect = Some(start_rect);
         self.pending_resize_animation = Some(crate::state::ResizeAnimationRequest {
@@ -1928,8 +1990,7 @@ impl AppState {
         });
 
         // Show overlay at current position immediately (animation will take over).
-        self.pending_drag_hint =
-            Some(crate::state::DragHintAction::ShowGhost { rect: start_rect });
+        self.pending_drag_hint = Some(crate::state::DragHintAction::ShowGhost { rect: start_rect });
         self.show_border(hwnd);
     }
 
@@ -2013,10 +2074,7 @@ impl AppState {
                 info!(
                     "Resize snap: window {} → width preset, new column width = {}",
                     hwnd,
-                    ws.columns()
-                        .get(col_idx)
-                        .map(|c| c.width())
-                        .unwrap_or(0)
+                    ws.columns().get(col_idx).map(|c| c.width()).unwrap_or(0)
                 );
             }
         }
@@ -2041,7 +2099,11 @@ impl AppState {
 
             let viewport_width = self.viewport_width_for(monitor_id);
 
-            if let Some(workspace) = self.workspaces.get_mut(&monitor_id).and_then(|v| v.get_mut(ws_idx)) {
+            if let Some(workspace) = self
+                .workspaces
+                .get_mut(&monitor_id)
+                .and_then(|v| v.get_mut(ws_idx))
+            {
                 if workspace.is_floating(hwnd) {
                     // Floating windows are managed but not represented in tiled columns.
                     self.previous_focused_hwnd = Some(hwnd);
@@ -2060,10 +2122,7 @@ impl AppState {
                         "Focus-follows-mouse: focused floating window {} on monitor {}",
                         hwnd, monitor_id
                     );
-                    self.broadcast_focused_window_if_changed(
-                        monitor_id as i64,
-                        Some(hwnd),
-                    );
+                    self.broadcast_focused_window_if_changed(monitor_id as i64, Some(hwnd));
                     return true;
                 }
                 if let Err(e) = workspace.focus_window(hwnd) {
@@ -2109,9 +2168,17 @@ mod snapback_settle_tests {
         // Freshly created and just maximized: defer (the bug case).
         assert!(defer_snapback_while_settling(Some(fresh), Some(fresh), now));
         // Established window (created long ago) manually restored: snap normally.
-        assert!(!defer_snapback_while_settling(Some(stale_create), Some(fresh), now));
+        assert!(!defer_snapback_while_settling(
+            Some(stale_create),
+            Some(fresh),
+            now
+        ));
         // Fresh window that hasn't been maximized recently: snap normally.
-        assert!(!defer_snapback_while_settling(Some(fresh), Some(stale_max), now));
+        assert!(!defer_snapback_while_settling(
+            Some(fresh),
+            Some(stale_max),
+            now
+        ));
         // Never maximized, or unmanaged: snap normally.
         assert!(!defer_snapback_while_settling(Some(fresh), None, now));
         assert!(!defer_snapback_while_settling(None, Some(fresh), now));
@@ -2125,22 +2192,37 @@ mod edit_config_match_tests {
     #[test]
     fn matches_editor_titles_as_a_whole_token() {
         // Typical editor title formats.
-        assert!(title_names_config_file("config.toml - Visual Studio Code", "config.toml"));
-        assert!(title_names_config_file("config.toml — Sublime Text", "config.toml"));
+        assert!(title_names_config_file(
+            "config.toml - Visual Studio Code",
+            "config.toml"
+        ));
+        assert!(title_names_config_file(
+            "config.toml — Sublime Text",
+            "config.toml"
+        ));
         assert!(title_names_config_file(
             r"C:\Users\Jose\AppData\config.toml - Notepad++",
             "config.toml"
         ));
         // Bare filename and case-insensitive.
         assert!(title_names_config_file("config.toml", "config.toml"));
-        assert!(title_names_config_file("CONFIG.TOML - Editor", "config.toml"));
+        assert!(title_names_config_file(
+            "CONFIG.TOML - Editor",
+            "config.toml"
+        ));
     }
 
     #[test]
     fn rejects_substring_of_a_longer_word() {
         // Filename embedded in a longer word must not match.
-        assert!(!title_names_config_file("myconfig.toml - Editor", "config.toml"));
-        assert!(!title_names_config_file("config.toml.bak - Editor", "config.toml"));
+        assert!(!title_names_config_file(
+            "myconfig.toml - Editor",
+            "config.toml"
+        ));
+        assert!(!title_names_config_file(
+            "config.toml.bak - Editor",
+            "config.toml"
+        ));
         // Unrelated window.
         assert!(!title_names_config_file("Inbox - Mail", "config.toml"));
         // Empty filename never matches.

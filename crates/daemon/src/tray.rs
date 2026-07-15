@@ -299,12 +299,7 @@ impl TrayManager {
     pub fn update_pause_text(&self, paused: bool) {
         self.shared.paused.store(paused, Ordering::Relaxed);
         unsafe {
-            win32_msg::PostThreadMessageW(
-                self.msg_thread_id,
-                win32_msg::WM_APP_UPDATE_PAUSE,
-                0,
-                0,
-            );
+            win32_msg::PostThreadMessageW(self.msg_thread_id, win32_msg::WM_APP_UPDATE_PAUSE, 0, 0);
         }
     }
 
@@ -472,13 +467,7 @@ fn run_tray_thread(
     // PostThreadMessageW calls from the caller won't be lost.
     unsafe {
         let mut msg = std::mem::zeroed::<win32_msg::MSG>();
-        win32_msg::PeekMessageW(
-            &mut msg,
-            std::ptr::null_mut(),
-            0,
-            0,
-            win32_msg::PM_NOREMOVE,
-        );
+        win32_msg::PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, win32_msg::PM_NOREMOVE);
     }
 
     if init_tx.send(Ok(thread_id)).is_err() {
@@ -572,9 +561,7 @@ fn run_tray_thread(
 
 /// Build the tray icon with its context menu. Called on the message-loop
 /// thread so the hidden notification window belongs to that thread.
-fn build_tray(
-    initial: &QuickToggleState,
-) -> Result<(tray_icon::TrayIcon, TrayItems), TrayError> {
+fn build_tray(initial: &QuickToggleState) -> Result<(tray_icon::TrayIcon, TrayItems), TrayError> {
     let menu = Menu::new();
     let append = |item: &dyn tray_icon::menu::IsMenuItem| -> Result<(), TrayError> {
         menu.append(item)
@@ -707,12 +694,7 @@ fn build_tray(
     append(&PredefinedMenuItem::separator())?;
 
     // Update checker — relabels itself when a newer release is detected.
-    let update_item = MenuItem::with_id(
-        menu_ids::CHECK_UPDATES,
-        "Check for Updates",
-        true,
-        None,
-    );
+    let update_item = MenuItem::with_id(menu_ids::CHECK_UPDATES, "Check for Updates", true, None);
     append(&update_item)?;
     append(&PredefinedMenuItem::separator())?;
 
@@ -1001,16 +983,10 @@ mod tests {
     #[test]
     fn test_tooltip_format() {
         let active = format_tooltip_text(14, 2, false, None, 1);
-        assert_eq!(
-            active,
-            "LeopardWM - Active (WS 1, 14 windows, 2 monitors)"
-        );
+        assert_eq!(active, "LeopardWM - Active (WS 1, 14 windows, 2 monitors)");
 
         let paused = format_tooltip_text(3, 1, true, None, 1);
-        assert_eq!(
-            paused,
-            "LeopardWM - Paused (WS 1, 3 windows, 1 monitors)"
-        );
+        assert_eq!(paused, "LeopardWM - Paused (WS 1, 3 windows, 1 monitors)");
     }
 
     #[test]
@@ -1026,10 +1002,7 @@ mod tests {
     fn test_tooltip_format_no_hotkey_mismatch() {
         // When registered == requested, no mismatch line
         let tooltip = format_tooltip_text(10, 2, false, Some((10, 10)), 1);
-        assert_eq!(
-            tooltip,
-            "LeopardWM - Active (WS 1, 10 windows, 2 monitors)"
-        );
+        assert_eq!(tooltip, "LeopardWM - Active (WS 1, 10 windows, 2 monitors)");
     }
 
     #[test]

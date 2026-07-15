@@ -18,7 +18,11 @@ impl AppState {
         let Some((mon, ws_idx)) = self.find_window_workspace(wid) else {
             return false;
         };
-        if let Some(ws) = self.workspaces.get_mut(&mon).and_then(|v| v.get_mut(ws_idx)) {
+        if let Some(ws) = self
+            .workspaces
+            .get_mut(&mon)
+            .and_then(|v| v.get_mut(ws_idx))
+        {
             if ws.is_floating(wid) {
                 ws.remove_floating(wid);
             } else {
@@ -87,7 +91,10 @@ impl AppState {
         // move a dead HWND and record a dangling designation.
         #[cfg(not(test))]
         if !leopardwm_platform_win32::is_window_valid(wid) {
-            info!("Scratchpad stash: focused window {} is no longer valid", wid);
+            info!(
+                "Scratchpad stash: focused window {} is no longer valid",
+                wid
+            );
             return;
         }
 

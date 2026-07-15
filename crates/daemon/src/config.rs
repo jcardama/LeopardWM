@@ -999,11 +999,7 @@ pub fn parse_command(cmd: &str) -> Option<leopardwm_ipc::IpcCommand> {
 }
 
 /// Deprecated hotkey command names that should be removed during migration.
-const DEPRECATED_HOTKEY_COMMANDS: &[&str] = &[
-    "width_third",
-    "width_half",
-    "width_two_thirds",
-];
+const DEPRECATED_HOTKEY_COMMANDS: &[&str] = &["width_third", "width_half", "width_two_thirds"];
 
 /// Hotkey command renames: (old_name, new_name).
 const HOTKEY_COMMAND_RENAMES: &[(&str, &str)] = &[
@@ -1023,9 +1019,7 @@ impl Config {
             }
         }
         // Remove bindings for deprecated commands
-        bindings.retain(|_, cmd| {
-            !DEPRECATED_HOTKEY_COMMANDS.contains(&cmd.as_str())
-        });
+        bindings.retain(|_, cmd| !DEPRECATED_HOTKEY_COMMANDS.contains(&cmd.as_str()));
     }
 
     /// Load configuration from standard locations.
@@ -1122,7 +1116,8 @@ impl Config {
 
         // default_width_preset must be a valid 1-based index into width_presets
         let preset_count = self.layout.width_presets.len();
-        if self.layout.default_width_preset == 0 || self.layout.default_width_preset > preset_count {
+        if self.layout.default_width_preset == 0 || self.layout.default_width_preset > preset_count
+        {
             warnings.push(ConfigWarning {
                 field: "layout.default_width_preset".to_string(),
                 message: format!(
@@ -1429,12 +1424,12 @@ impl Config {
             .ok_or_else(|| anyhow::anyhow!("No config path available"))?;
 
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("Failed to create config directory: {}", parent.display()))?;
+            fs::create_dir_all(parent).with_context(|| {
+                format!("Failed to create config directory: {}", parent.display())
+            })?;
         }
 
-        let content = toml::to_string_pretty(self)
-            .context("Failed to serialize config to TOML")?;
+        let content = toml::to_string_pretty(self).context("Failed to serialize config to TOML")?;
 
         fs::write(path, &content)
             .with_context(|| format!("Failed to write config file: {}", path.display()))?;
@@ -1632,10 +1627,7 @@ mod tests {
             parse_command("focus_monitor_left"),
             Some(IpcCommand::FocusMonitorLeft)
         );
-        assert_eq!(
-            parse_command("resize_grow"),
-            Some(IpcCommand::CycleWidthUp)
-        );
+        assert_eq!(parse_command("resize_grow"), Some(IpcCommand::CycleWidthUp));
         assert_eq!(
             parse_command("resize_shrink"),
             Some(IpcCommand::CycleWidthDown)
@@ -1770,7 +1762,10 @@ mod tests {
         });
         let hk: HotkeyConfig = serde_json::from_value(json).unwrap();
         assert_eq!(hk.disabled, vec!["consume_from_right".to_string()]);
-        assert_eq!(hk.bindings.get("Ctrl+Alt+H"), Some(&"focus_left".to_string()));
+        assert_eq!(
+            hk.bindings.get("Ctrl+Alt+H"),
+            Some(&"focus_left".to_string())
+        );
         // `disabled` must not leak into the flattened bindings map.
         assert!(!hk.bindings.contains_key("disabled"));
     }
@@ -1808,7 +1803,10 @@ mod tests {
         // width = 0.333 * 1910 - 10 = 626
         let width = config.default_column_width_px(1920);
         let base = 1920 - config.outer_gap_left - config.outer_gap_right + config.gap;
-        assert_eq!(width, (base as f64 * 0.333 - config.gap as f64).round() as i32);
+        assert_eq!(
+            width,
+            (base as f64 * 0.333 - config.gap as f64).round() as i32
+        );
     }
 
     #[test]
@@ -2321,9 +2319,7 @@ mod tests {
         let warnings = config.validate();
         assert_eq!(config.layout.outer_gap_left, 0);
         assert_eq!(config.layout.outer_gap_top, 0);
-        assert!(warnings
-            .iter()
-            .any(|w| w.field == "layout.outer_gap_left"));
+        assert!(warnings.iter().any(|w| w.field == "layout.outer_gap_left"));
     }
 
     #[test]
@@ -2332,9 +2328,7 @@ mod tests {
         config.layout.width_presets = vec![];
         let warnings = config.validate();
         assert_eq!(config.layout.width_presets, vec![0.333, 0.5, 0.667]);
-        assert!(warnings
-            .iter()
-            .any(|w| w.field == "layout.width_presets"));
+        assert!(warnings.iter().any(|w| w.field == "layout.width_presets"));
     }
 
     #[test]
@@ -2401,7 +2395,10 @@ mod tests {
         let mut config = Config::default();
         config.animation.layout_duration_ms = 99_999;
         let warnings = config.validate();
-        assert_eq!(config.animation.layout_duration_ms, MAX_ANIMATION_DURATION_MS);
+        assert_eq!(
+            config.animation.layout_duration_ms,
+            MAX_ANIMATION_DURATION_MS
+        );
         assert!(warnings
             .iter()
             .any(|w| w.field == "animation.layout_duration_ms"));
@@ -2442,11 +2439,7 @@ mod tests {
     #[test]
     fn test_workspace_names_resolve_by_position() {
         let mut config = Config::default();
-        config.workspaces.names = vec![
-            "web".to_string(),
-            "".to_string(),
-            "  chat  ".to_string(),
-        ];
+        config.workspaces.names = vec!["web".to_string(), "".to_string(), "  chat  ".to_string()];
         assert_eq!(config.workspaces.name_for(0).as_deref(), Some("web"));
         // Empty entry -> unnamed.
         assert_eq!(config.workspaces.name_for(1), None);
@@ -2559,10 +2552,7 @@ mod tests {
         };
 
         let compiled = config.compile_window_rules();
-        assert_eq!(
-            compiled.len(),
-            2 + BUILTIN_IGNORE_EXECUTABLES.len()
-        );
+        assert_eq!(compiled.len(), 2 + BUILTIN_IGNORE_EXECUTABLES.len());
 
         // First rule: class + title regex
         assert!(compiled[0].matches(
@@ -2617,10 +2607,7 @@ mod tests {
 
         let compiled = config.compile_window_rules();
         // First rule should be skipped due to invalid regex
-        assert_eq!(
-            compiled.len(),
-            1 + BUILTIN_IGNORE_EXECUTABLES.len()
-        );
+        assert_eq!(compiled.len(), 1 + BUILTIN_IGNORE_EXECUTABLES.len());
         assert!(compiled[0].matches("ValidClass", "Any Title", "any.exe"));
     }
 
@@ -2749,10 +2736,7 @@ mod tests {
         let default = Config::default();
         assert_eq!(config.layout.gap, default.layout.gap);
         assert_eq!(config.layout.outer_gap_left, default.layout.outer_gap_left);
-        assert_eq!(
-            config.layout.width_presets,
-            default.layout.width_presets
-        );
+        assert_eq!(config.layout.width_presets, default.layout.width_presets);
         assert_eq!(
             config.appearance.active_border_color,
             default.appearance.active_border_color

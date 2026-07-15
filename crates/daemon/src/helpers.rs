@@ -143,8 +143,14 @@ impl AppState {
         self.update_tab_strip();
 
         for (&monitor_id, ws_vec) in self.workspaces.iter_mut() {
-            let scale = self.monitors.get(&monitor_id).map(|m| m.scale_factor).unwrap_or(1.0);
-            let viewport_width = self.monitors.get(&monitor_id)
+            let scale = self
+                .monitors
+                .get(&monitor_id)
+                .map(|m| m.scale_factor)
+                .unwrap_or(1.0);
+            let viewport_width = self
+                .monitors
+                .get(&monitor_id)
                 .map(|m| m.work_area.width)
                 .unwrap_or(FALLBACK_VIEWPORT_WIDTH);
             let params = ScaledLayoutParams::from_config(
@@ -232,8 +238,8 @@ impl AppState {
     /// this drives `ITaskbarList` directly. Idempotent and change-gated in the
     /// controller, so it's cheap to call after any layout/scroll change.
     pub(crate) fn sync_taskbar_buttons(&self) {
-        use leopardwm_platform_win32::taskbar::{taskbar_hide, taskbar_show};
         use leopardwm_core_layout::Visibility;
+        use leopardwm_platform_win32::taskbar::{taskbar_hide, taskbar_show};
         // Disabled: make sure no button stays hidden (restores any we hid before
         // the user turned the option off), then leave the taskbar alone.
         if !self.config.behavior.hide_offscreen_taskbar_buttons {
@@ -305,7 +311,11 @@ impl AppState {
                 }
             }
             for (monitor_id, ws_idx, wid) in &stale {
-                if let Some(workspace) = self.workspaces.get_mut(monitor_id).and_then(|v| v.get_mut(*ws_idx)) {
+                if let Some(workspace) = self
+                    .workspaces
+                    .get_mut(monitor_id)
+                    .and_then(|v| v.get_mut(*ws_idx))
+                {
                     let was_floating = workspace.remove_floating(*wid);
                     if !was_floating {
                         let _ = workspace.remove_window(*wid);
@@ -319,11 +329,15 @@ impl AppState {
             // Evict orphaned entries from window_managed_at whose HWNDs are
             // no longer managed in any workspace (catches all removal paths).
             if !self.window_managed_at.is_empty() || !self.window_last_maximized_at.is_empty() {
-                let managed: std::collections::HashSet<u64> = self.workspaces.values()
+                let managed: std::collections::HashSet<u64> = self
+                    .workspaces
+                    .values()
                     .flat_map(|ws_vec| ws_vec.iter().flat_map(|ws| ws.all_window_ids()))
                     .collect();
-                self.window_managed_at.retain(|hwnd, _| managed.contains(hwnd));
-                self.window_last_maximized_at.retain(|hwnd, _| managed.contains(hwnd));
+                self.window_managed_at
+                    .retain(|hwnd, _| managed.contains(hwnd));
+                self.window_last_maximized_at
+                    .retain(|hwnd, _| managed.contains(hwnd));
             }
         }
     }
@@ -428,7 +442,10 @@ impl AppState {
         match leopardwm_platform_win32::restore_maximizebox(hwnd) {
             Ok(_) => {}
             Err(e) => {
-                debug!("Failed to restore WS_MAXIMIZEBOX for window {}: {}", hwnd, e);
+                debug!(
+                    "Failed to restore WS_MAXIMIZEBOX for window {}: {}",
+                    hwnd, e
+                );
             }
         }
     }
@@ -490,6 +507,7 @@ impl AppState {
             // Hide any visible drag ghost overlay
             self.pending_drag_hint = Some(crate::state::DragHintAction::Hide);
         } else {
+            self.pending_layout_apply_timeout_report = None;
             if let Err(err) = self.apply_layout() {
                 self.paused = was_paused;
                 warn!(

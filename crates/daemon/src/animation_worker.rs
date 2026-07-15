@@ -114,7 +114,9 @@ impl AnimationWorkerControl {
     /// Signal the worker to abort an in-flight crossfade for `epoch`.
     /// Cooperative — the worker only checks between fade iterations.
     pub fn send_abort_crossfade(&self, epoch: u64) {
-        let _ = self.command_tx.send(WorkerCommand::AbortCrossfade { epoch });
+        let _ = self
+            .command_tx
+            .send(WorkerCommand::AbortCrossfade { epoch });
     }
 }
 
@@ -180,7 +182,6 @@ impl AnimationWorkerHandle {
             })
             .map_err(|_| "Animation worker thread has exited".to_string())
     }
-
 }
 
 impl Drop for AnimationWorkerHandle {
