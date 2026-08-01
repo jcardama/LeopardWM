@@ -76,6 +76,9 @@ fn run_watch(secs: u64, include_titles: bool, show_all: bool) -> Result<()> {
     let mut seen: HashSet<WatchKey> = HashSet::new();
     let mut known_identities: HashSet<(u64, String)> = HashSet::new();
     let mut omitted_unique = 0usize;
+    let mut success_count = 0usize;
+    let mut failure_count = 0usize;
+    let mut consecutive_failing = false;
     println!("LeopardWM window inspection — watching for {secs}s (100ms interval)");
     if !show_all {
         println!("Default filter: only windows that ADMIT on at least one path (pass --all for every window).");
@@ -84,9 +87,30 @@ fn run_watch(secs: u64, include_titles: bool, show_all: bool) -> Result<()> {
 
     while Instant::now() < deadline {
         let windows = match inspect_windows() {
-            Ok(w) => w,
+            Ok(w) => {
+                if let Some(msg) = watch_sample_status_message(
+                    consecutive_failing,
+                    true,
+                    None,
+                    failure_count,
+                ) {
+                    let _ = writeln!(io::stderr(), "{msg}");
+                }
+                consecutive_failing = false;
+                success_count += 1;
+                w
+            }
             Err(e) => {
-                let _ = writeln!(io::stderr(), "EnumWindows failed during watch sample: {e}");
+                failure_count += 1;
+                if let Some(msg) = watch_sample_status_message(
+                    consecutive_failing,
+                    false,
+                    Some(e.as_str()),
+                    failure_count,
+                ) {
+                    let _ = writeln!(io::stderr(), "{msg}");
+                }
+                consecutive_failing = true;
                 thread::sleep(Duration::from_millis(100));
                 continue;
             }
@@ -114,10 +138,20 @@ fn run_watch(secs: u64, include_titles: bool, show_all: bool) -> Result<()> {
         thread::sleep(Duration::from_millis(100));
     }
 
+    if success_count == 0 {
+        return Err(anyhow::anyhow!(
+            "Watch failed: 0 successful samples ({} failed)",
+            failure_count
+        ));
+    }
+
     println!(
         "Watch complete: {} unique window state(s) observed.",
         seen.len()
     );
+    if failure_count > 0 {
+        println!("{failure_count} sample(s) failed during the watch.");
+    }
     if omitted_unique > 0 {
         println!(
             "Omitted {omitted_unique} unique window state(s) that SKIP on both admission paths. Pass --all to show them."
@@ -125,6 +159,30 @@ fn run_watch(secs: u64, include_titles: bool, show_all: bool) -> Result<()> {
     }
     print_footer();
     Ok(())
+}
+
+/// Status line for a watch sample, if one should be emitted.
+///
+/// First failure reports; consecutive failures stay quiet; a success after
+/// failures reports recovery. Pure so the throttle/recovery rules can be unit
+/// tested without a live HWND.
+fn watch_sample_status_message(
+    was_failing: bool,
+    succeeded: bool,
+    err: Option<&str>,
+    failure_count: usize,
+) -> Option<String> {
+    match (was_failing, succeeded) {
+        (false, false) => Some(format!(
+            "EnumWindows failed during watch sample: {}",
+            err.unwrap_or("unknown error")
+        )),
+        (true, false) => None,
+        (true, true) => Some(format!(
+            "EnumWindows recovered ({failure_count} failed sample(s) so far this watch)"
+        )),
+        (false, true) => None,
+    }
 }
 
 fn print_window(w: &WindowInspection, include_titles: bool, is_update: bool) {
@@ -304,17 +362,20 @@ fn print_footer() {
         "Note: verdicts are the built-in admission filters only. The daemon may still\n\
          float or ignore a window due to a user window rule, already-managed state,\n\
          or transient-popup suppression — this command cannot model those\n\
-         post-enumeration decisions. Shell-cloaked and ConsoleWindowClass windows\n\
-         may still appear here with SKIP verdicts; what this command cannot see is\n\
-         historical admission under different styles/visibility/cloak/owner state.\n\
-         Titles are redacted unless --include-titles is passed; review all output\n\
-         before pasting into a public issue."
+         post-enumeration decisions. Shell-cloaked windows, ConsoleWindowClass hosts\n\
+         whose title is just an exe path, and elevated windows a non-elevated daemon\n\
+         cannot reposition (UIPI) can still ADMIT here yet be dropped later by the\n\
+         daemon's post-lookup shell-cloak, console-host, and elevation filters; what\n\
+         this command cannot see is historical admission under different\n\
+         styles/visibility/cloak/owner state. Titles are redacted unless\n\
+         --include-titles is passed; review all output before pasting into a\n\
+         public issue."
     );
 }
 
 #[cfg(test)]
 mod tests {
-    use super::sanitize_diag;
+    use super::{sanitize_diag, watch_sample_status_message};
 
     #[test]
     fn sanitize_diag_escapes_controls_and_newlines() {
@@ -332,5 +393,26 @@ mod tests {
         assert_eq!(sanitize_diag("a\u{2029}b"), "a\\u{2029}b");
         assert_eq!(sanitize_diag("a\u{200b}b"), "a\\u{200b}b");
         assert_eq!(sanitize_diag("Shell_TrayWnd"), "Shell_TrayWnd");
+    }
+
+    #[test]
+    fn watch_sample_status_reports_first_failure_only() {
+        let first = watch_sample_status_message(false, false, Some("boom"), 1);
+        assert_eq!(
+            first.as_deref(),
+            Some("EnumWindows failed during watch sample: boom")
+        );
+        assert!(watch_sample_status_message(true, false, Some("boom"), 2).is_none());
+        assert!(watch_sample_status_message(true, false, Some("boom"), 3).is_none());
+    }
+
+    #[test]
+    fn watch_sample_status_reports_recovery_after_failures() {
+        assert!(watch_sample_status_message(false, true, None, 0).is_none());
+        let recovered = watch_sample_status_message(true, true, None, 4);
+        assert_eq!(
+            recovered.as_deref(),
+            Some("EnumWindows recovered (4 failed sample(s) so far this watch)")
+        );
     }
 }

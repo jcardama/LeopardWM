@@ -475,6 +475,11 @@ unsafe extern "system" fn enum_windows_callback(hwnd: HWND, lparam: LPARAM) -> B
 ///
 /// This mirrors enumeration filters so event callbacks don't emit churn for
 /// windows we would never manage.
+///
+/// Adding or reordering a check here requires the same edit in
+/// `platform_win32/src/inspect.rs` (`classify_live_create` Stage 1 only). The two
+/// admission chains intentionally diverge: live-create omits cloak, empty
+/// title, and skip-title relative to startup so transient popups can admit.
 pub(crate) fn should_emit_window_event_with_policy(
     hwnd: HWND,
     require_visible: bool,
