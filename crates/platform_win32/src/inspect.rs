@@ -2,8 +2,13 @@
 //!
 //! Mirrors the two admission paths without mutating windows or touching the
 //! production enumeration callbacks. Classification short-circuits in source
-//! order; pure table builders exist only so that order is unit-testable without
-//! live HWNDs.
+//! order. Live-create first mirrors the create/show WinEvent pre-gate
+//! (`should_emit_window_event_with_policy` with require_visible=true,
+//! require_title=false, filter_cloaked=false), then the residual
+//! `get_window_info` checks. Relative to startup/refresh it still omits cloak,
+//! empty/unreadable title, and skip-title — that divergence is the contract
+//! that admits transient popups, but it is not enforced by unit tests here
+//! because the classifiers require a live HWND.
 
 use crate::enumeration::{
     is_excluded_tool_window, is_window_cloaked, should_skip_window_by_class,
@@ -18,7 +23,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GW_OWNER, WS_EX_NOACTIVATE, WS_VISIBLE,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SkipReason {
     NotVisible,
     Minimized,
@@ -34,12 +39,6 @@ pub enum SkipReason {
     ZeroSize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AdmissionPath {
-    StartupRefresh,
-    LiveCreate,
-}
-
 pub struct WindowInspection {
     pub hwnd: WindowId,
     pub style: u32,
@@ -51,58 +50,6 @@ pub struct WindowInspection {
     pub rect: Option<Rect>,
     pub startup_verdict: Result<(), SkipReason>,
     pub live_create_verdict: Result<(), SkipReason>,
-}
-
-// Pure ordered tables + first_failure exist for unit tests: live classifiers stay
-// lazy (Win32 short-circuit) because intermediate values (title, class) depend on
-// earlier reads. Laziness preferred; order is locked by the table builders alone.
-#[cfg(test)]
-fn first_failure(checks: &[(bool, SkipReason)]) -> Result<(), SkipReason> {
-    for (fails, reason) in checks {
-        if *fails {
-            return Err(*reason);
-        }
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-const STARTUP_ORDER: [SkipReason; 12] = [
-    SkipReason::NotVisible,
-    SkipReason::Minimized,
-    SkipReason::StyleNotVisible,
-    SkipReason::ToolWindow,
-    SkipReason::NoActivate,
-    SkipReason::Owned,
-    SkipReason::Cloaked,
-    SkipReason::EmptyOrUnreadableTitle,
-    SkipReason::SkipTitle,
-    SkipReason::SkipClass,
-    SkipReason::RectReadFailed,
-    SkipReason::ZeroSize,
-];
-
-#[cfg(test)]
-const LIVE_CREATE_ORDER: [SkipReason; 7] = [
-    SkipReason::NotVisible,
-    SkipReason::ToolWindow,
-    SkipReason::NoActivate,
-    SkipReason::Owned,
-    SkipReason::SkipClass,
-    SkipReason::RectReadFailed,
-    SkipReason::ZeroSize,
-];
-
-/// Ordered startup/refresh (strict) failure table from already-read values.
-#[cfg(test)]
-fn startup_check_table(fails: [bool; 12]) -> Vec<(bool, SkipReason)> {
-    fails.into_iter().zip(STARTUP_ORDER).collect()
-}
-
-/// Ordered live-create (relaxed) failure table from already-read values.
-#[cfg(test)]
-fn live_create_check_table(fails: [bool; 7]) -> Vec<(bool, SkipReason)> {
-    fails.into_iter().zip(LIVE_CREATE_ORDER).collect()
 }
 
 fn owner_is_present(hwnd: HWND) -> bool {
@@ -191,13 +138,31 @@ fn classify_startup(hwnd: HWND) -> Result<(), SkipReason> {
     Ok(())
 }
 
-/// Lazy live-create chain — Win32 reads short-circuit in get_window_info order.
+/// Lazy live-create chain.
+///
+/// Stage 1 mirrors `should_emit_window_event_with_policy(hwnd, true, false, false)`
+/// — the create/show WinEvent pre-gate that runs before `get_window_info`.
+/// Stage 2 mirrors the residual `get_window_info` checks (title allowed empty;
+/// rect required).
 fn classify_live_create(hwnd: HWND) -> Result<(), SkipReason> {
+    // --- Stage 1: create/show event pre-gate ---
+    // Mirrors should_emit_window_event_with_policy (require_visible=true,
+    // require_title=false, filter_cloaked=false).
+    let style = unsafe { GetWindowLongW(hwnd, GWL_STYLE) as u32 };
+    let ex_style = unsafe { GetWindowLongW(hwnd, GWL_EXSTYLE) as u32 };
+
+    // require_visible: IsWindowVisible
     if !unsafe { IsWindowVisible(hwnd) }.as_bool() {
         return Err(SkipReason::NotVisible);
     }
-    let style = unsafe { GetWindowLongW(hwnd, GWL_STYLE) as u32 };
-    let ex_style = unsafe { GetWindowLongW(hwnd, GWL_EXSTYLE) as u32 };
+    // require_visible: WS_VISIBLE style bit
+    if style & WS_VISIBLE.0 == 0 {
+        return Err(SkipReason::StyleNotVisible);
+    }
+    // require_visible: IsIconic
+    if unsafe { IsIconic(hwnd) }.as_bool() {
+        return Err(SkipReason::Minimized);
+    }
     if is_excluded_tool_window(style, ex_style) {
         return Err(SkipReason::ToolWindow);
     }
@@ -207,12 +172,17 @@ fn classify_live_create(hwnd: HWND) -> Result<(), SkipReason> {
     if owner_is_present(hwnd) {
         return Err(SkipReason::Owned);
     }
-    // Title is read but empty is allowed on the live-create path.
-    let _ = read_title_best_effort(hwnd);
+    // filter_cloaked=false: cloak not checked.
+    // require_title=false: empty/skip title allowed.
+
     let class_name = read_class_name(hwnd);
     if should_skip_window_by_class(&class_name) {
         return Err(SkipReason::SkipClass);
     }
+
+    // --- Stage 2: residual get_window_info checks ---
+    // Title is read but empty is allowed on the live-create path.
+    let _ = read_title_best_effort(hwnd);
     let _ = read_rect(hwnd)?;
     Ok(())
 }
@@ -282,13 +252,14 @@ fn inspect_one(hwnd: HWND) -> WindowInspection {
 ///
 /// Own EnumWindows callback — does not reuse or modify `enum_windows_callback`.
 /// Strictly read-only: no SetWindowPos/ShowWindow/SetForegroundWindow.
-pub fn inspect_windows() -> Vec<WindowInspection> {
+pub fn inspect_windows() -> Result<Vec<WindowInspection>, String> {
     let mut windows: Vec<WindowInspection> = Vec::new();
     unsafe {
         let windows_ptr = &mut windows as *mut Vec<WindowInspection>;
-        let _ = EnumWindows(Some(inspect_windows_callback), LPARAM(windows_ptr as isize));
+        EnumWindows(Some(inspect_windows_callback), LPARAM(windows_ptr as isize))
+            .map_err(|e| format!("EnumWindows failed: {e}"))?;
     }
-    windows
+    Ok(windows)
 }
 
 unsafe extern "system" fn inspect_windows_callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
@@ -303,110 +274,24 @@ mod tests {
     use windows::Win32::UI::WindowsAndMessaging::{WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_THICKFRAME};
 
     #[test]
-    fn first_failure_returns_earliest_reason() {
-        let checks = [
-            (false, SkipReason::NotVisible),
-            (true, SkipReason::Minimized),
-            (true, SkipReason::ToolWindow),
-        ];
-        assert_eq!(first_failure(&checks), Err(SkipReason::Minimized));
-    }
-
-    #[test]
-    fn first_failure_ok_when_all_pass() {
-        let checks = [
-            (false, SkipReason::NotVisible),
-            (false, SkipReason::Minimized),
-            (false, SkipReason::SkipClass),
-        ];
-        assert_eq!(first_failure(&checks), Ok(()));
-    }
-
-    #[test]
-    fn startup_table_contains_strict_only_reasons_in_order() {
-        let table = startup_check_table([false; 12]);
-        let reasons: Vec<SkipReason> = table.into_iter().map(|(_, r)| r).collect();
-        assert_eq!(reasons, STARTUP_ORDER.to_vec());
-        let idx = |r: SkipReason| reasons.iter().position(|x| *x == r).unwrap();
-        assert!(idx(SkipReason::Minimized) < idx(SkipReason::StyleNotVisible));
-        assert!(idx(SkipReason::StyleNotVisible) < idx(SkipReason::Cloaked));
-        assert!(idx(SkipReason::Cloaked) < idx(SkipReason::EmptyOrUnreadableTitle));
-        assert!(idx(SkipReason::EmptyOrUnreadableTitle) < idx(SkipReason::SkipTitle));
-    }
-
-    #[test]
-    fn live_create_table_is_relaxed() {
-        let table = live_create_check_table([false; 7]);
-        let reasons: Vec<SkipReason> = table.into_iter().map(|(_, r)| r).collect();
-        assert_eq!(reasons, LIVE_CREATE_ORDER.to_vec());
-        for forbidden in [
-            SkipReason::Minimized,
-            SkipReason::StyleNotVisible,
-            SkipReason::Cloaked,
-            SkipReason::EmptyOrUnreadableTitle,
-            SkipReason::SkipTitle,
-        ] {
-            assert!(
-                !reasons.contains(&forbidden),
-                "live-create must not check {forbidden:?}"
-            );
-        }
-        for required in [
-            SkipReason::ToolWindow,
-            SkipReason::NoActivate,
-            SkipReason::Owned,
-            SkipReason::SkipClass,
-            SkipReason::RectReadFailed,
-            SkipReason::ZeroSize,
-        ] {
-            assert!(
-                reasons.contains(&required),
-                "live-create must check {required:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn empty_title_maps_to_fused_empty_or_unreadable() {
-        let mut fails = [false; 12];
-        fails[7] = true; // EmptyOrUnreadableTitle position in STARTUP_ORDER
-        let table = startup_check_table(fails);
-        assert_eq!(
-            first_failure(&table),
-            Err(SkipReason::EmptyOrUnreadableTitle)
-        );
-    }
-
-    #[test]
     fn tool_window_exception_preserved() {
         let thick = WS_THICKFRAME.0;
         let tool = WS_EX_TOOLWINDOW.0;
         let app = WS_EX_APPWINDOW.0;
         assert!(!is_excluded_tool_window(thick, tool | app));
-        let mut fails = [false; 12];
-        fails[3] = is_excluded_tool_window(thick, tool | app); // ToolWindow position
-        let table = startup_check_table(fails);
-        assert_eq!(first_failure(&table), Ok(()));
+        assert!(is_excluded_tool_window(0, tool));
     }
 
     #[test]
     fn skip_class_and_title_leaf_predicates() {
         assert!(should_skip_window_by_class("#32770"));
         assert!(should_skip_window_by_title("Program Manager"));
-        let mut live_fails = [false; 7];
-        live_fails[4] = should_skip_window_by_class("#32770"); // SkipClass
-        let class_table = live_create_check_table(live_fails);
-        assert_eq!(first_failure(&class_table), Err(SkipReason::SkipClass));
-        let mut startup_fails = [false; 12];
-        startup_fails[8] = should_skip_window_by_title("Program Manager"); // SkipTitle
-        let title_table = startup_check_table(startup_fails);
-        assert_eq!(first_failure(&title_table), Err(SkipReason::SkipTitle));
     }
 
     #[test]
     #[ignore = "Requires display hardware - run with: cargo test -- --ignored"]
     fn inspect_windows_returns_entries_with_both_verdicts() {
-        let windows = inspect_windows();
+        let windows = inspect_windows().expect("EnumWindows should succeed");
         for w in &windows {
             // Both verdicts are always populated (Ok or Err).
             let _ = (w.startup_verdict, w.live_create_verdict, w.hwnd);

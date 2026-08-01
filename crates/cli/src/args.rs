@@ -316,15 +316,18 @@ pub(crate) enum QueryType {
 pub(crate) enum DoctorAction {
     /// Inspect live top-level windows: identity + tile/skip verdict per admission path
     Windows {
-        /// Re-sample for N seconds (100ms interval) to catch transient popups
-        #[arg(long)]
+        /// Re-sample for N seconds (1–120; 100ms interval) to catch transient popups
+        #[arg(long, value_parser = clap::value_parser!(u64).range(1..=120))]
         watch: Option<u64>,
-        /// Wait N seconds before a single snapshot
-        #[arg(long)]
+        /// Wait N seconds before a single snapshot (1–120)
+        #[arg(long, value_parser = clap::value_parser!(u64).range(1..=120))]
         delay: Option<u64>,
         /// Show real window titles (default redacts them for safe pasting)
         #[arg(long)]
         include_titles: bool,
+        /// Print every enumerated window (default: only those that ADMIT on at least one path)
+        #[arg(long)]
+        all: bool,
     },
 }
 

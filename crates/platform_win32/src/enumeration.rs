@@ -53,6 +53,11 @@ pub fn is_excluded_tool_window_hwnd(hwnd: WindowId) -> bool {
 /// Unlike `enumerate_windows`, this does not filter out cloaked windows
 /// or windows with empty titles, making it suitable for handling window
 /// creation events where UWP apps may still be transitioning.
+///
+/// Adding or reordering a check here requires the same edit in
+/// `platform_win32/src/inspect.rs` (`classify_live_create` only). The two
+/// admission chains intentionally diverge: live-create omits cloak, empty
+/// title, and skip-title relative to startup so transient popups can admit.
 pub fn get_window_info(hwnd_id: WindowId) -> Option<WindowInfo> {
     unsafe {
         let hwnd = HWND(hwnd_id as *mut c_void);
@@ -358,6 +363,11 @@ unsafe extern "system" fn enum_monitors_callback(
 }
 
 /// Callback for EnumWindows that filters and collects window info.
+///
+/// Adding or reordering a check here requires the same edit in
+/// `platform_win32/src/inspect.rs` (`classify_startup` only). The two
+/// admission chains intentionally diverge: live-create omits cloak, empty
+/// title, and skip-title relative to startup so transient popups can admit.
 unsafe extern "system" fn enum_windows_callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
     let windows = &mut *(lparam.0 as *mut Vec<WindowInfo>);
 

@@ -33,9 +33,12 @@ All notable changes to LeopardWM will be documented in this file.
 - **Read-only window admission diagnostic for bug reports.** `lwm doctor windows`
   (and `leopardwm-cli doctor windows`) inspects live top-level windows and reports
   identity plus tile/skip verdicts for both the live-create and startup/refresh
-  admission paths, without changing tiling behaviour. Optional `--watch`,
-  `--delay`, and `--include-titles` help catch transient popups safely for public
-  issue pastes.
+  admission paths, without changing tiling behaviour. By default only windows that
+  ADMIT on at least one path are printed (pass `--all` for every window). Optional
+  `--watch`, `--delay`, and `--include-titles` help catch transient popups safely
+  for public issue pastes. Live-create verdicts include the create/show WinEvent
+  pre-gate so minimized and non-WS_VISIBLE windows report SKIP rather than a false
+  ADMIT.
 
 ## 0.2.5
 

@@ -6,6 +6,7 @@ use leopardwm_platform_win32::{
     get_process_executable, is_dialog_like_window, window_manage_block, ManageBlock,
 };
 use std::collections::HashSet;
+use std::io::{self, Write};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -13,6 +14,7 @@ pub(crate) fn handle_doctor_windows(
     watch: Option<u64>,
     delay: Option<u64>,
     include_titles: bool,
+    show_all: bool,
 ) -> Result<()> {
     if let Some(secs) = delay {
         for remaining in (1..=secs).rev() {
@@ -22,17 +24,25 @@ pub(crate) fn handle_doctor_windows(
     }
 
     if let Some(secs) = watch {
-        run_watch(secs, include_titles);
+        run_watch(secs, include_titles, show_all)?;
     } else {
-        let windows = inspect_windows();
+        let windows = inspect_windows().map_err(|e| anyhow::anyhow!(e))?;
+        let (shown, omitted) = partition_for_display(&windows, show_all);
         println!(
-            "LeopardWM window inspection ({} top-level window{})",
+            "LeopardWM window inspection ({} top-level window{}; showing {})",
             windows.len(),
-            if windows.len() == 1 { "" } else { "s" }
+            if windows.len() == 1 { "" } else { "s" },
+            shown.len()
         );
         println!();
-        for w in &windows {
-            print_window(w, include_titles);
+        for w in &shown {
+            print_window(w, include_titles, false);
+            println!();
+        }
+        if omitted > 0 {
+            println!(
+                "Omitted {omitted} window(s) that SKIP on both admission paths. Pass --all to show them."
+            );
             println!();
         }
         print_footer();
@@ -41,45 +51,100 @@ pub(crate) fn handle_doctor_windows(
     Ok(())
 }
 
-fn run_watch(secs: u64, include_titles: bool) {
+type WatchKey = (u64, String, Result<(), SkipReason>, Result<(), SkipReason>);
+
+fn admits_any(w: &WindowInspection) -> bool {
+    w.startup_verdict.is_ok() || w.live_create_verdict.is_ok()
+}
+
+fn partition_for_display(
+    windows: &[WindowInspection],
+    show_all: bool,
+) -> (Vec<&WindowInspection>, usize) {
+    if show_all {
+        return (windows.iter().collect(), 0);
+    }
+    let shown: Vec<&WindowInspection> = windows.iter().filter(|w| admits_any(w)).collect();
+    let omitted = windows.len().saturating_sub(shown.len());
+    (shown, omitted)
+}
+
+fn run_watch(secs: u64, include_titles: bool, show_all: bool) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(secs);
-    let mut seen: HashSet<(u64, String, String)> = HashSet::new();
-    println!(
-        "LeopardWM window inspection — watching for {secs}s (100ms interval)"
-    );
+    // Full key includes verdicts so a stable hwnd+class re-prints when a verdict
+    // flips. Title is intentionally excluded: browser/editor titles thrash.
+    let mut seen: HashSet<WatchKey> = HashSet::new();
+    let mut known_identities: HashSet<(u64, String)> = HashSet::new();
+    let mut omitted_unique = 0usize;
+    println!("LeopardWM window inspection — watching for {secs}s (100ms interval)");
+    if !show_all {
+        println!("Default filter: only windows that ADMIT on at least one path (pass --all for every window).");
+    }
     println!();
 
     while Instant::now() < deadline {
-        let windows = inspect_windows();
-        for w in &windows {
-            let key = (w.hwnd, w.class_name.clone(), w.title.clone());
-            if seen.insert(key) {
-                print_window(w, include_titles);
-                println!();
+        let windows = match inspect_windows() {
+            Ok(w) => w,
+            Err(e) => {
+                let _ = writeln!(io::stderr(), "EnumWindows failed during watch sample: {e}");
+                thread::sleep(Duration::from_millis(100));
+                continue;
             }
+        };
+        for w in &windows {
+            let class = sanitize_diag(&w.class_name);
+            let key = (
+                w.hwnd,
+                class.clone(),
+                w.startup_verdict,
+                w.live_create_verdict,
+            );
+            if !seen.insert(key) {
+                continue;
+            }
+            if !show_all && !admits_any(w) {
+                omitted_unique += 1;
+                continue;
+            }
+            let identity = (w.hwnd, class);
+            let is_update = !known_identities.insert(identity);
+            print_window(w, include_titles, is_update);
+            println!();
         }
         thread::sleep(Duration::from_millis(100));
     }
 
     println!(
-        "Watch complete: {} unique window identity(ies) observed.",
+        "Watch complete: {} unique window state(s) observed.",
         seen.len()
     );
+    if omitted_unique > 0 {
+        println!(
+            "Omitted {omitted_unique} unique window state(s) that SKIP on both admission paths. Pass --all to show them."
+        );
+    }
     print_footer();
+    Ok(())
 }
 
-fn print_window(w: &WindowInspection, include_titles: bool) {
-    println!("hwnd {:#018x}", w.hwnd);
+fn print_window(w: &WindowInspection, include_titles: bool, is_update: bool) {
+    let class = sanitize_diag(&w.class_name);
+    let title = sanitize_diag(&w.title);
+    if is_update {
+        println!("hwnd {:#018x}  (changed since first sighting)", w.hwnd);
+    } else {
+        println!("hwnd {:#018x}", w.hwnd);
+    }
     println!(
         "  LIVE-CREATE path (how popups are admitted): {}",
-        format_verdict(w.live_create_verdict, &w.class_name, true)
+        format_verdict(w.live_create_verdict, &class)
     );
     println!(
         "  STARTUP/REFRESH path:                       {}",
-        format_verdict(w.startup_verdict, &w.class_name, false)
+        format_verdict(w.startup_verdict, &class)
     );
-    println!("  class    {}", display_or_empty(&w.class_name));
-    println!("  title    {}", format_title(&w.title, include_titles));
+    println!("  class    {}", display_or_empty(&class));
+    println!("  title    {}", format_title(&title, include_titles));
     println!(
         "  style    {:#010x}   ex-style {:#010x}",
         w.style, w.ex_style
@@ -88,7 +153,9 @@ fn print_window(w: &WindowInspection, include_titles: bool) {
         Some(owner) => println!("  owner    {:#018x}", owner),
         None => println!("  owner    (none)"),
     }
-    let exe = get_process_executable(w.process_id).unwrap_or_else(|| "(unknown)".to_string());
+    let exe = sanitize_diag(
+        &get_process_executable(w.process_id).unwrap_or_else(|| "(unknown)".to_string()),
+    );
     println!("  exe      {exe}");
     match w.rect {
         Some(r) => println!(
@@ -100,20 +167,20 @@ fn print_window(w: &WindowInspection, include_titles: bool) {
     let dialog = is_dialog_like_window(w.hwnd);
     println!(
         "  dialog-shape heuristic (applies only when no user rule matched): {}",
-        if dialog { "yes" } else { "no" }
+        if dialog {
+            "yes (this heuristic would leave it floating, if admitted)"
+        } else {
+            "no (this heuristic would not float it)"
+        }
     );
     println!("  elevation {}", format_elevation(w.hwnd));
 }
 
-fn format_verdict(
-    verdict: Result<(), SkipReason>,
-    class_name: &str,
-    live_create: bool,
-) -> String {
+fn format_verdict(verdict: Result<(), SkipReason>, class_name: &str) -> String {
     match verdict {
         Ok(()) => "ADMIT".to_string(),
         Err(reason) => {
-            let detail = reason_detail(reason, class_name, live_create);
+            let detail = reason_detail(reason, class_name);
             if detail.is_empty() {
                 format!("SKIP — {reason:?}")
             } else {
@@ -123,7 +190,7 @@ fn format_verdict(
     }
 }
 
-fn reason_detail(reason: SkipReason, class_name: &str, _live_create: bool) -> String {
+fn reason_detail(reason: SkipReason, class_name: &str) -> String {
     match reason {
         SkipReason::SkipClass if !class_name.is_empty() => {
             format!("\"{class_name}\" is in the built-in skip list")
@@ -155,18 +222,20 @@ fn format_title(title: &str, include_titles: bool) -> String {
             format!("\"{title}\"")
         }
     } else {
-        format!("[redacted — length {}]", title.chars().count())
+        "[redacted]".to_string()
     }
 }
 
 fn format_elevation(hwnd: u64) -> String {
     match window_manage_block(hwnd) {
-        ManageBlock::No => "manageable (same or lower integrity)".to_string(),
+        ManageBlock::No => {
+            "manageable relative to this CLI process (same or lower integrity; matches the daemon only when both run at the same privilege level)".to_string()
+        }
         ManageBlock::HigherIntegrity => {
-            "blocked — higher integrity than this process (elevated/admin or System)".to_string()
+            "blocked relative to this CLI process — higher integrity (elevated/admin or System); may still be manageable by an elevated daemon".to_string()
         }
         ManageBlock::Protected => {
-            "blocked — protected/unreadable process token".to_string()
+            "blocked relative to this CLI process — protected/unreadable process token".to_string()
         }
     }
 }
@@ -179,12 +248,89 @@ fn display_or_empty(s: &str) -> &str {
     }
 }
 
+/// Single-line, control- and format-character-free form of an untrusted Win32
+/// string for report pasting. Escapes C0/C1 controls, Unicode format (Cf)
+/// characters, and U+2028/U+2029 line/paragraph separators; leaves ordinary
+/// class names intact.
+fn sanitize_diag(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() || is_format_or_line_sep(c) => {
+                out.push_str(&format!("\\u{{{:04x}}}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Unicode general category Cf (format) plus Zl/Zp line/paragraph separators.
+/// `char::is_control()` is Cc-only and misses these.
+fn is_format_or_line_sep(c: char) -> bool {
+    matches!(
+        c,
+        '\u{2028}'
+            | '\u{2029}'
+            | '\u{00AD}'
+            | '\u{0600}'..='\u{0605}'
+            | '\u{061C}'
+            | '\u{06DD}'
+            | '\u{070F}'
+            | '\u{0890}'..='\u{0891}'
+            | '\u{08E2}'
+            | '\u{180E}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{206F}'
+            | '\u{FEFF}'
+            | '\u{FFF9}'..='\u{FFFB}'
+            | '\u{110BD}'
+            | '\u{110CD}'
+            | '\u{13430}'..='\u{1343F}'
+            | '\u{1BCA0}'..='\u{1BCA3}'
+            | '\u{1D173}'..='\u{1D17A}'
+            | '\u{E0001}'
+            | '\u{E0020}'..='\u{E007F}'
+    )
+}
+
 fn print_footer() {
     println!(
         "Note: verdicts are the built-in admission filters only. The daemon may still\n\
-         float or ignore a window due to a user window rule, already-managed state, or\n\
-         transient-popup suppression — this command cannot see those. Titles are\n\
-         redacted unless --include-titles is passed; review all output before pasting\n\
-         into a public issue."
+         float or ignore a window due to a user window rule, already-managed state,\n\
+         or transient-popup suppression — this command cannot model those\n\
+         post-enumeration decisions. Shell-cloaked and ConsoleWindowClass windows\n\
+         may still appear here with SKIP verdicts; what this command cannot see is\n\
+         historical admission under different styles/visibility/cloak/owner state.\n\
+         Titles are redacted unless --include-titles is passed; review all output\n\
+         before pasting into a public issue."
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_diag;
+
+    #[test]
+    fn sanitize_diag_escapes_controls_and_newlines() {
+        assert_eq!(sanitize_diag("plain.Class"), "plain.Class");
+        assert_eq!(sanitize_diag("a\nb"), "a\\nb");
+        assert_eq!(sanitize_diag("a\rb\tc"), "a\\rb\\tc");
+        assert_eq!(sanitize_diag("x\u{1b}[31my"), "x\\u{001b}[31my");
+        assert_eq!(sanitize_diag("del\u{7f}"), "del\\u{007f}");
+    }
+
+    #[test]
+    fn sanitize_diag_escapes_format_and_line_separators() {
+        assert_eq!(sanitize_diag("a\u{202e}b"), "a\\u{202e}b");
+        assert_eq!(sanitize_diag("a\u{2028}b"), "a\\u{2028}b");
+        assert_eq!(sanitize_diag("a\u{2029}b"), "a\\u{2029}b");
+        assert_eq!(sanitize_diag("a\u{200b}b"), "a\\u{200b}b");
+        assert_eq!(sanitize_diag("Shell_TrayWnd"), "Shell_TrayWnd");
+    }
 }
