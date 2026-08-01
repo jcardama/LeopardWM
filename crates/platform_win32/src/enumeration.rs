@@ -662,6 +662,9 @@ pub(crate) fn should_skip_window_by_class(class_name: &str) -> bool {
                                       // tiling breaks them because the remote session controls sizing
         "Ghost",                      // DWM hung-window replacement — tiling duplicates the original
         "#32770",                     // Standard Win32 dialog (Open/Save/Print/Properties)
+        "OperationStatusWindow",      // Shell copy/move/delete progress dialog. Style-based
+                                      // dialog detection misses it: it keeps WS_MINIMIZEBOX,
+                                      // so it fails the "no minimize *and* no maximize" test.
         "Chrome_RenderWidgetHostHWND", // Internal Electron/Chrome render widget, not a real window
         "LeopardWMSettings",          // Our own settings window
         "LeopardWMBorderFrame",       // Our own border overlay
@@ -964,6 +967,14 @@ mod tests {
         assert!(
             !skip,
             "ApplicationFrameWindow should NOT be in skip list (UWP apps should be tiled)"
+        );
+    }
+
+    #[test]
+    fn test_shell_progress_dialog_is_skipped() {
+        assert!(
+            should_skip_window_by_class("OperationStatusWindow"),
+            "shell copy/move/delete progress dialogs should not be tiled"
         );
     }
 }
