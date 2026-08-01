@@ -32,6 +32,7 @@ bash.exe.stackdump
 
 # Claude Code
 .claude/
+CLAUDE.local.md
 
 # Local recording / launch-footage working folder (scripts + captured media)
 recording/
