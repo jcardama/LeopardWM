@@ -92,7 +92,7 @@ pub(crate) fn to_ipc_command(cmd: &Commands) -> IpcCommand {
         Commands::PanicRevert => IpcCommand::PanicRevert,
         Commands::Run { .. } => unreachable!("Run handled separately"),
         Commands::Subscribe { .. } => unreachable!("Subscribe handled separately"),
-        Commands::Doctor => unreachable!("Doctor handled separately"),
+        Commands::Doctor { .. } => unreachable!("Doctor handled separately"),
         Commands::Autostart { .. } => unreachable!("Autostart handled separately"),
         Commands::CollectLogs => unreachable!("CollectLogs handled separately"),
         Commands::Config { .. } => unreachable!("Config handled separately"),

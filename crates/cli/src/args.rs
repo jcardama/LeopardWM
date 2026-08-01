@@ -200,7 +200,10 @@ pub(crate) enum Commands {
     /// Query daemon status
     Status,
     /// Run diagnostic checks
-    Doctor,
+    Doctor {
+        #[command(subcommand)]
+        action: Option<DoctorAction>,
+    },
     /// Manage auto-start on login
     Autostart {
         #[command(subcommand)]
@@ -307,6 +310,22 @@ pub(crate) enum QueryType {
     Focused,
     /// List all managed windows
     All,
+}
+
+#[derive(Subcommand)]
+pub(crate) enum DoctorAction {
+    /// Inspect live top-level windows: identity + tile/skip verdict per admission path
+    Windows {
+        /// Re-sample for N seconds (100ms interval) to catch transient popups
+        #[arg(long)]
+        watch: Option<u64>,
+        /// Wait N seconds before a single snapshot
+        #[arg(long)]
+        delay: Option<u64>,
+        /// Show real window titles (default redacts them for safe pasting)
+        #[arg(long)]
+        include_titles: bool,
+    },
 }
 
 #[derive(Subcommand)]

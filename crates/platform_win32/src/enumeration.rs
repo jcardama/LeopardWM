@@ -31,7 +31,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 /// when they are also resizable (`WS_THICKFRAME`). A fixed-size tool window is an
 /// overlay or launcher, like Raycast's 2x2 helper window, which must never be
 /// tiled into a column.
-fn is_excluded_tool_window(style: u32, ex_style: u32) -> bool {
+pub(crate) fn is_excluded_tool_window(style: u32, ex_style: u32) -> bool {
     let is_tool = ex_style & WS_EX_TOOLWINDOW.0 != 0;
     let is_app = ex_style & WS_EX_APPWINDOW.0 != 0;
     let is_resizable = style & WS_THICKFRAME.0 != 0;

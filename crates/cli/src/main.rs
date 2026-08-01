@@ -11,13 +11,14 @@ mod daemon_cmds;
 mod doctor;
 mod ipc_client;
 mod output;
+mod window_inspect;
 #[cfg(test)]
 mod tests;
 
 use anyhow::Result;
 use clap::Parser;
 
-use args::{validate_set_width_fraction, Cli, Commands};
+use args::{validate_set_width_fraction, Cli, Commands, DoctorAction};
 use command_map::to_ipc_command;
 use config_cmds::handle_config;
 use daemon_cmds::{
@@ -27,6 +28,7 @@ use daemon_cmds::{
 use doctor::{handle_collect_logs, handle_doctor};
 use ipc_client::{is_non_success_response, send_command};
 use output::print_response;
+use window_inspect::handle_doctor_windows;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -45,7 +47,14 @@ async fn main() -> Result<()> {
         Commands::PanicRevert => return handle_panic_revert().await,
         Commands::EmergencyUncloak => return handle_emergency_uncloak(),
         Commands::Status => return handle_status().await,
-        Commands::Doctor => return handle_doctor().await,
+        Commands::Doctor { action: None } => return handle_doctor().await,
+        Commands::Doctor {
+            action: Some(DoctorAction::Windows {
+                watch,
+                delay,
+                include_titles,
+            }),
+        } => return handle_doctor_windows(watch, delay, include_titles),
         Commands::Autostart { action } => return handle_autostart(action),
         Commands::CollectLogs => return handle_collect_logs(),
         Commands::Config { action } => return handle_config(action),

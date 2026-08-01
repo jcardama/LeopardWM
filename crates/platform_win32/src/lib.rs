@@ -28,6 +28,8 @@ pub use tab_strip::{TabAction, TabActionEvent, TabCloseAction};
 
 mod elevation;
 mod enumeration;
+#[doc(hidden)]
+pub mod inspect;
 mod event_hooks;
 mod focus;
 mod placement;

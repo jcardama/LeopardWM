@@ -28,6 +28,15 @@ All notable changes to LeopardWM will be documented in this file.
   timed-out batch with best-effort class, title, and executable details, without
   claiming one was the blocker.
 
+### Improvements
+
+- **Read-only window admission diagnostic for bug reports.** `lwm doctor windows`
+  (and `leopardwm-cli doctor windows`) inspects live top-level windows and reports
+  identity plus tile/skip verdicts for both the live-create and startup/refresh
+  admission paths, without changing tiling behaviour. Optional `--watch`,
+  `--delay`, and `--include-titles` help catch transient popups safely for public
+  issue pastes.
+
 ## 0.2.5
 
 ### Improvements
