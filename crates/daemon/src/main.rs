@@ -1717,6 +1717,18 @@ async fn handle_gesture_event(ctx: &mut EventLoopCtx<'_>, gesture_event: Gesture
     false
 }
 
+async fn shell_open(target: std::ffi::OsString) -> Result<(), String> {
+    match tokio::task::spawn_blocking(move || {
+        leopardwm_platform_win32::shell::open(&target)
+    })
+    .await
+    {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(e)) => Err(e.to_string()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 /// Handle a tray menu event.
 /// Open the config file in the user's editor and arm the "Edit Config" pull, so
 /// a single-instance editor that raises an existing window on another workspace
@@ -1733,14 +1745,14 @@ async fn launch_config_editor(ctx: &mut EventLoopCtx<'_>) {
         .file_name()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_default();
-    match leopardwm_platform_win32::shell::open(path.as_os_str()) {
+    match shell_open(path.into_os_string()).await {
         // Arm the pull only once the launch actually started, and only if we
         // have a filename to identify the editor window by.
-        Ok(_) if !filename.is_empty() => {
+        Ok(()) if !filename.is_empty() => {
             ctx.state.lock().await.pending_edit_config_pull =
                 Some((std::time::Instant::now(), filename));
         }
-        Ok(_) => {}
+        Ok(()) => {}
         Err(e) => warn!("Failed to launch config editor: {}", e),
     }
 }
@@ -1851,7 +1863,7 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
                 );
                 return;
             }
-            if let Err(e) = leopardwm_platform_win32::shell::open(log_dir.as_os_str()) {
+            if let Err(e) = shell_open(log_dir.as_os_str().to_os_string()).await {
                 warn!("Failed to open log directory {}: {}", log_dir.display(), e);
             }
         }
@@ -1989,9 +2001,9 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
         }
         tray::TrayEvent::OpenReleasesPage => {
             info!("Tray: opening releases page");
-            if let Err(e) = leopardwm_platform_win32::shell::open(std::ffi::OsStr::new(
-                update_check::RELEASES_PAGE_URL,
-            )) {
+            if let Err(e) =
+                shell_open(std::ffi::OsString::from(update_check::RELEASES_PAGE_URL)).await
+            {
                 warn!("Failed to open releases page: {}", e);
             }
         }

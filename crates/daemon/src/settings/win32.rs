@@ -301,9 +301,10 @@ fn is_allowed_url(url: &str) -> bool {
     let Some((scheme, rest)) = url.split_once("://") else {
         return false;
     };
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let authority = rest.split(['/', '?', '#']).next().unwrap();
     (scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https"))
-        && !authority.trim().is_empty()
+        && !authority.is_empty()
+        && !authority.chars().any(char::is_whitespace)
 }
 
 /// Handle IPC messages from the WebView (JS → Rust).
@@ -519,6 +520,8 @@ mod tests {
             "",
             "https://",
             "https:// ",
+            "https://exam ple.com",
+            "https://example.com extra",
             "https:///x",
             "https:/x",
             " https://example.com",

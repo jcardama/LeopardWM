@@ -4,9 +4,9 @@
 
 LeopardWM is a local desktop window manager. It:
 
-- **Is predominantly local** — window management, IPC, config, and logs stay on the machine. The only network use is an optional outbound HTTPS update check (see [Automatic Update Check](#automatic-update-check))
+- **Is predominantly local** — window management, IPC, config, and logs stay on the machine. The only network use in LeopardWM's own code is an optional outbound HTTPS update check (see [Automatic Update Check](#automatic-update-check))
 - **Has no telemetry or data collection** — config, logs, state, crash reports, and window metadata are never transmitted
-- **Communicates via local named pipe** (`\\.\pipe\leopardwm`) — the CLI and daemon talk over this pipe, which is accessible only to the local user session
+- **Communicates via local named pipe** (`\\.\pipe\leopardwm`) — the CLI and daemon talk over this pipe, which is accessible only to local processes running under the same Windows user account
 - **Does not run as a service** — it runs as a regular user process
 - **Does not require administrator privileges** — though it cannot manage elevated windows without elevation
 
@@ -26,10 +26,10 @@ When enabled (the default), the daemon performs a single outbound HTTPS GET to c
 | Not sent | Config, logs, state, crash reports, window titles, process names, or any other user data |
 | Response use | Only `tag_name` is retained for comparison |
 | Behavior | Notification/check only — no binary download, no automatic install |
-| Opt-out | `behavior.check_for_updates = false` in config; when false the update-check thread is never spawned |
+| Opt-out | `behavior.check_for_updates = false` in config. The setting takes effect when the daemon starts, so restart the daemon after changing it; when false the update-check thread is never spawned. |
 | Side effect | The HTTPS request discloses the source IP address to GitHub |
 
-Confirmed absent workspace-wide: telemetry, analytics, remote logging, crash upload, and any second network client. Crash reports are written to local files only.
+Confirmed absent from LeopardWM's own code: telemetry, analytics, remote logging, crash upload, and any second network client. Crash reports are written to local files only. The settings UI hosts the Microsoft Edge WebView2 runtime in-process and supplies it only local embedded HTML via `with_html`; it does not navigate to a remote URL. The Edge runtime's own network behavior is governed by Microsoft.
 
 ## Security-Relevant Win32 APIs
 
@@ -43,6 +43,7 @@ Confirmed absent workspace-wide: telemetry, analytics, remote logging, crash upl
 | `EnumWindows` / `GetWindowInfo` | Window enumeration |
 | Named pipes (async) | Local IPC between CLI and daemon |
 | `ShellExecuteW` | Open the config file, log directory, releases page, and settings links |
+| Registry (`HKCU\Software\Classes\AppUserModelId\jcardama.LeopardWM`) | AppUserModelID and display name written at startup to enable toast notifications |
 | Registry (`HKCU\...\Run`) | Per-user auto-start entry when the user enables auto-start |
 
 ## Permission Model
@@ -60,7 +61,7 @@ LeopardWM's attack surface is minimal by design:
 
 | Vector | Exposure | Worst Case |
 |--------|----------|------------|
-| Named pipe IPC | Local user session only | Malicious IPC commands rearrange windows or stop the daemon |
+| Named pipe IPC | Local processes under the same Windows user account | Malicious IPC commands rearrange windows or stop the daemon |
 | Global hotkeys | User's keyboard | Hotkey conflicts with other apps (no escalation) |
 | WinEvent hooks | Passive observation | Receives window events; cannot inject or modify them |
 | Low-level mouse hook | Gesture detection | Observes mouse input for swipe gestures; does not block or modify |
@@ -70,7 +71,7 @@ LeopardWM's attack surface is minimal by design:
 ### What LeopardWM Cannot Do
 
 - **No inbound network listener** — does not accept connections; no telemetry, analytics, remote logging, or crash upload; no automatic update download or install
-- **No transmission of local user data** — config, logs, state, crash reports, and window metadata are never sent over the network (the optional update check sends only the request headers described above, plus the unavoidable source IP)
+- **No transmission of local user data** — config, logs, state, crash reports, and window metadata are never sent over the network (the optional update check includes only the explicitly configured `User-Agent` and `Accept` headers, protocol-required metadata such as `Host`, DNS and TLS connection metadata, and the unavoidable source IP; it includes no local application data)
 - **No code execution from config** — config values are data (strings, numbers, booleans); no eval, scripting, or plugin loading
 - **No privilege escalation** — runs at user integrity level; cannot elevate itself
 - **No inter-process injection** — does not inject DLLs, modify process memory, or hook into other applications' code
@@ -79,7 +80,7 @@ LeopardWM's attack surface is minimal by design:
 
 The IPC pipe (`\\.\pipe\leopardwm`) uses default Windows named pipe security:
 
-- Accessible to the creating user's logon session
+- Accessible to local processes running under the creating Windows user's account (SID)
 - No authentication protocol (any local process under the same user can connect)
 - Commands are limited to the `IpcCommand` enum — the daemon rejects malformed messages
 - Maximum message size is enforced (`MAX_IPC_MESSAGE_SIZE`)
@@ -91,7 +92,7 @@ The IPC pipe (`\\.\pipe\leopardwm`) uses default Windows named pipe security:
 
 - The daemon cannot reposition windows owned by elevated (Administrator) processes unless itself running elevated
 - Running the daemon elevated is not recommended for daily use — it grants no additional features beyond managing admin windows
-- The daemon does not create services, scheduled tasks, or system-wide (HKLM) registry keys. Enabling auto-start writes a per-user Run key at `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run`
+- The daemon does not create services, scheduled tasks, or system-wide (HKLM) registry keys. At startup, LeopardWM writes per-user AppUserModelID registry values under `HKEY_CURRENT_USER\Software\Classes\AppUserModelId` to enable toast notifications. Enabling auto-start also writes a per-user Run key at `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run`
 
 ---
 
@@ -121,7 +122,7 @@ Daemon logs may contain:
 - **Process executable names** — e.g., "notepad.exe". Visible in Task Manager.
 - **Monitor device names** — e.g., "DISPLAY1". Hardware identifiers.
 
-Logs do **not** contain: passwords, API keys, file contents, browsing history, keystrokes, clipboard data, or any other sensitive information.
+LeopardWM does not capture keystrokes, clipboard data, file contents, or browsing history as such. However, logs may contain any text a program exposes in its window title, including sensitive information such as document names, full URLs, email subjects, chat contents, passwords, or API keys. Review or redact logs before sharing them publicly, including in GitHub issues.
 
 ---
 
