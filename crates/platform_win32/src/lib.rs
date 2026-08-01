@@ -18,6 +18,7 @@ pub mod keyboard_hook;
 pub mod mouse_hook;
 pub mod overlay;
 pub mod overview;
+pub mod shell;
 pub mod snapshot;
 pub mod tab_strip;
 pub mod taskbar;

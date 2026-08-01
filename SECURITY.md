@@ -4,15 +4,34 @@
 
 LeopardWM is a local desktop window manager. It:
 
-- **Uses only local Win32 APIs** — no network sockets, HTTP clients, or remote connections
-- **Has no telemetry or data collection** — nothing leaves your machine
+- **Is predominantly local** — window management, IPC, config, and logs stay on the machine. The only network use is an optional outbound HTTPS update check (see [Automatic Update Check](#automatic-update-check))
+- **Has no telemetry or data collection** — config, logs, state, crash reports, and window metadata are never transmitted
 - **Communicates via local named pipe** (`\\.\pipe\leopardwm`) — the CLI and daemon talk over this pipe, which is accessible only to the local user session
 - **Does not run as a service** — it runs as a regular user process
 - **Does not require administrator privileges** — though it cannot manage elevated windows without elevation
 
 > **Note:** Pipe names and config paths still use `leopardwm` internally. A full crate rename is separate future work.
 
-## Win32 APIs Used
+## Automatic Update Check
+
+When enabled (the default), the daemon performs a single outbound HTTPS GET to check whether a newer release exists on GitHub. Nothing is downloaded or installed automatically.
+
+| Aspect | Detail |
+|--------|--------|
+| Destination | `https://api.github.com/repos/jcardama/LeopardWM/releases/latest` |
+| Client | `ureq` (HTTPS) |
+| Schedule | Once ~30 seconds after startup, then every 24 hours |
+| Request headers | `User-Agent: LeopardWM/<version>` and `Accept: application/vnd.github+json` |
+| Request body | None |
+| Not sent | Config, logs, state, crash reports, window titles, process names, or any other user data |
+| Response use | Only `tag_name` is retained for comparison |
+| Behavior | Notification/check only — no binary download, no automatic install |
+| Opt-out | `behavior.check_for_updates = false` in config; when false the update-check thread is never spawned |
+| Side effect | The HTTPS request discloses the source IP address to GitHub |
+
+Confirmed absent workspace-wide: telemetry, analytics, remote logging, crash upload, and any second network client. Crash reports are written to local files only.
+
+## Security-Relevant Win32 APIs
 
 | API | Purpose |
 |-----|---------|
@@ -23,6 +42,8 @@ LeopardWM is a local desktop window manager. It:
 | `DwmSetWindowAttribute` | Window border colors, cloaking |
 | `EnumWindows` / `GetWindowInfo` | Window enumeration |
 | Named pipes (async) | Local IPC between CLI and daemon |
+| `ShellExecuteW` | Open the config file, log directory, releases page, and settings links |
+| Registry (`HKCU\...\Run`) | Per-user auto-start entry when the user enables auto-start |
 
 ## Permission Model
 
@@ -44,11 +65,12 @@ LeopardWM's attack surface is minimal by design:
 | WinEvent hooks | Passive observation | Receives window events; cannot inject or modify them |
 | Low-level mouse hook | Gesture detection | Observes mouse input for swipe gestures; does not block or modify |
 | Config file | Local filesystem | Malformed config causes fallback to defaults; no code execution |
+| Outbound update check | Optional HTTPS GET to GitHub Releases API | Source IP address and LeopardWM version disclosed to GitHub |
 
 ### What LeopardWM Cannot Do
 
-- **No network access** — no sockets, HTTP clients, DNS lookups, or remote connections of any kind
-- **No file exfiltration** — the daemon reads its own config file and writes logs/state; it does not read arbitrary user files
+- **No inbound network listener** — does not accept connections; no telemetry, analytics, remote logging, or crash upload; no automatic update download or install
+- **No transmission of local user data** — config, logs, state, crash reports, and window metadata are never sent over the network (the optional update check sends only the request headers described above, plus the unavoidable source IP)
 - **No code execution from config** — config values are data (strings, numbers, booleans); no eval, scripting, or plugin loading
 - **No privilege escalation** — runs at user integrity level; cannot elevate itself
 - **No inter-process injection** — does not inject DLLs, modify process memory, or hook into other applications' code
@@ -69,7 +91,7 @@ The IPC pipe (`\\.\pipe\leopardwm`) uses default Windows named pipe security:
 
 - The daemon cannot reposition windows owned by elevated (Administrator) processes unless itself running elevated
 - Running the daemon elevated is not recommended for daily use — it grants no additional features beyond managing admin windows
-- The daemon does not create or modify any system-wide resources (no services, scheduled tasks, or registry keys)
+- The daemon does not create services, scheduled tasks, or system-wide (HKLM) registry keys. Enabling auto-start writes a per-user Run key at `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run`
 
 ---
 
@@ -77,11 +99,11 @@ The IPC pipe (`\\.\pipe\leopardwm`) uses default Windows named pipe security:
 
 ### No Telemetry
 
-LeopardWM collects **no telemetry**, analytics, crash reports, or usage statistics. Nothing is transmitted over the network — the daemon has no networking code at all.
+LeopardWM collects **no telemetry**, analytics, crash reports, or usage statistics. The optional update check (see [Automatic Update Check](#automatic-update-check)) is a version comparison only and is not telemetry.
 
 ### Local Data Only
 
-All data stays on your machine:
+The following data is stored only on your machine and is not uploaded:
 
 | Data | Location | Content |
 |------|----------|---------|
@@ -118,4 +140,4 @@ We will coordinate disclosure and release a fix before any public announcement.
 
 | Version | Supported |
 |---------|-----------|
-| 0.1.x (current dev) | Yes |
+| 0.2.x | Yes |

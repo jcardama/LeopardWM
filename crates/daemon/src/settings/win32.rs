@@ -297,6 +297,15 @@ pub fn run_settings_window(
     Ok(())
 }
 
+fn is_allowed_url(url: &str) -> bool {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    (scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https"))
+        && !authority.trim().is_empty()
+}
+
 /// Handle IPC messages from the WebView (JS → Rust).
 fn handle_ipc(body: &str, event_tx: &mpsc::Sender<SettingsEvent>, _hwnd: HWND) {
     let msg: serde_json::Value = match serde_json::from_str(body) {
@@ -343,10 +352,16 @@ fn handle_ipc(body: &str, event_tx: &mpsc::Sender<SettingsEvent>, _hwnd: HWND) {
             }
         }
         "open_url" => {
-            if let Some(url) = msg.get("url").and_then(|v| v.as_str()) {
-                let _ = std::process::Command::new("cmd")
-                    .args(["/c", "start", "", url])
-                    .spawn();
+            let Some(url) = msg.get("url").and_then(|v| v.as_str()) else {
+                warn!("Settings IPC: rejected open_url with missing or non-string 'url'");
+                return;
+            };
+            if !is_allowed_url(url) {
+                warn!("Settings IPC: rejected open_url: {:?}", url);
+                return;
+            }
+            if let Err(e) = leopardwm_platform_win32::shell::open(std::ffi::OsStr::new(url)) {
+                warn!("Settings IPC: failed to open URL {:?}: {}", url, e);
             }
         }
         other => {
@@ -475,4 +490,40 @@ unsafe fn apply_win11_theming(hwnd: HWND, dark: bool) {
         &backdrop as *const u32 as *const std::ffi::c_void,
         std::mem::size_of::<u32>() as u32,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn allowed_urls_include_settings_links_and_mixed_case_schemes() {
+        for url in [
+            "https://github.com/jcardama/LeopardWM/graphs/contributors",
+            "https://github.com/jcardama/LeopardWM",
+            "https://buymeacoffee.com/jcardama",
+            "hTtPs://example.com",
+            "HtTp://example.com",
+        ] {
+            assert!(is_allowed_url(url), "expected URL to be allowed: {url}");
+        }
+    }
+
+    #[test]
+    fn disallowed_urls_reject_invalid_schemes_and_authorities() {
+        for url in [
+            "file:///C:/config.toml",
+            "custom://example.com",
+            "example.com",
+            "://example.com",
+            "",
+            "https://",
+            "https:// ",
+            "https:///x",
+            "https:/x",
+            " https://example.com",
+        ] {
+            assert!(!is_allowed_url(url), "expected URL to be rejected: {url:?}");
+        }
+    }
 }

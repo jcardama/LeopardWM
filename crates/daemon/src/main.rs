@@ -1733,10 +1733,7 @@ async fn launch_config_editor(ctx: &mut EventLoopCtx<'_>) {
         .file_name()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_default();
-    match std::process::Command::new("cmd")
-        .args(["/c", "start", "", &path.to_string_lossy()])
-        .spawn()
-    {
+    match leopardwm_platform_win32::shell::open(path.as_os_str()) {
         // Arm the pull only once the launch actually started, and only if we
         // have a filename to identify the editor window by.
         Ok(_) if !filename.is_empty() => {
@@ -1846,10 +1843,17 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
         tray::TrayEvent::ViewLogs => {
             info!("Tray: View logs requested");
             let log_dir = leopardwm_ipc::log_dir();
-            let _ = std::fs::create_dir_all(&log_dir);
-            let _ = std::process::Command::new("cmd")
-                .args(["/c", "start", "", &log_dir.to_string_lossy()])
-                .spawn();
+            if let Err(e) = std::fs::create_dir_all(&log_dir) {
+                warn!(
+                    "Failed to create log directory {}: {}",
+                    log_dir.display(),
+                    e
+                );
+                return;
+            }
+            if let Err(e) = leopardwm_platform_win32::shell::open(log_dir.as_os_str()) {
+                warn!("Failed to open log directory {}: {}", log_dir.display(), e);
+            }
         }
         tray::TrayEvent::ReleaseAllWindows => {
             warn!("Tray: Release all windows requested");
@@ -1985,10 +1989,9 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
         }
         tray::TrayEvent::OpenReleasesPage => {
             info!("Tray: opening releases page");
-            if let Err(e) = std::process::Command::new("cmd")
-                .args(["/C", "start", "", update_check::RELEASES_PAGE_URL])
-                .spawn()
-            {
+            if let Err(e) = leopardwm_platform_win32::shell::open(std::ffi::OsStr::new(
+                update_check::RELEASES_PAGE_URL,
+            )) {
                 warn!("Failed to open releases page: {}", e);
             }
         }

@@ -27,6 +27,10 @@ All notable changes to LeopardWM will be documented in this file.
   explains what happened. Logs now include every candidate window from the
   timed-out batch with best-effort class, title, and executable details, without
   claiming one was the blocker.
+- **Shell-open actions no longer route through `cmd.exe`.** Opening the config
+  file, log folder, releases page, or settings links no longer launches
+  `cmd /c start`, so paths and URLs containing characters like `&` or `%` are
+  no longer reinterpreted as shell syntax or environment variables.
 
 ### Improvements
 
@@ -39,6 +43,11 @@ All notable changes to LeopardWM will be documented in this file.
   for public issue pastes. Live-create verdicts include the create/show WinEvent
   pre-gate so minimized and non-WS_VISIBLE windows report SKIP rather than a false
   ADMIT.
+- **Security policy accurately documents network and auto-start behavior.**
+  `SECURITY.md` now describes the optional GitHub update check (endpoint,
+  frequency, what is and is not sent, and how to disable it) and the per-user
+  auto-start registry key. Documentation-accuracy correction only; no behavior
+  change.
 
 ## 0.2.5
 
