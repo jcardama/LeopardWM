@@ -10,7 +10,7 @@ use tracing::{debug, info, warn};
 impl AppState {
     /// Remove the drag placeholder window from all workspaces on all monitors.
     fn clear_drag_placeholder(&mut self) {
-        for (_, ws_vec) in self.workspaces.iter_mut() {
+        for ws_vec in self.workspaces.values_mut() {
             for ws in ws_vec.iter_mut() {
                 let _ = ws.remove_window(DRAG_PLACEHOLDER_HWND);
             }

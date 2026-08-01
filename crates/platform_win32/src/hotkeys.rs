@@ -646,11 +646,9 @@ pub fn parse_hotkey_string(s: &str) -> Option<(Modifiers, u32)> {
             "ALT" => modifiers.alt = true,
             "SHIFT" => modifiers.shift = true,
             "WIN" | "SUPER" | "META" => modifiers.win = true,
-            // F13–F24 may act as modifiers; F1–F12 may not.
-            other => match parse_vk(other).and_then(fn_mod_bit) {
-                Some(bit) => modifiers.fn_mods |= bit,
-                None => return None, // Unknown modifier
-            },
+            // F13–F24 may act as modifiers; F1–F12 may not. Anything else is
+            // an unknown modifier and rejects the whole hotkey string.
+            other => modifiers.fn_mods |= parse_vk(other).and_then(fn_mod_bit)?,
         }
     }
 

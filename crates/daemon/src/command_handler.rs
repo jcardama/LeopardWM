@@ -969,7 +969,7 @@ impl AppState {
                     let _ = ws.insert_window(drag.hwnd, None);
                 }
             }
-            for (_, ws_vec) in self.workspaces.iter_mut() {
+            for ws_vec in self.workspaces.values_mut() {
                 for ws in ws_vec.iter_mut() {
                     let _ = ws.remove_window(crate::state::DRAG_PLACEHOLDER_HWND);
                 }

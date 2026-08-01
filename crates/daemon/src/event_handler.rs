@@ -1045,7 +1045,7 @@ impl AppState {
                             let _ = ws.insert_window(drag.hwnd, None);
                         }
                     }
-                    for (_, ws_vec) in self.workspaces.iter_mut() {
+                    for ws_vec in self.workspaces.values_mut() {
                         for ws in ws_vec.iter_mut() {
                             let _ = ws.remove_window(crate::state::DRAG_PLACEHOLDER_HWND);
                         }
@@ -1614,7 +1614,7 @@ impl AppState {
         let Some(win_info) = self.lookup_window_info(hwnd) else {
             // Window vanished during drag — clean up placeholder.
             // Do NOT reinsert the window — it no longer exists.
-            for (_, ws_vec) in self.workspaces.iter_mut() {
+            for ws_vec in self.workspaces.values_mut() {
                 for ws in ws_vec.iter_mut() {
                     let _ = ws.remove_window(crate::state::DRAG_PLACEHOLDER_HWND);
                 }
@@ -1635,7 +1635,7 @@ impl AppState {
 
         if shift_held {
             // Clean up placeholder (shouldn't exist in shift mode, but be safe).
-            for (_, ws_vec) in self.workspaces.iter_mut() {
+            for ws_vec in self.workspaces.values_mut() {
                 for ws in ws_vec.iter_mut() {
                     let _ = ws.remove_window(crate::state::DRAG_PLACEHOLDER_HWND);
                 }
