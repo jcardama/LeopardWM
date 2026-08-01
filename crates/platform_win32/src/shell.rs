@@ -10,15 +10,33 @@ use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 const SE_ERR_NOASSOC: isize = 31;
 
 // ShellExecuteW runs on a dedicated STA thread so COM shell extensions see a clean
-// apartment. The call still blocks the caller until association resolution finishes;
-// daemon event-loop sites must wrap this in spawn_blocking.
-pub fn open(target: &OsStr) -> Result<()> {
-    std::thread::scope(|scope| {
-        match scope.spawn(|| open_on_com_thread(target)).join() {
-            Ok(result) => result,
-            Err(_) => bail!("ShellExecuteW worker thread panicked"),
-        }
-    })
+// apartment. Association resolution can block for seconds, so the call is dispatched
+// onto a detached worker and failures are logged rather than returned.
+
+/// Open `target` via the shell without blocking the caller.
+///
+/// Failures (including worker-spawn failure) are logged; there is no Result to await.
+pub fn open(target: impl AsRef<OsStr>) {
+    let target = target.as_ref().to_os_string();
+    let target_label = target.to_string_lossy().into_owned();
+    if let Err(e) = std::thread::Builder::new()
+        .name("shell-open".into())
+        .spawn(move || {
+            if let Err(e) = open_on_com_thread(&target) {
+                tracing::warn!(
+                    "ShellExecuteW failed to open {}: {}",
+                    target.to_string_lossy(),
+                    e
+                );
+            }
+        })
+    {
+        tracing::warn!(
+            "Failed to spawn ShellExecuteW worker for {}: {}",
+            target_label,
+            e
+        );
+    }
 }
 
 fn open_on_com_thread(target: &OsStr) -> Result<()> {

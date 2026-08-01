@@ -361,9 +361,7 @@ fn handle_ipc(body: &str, event_tx: &mpsc::Sender<SettingsEvent>, _hwnd: HWND) {
                 warn!("Settings IPC: rejected open_url: {:?}", url);
                 return;
             }
-            if let Err(e) = leopardwm_platform_win32::shell::open(std::ffi::OsStr::new(url)) {
-                warn!("Settings IPC: failed to open URL {:?}: {}", url, e);
-            }
+            leopardwm_platform_win32::shell::open(url);
         }
         other => {
             warn!("Settings IPC: unknown action: {}", other);
