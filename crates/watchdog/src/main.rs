@@ -9,8 +9,14 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
+use windows::core::BOOL;
+use windows::Win32::System::Console::{
+    SetConsoleCtrlHandler, CTRL_BREAK_EVENT, CTRL_C_EVENT, CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT,
+    CTRL_SHUTDOWN_EVENT,
+};
 use windows::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, SetInformationJobObject,
     JobObjectExtendedLimitInformation, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
@@ -24,6 +30,10 @@ const TOAST_AUMID: &str = "jcardama.LeopardWM.Watchdog";
 const TOAST_APP_NAME: &str = "LeopardWM";
 
 const DAEMON_BIN_NAME: &str = "leopardwm.exe";
+
+/// Set by the console control handler so the supervise loop exits instead of
+/// restarting the daemon after a console-close / Ctrl+C kill mid-cleanup.
+static CONSOLE_CTRL_RECEIVED: AtomicBool = AtomicBool::new(false);
 
 /// Crash-loop detection: if the daemon exits abnormally
 /// `MAX_CRASHES_PER_WINDOW` or more times within `CRASH_WINDOW`, the
@@ -42,6 +52,14 @@ fn main() -> Result<()> {
         .init();
 
     info!("leopardwm-watchdog starting");
+
+    // Stay alive on console-close / session-end long enough for the daemon
+    // to finish restore-first cleanup. Without this, the default handler
+    // kills us near-instantly, the Job Object handle closes, and
+    // KILL_ON_JOB_CLOSE terminates the daemon mid-cleanup.
+    if let Err(err) = install_console_ctrl_handler() {
+        warn!(%err, "Console control handler not installed — console close may kill daemon before cleanup");
+    }
 
     // Put ourselves in a Job Object with KILL_ON_JOB_CLOSE so any daemon
     // we spawn dies with us if the watchdog itself is killed (`taskkill
@@ -71,6 +89,17 @@ fn main() -> Result<()> {
 
     loop {
         let status = spawn_daemon(&daemon_path, &daemon_args)?;
+
+        // Console-control path: do not recover/restart. A mid-cleanup kill
+        // would otherwise spawn a fresh daemon that re-tiles and re-parks
+        // windows at the sentinel right as the session is ending.
+        if CONSOLE_CTRL_RECEIVED.load(Ordering::SeqCst) {
+            info!(
+                ?status,
+                "Daemon exited after console control — watchdog stopping without restart"
+            );
+            return Ok(());
+        }
 
         if status.success() {
             info!(?status, "Daemon exited cleanly — watchdog stopping");
@@ -200,6 +229,40 @@ fn install_kill_on_close_job() -> Result<()> {
         let _ = job;
     }
     Ok(())
+}
+
+fn install_console_ctrl_handler() -> Result<()> {
+    unsafe {
+        SetConsoleCtrlHandler(Some(console_ctrl_handler), true)
+            .context("SetConsoleCtrlHandler failed")?;
+    }
+    Ok(())
+}
+
+/// Handler for console control events.
+///
+/// For CTRL_CLOSE / CTRL_LOGOFF / CTRL_SHUTDOWN, returning from the handler
+/// terminates the process immediately. Park forever instead (mirroring tokio's
+/// windows signal driver) so the process stays alive for the OS grace period
+/// and the supervised daemon can finish cleanup before the Job Object handle
+/// closes and KILL_ON_JOB_CLOSE fires.
+///
+/// For CTRL_C / CTRL_BREAK, return TRUE so the default ExitProcess handler does
+/// not run — the watchdog must keep supervising while the daemon restores.
+unsafe extern "system" fn console_ctrl_handler(ctrl_type: u32) -> BOOL {
+    match ctrl_type {
+        CTRL_CLOSE_EVENT | CTRL_LOGOFF_EVENT | CTRL_SHUTDOWN_EVENT => {
+            CONSOLE_CTRL_RECEIVED.store(true, Ordering::SeqCst);
+            loop {
+                std::thread::park();
+            }
+        }
+        CTRL_C_EVENT | CTRL_BREAK_EVENT => {
+            CONSOLE_CTRL_RECEIVED.store(true, Ordering::SeqCst);
+            BOOL(1)
+        }
+        _ => BOOL(0),
+    }
 }
 
 #[cfg(test)]

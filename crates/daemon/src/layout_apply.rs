@@ -184,6 +184,11 @@ impl AppState {
         if self.paused {
             return Ok(false);
         }
+        // Gate after console-signal / shutdown latch so we never compute or
+        // dispatch a frame that would re-park windows after restore.
+        if self.apply_worker_cancelled.load(Ordering::SeqCst) {
+            return Ok(false);
+        }
         // Commit deferred min-size clears before the frame reads constraints,
         // matching the invariant maintained by apply_layout. Without this, a
         // composition change occurring during an active animation would leave

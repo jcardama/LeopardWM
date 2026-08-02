@@ -6,6 +6,11 @@ All notable changes to LeopardWM will be documented in this file.
 
 ### Fixes
 
+- **Closing the console no longer strands scrolled-away windows off-screen.**
+  Console close and Ctrl+C / Ctrl+Break now restore windows parked at the
+  off-screen sentinel before graceful shutdown, and the watchdog stays alive
+  long enough for the daemon to finish that cleanup instead of killing it via
+  the Job Object first.
 - **Trackpad modifier-scroll navigation no longer races through focus.** Rapid
   wheel-message bursts are normalized and rate-limited while separated mouse
   wheel notches remain responsive.

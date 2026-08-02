@@ -11,7 +11,9 @@
 
 use leopardwm_core_layout::{Rect, WindowPlacement};
 use leopardwm_platform_win32::{PlacementCache, PlatformConfig};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc as std_mpsc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::debug;
 
@@ -125,15 +127,18 @@ impl AnimationWorkerHandle {
     ///
     /// The worker blocks on channel recv when idle, consuming no CPU.
     /// `event_tx` is used to send `FrameResult` back to the main event loop.
+    /// `apply_worker_cancelled` gates Frame application so a frame already in
+    /// the channel cannot re-park windows after console-signal restore.
     pub fn spawn(
         event_tx: tokio::sync::mpsc::Sender<super::DaemonEvent>,
+        apply_worker_cancelled: Arc<AtomicBool>,
     ) -> Result<Self, std::io::Error> {
         let (command_tx, command_rx) = std_mpsc::channel::<WorkerCommand>();
 
         let thread = std::thread::Builder::new()
             .name("leopardwm-animation-worker".to_string())
             .spawn(move || {
-                worker_loop(command_rx, event_tx);
+                worker_loop(command_rx, event_tx, apply_worker_cancelled);
             })?;
 
         Ok(Self {
@@ -201,6 +206,7 @@ impl Drop for AnimationWorkerHandle {
 fn worker_loop(
     command_rx: std_mpsc::Receiver<WorkerCommand>,
     event_tx: tokio::sync::mpsc::Sender<super::DaemonEvent>,
+    apply_worker_cancelled: Arc<AtomicBool>,
 ) {
     debug!("Animation worker thread started");
     let mut placement_cache = PlacementCache::new();
@@ -248,6 +254,27 @@ fn worker_loop(
             }
             WorkerCommand::Frame(request) => {
                 let frame_start = Instant::now();
+
+                // Skip apply after shutdown/revert latch so a queued frame
+                // cannot re-park windows after the console-signal restore.
+                // Plain cancelled flag is enough: apply_epoch also bumps on
+                // every normal apply and would falsely drop live frames.
+                if apply_worker_cancelled.load(Ordering::SeqCst) {
+                    let result = FrameResult {
+                        apply_result: Ok(()),
+                        frame_time: frame_start.elapsed(),
+                        width_violations: Vec::new(),
+                        height_violations: Vec::new(),
+                    };
+                    if event_tx
+                        .blocking_send(super::DaemonEvent::AnimationFrameApplied(result))
+                        .is_err()
+                    {
+                        debug!("Animation worker: event channel closed, exiting");
+                        break;
+                    }
+                    continue;
+                }
 
                 // Apply window placements, skipping unchanged windows via cache.
                 // Animation frames are SWP_ASYNCWINDOWPOS so the sticky-compositor

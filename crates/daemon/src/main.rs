@@ -114,6 +114,124 @@ fn shutdown_mode_for_command(cmd: &IpcCommand) -> Option<ShutdownMode> {
         _ => None,
     }
 }
+
+/// Listen for console-close / Ctrl+C / break. On receipt, latch apply
+/// cancellation, restore scrolled-away windows (sync, no AppState lock), then
+/// send Shutdown. Loops so a second signal re-runs the same idempotent restore
+/// rather than falling through to default handlers.
+///
+/// The logoff/shutdown listeners only ever fire if this process runs as a
+/// service: Win32 delivers WM_QUERYENDSESSION/WM_ENDSESSION, not console
+/// control events, to interactive apps. Session-end restore is not covered.
+fn install_console_control_signal_handlers(
+    event_tx: mpsc::Sender<DaemonEvent>,
+    apply_worker_cancelled: Arc<std::sync::atomic::AtomicBool>,
+    apply_epoch: Arc<std::sync::atomic::AtomicU64>,
+) {
+    tokio::spawn(async move {
+        let mut close = match tokio::signal::windows::ctrl_close() {
+            Ok(s) => Some(s),
+            Err(e) => {
+                warn!("Failed to install ctrl_close handler: {}", e);
+                None
+            }
+        };
+        let mut brk = match tokio::signal::windows::ctrl_break() {
+            Ok(s) => Some(s),
+            Err(e) => {
+                warn!("Failed to install ctrl_break handler: {}", e);
+                None
+            }
+        };
+        let mut logoff = match tokio::signal::windows::ctrl_logoff() {
+            Ok(s) => Some(s),
+            Err(e) => {
+                warn!("Failed to install ctrl_logoff handler: {}", e);
+                None
+            }
+        };
+        let mut shutdown_sig = match tokio::signal::windows::ctrl_shutdown() {
+            Ok(s) => Some(s),
+            Err(e) => {
+                warn!("Failed to install ctrl_shutdown handler: {}", e);
+                None
+            }
+        };
+        let mut ctrlc = match tokio::signal::windows::ctrl_c() {
+            Ok(s) => Some(s),
+            Err(e) => {
+                warn!("Failed to install ctrl_c handler: {}", e);
+                None
+            }
+        };
+
+        if close.is_none()
+            && brk.is_none()
+            && logoff.is_none()
+            && shutdown_sig.is_none()
+            && ctrlc.is_none()
+        {
+            warn!("No console control signal handlers installed");
+            return;
+        }
+
+        loop {
+            let source = tokio::select! {
+                _ = async {
+                    match close.as_mut() {
+                        Some(s) => s.recv().await,
+                        None => std::future::pending().await,
+                    }
+                } => "ctrl_close",
+                _ = async {
+                    match brk.as_mut() {
+                        Some(s) => s.recv().await,
+                        None => std::future::pending().await,
+                    }
+                } => "ctrl_break",
+                _ = async {
+                    match logoff.as_mut() {
+                        Some(s) => s.recv().await,
+                        None => std::future::pending().await,
+                    }
+                } => "ctrl_logoff",
+                _ = async {
+                    match shutdown_sig.as_mut() {
+                        Some(s) => s.recv().await,
+                        None => std::future::pending().await,
+                    }
+                } => "ctrl_shutdown",
+                _ = async {
+                    match ctrlc.as_mut() {
+                        Some(s) => s.recv().await,
+                        None => std::future::pending().await,
+                    }
+                } => "ctrl_c",
+            };
+
+            // Latch cancellation before restore. uncloak drains the cloaked
+            // sets that suppress LOCATIONCHANGE, and nothing arms
+            // moved_or_resized_suppression here — so restore's own
+            // SetWindowPos would otherwise re-enter apply_layout via
+            // on_window_moved_or_resized and re-park windows at the sentinel.
+            // Do not lock AppState: a wedged apply worker could burn the OS budget.
+            apply_worker_cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
+            apply_epoch.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            uncloak_all_visible_windows();
+            if source == "ctrl_c" {
+                info!(
+                    "Ctrl+C received; restored off-screen windows, initiating shutdown..."
+                );
+            } else {
+                info!(
+                    "Console control signal ({}) received; restored off-screen windows, initiating shutdown...",
+                    source
+                );
+            }
+            let _ = event_tx.send(DaemonEvent::Shutdown).await;
+        }
+    });
+}
 /// Hotkey registration result containing handles and mapping.
 struct HotkeyState {
     /// System-event window (display/work-area/power); kept alive for its
@@ -3001,15 +3119,14 @@ async fn main() -> Result<()> {
 
     info!("IPC server listening on {}", preferred_pipe_name());
 
-    // Install Ctrl+C handler so terminal kill triggers graceful shutdown
+    // Console-close / Ctrl+C: clone cancel arcs once (uncontended), then restore-first.
     {
-        let shutdown_tx = event_tx.clone();
-        tokio::spawn(async move {
-            if let Ok(()) = tokio::signal::ctrl_c().await {
-                info!("Ctrl+C received, initiating shutdown...");
-                let _ = shutdown_tx.send(DaemonEvent::Shutdown).await;
-            }
-        });
+        let s = state.lock().await;
+        install_console_control_signal_handlers(
+            event_tx.clone(),
+            s.apply_worker_cancelled.clone(),
+            s.apply_epoch.clone(),
+        );
     }
 
     // Print startup banner for immediate user feedback
@@ -3025,8 +3142,11 @@ async fn main() -> Result<()> {
     info!("Ready. Use leopardwm-cli to send commands.");
 
     // Persistent animation worker thread (DwmFlush-based vsync pacing)
-    let animation_worker = animation_worker::AnimationWorkerHandle::spawn(event_tx.clone())
-        .expect("Failed to spawn animation worker");
+    let animation_worker = animation_worker::AnimationWorkerHandle::spawn(
+        event_tx.clone(),
+        state.lock().await.apply_worker_cancelled.clone(),
+    )
+    .expect("Failed to spawn animation worker");
     {
         let mut state_guard = state.lock().await;
         state_guard.animation_worker_control = Some(animation_worker.control());

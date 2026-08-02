@@ -2664,6 +2664,39 @@ fn test_apply_layout_timeout_worker_is_joined_during_shutdown_begin() {
 }
 
 #[test]
+fn test_send_animation_frame_skips_after_apply_worker_cancelled() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = false;
+    state.begin_shutdown_or_revert();
+    assert!(
+        state.apply_worker_cancelled.load(Ordering::SeqCst),
+        "begin_shutdown_or_revert should latch cancellation"
+    );
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("test runtime");
+    let (event_tx, _event_rx) = tokio::sync::mpsc::channel(4);
+    let worker = animation_worker::AnimationWorkerHandle::spawn(
+        event_tx,
+        state.apply_worker_cancelled.clone(),
+    )
+    .expect("spawn animation worker");
+
+    let sent = state
+        .send_animation_frame(&worker)
+        .expect("cancelled send_animation_frame should not error");
+    assert!(
+        !sent,
+        "cancelled send_animation_frame must not dispatch a frame that could re-park windows"
+    );
+    drop(worker);
+    // Keep the runtime alive until the worker is dropped so the channel stays open.
+    let _ = rt;
+}
+
+#[test]
 fn test_apply_layout_rejects_overlap_while_timed_out_worker_is_running() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
     state.paused = false;
