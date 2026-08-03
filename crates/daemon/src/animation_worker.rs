@@ -187,6 +187,13 @@ impl AnimationWorkerHandle {
             })
             .map_err(|_| "Animation worker thread has exited".to_string())
     }
+
+    /// Send Shutdown and release the thread for a caller-owned join.
+    /// After this returns, `Drop` will not join (thread already taken).
+    pub fn into_shutdown_join_handle(mut self) -> Option<std::thread::JoinHandle<()>> {
+        let _ = self.command_tx.send(WorkerCommand::Shutdown);
+        self.thread.take()
+    }
 }
 
 impl Drop for AnimationWorkerHandle {

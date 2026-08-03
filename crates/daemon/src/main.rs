@@ -562,6 +562,32 @@ async fn run_shutdown_cleanup(state: &Arc<Mutex<AppState>>, mode: ShutdownMode) 
     }
 }
 
+async fn stop_animation_worker_and_run_recovery(
+    animation_worker: animation_worker::AnimationWorkerHandle,
+    state: &Arc<Mutex<AppState>>,
+    event_rx: mpsc::Receiver<DaemonEvent>,
+) {
+    // Alive-but-undrained event_rx lets a full channel wedge the worker on
+    // blocking_send, so it never observes Shutdown and Drop's join hangs.
+    // Closing first makes those sends fail promptly.
+    drop(event_rx);
+
+    let mut thread = animation_worker.into_shutdown_join_handle();
+    if !join_with_timeout(&mut thread, SHUTDOWN_FINAL_JOIN_TIMEOUT) {
+        warn!(
+            "Animation worker did not exit within {} ms; continuing post-animation recovery",
+            SHUTDOWN_FINAL_JOIN_TIMEOUT.as_millis()
+        );
+    }
+
+    // On join timeout the worker is detached, not stopped, so it can still
+    // dequeue buffered frames — those are no-ops only because
+    // begin_shutdown_or_revert latched apply_worker_cancelled. Async
+    // SWP_ASYNCWINDOWPOS work and timed-out apply workers may still complete.
+    let managed_window_ids = state.lock().await.all_managed_window_ids();
+    run_visibility_recovery_pass(&managed_window_ids, "post-animation-worker");
+}
+
 /// Lightweight DwmFlush-aligned animation loop for resize preview transitions.
 /// Directly repositions the overlay window via SetWindowPos — no channel round-trip.
 fn resize_preview_animation_loop(
@@ -3307,9 +3333,7 @@ async fn main() -> Result<()> {
 
     // Stop the update-checker worker so it doesn't hold up shutdown.
     update_check_cancel.store(true, std::sync::atomic::Ordering::SeqCst);
-
-    // Clean up animation worker (Drop sends Shutdown and joins)
-    drop(animation_worker);
+    stop_animation_worker_and_run_recovery(animation_worker, &state, event_rx).await;
 
     // Clean up timers if running
     if let Some(handle) = snap_hint_timer_handle {
