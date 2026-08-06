@@ -669,6 +669,8 @@ pub(crate) fn should_skip_window_by_class(class_name: &str) -> bool {
         "Shell_SecondaryTrayWnd",     // Secondary taskbar
         "WorkerW",                    // Desktop worker
         "Windows.UI.Core.CoreWindow", // UWP system windows
+        "IME",                        // Legacy input-method helper window
+        "MSCTFIME UI",                // Text Services Framework IME helper window
         // ApplicationFrameWindow removed: allows tiling UWP apps (Calculator, Photos, etc.)
         // Empty/cloaked UWP frames are already filtered by the cloaked window check.
         "XamlExplorerHostIslandWindow", // XAML islands
@@ -991,5 +993,12 @@ mod tests {
             should_skip_window_by_class("OperationStatusWindow"),
             "shell copy/move/delete progress dialogs should not be tiled"
         );
+    }
+
+    #[test]
+    fn test_input_method_helper_classes_are_skipped_exactly() {
+        assert!(should_skip_window_by_class("IME"));
+        assert!(should_skip_window_by_class("MSCTFIME UI"));
+        assert!(!should_skip_window_by_class("IMEWindow"));
     }
 }

@@ -162,14 +162,14 @@ fn spawn_watchdog(safe_mode: bool) -> Result<u32> {
 
     let log_dir = leopardwm_ipc::log_dir();
     std::fs::create_dir_all(&log_dir).context("Failed to create log directory")?;
-    let stdout_path = log_dir.join("leopardwm-watchdog.log");
+    let watchdog_log_path = log_dir.join("leopardwm-watchdog.log");
     let stderr_path = log_dir.join("leopardwm-watchdog.err.log");
-
-    let stdout = File::create(&stdout_path).context("Failed to create watchdog stdout log")?;
     let stderr = File::create(&stderr_path).context("Failed to create watchdog stderr log")?;
 
     let mut cmd = Command::new(watchdog_path);
-    cmd.stdin(Stdio::null()).stdout(stdout).stderr(stderr);
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(stderr);
     if safe_mode {
         cmd.arg("--safe-mode");
     }
@@ -189,7 +189,7 @@ fn spawn_watchdog(safe_mode: bool) -> Result<u32> {
     }
     println!(
         "Logs: {} / {}",
-        stdout_path.display(),
+        watchdog_log_path.display(),
         stderr_path.display()
     );
     Ok(child.id())

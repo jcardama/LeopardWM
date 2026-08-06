@@ -1172,8 +1172,10 @@ name = "leopardwm-watchdog"
 version = "0.2.6"
 dependencies = [
  "anyhow",
+ "leopardwm-ipc",
  "leopardwm-platform-win32",
  "tracing",
+ "tracing-appender",
  "tracing-subscriber",
  "windows 0.62.2",
 ]

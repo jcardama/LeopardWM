@@ -285,8 +285,8 @@ pub(crate) fn handle_collect_logs() -> Result<()> {
     }
     println!();
 
-    // Watchdog log — captures the daemon's stdout/stderr when launched via the
-    // watchdog (e.g. autostart), including panics that never reach the file log.
+    // Watchdog tracing log. Daemon bootstrap stderr and early panics are kept
+    // separately in the daemon error log above.
     let watchdog_log_path = log_dir.join("leopardwm-watchdog.log");
     println!("## Watchdog Log ({}):", watchdog_log_path.display());
     match fs::read_to_string(&watchdog_log_path) {
@@ -300,6 +300,18 @@ pub(crate) fn handle_collect_logs() -> Result<()> {
                 println!("  ... ({} earlier lines omitted)", start);
             }
         }
+        Err(e) => println!("  (not found or unreadable: {})", e),
+    }
+    println!();
+
+    let watchdog_err_log_path = log_dir.join("leopardwm-watchdog.err.log");
+    println!(
+        "## Watchdog Error Log ({}):",
+        watchdog_err_log_path.display()
+    );
+    match fs::read_to_string(&watchdog_err_log_path) {
+        Ok(content) if !content.trim().is_empty() => println!("{}", content),
+        Ok(_) => println!("  (empty)"),
         Err(e) => println!("  (not found or unreadable: {})", e),
     }
     println!();

@@ -6,6 +6,14 @@ All notable changes to LeopardWM will be documented in this file.
 
 ### Fixes
 
+- **Direct watchdog launches no longer open a console window.** Release builds
+  now run as a Windows GUI-subsystem process, so launching the watchdog
+  directly (for example from a user-configured scheduled task) cannot expose a
+  watchdog terminal for LeopardWM to tile or users to close.
+  Crash supervision and Job Object daemon-lifetime coupling are unchanged.
+- **Windows input-method helpers no longer leave blank columns after sign-in.**
+  The `IME` and `MSCTFIME UI` helper classes are rejected during live and
+  startup admission instead of remaining managed after becoming invisible.
 - **Closing the console no longer strands scrolled-away windows off-screen.**
   Console close and Ctrl+C / Ctrl+Break now restore windows parked at the
   off-screen sentinel before graceful shutdown, and the watchdog stays alive

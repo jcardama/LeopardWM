@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 //! LeopardWM Watchdog
 //!
 //! Spawns the daemon (`leopardwm.exe`) as a child process, monitors its
@@ -7,8 +9,10 @@
 //! who want the supervision layer.
 
 use anyhow::{Context, Result};
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus};
+use std::process::{Command, ExitCode, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
@@ -30,6 +34,25 @@ const TOAST_AUMID: &str = "jcardama.LeopardWM.Watchdog";
 const TOAST_APP_NAME: &str = "LeopardWM";
 
 const DAEMON_BIN_NAME: &str = "leopardwm.exe";
+const DAEMON_ERROR_LOG_NAME: &str = "leopardwm-daemon.err.log";
+const WATCHDOG_ERROR_LOG_NAME: &str = "leopardwm-watchdog.err.log";
+
+struct WatchdogLogPaths {
+    dir: PathBuf,
+    daemon_error: PathBuf,
+    watchdog_error: PathBuf,
+}
+
+impl WatchdogLogPaths {
+    fn new() -> Self {
+        let dir = leopardwm_ipc::log_dir();
+        Self {
+            daemon_error: dir.join(DAEMON_ERROR_LOG_NAME),
+            watchdog_error: dir.join(WATCHDOG_ERROR_LOG_NAME),
+            dir,
+        }
+    }
+}
 
 /// Set by the console control handler so the supervise loop exits instead of
 /// restarting the daemon after a console-close / Ctrl+C kill mid-cleanup.
@@ -43,22 +66,72 @@ static CONSOLE_CTRL_RECEIVED: AtomicBool = AtomicBool::new(false);
 const CRASH_WINDOW: Duration = Duration::from_secs(60);
 const MAX_CRASHES_PER_WINDOW: usize = 3;
 
-fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
+fn init_tracing(log_dir: &Path) -> Result<()> {
+    use tracing_subscriber::prelude::*;
+
+    let file_appender = tracing_appender::rolling::never(log_dir, "leopardwm-watchdog.log");
+    tracing_subscriber::registry()
+        .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
-        .init();
+        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stdout))
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .with_writer(file_appender),
+        )
+        .try_init()
+        .map_err(|err| anyhow::anyhow!("Failed to set tracing subscriber: {err}"))
+}
+
+fn append_error(path: &Path, message: &str) -> std::io::Result<()> {
+    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+    writeln!(file, "{message}")
+}
+
+fn install_panic_hook(error_log_path: PathBuf) {
+    let previous_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        let _ = append_error(&error_log_path, &format!("watchdog panic: {panic_info}"));
+        previous_hook(panic_info);
+    }));
+}
+
+fn main() -> ExitCode {
+    let log_paths = WatchdogLogPaths::new();
+    if let Err(err) = fs::create_dir_all(&log_paths.dir).context("Failed to create log directory") {
+        let message = format!("watchdog fatal error: {err:#}");
+        eprintln!("{message}");
+        let _ = append_error(&log_paths.watchdog_error, &message);
+        return ExitCode::FAILURE;
+    }
+
+    install_panic_hook(log_paths.watchdog_error.clone());
+
+    match run(&log_paths) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            error!(error = %err, "Watchdog fatal error");
+            let message = format!("watchdog fatal error: {err:#}");
+            eprintln!("{message}");
+            let _ = append_error(&log_paths.watchdog_error, &message);
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run(log_paths: &WatchdogLogPaths) -> Result<()> {
+    fs::File::create(&log_paths.daemon_error).context("Failed to reset daemon error log")?;
+    init_tracing(&log_paths.dir)?;
 
     info!("leopardwm-watchdog starting");
 
-    // Stay alive on console-close / session-end long enough for the daemon
-    // to finish restore-first cleanup. Without this, the default handler
-    // kills us near-instantly, the Job Object handle closes, and
-    // KILL_ON_JOB_CLOSE terminates the daemon mid-cleanup.
+    // Release builds use the Windows GUI subsystem and allocate no console.
+    // Keep this fallback for console-attached debug or manual launches so the
+    // watchdog survives long enough for the daemon's restore-first cleanup.
     if let Err(err) = install_console_ctrl_handler() {
-        warn!(%err, "Console control handler not installed — console close may kill daemon before cleanup");
+        warn!(%err, "Console control fallback not installed — console close may kill daemon before cleanup");
     }
 
     // Put ourselves in a Job Object with KILL_ON_JOB_CLOSE so any daemon
@@ -88,7 +161,7 @@ fn main() -> Result<()> {
     let mut crashes: Vec<Instant> = Vec::new();
 
     loop {
-        let status = spawn_daemon(&daemon_path, &daemon_args)?;
+        let status = spawn_daemon(&daemon_path, &daemon_args, &log_paths.daemon_error)?;
 
         // Console-control path: do not recover/restart. A mid-cleanup kill
         // would otherwise spawn a fresh daemon that re-tiles and re-parks
@@ -109,7 +182,12 @@ fn main() -> Result<()> {
         warn!(?status, "Daemon exited abnormally — running recovery");
         recover_from_crash();
 
-        match record_crash_and_decide(&mut crashes, Instant::now(), CRASH_WINDOW, MAX_CRASHES_PER_WINDOW) {
+        match record_crash_and_decide(
+            &mut crashes,
+            Instant::now(),
+            CRASH_WINDOW,
+            MAX_CRASHES_PER_WINDOW,
+        ) {
             CrashDecision::Restart { attempt } => {
                 // Fire-and-forget: the toast renders on the shared worker
                 // thread so we don't delay the daemon restart.
@@ -120,11 +198,6 @@ fn main() -> Result<()> {
                 info!(attempt, "Restarting daemon after crash");
             }
             CrashDecision::GiveUp { count } => {
-                error!(
-                    count,
-                    window_secs = CRASH_WINDOW.as_secs(),
-                    "Crash loop detected — exiting watchdog without restart"
-                );
                 // Render synchronously so the user actually sees the "disabled"
                 // message before the watchdog process exits.
                 leopardwm_platform_win32::toast::show_toast_blocking(
@@ -183,14 +256,18 @@ fn find_daemon_binary() -> Result<PathBuf> {
     Ok(candidate)
 }
 
-fn spawn_daemon(path: &Path, args: &[String]) -> Result<ExitStatus> {
+fn spawn_daemon(path: &Path, args: &[String], error_log_path: &Path) -> Result<ExitStatus> {
+    let stderr = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(error_log_path)
+        .context("failed to open daemon error log")?;
     let mut child = Command::new(path)
         .args(args)
-        // The daemon writes its own log file, so null its stdout rather than
-        // duplicating it into the watchdog log. stderr stays inherited so a
-        // panic before the tracing subscriber inits still reaches the watchdog
-        // error log.
-        .stdout(std::process::Stdio::null())
+        // The daemon writes its own tracing log. Keep stdout nulled and retain
+        // bootstrap stderr and early panics across every supervised restart.
+        .stdout(Stdio::null())
+        .stderr(Stdio::from(stderr))
         .spawn()
         .with_context(|| format!("failed to spawn {}", path.display()))?;
     child.wait().context("failed to wait on daemon child")
@@ -239,7 +316,7 @@ fn install_console_ctrl_handler() -> Result<()> {
     Ok(())
 }
 
-/// Handler for console control events.
+/// Fallback handler for console-attached debug or manual launches.
 ///
 /// For CTRL_CLOSE / CTRL_LOGOFF / CTRL_SHUTDOWN, returning from the handler
 /// terminates the process immediately. Park forever instead (mirroring tokio's

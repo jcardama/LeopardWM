@@ -14,6 +14,9 @@ jobs:
       - name: Install cargo-wix
         run: cargo install cargo-wix --version ^0.3
       - run: cargo build --release
+      - name: Verify GUI executable subsystems
+        shell: pwsh
+        run: ./.github/verify-gui-subsystems.ps1
       - run: cargo test --all
       - name: Package zip
         shell: bash
