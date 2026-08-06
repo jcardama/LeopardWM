@@ -50,7 +50,7 @@ use leopardwm_platform_win32::{
     cascade_windows, enumerate_monitors, enumerate_windows, fn_mod_bit, install_event_hooks,
     install_keyboard_hook, install_mouse_hook, overlay::OverlayWindow, parse_hotkey_string,
     register_gestures, register_system_events, restore_windows_moved_offscreen,
-    set_display_change_sender, set_dpi_awareness, set_power_state_sender,
+    set_display_change_sender, set_dpi_awareness, set_power_state_sender, set_session_end_handler,
     uncloak_all_visible_windows, GestureEvent, Hotkey, HotkeyBind, HotkeyId, KeyboardHookHandle,
     Modifiers, MonitorId, MonitorInfo, MouseHookHandle, WindowEvent,
 };
@@ -87,6 +87,8 @@ const SHUTDOWN_RECOVERY_RETRY_ATTEMPTS: usize = 3;
 const SHUTDOWN_RECOVERY_RETRY_DELAY: Duration = Duration::from_millis(250);
 /// Final bounded wait per lingering apply worker before daemon exit.
 const SHUTDOWN_FINAL_JOIN_TIMEOUT: Duration = Duration::from_secs(2);
+/// Maximum session-end wait for an in-flight animation frame to finish queuing placements.
+const SESSION_END_ANIMATION_BARRIER_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ShutdownMode {
@@ -115,14 +117,82 @@ fn shutdown_mode_for_command(cmd: &IpcCommand) -> Option<ShutdownMode> {
     }
 }
 
+fn restore_windows_for_session_end<WaitAnimation, RestoreSnap, RestoreVisibility>(
+    event_tx: &mpsc::Sender<DaemonEvent>,
+    apply_worker_cancelled: &std::sync::atomic::AtomicBool,
+    apply_epoch: &std::sync::atomic::AtomicU64,
+    wait_animation: WaitAnimation,
+    restore_snap: RestoreSnap,
+    restore_visibility: RestoreVisibility,
+) where
+    WaitAnimation: FnOnce(),
+    RestoreSnap: FnOnce(),
+    RestoreVisibility: FnOnce(),
+{
+    apply_worker_cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
+    apply_epoch.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    wait_animation();
+    restore_snap();
+    restore_visibility();
+    let _ = event_tx.try_send(DaemonEvent::Shutdown);
+}
+
+async fn setup_daemon_runtime(
+    state: &Arc<Mutex<AppState>>,
+) -> (
+    mpsc::Sender<DaemonEvent>,
+    mpsc::Receiver<DaemonEvent>,
+    animation_worker::AnimationWorkerHandle,
+) {
+    let (event_tx, event_rx) = mpsc::channel::<DaemonEvent>(100);
+    let (apply_worker_cancelled, apply_epoch) = {
+        let state = state.lock().await;
+        (
+            state.apply_worker_cancelled.clone(),
+            state.apply_epoch.clone(),
+        )
+    };
+    let animation_worker = animation_worker::AnimationWorkerHandle::spawn(
+        event_tx.clone(),
+        apply_worker_cancelled.clone(),
+    )
+    .expect("Failed to spawn animation worker");
+    let animation_worker_control = animation_worker.control();
+    state.lock().await.animation_worker_control = Some(animation_worker_control.clone());
+
+    let session_end_event_tx = event_tx.clone();
+    if let Err(e) = set_session_end_handler(Arc::new(move || {
+        restore_windows_for_session_end(
+            &session_end_event_tx,
+            &apply_worker_cancelled,
+            &apply_epoch,
+            || {
+                if !animation_worker_control
+                    .wait_for_session_end_barrier(SESSION_END_ANIMATION_BARRIER_TIMEOUT)
+                {
+                    warn!("Animation worker did not reach the session-end barrier before recovery");
+                }
+            },
+            leopardwm_platform_win32::restore_maximizebox_panic_recovery,
+            uncloak_all_visible_windows,
+        );
+    })) {
+        warn!(
+            "Failed to register session-end recovery: {}. Windows may remain off-screen after sign-out or shutdown.",
+            e
+        );
+    }
+    (event_tx, event_rx, animation_worker)
+}
+
 /// Listen for console-close / Ctrl+C / break. On receipt, latch apply
 /// cancellation, restore scrolled-away windows (sync, no AppState lock), then
 /// send Shutdown. Loops so a second signal re-runs the same idempotent restore
 /// rather than falling through to default handlers.
 ///
 /// The logoff/shutdown listeners only ever fire if this process runs as a
-/// service: Win32 delivers WM_QUERYENDSESSION/WM_ENDSESSION, not console
-/// control events, to interactive apps. Session-end restore is not covered.
+/// service. Interactive session end is restored synchronously by the hidden
+/// system-event window's WM_ENDSESSION handler.
 fn install_console_control_signal_handlers(
     event_tx: mpsc::Sender<DaemonEvent>,
     apply_worker_cancelled: Arc<std::sync::atomic::AtomicBool>,
@@ -234,8 +304,8 @@ fn install_console_control_signal_handlers(
 }
 /// Hotkey registration result containing handles and mapping.
 struct HotkeyState {
-    /// System-event window (display/work-area/power); kept alive for its
-    /// message pump. Independent of hotkeys.
+    /// System-event window (display/work-area/power/session-end); kept alive for
+    /// its message pump. Independent of hotkeys.
     handle: Option<leopardwm_platform_win32::SystemEventHandle>,
     /// Low-level keyboard hook: LeopardWM's sole hotkey matcher. `None` when
     /// there are no binds, the hook failed to install, or matching is
@@ -374,6 +444,16 @@ fn install_hotkey_hook(
     }
 }
 
+fn setup_system_event_handle() -> Option<leopardwm_platform_win32::SystemEventHandle> {
+    match register_system_events() {
+        Ok(handle) => Some(handle),
+        Err(e) => {
+            warn!("Failed to create system-event window: {}", e);
+            None
+        }
+    }
+}
+
 fn setup_hotkeys(config: &Config, event_tx: mpsc::Sender<DaemonEvent>) -> HotkeyState {
     let config_hotkeys = &config.hotkeys.bindings;
 
@@ -426,15 +506,9 @@ fn setup_hotkeys(config: &Config, event_tx: mpsc::Sender<DaemonEvent>) -> Hotkey
         }
     }
 
-    // The system-event window (display/work-area/power) is independent of
-    // hotkeys; create it regardless so those notifications still arrive.
-    let handle = match register_system_events() {
-        Ok(h) => Some(h),
-        Err(e) => {
-            warn!("Failed to create system-event window: {}", e);
-            None
-        }
-    };
+    // The system-event window (display/work-area/power/session-end) is
+    // independent of hotkeys; create it regardless so notifications arrive.
+    let handle = setup_system_event_handle();
 
     if binds.is_empty() {
         info!("No hotkeys configured");
@@ -3024,8 +3098,8 @@ async fn main() -> Result<()> {
         init_workspace_state(&mut state);
     }
 
-    // Create event channel
-    let (event_tx, mut event_rx) = mpsc::channel::<DaemonEvent>(100);
+    // Create the event channel/animation worker before the system-event window.
+    let (event_tx, mut event_rx, animation_worker) = setup_daemon_runtime(&state).await;
 
     // Collect forwarding thread handles for graceful shutdown
     let mut thread_handles: Vec<std::thread::JoinHandle<()>> = Vec::new();
@@ -3043,7 +3117,7 @@ async fn main() -> Result<()> {
     let mut hotkey_state = if args.skip_hotkeys() {
         info!("Hotkeys disabled by command-line flag");
         HotkeyState {
-            handle: None,
+            handle: setup_system_event_handle(),
             hook: None,
             mapping: HashMap::new(),
             requested_count: 0,
@@ -3167,16 +3241,6 @@ async fn main() -> Result<()> {
 
     info!("Ready. Use leopardwm-cli to send commands.");
 
-    // Persistent animation worker thread (DwmFlush-based vsync pacing)
-    let animation_worker = animation_worker::AnimationWorkerHandle::spawn(
-        event_tx.clone(),
-        state.lock().await.apply_worker_cancelled.clone(),
-    )
-    .expect("Failed to spawn animation worker");
-    {
-        let mut state_guard = state.lock().await;
-        state_guard.animation_worker_control = Some(animation_worker.control());
-    }
     let mut animation_active = false;
     let mut last_frame_instant: Option<std::time::Instant> = None;
 

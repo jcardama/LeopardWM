@@ -654,6 +654,85 @@ fn test_shutdown_mode_for_command_maps_shutdown_variants() {
 }
 
 #[test]
+fn test_session_end_restore_orders_recovery_before_shutdown() {
+    let (event_tx, mut event_rx) = mpsc::channel(1);
+    let apply_worker_cancelled = std::sync::atomic::AtomicBool::new(false);
+    let apply_epoch = std::sync::atomic::AtomicU64::new(7);
+    let steps = std::sync::Mutex::new(Vec::new());
+
+    restore_windows_for_session_end(
+        &event_tx,
+        &apply_worker_cancelled,
+        &apply_epoch,
+        || {
+            assert!(apply_worker_cancelled.load(Ordering::SeqCst));
+            assert_eq!(apply_epoch.load(Ordering::SeqCst), 8);
+            steps.lock().unwrap().push("barrier");
+        },
+        || {
+            assert_eq!(*steps.lock().unwrap(), vec!["barrier"]);
+            steps.lock().unwrap().push("snap");
+        },
+        || {
+            assert_eq!(*steps.lock().unwrap(), vec!["barrier", "snap"]);
+            assert!(matches!(
+                event_rx.try_recv(),
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+            ));
+            steps.lock().unwrap().push("visibility");
+        },
+    );
+
+    assert_eq!(
+        *steps.lock().unwrap(),
+        vec!["barrier", "snap", "visibility"]
+    );
+    assert!(matches!(event_rx.try_recv(), Ok(DaemonEvent::Shutdown)));
+}
+
+#[test]
+fn test_session_end_restore_tolerates_full_shutdown_channel() {
+    let (event_tx, mut event_rx) = mpsc::channel(1);
+    event_tx.try_send(DaemonEvent::Shutdown).unwrap();
+    let apply_worker_cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let apply_epoch = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let worker_cancelled = apply_worker_cancelled.clone();
+    let worker_epoch = apply_epoch.clone();
+    let worker_event_tx = event_tx.clone();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+
+    let worker = std::thread::spawn(move || {
+        restore_windows_for_session_end(
+            &worker_event_tx,
+            &worker_cancelled,
+            &worker_epoch,
+            || {},
+            || {},
+            || {},
+        );
+        done_tx.send(()).unwrap();
+    });
+
+    if done_rx
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .is_err()
+    {
+        drop(event_rx);
+        worker.join().unwrap();
+        panic!("session-end recovery blocked on a full shutdown channel");
+    }
+    worker.join().unwrap();
+
+    assert!(apply_worker_cancelled.load(Ordering::SeqCst));
+    assert_eq!(apply_epoch.load(Ordering::SeqCst), 1);
+    assert!(matches!(event_rx.try_recv(), Ok(DaemonEvent::Shutdown)));
+    assert!(matches!(
+        event_rx.try_recv(),
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+    ));
+}
+
+#[test]
 fn test_max_ipc_message_size_is_reasonable() {
     const { assert!(leopardwm_ipc::MAX_IPC_MESSAGE_SIZE >= 1024) };
     const { assert!(leopardwm_ipc::MAX_IPC_MESSAGE_SIZE <= 1024 * 1024) };

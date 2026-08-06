@@ -75,6 +75,10 @@ enum WorkerCommand {
     /// Invalidate the placement cache (e.g., after a theme/display change
     /// so stale inset-expanded positions don't survive as cache hits).
     ClearCache,
+    /// Acknowledge after all commands queued before this one have completed.
+    SessionEndBarrier(std_mpsc::Sender<()>),
+    #[cfg(test)]
+    TestBlock(std_mpsc::Receiver<()>),
     /// Shut down the worker thread.
     Shutdown,
 }
@@ -119,6 +123,22 @@ impl AnimationWorkerControl {
         let _ = self
             .command_tx
             .send(WorkerCommand::AbortCrossfade { epoch });
+    }
+
+    /// Wait until commands already queued on the worker have completed.
+    ///
+    /// Returns `true` when the barrier was acknowledged or the worker had
+    /// already exited, and `false` when the bounded wait expired.
+    pub fn wait_for_session_end_barrier(&self, timeout: Duration) -> bool {
+        let (ack_tx, ack_rx) = std_mpsc::channel();
+        if self
+            .command_tx
+            .send(WorkerCommand::SessionEndBarrier(ack_tx))
+            .is_err()
+        {
+            return true;
+        }
+        ack_rx.recv_timeout(timeout).is_ok()
     }
 }
 
@@ -245,6 +265,15 @@ fn worker_loop(
                 placement_cache.clear();
                 placement_cache.clear_insets();
                 debug!("Animation worker: placement cache cleared");
+                continue;
+            }
+            WorkerCommand::SessionEndBarrier(ack_tx) => {
+                let _ = ack_tx.send(());
+                continue;
+            }
+            #[cfg(test)]
+            WorkerCommand::TestBlock(release_rx) => {
+                let _ = release_rx.recv();
                 continue;
             }
             WorkerCommand::Crossfade {
@@ -424,5 +453,43 @@ fn dwm_flush_or_fallback() {
     if result.is_err() {
         // DWM not available — sleep briefly so we don't spin
         std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_end_barrier_waits_for_prior_worker_command() {
+        let (command_tx, command_rx) = std_mpsc::channel();
+        let (event_tx, _event_rx) = tokio::sync::mpsc::channel(1);
+        let worker_thread = std::thread::spawn(move || {
+            worker_loop(command_rx, event_tx, Arc::new(AtomicBool::new(false)));
+        });
+        let control = AnimationWorkerControl {
+            command_tx: command_tx.clone(),
+        };
+        let (release_tx, release_rx) = std_mpsc::channel();
+        command_tx
+            .send(WorkerCommand::TestBlock(release_rx))
+            .unwrap();
+        let (wait_done_tx, wait_done_rx) = std_mpsc::channel();
+
+        let wait_thread = std::thread::spawn(move || {
+            let acknowledged = control.wait_for_session_end_barrier(Duration::from_secs(2));
+            wait_done_tx.send(acknowledged).unwrap();
+        });
+
+        assert!(matches!(
+            wait_done_rx.recv_timeout(Duration::from_millis(100)),
+            Err(std_mpsc::RecvTimeoutError::Timeout)
+        ));
+        release_tx.send(()).unwrap();
+        assert!(wait_done_rx.recv_timeout(Duration::from_secs(2)).unwrap());
+
+        wait_thread.join().unwrap();
+        command_tx.send(WorkerCommand::Shutdown).unwrap();
+        worker_thread.join().unwrap();
     }
 }

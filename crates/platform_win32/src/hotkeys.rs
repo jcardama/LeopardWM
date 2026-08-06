@@ -1,12 +1,14 @@
-//! System-event window: forwards display-configuration, work-area, and power
-//! notifications to the daemon. Hotkey matching lives in `keyboard_hook.rs`.
+//! System-event window: forwards display-configuration, work-area, power, and
+//! session-end notifications to the daemon. Hotkey matching lives in
+//! `keyboard_hook.rs`.
 //!
 //! This module also owns the shared hotkey vocabulary (`Modifiers`, `Hotkey`,
 //! `HotkeyEvent`, `parse_hotkey_string`) used by the keyboard hook and daemon.
 
 use crate::{recover_poisoned_mutex, Win32Error, WindowEvent};
 use std::ffi::c_void;
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -14,6 +16,12 @@ use windows::Win32::UI::WindowsAndMessaging::{
     PostThreadMessageW, RegisterClassW, UnregisterClassW, MSG, WM_USER, WNDCLASSW,
     WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP,
 };
+
+/// Window message asking whether an interactive session may end.
+const WM_QUERYENDSESSION: u32 = 0x0011;
+
+/// Window message confirming or cancelling an interactive session end.
+const WM_ENDSESSION: u32 = 0x0016;
 
 /// Window message for display configuration changes.
 const WM_DISPLAYCHANGE: u32 = 0x007E;
@@ -150,6 +158,14 @@ static DISPLAY_CHANGE_SENDER: std::sync::Mutex<Option<mpsc::Sender<WindowEvent>>
 static POWER_STATE_SENDER: std::sync::Mutex<Option<mpsc::Sender<bool>>> =
     std::sync::Mutex::new(None);
 
+/// Process-lifetime callback for committed interactive session end. Like the
+/// forwarding senders, it survives system-event window recreation.
+static SESSION_END_HANDLER: std::sync::Mutex<Option<Arc<dyn Fn() + Send + Sync + 'static>>> =
+    std::sync::Mutex::new(None);
+
+/// Ensures duplicate committed WM_ENDSESSION messages run recovery only once.
+static SESSION_END_LATCHED: AtomicBool = AtomicBool::new(false);
+
 /// Custom message to signal the system-event thread to stop.
 const WM_QUIT_SYSEVENT_THREAD: u32 = WM_USER + 1;
 
@@ -256,12 +272,26 @@ pub fn set_power_state_sender(sender: mpsc::Sender<bool>) -> Result<(), Win32Err
     Ok(())
 }
 
+/// Register the synchronous recovery callback for committed session end.
+///
+/// Call this before `register_system_events`. The callback survives system-event
+/// window recreation and is invoked at most once after registration.
+pub fn set_session_end_handler(
+    handler: Arc<dyn Fn() + Send + Sync + 'static>,
+) -> Result<(), Win32Error> {
+    let mut guard = SESSION_END_HANDLER.lock().map_err(|_| {
+        Win32Error::HookInstallFailed("Session end handler mutex poisoned".to_string())
+    })?;
+    SESSION_END_LATCHED.store(false, Ordering::SeqCst);
+    *guard = Some(handler);
+    Ok(())
+}
+
 /// Create the hidden system-event window and start its message loop.
 ///
-/// The window receives `WM_DISPLAYCHANGE`, `WM_SETTINGCHANGE` (work area), and
-/// `WM_POWERBROADCAST` and forwards them through the senders registered with
-/// [`set_display_change_sender`] / [`set_power_state_sender`]. Hotkeys are
-/// matched separately by the keyboard hook (`keyboard_hook.rs`).
+/// The window receives display, work-area, power, and interactive session-end
+/// messages. It forwards notifications through the registered senders/callback;
+/// hotkeys are matched separately by the keyboard hook (`keyboard_hook.rs`).
 ///
 /// # Returns
 /// * Handle to keep the window alive (drop to tear it down)
@@ -283,8 +313,8 @@ pub fn register_system_events() -> Result<SystemEventHandle, Win32Error> {
             };
             RegisterClassW(&wc);
 
-            // Create a hidden top-level window.
-            // WM_DISPLAYCHANGE is broadcast to top-level windows, but not to message-only windows.
+            // Create a hidden top-level window. Broadcast messages such as
+            // WM_DISPLAYCHANGE and WM_QUERYENDSESSION skip message-only windows.
             let hwnd = CreateWindowExW(
                 WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
                 windows::core::PCWSTR(class_name.as_ptr()),
@@ -416,6 +446,23 @@ fn sysevent_window_proc_inner(
     lparam: windows::Win32::Foundation::LPARAM,
 ) -> windows::Win32::Foundation::LRESULT {
     match msg {
+        WM_QUERYENDSESSION => windows::Win32::Foundation::LRESULT(1),
+        WM_ENDSESSION => {
+            if wparam.0 != 0
+                && SESSION_END_LATCHED
+                    .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                    .is_ok()
+            {
+                let handler = SESSION_END_HANDLER
+                    .lock()
+                    .unwrap_or_else(recover_poisoned_mutex)
+                    .clone();
+                if let Some(handler) = handler {
+                    handler();
+                }
+            }
+            windows::Win32::Foundation::LRESULT(0)
+        }
         WM_DISPLAYCHANGE => {
             tracing::info!("Display configuration changed (WM_DISPLAYCHANGE)");
 
@@ -736,6 +783,7 @@ mod tests {
                 .unwrap_or_else(recover_poisoned_mutex);
             *g = Some(power_tx);
         }
+        set_session_end_handler(Arc::new(|| {})).unwrap();
 
         // Dropping the system-event window happens on every config reload. It
         // must NOT clear the daemon's forwarding senders, or display-change and
@@ -769,6 +817,14 @@ mod tests {
             "power sender must survive window drop"
         );
         drop(power_sender);
+        let session_end_handler = SESSION_END_HANDLER
+            .lock()
+            .unwrap_or_else(recover_poisoned_mutex);
+        assert!(
+            session_end_handler.is_some(),
+            "session-end handler must survive window drop"
+        );
+        drop(session_end_handler);
 
         // Cleanup for other tests.
         *DISPLAY_CHANGE_SENDER
@@ -777,6 +833,71 @@ mod tests {
         *POWER_STATE_SENDER
             .lock()
             .unwrap_or_else(recover_poisoned_mutex) = None;
+        *SESSION_END_HANDLER
+            .lock()
+            .unwrap_or_else(recover_poisoned_mutex) = None;
+        SESSION_END_LATCHED.store(false, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn test_sysevent_window_proc_handles_committed_session_end_once() {
+        let _guard = HOTKEY_TEST_LOCK
+            .lock()
+            .unwrap_or_else(recover_poisoned_mutex);
+
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let handler_calls = calls.clone();
+        set_session_end_handler(Arc::new(move || {
+            handler_calls.fetch_add(1, Ordering::SeqCst);
+        }))
+        .unwrap();
+
+        let hwnd = HWND(std::ptr::null_mut());
+        let lparam = windows::Win32::Foundation::LPARAM(0);
+
+        let query_result = sysevent_window_proc_inner(
+            hwnd,
+            WM_QUERYENDSESSION,
+            windows::Win32::Foundation::WPARAM(0),
+            lparam,
+        );
+        assert_eq!(query_result.0, 1);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert!(!SESSION_END_LATCHED.load(Ordering::SeqCst));
+
+        let cancelled_result = sysevent_window_proc_inner(
+            hwnd,
+            WM_ENDSESSION,
+            windows::Win32::Foundation::WPARAM(0),
+            lparam,
+        );
+        assert_eq!(cancelled_result.0, 0);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert!(!SESSION_END_LATCHED.load(Ordering::SeqCst));
+
+        let committed_result = sysevent_window_proc_inner(
+            hwnd,
+            WM_ENDSESSION,
+            windows::Win32::Foundation::WPARAM(1),
+            lparam,
+        );
+        assert_eq!(committed_result.0, 0);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(SESSION_END_LATCHED.load(Ordering::SeqCst));
+
+        let duplicate_result = sysevent_window_proc_inner(
+            hwnd,
+            WM_ENDSESSION,
+            windows::Win32::Foundation::WPARAM(1),
+            lparam,
+        );
+        assert_eq!(duplicate_result.0, 0);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        *SESSION_END_HANDLER
+            .lock()
+            .unwrap_or_else(recover_poisoned_mutex) = None;
+        SESSION_END_LATCHED.store(false, Ordering::SeqCst);
     }
 
     #[test]

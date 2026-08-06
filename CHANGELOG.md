@@ -14,6 +14,11 @@ All notable changes to LeopardWM will be documented in this file.
 - **Windows input-method helpers no longer leave blank columns after sign-in.**
   The `IME` and `MSCTFIME UI` helper classes are rejected during live and
   startup admission instead of remaining managed after becoming invisible.
+- **Windows session end no longer strands scrolled-away windows off-screen.**
+  Committed sign-out, restart, and shutdown now restore snap styles and visible
+  window positions before the interactive session ends, preventing off-screen
+  sentinel geometry from carrying into the next sign-in. Graceful daemon
+  shutdown remains best effort after visibility recovery.
 - **Closing the console no longer strands scrolled-away windows off-screen.**
   Console close and Ctrl+C / Ctrl+Break now restore windows parked at the
   off-screen sentinel before graceful shutdown, and the watchdog stays alive
