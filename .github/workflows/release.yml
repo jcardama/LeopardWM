@@ -3,10 +3,12 @@ on:
   push:
     tags: ["v*"]
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
+    permissions:
+      contents: write
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -80,7 +82,7 @@ jobs:
     # opens a version-bump PR from that fork.
     if: ${{ !github.event.repository.fork }}
     steps:
-      - uses: vedantmgoyal9/winget-releaser@main
+      - uses: vedantmgoyal9/winget-releaser@b3a5dae0047c6180023acba3f548c55fdf6b7193 # main 2026-07-28
         with:
           identifier: jcardama.LeopardWM
           installers-regex: '\.msi$'
