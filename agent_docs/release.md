@@ -4,26 +4,34 @@ Guide for all agents and contributors releasing LeopardWM.
 
 ## Version Format
 
-Semantic versioning: `vX.Y.Z` (e.g., `v0.1.5`).
+Semantic versioning: `vX.Y.Z` (for example, `v0.2.6`).
 Version is set in the workspace `Cargo.toml` under `[workspace.package]`.
 
 ## Release Workflow
 
-The GitHub Actions workflow (`.github/workflows/release.yml`) triggers on tag pushes matching `v*`.
+`.github/workflows/release.yml` triggers when a tag matching `v*` is pushed.
+The tag push is the publication boundary; do not build or publish release assets manually.
 
-**What it does:**
-1. Checks out code on `windows-latest`
-2. Builds release: `cargo build --release`
-3. Runs tests: `cargo test --all`
-4. Packages: `leopardwm.exe` + `leopardwm-cli.exe` + `README.md` + `LICENSE` into `LeopardWM-{version}-x86_64-windows.zip`
-5. Extracts release notes from `CHANGELOG.md` (section matching `## X.Y.Z` or `## [X.Y.Z]`)
-6. Creates GitHub Release with the zip and notes (falls back to auto-generated notes if no changelog section found)
+The workflow:
 
-Binary path: `target/x86_64-pc-windows-msvc/release/` (explicit target in `.cargo/config.toml`).
+1. Checks out the tagged commit on `windows-latest` with the stable MSVC toolchain.
+2. Builds release binaries with `cargo build --release`.
+3. Verifies that `leopardwm.exe` and `leopardwm-watchdog.exe` use the Windows GUI subsystem.
+4. Runs `cargo test --all`.
+5. Packages `leopardwm.exe`, `leopardwm-cli.exe`, `lwm.exe`, `leopardwm-watchdog.exe`, `README.md`, and `LICENSE` into `LeopardWM-{version}-x86_64-windows.zip`.
+6. Builds the per-machine MSI with `cargo wix` and `wix/main.wxs`.
+7. Extracts the matching version section from `CHANGELOG.md` for release notes.
+8. Generates `checksums.txt` with SHA-256 hashes for the ZIP and MSI.
+9. Creates the GitHub Release with the ZIP, MSI, checksums, and release notes.
+10. Runs the dependent Winget job, which opens a public `microsoft/winget-pkgs` PR for `jcardama.LeopardWM` using the released MSI.
+
+Binary path: `target/x86_64-pc-windows-msvc/release/` (the explicit target is configured in `.cargo/config.toml`).
+
+A successful GitHub Release does not imply the Winget job succeeded. Verify both jobs independently.
 
 ## Changelog Format
 
-Conventional Commits style in `CHANGELOG.md`:
+Use Conventional Commits-style sections in `CHANGELOG.md`:
 
 ```markdown
 ## 0.2.0
@@ -34,26 +42,37 @@ Conventional Commits style in `CHANGELOG.md`:
 ### Improvements
 - Improve border rendering performance on multi-monitor setups
 
-### Bug Fixes
+### Fixes
 - Fix transient window suppression for Beeper desktop app
 ```
 
-Section header: `## X.Y.Z` (no `v` prefix, brackets optional).
+The section header is `## X.Y.Z` without a `v` prefix; brackets are also accepted by the extraction script.
 
 ## Pre-Release Checklist
 
-1. Update `CHANGELOG.md` with all notable changes
-2. Bump `version` in workspace `Cargo.toml`
-3. Run full CI locally: `cargo test --all && cargo clippy --all -- -D warnings`
-4. Commit: `chore: prepare release X.Y.Z`
-5. Tag: `git tag vX.Y.Z`
-6. Push tag: `git push origin vX.Y.Z`
-7. Monitor the release workflow on GitHub Actions
+1. Update `CHANGELOG.md` with all notable user-facing changes.
+2. Bump `[workspace.package].version` in `Cargo.toml` and update `Cargo.lock`.
+3. Update the stable MSVC toolchain so local clippy matches current CI.
+4. Run the local release gate and inspect every result:
+   - `cargo build --release`
+   - `pwsh ./.github/verify-gui-subsystems.ps1`
+   - `cargo test --all`
+   - `cargo clippy --all -- -D warnings`
+   - `cargo fmt --all -- --check`
+5. Commit the release preparation without co-author trailers.
+6. Freeze the candidate commit and independently review the exact diff from the previous release.
+7. Push the candidate to `main` without force and require the `check` workflow to pass for that exact SHA.
+8. Confirm `origin/main` still matches the candidate and the release tag does not already exist.
+9. Create the lightweight tag: `git tag vX.Y.Z <candidate-sha>`.
+10. Push only the tag: `git push origin refs/tags/vX.Y.Z`.
+11. Monitor the Release workflow, then verify the GitHub Release, ZIP/MSI checksums, ZIP contents, release notes, and Winget PR.
 
-## Branch Protection (main)
+Any candidate change after verification or review requires rerunning the complete gate and review before publication.
 
-- Required status check: `ci` (strict — branch must be up to date)
-- Required approving reviews: 1
-- Required linear history (rebase or squash merge only)
-- Enforce admins: disabled (admin bypass available)
-- Force pushes: not allowed
+## Branch Protection (`main`)
+
+- Required status check: `check` (strict; the branch must be up to date).
+- Required approving reviews: 1.
+- Linear history is required.
+- Admin enforcement is disabled, so repository administrators can bypass these requirements without changing protection settings.
+- Force pushes are not allowed.
