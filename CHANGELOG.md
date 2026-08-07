@@ -45,10 +45,11 @@ All notable changes to LeopardWM will be documented in this file.
   explains what happened. Logs now include every candidate window from the
   timed-out batch with best-effort class, title, and executable details, without
   claiming one was the blocker.
-- **Shell-open actions no longer route through `cmd.exe`.** Opening the config
-  file, log folder, releases page, or settings links no longer launches
-  `cmd /c start`, so paths and URLs containing characters like `&` or `%` are
-  no longer reinterpreted as shell syntax or environment variables.
+- **Shell-open actions no longer invoke `cmd.exe` or block the daemon.** Opening
+  the config file, log folder, releases page, or settings links now uses
+  `ShellExecuteW` on a dedicated COM-initialized worker, so shell association
+  resolution cannot stall the event loop and characters like `&` or `%` are not
+  reinterpreted as shell syntax or environment variables.
 
 ### Improvements
 

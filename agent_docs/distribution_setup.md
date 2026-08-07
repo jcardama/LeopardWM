@@ -4,19 +4,14 @@ Manual one-time steps to enable winget auto-publishing and code signing. Each se
 
 ## winget — `WINGET_TOKEN` secret
 
-The `publish-winget` job in `.github/workflows/release.yml` uses the `vedantmgoyal9/winget-releaser` action to fork `microsoft/winget-pkgs`, generate a manifest from the released MSI, and open a PR. It needs a fine-grained personal access token with permission to push to that fork.
+The `publish-winget` job in `.github/workflows/release.yml` uses the `vedantmgoyal9/winget-releaser` action to fork `microsoft/winget-pkgs`, generate a manifest from the released MSI, and open a PR. The action requires a classic personal access token with the `public_repo` scope; fine-grained tokens cannot open the upstream PR.
 
-1. Go to https://github.com/settings/personal-access-tokens/new
-2. **Token name:** `LeopardWM winget releaser`
+1. Go to https://github.com/settings/tokens/new
+2. **Note:** `LeopardWM winget releaser`
 3. **Expiration:** `1 year` (renew when it expires)
-4. **Resource owner:** `jcardama`
-5. **Repository access:** `All repositories` (the action creates a fork of microsoft/winget-pkgs on first run; the PAT needs to push to it)
-6. **Permissions** → **Repository permissions:**
-   - `Contents`: Read and write
-   - `Pull requests`: Read and write
-   - `Workflows`: Read and write
-7. Click **Generate token**, copy the value (starts with `github_pat_`).
-8. Add as repo secret:
+4. Select the `public_repo` scope.
+5. Click **Generate token** and copy the value.
+6. Add it as the repository secret:
    ```
    gh secret set WINGET_TOKEN --repo jcardama/LeopardWM
    # (paste the token when prompted)

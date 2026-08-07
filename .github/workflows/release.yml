@@ -38,7 +38,8 @@ jobs:
             --target x86_64-pc-windows-msvc \
             --no-build --nocapture \
             --bin-path "C:\Program Files (x86)\WiX Toolset v3.14\bin"
-          ls target/wix/*.msi
+          cp target/wix/*.msi .
+          ls *.msi
       - name: Extract changelog
         id: changelog
         shell: bash
@@ -58,15 +59,14 @@ jobs:
       - name: Generate SHA256 checksums
         shell: bash
         run: |
-          sha256sum LeopardWM-*.zip > checksums.txt
-          sha256sum target/wix/*.msi >> checksums.txt
+          sha256sum LeopardWM-*.zip *.msi > checksums.txt
           cat checksums.txt
       - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         id: gh_release
         with:
           files: |
             LeopardWM-*.zip
-            target/wix/*.msi
+            *.msi
             checksums.txt
           body: ${{ steps.changelog.outputs.body }}
           generate_release_notes: ${{ steps.changelog.outputs.body == '' }}

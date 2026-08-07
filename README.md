@@ -90,7 +90,7 @@ winget install jcardama.LeopardWM         # Windows Package Manager
 scoop install extras/leopardwm            # Scoop (after `scoop bucket add extras`)
 ```
 
-Both fetch the signed MSI installer and put `leopardwm`, `leopardwm-cli`, and `lwm` on your PATH. `winget upgrade` / `scoop update` keep you on the latest release.
+Both install LeopardWM and put `leopardwm`, `leopardwm-cli`, and `lwm` on your PATH. `winget upgrade` / `scoop update` keep you on the latest release.
 
 ### Via MSI installer
 
@@ -105,7 +105,7 @@ For users who prefer not to install:
 3. Run `leopardwm.exe`
 4. (Optional) Enable autostart: `lwm autostart enable`
 
-Releases are signed via the [SignPath Foundation](https://signpath.org/) program.
+Current releases are not code-signed, so Windows SmartScreen may show a warning on first install.
 
 ## Quick Start (from source)
 
