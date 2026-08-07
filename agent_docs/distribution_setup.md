@@ -4,12 +4,12 @@ Manual one-time steps to enable winget auto-publishing and code signing. Each se
 
 ## winget — `WINGET_TOKEN` secret
 
-The `publish-winget` job in `.github/workflows/release.yml` uses the `vedantmgoyal9/winget-releaser` action to fork `microsoft/winget-pkgs`, generate a manifest from the released MSI, and open a PR. The action requires a classic personal access token with the `public_repo` scope; fine-grained tokens cannot open the upstream PR.
+The `publish-winget` job in `.github/workflows/release.yml` uses the `vedantmgoyal9/winget-releaser` action to fork `microsoft/winget-pkgs`, generate a manifest from the released MSI, and open a PR. The action requires a classic personal access token with the `public_repo` and `workflow` scopes; fork synchronization can import upstream workflow files, which GitHub rejects without `workflow`. Fine-grained tokens cannot open the upstream PR.
 
 1. Go to https://github.com/settings/tokens/new
 2. **Note:** `LeopardWM winget releaser`
 3. **Expiration:** `1 year` (renew when it expires)
-4. Select the `public_repo` scope.
+4. Select the `public_repo` and `workflow` scopes.
 5. Click **Generate token** and copy the value.
 6. Add it as the repository secret:
    ```

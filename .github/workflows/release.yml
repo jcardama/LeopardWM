@@ -76,10 +76,10 @@ jobs:
   publish-winget:
     needs: build
     runs-on: windows-latest
-    # WINGET_TOKEN must be a CLASSIC PAT with the `public_repo` scope (not a
-    # fine-grained PAT — those can't open the upstream PR). The action forks
-    # microsoft/winget-pkgs to the token owner's account on first run, then
-    # opens a version-bump PR from that fork.
+    # WINGET_TOKEN must be a CLASSIC PAT with the `public_repo` and `workflow`
+    # scopes. Fork sync may import upstream workflow files, which GitHub rejects
+    # without `workflow`; fine-grained PATs can't open the upstream PR. The action
+    # forks microsoft/winget-pkgs, then opens a version-bump PR from that fork.
     if: ${{ !github.event.repository.fork }}
     steps:
       - uses: vedantmgoyal9/winget-releaser@b3a5dae0047c6180023acba3f548c55fdf6b7193 # main 2026-07-28
