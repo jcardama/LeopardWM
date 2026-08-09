@@ -3006,6 +3006,79 @@ fn test_pull_window_to_workspace() {
     assert!(!state.pull_window_to_workspace(999, mon, 1, mon, 0));
 }
 
+fn assert_workspace_switch_transition_direction(
+    current_idx: usize,
+    target_idx: usize,
+    command: IpcCommand,
+    expected_enter_offset: i32,
+) {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    let monitor = state.focused_monitor;
+    let source_window = 100;
+    let destination_window = 200;
+    state.ensure_workspace_exists(monitor, current_idx);
+    state.ensure_workspace_exists(monitor, target_idx);
+    state.workspaces.get_mut(&monitor).unwrap()[current_idx]
+        .insert_window(source_window, Some(800))
+        .unwrap();
+    state.workspaces.get_mut(&monitor).unwrap()[target_idx]
+        .insert_window(destination_window, Some(800))
+        .unwrap();
+    state.active_workspace.insert(monitor, current_idx);
+
+    let viewport = state.layout_viewport(monitor);
+    let source_rect = state.workspaces[&monitor][current_idx]
+        .compute_placements_animated(viewport)
+        .into_iter()
+        .find(|placement| placement.window_id == source_window)
+        .unwrap()
+        .rect;
+    let destination_rect = state.workspaces[&monitor][target_idx]
+        .compute_placements_animated(viewport)
+        .into_iter()
+        .find(|placement| placement.window_id == destination_window)
+        .unwrap()
+        .rect;
+    let slide_height = state.monitors[&monitor].work_area.height;
+    state.reduce_motion = false;
+
+    assert!(matches!(state.handle_command(command), IpcResponse::Ok));
+    let transition = state.layout_transition.as_ref().unwrap();
+    assert_eq!(
+        transition.start_rects[&destination_window].y,
+        destination_rect.y + expected_enter_offset * slide_height,
+        "entering workspace must slide in the requested direction"
+    );
+    assert_eq!(
+        transition.exit_rects[&source_window].y,
+        source_rect.y - expected_enter_offset * slide_height,
+        "leaving workspace must slide out opposite the requested direction"
+    );
+}
+
+#[test]
+fn test_workspace_relative_switch_wrap_animation_direction() {
+    assert_workspace_switch_transition_direction(0, 8, IpcCommand::WorkspacePrev, -1);
+    assert_workspace_switch_transition_direction(8, 0, IpcCommand::WorkspaceNext, 1);
+}
+
+#[test]
+fn test_workspace_relative_switch_adjacent_animation_direction() {
+    assert_workspace_switch_transition_direction(0, 1, IpcCommand::WorkspaceNext, 1);
+    assert_workspace_switch_transition_direction(1, 0, IpcCommand::WorkspacePrev, -1);
+}
+
+#[test]
+fn test_workspace_numeric_switch_retains_raw_index_animation_direction() {
+    assert_workspace_switch_transition_direction(0, 8, IpcCommand::SwitchWorkspace { index: 9 }, 1);
+    assert_workspace_switch_transition_direction(
+        8,
+        0,
+        IpcCommand::SwitchWorkspace { index: 1 },
+        -1,
+    );
+}
+
 #[test]
 fn test_move_to_workspace_relative_wraps_around() {
     // Prev from the first workspace wraps to the last (index 8 = workspace 9).

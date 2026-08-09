@@ -659,14 +659,12 @@ impl AppState {
         const COUNT: usize = 9;
         let monitor = self.focused_monitor;
         let current = self.active_workspace_idx(monitor);
-        let target = match cmd {
-            IpcCommand::WorkspacePrev => (current + COUNT - 1) % COUNT,
-            IpcCommand::WorkspaceNext => (current + 1) % COUNT,
+        let (target, forward) = match cmd {
+            IpcCommand::WorkspacePrev => ((current + COUNT - 1) % COUNT, false),
+            IpcCommand::WorkspaceNext => ((current + 1) % COUNT, true),
             _ => unreachable!(),
         };
-        self.handle_command(IpcCommand::SwitchWorkspace {
-            index: (target + 1) as u8,
-        })
+        self.handle_switch_workspace_with_direction((target + 1) as u8, Some(forward))
     }
 
     /// Move the focused window to the previous (`forward = false`) or next
@@ -910,6 +908,14 @@ impl AppState {
 
     /// Handle `IpcCommand::SwitchWorkspace`.
     fn handle_switch_workspace(&mut self, index: u8) -> IpcResponse {
+        self.handle_switch_workspace_with_direction(index, None)
+    }
+
+    fn handle_switch_workspace_with_direction(
+        &mut self,
+        index: u8,
+        relative_forward: Option<bool>,
+    ) -> IpcResponse {
         if !(1..=9).contains(&index) {
             return IpcResponse::error("Workspace index must be 1-9");
         }
@@ -992,10 +998,11 @@ impl AppState {
             .map(|m| m.work_area.height)
             .unwrap_or(crate::state::FALLBACK_WORK_AREA_HEIGHT);
         // Positive offset = new workspace enters from below (scrolling up).
-        let y_offset = if idx > current_idx {
-            slide_height
-        } else {
-            -slide_height
+        let y_offset = match relative_forward {
+            Some(true) => slide_height,
+            Some(false) => -slide_height,
+            None if idx > current_idx => slide_height,
+            None => -slide_height,
         };
 
         // Snapshot old workspace's current positions (start for exiting windows).
