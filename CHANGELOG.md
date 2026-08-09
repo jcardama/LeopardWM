@@ -6,6 +6,9 @@ All notable changes to LeopardWM will be documented in this file.
 
 ### Fixes
 
+- **Disabled hotkeys survive unrelated Settings saves.** A disabled action now
+  takes precedence over an obsolete matching binding when Settings loads, so
+  manual `hotkeys.disabled` entries and cleared rows are not erased on save.
 - **Focus borders no longer linger after their window closes or hides.**
 
 ## 0.2.6

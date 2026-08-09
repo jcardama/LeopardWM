@@ -1916,7 +1916,7 @@ function loadHotkeysSorted(bindings, scrollModifier, disabled) {
   /* Render in defined order. A command the user disabled stays empty rather
      than falling back to its default. */
   CMD_ORDER.forEach(function(cmd) {
-    var key = cmdToKey[cmd] || (disabledSet.indexOf(cmd) === -1 ? defaultKeyForCmd(cmd) : '');
+    var key = disabledSet.indexOf(cmd) !== -1 ? '' : (cmdToKey[cmd] || defaultKeyForCmd(cmd));
     addHotkeyRow(key, cmd);
   });
   /* Append any custom commands not in CMD_ORDER */
@@ -2339,5 +2339,13 @@ mod tests {
             .contains("row.querySelector('.row-delete').disabled = row === onlyValidRow;"));
         assert!(SETTINGS_HTML.contains("widthPresets = lastValidWidthPresets.slice();"));
         assert!(SETTINGS_HTML.contains("default_width_preset: defaultWidthPreset"));
+    }
+
+    #[test]
+    fn disabled_hotkeys_survive_settings_saves() {
+        assert!(SETTINGS_HTML.contains(
+            "var key = disabledSet.indexOf(cmd) !== -1 ? '' : (cmdToKey[cmd] || defaultKeyForCmd(cmd));"
+        ));
+        assert!(SETTINGS_HTML.contains("if (!k && c && defaultKeyForCmd(c)) d.push(c);"));
     }
 }
