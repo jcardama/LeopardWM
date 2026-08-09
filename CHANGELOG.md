@@ -2,6 +2,12 @@
 
 All notable changes to LeopardWM will be documented in this file.
 
+## 0.2.7
+
+### Fixes
+
+- **Focus borders no longer linger after their window closes or hides.**
+
 ## 0.2.6
 
 ### Fixes

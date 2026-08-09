@@ -746,6 +746,7 @@ impl AppState {
 
         // Clear stale focus reference
         if self.previous_focused_hwnd == Some(hwnd) {
+            self.hide_border();
             self.previous_focused_hwnd = None;
             let monitor = self.focused_monitor as i64;
             self.broadcast_focused_window_if_changed(monitor, None);

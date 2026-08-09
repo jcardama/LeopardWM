@@ -223,6 +223,9 @@ impl AppState {
 
     /// Hide the border frame.
     pub(crate) fn hide_border(&self) {
+        #[cfg(test)]
+        self.border_hide_count
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if let Some(ref frame) = self.border_frame {
             frame.hide();
         }

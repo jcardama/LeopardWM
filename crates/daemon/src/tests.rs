@@ -3374,6 +3374,93 @@ fn test_recently_hidden_hwnd_suppresses_recreation() {
 }
 
 #[test]
+fn test_destroyed_or_hidden_focused_window_clears_focus_and_recovers() {
+    for event in [WindowEvent::Destroyed(100), WindowEvent::Hidden(100)] {
+        let mut state = AppState::new_with_config(test_config(), test_monitors());
+        let monitor = state.focused_monitor;
+        for hwnd in [100, 200] {
+            state
+                .injected_window_info
+                .insert(hwnd, make_test_window_info(hwnd));
+            state.handle_window_event(WindowEvent::Created(hwnd));
+        }
+        state
+            .focused_workspace_mut()
+            .unwrap()
+            .focus_window(100)
+            .unwrap();
+        state.previous_focused_hwnd = Some(100);
+        let mut rx = state.event_broadcaster.subscribe();
+
+        state.handle_window_event(event);
+
+        assert_eq!(state.border_hide_count.load(Ordering::Relaxed), 1);
+        assert_eq!(state.previous_focused_hwnd, None);
+        assert_eq!(state.last_broadcast_focused, Some((monitor as i64, None)));
+        let mut saw_clear = false;
+        while let Ok(event) = rx.try_recv() {
+            saw_clear |= matches!(
+                event,
+                leopardwm_ipc::IpcEvent::FocusedWindowChanged { hwnd: None, .. }
+            );
+        }
+        assert!(saw_clear);
+
+        state.handle_window_event(WindowEvent::Focused(200));
+
+        assert_eq!(state.border_hide_count.load(Ordering::Relaxed), 1);
+        assert_eq!(state.previous_focused_hwnd, Some(200));
+        assert_eq!(
+            state.last_broadcast_focused,
+            Some((monitor as i64, Some(200)))
+        );
+        let mut saw_refocus = false;
+        while let Ok(event) = rx.try_recv() {
+            saw_refocus |= matches!(
+                event,
+                leopardwm_ipc::IpcEvent::FocusedWindowChanged {
+                    hwnd: Some(200),
+                    ..
+                }
+            );
+        }
+        assert!(saw_refocus);
+    }
+}
+
+#[test]
+fn test_destroyed_or_hidden_unfocused_window_preserves_focus() {
+    for event in [WindowEvent::Destroyed(100), WindowEvent::Hidden(100)] {
+        let mut state = AppState::new_with_config(test_config(), test_monitors());
+        let monitor = state.focused_monitor;
+        for hwnd in [100, 200] {
+            state
+                .injected_window_info
+                .insert(hwnd, make_test_window_info(hwnd));
+            state.handle_window_event(WindowEvent::Created(hwnd));
+        }
+        state.previous_focused_hwnd = Some(200);
+        state.last_broadcast_focused = Some((monitor as i64, Some(200)));
+        let mut rx = state.event_broadcaster.subscribe();
+
+        state.handle_window_event(event);
+
+        assert_eq!(state.border_hide_count.load(Ordering::Relaxed), 0);
+        assert_eq!(state.previous_focused_hwnd, Some(200));
+        assert_eq!(
+            state.last_broadcast_focused,
+            Some((monitor as i64, Some(200)))
+        );
+        let mut saw_focus_change = false;
+        while let Ok(event) = rx.try_recv() {
+            saw_focus_change |=
+                matches!(event, leopardwm_ipc::IpcEvent::FocusedWindowChanged { .. });
+        }
+        assert!(!saw_focus_change);
+    }
+}
+
+#[test]
 fn test_hidden_window_restores_column_width_on_reshow() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
     state
