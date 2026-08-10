@@ -2,13 +2,14 @@
 
 use crate::config;
 use crate::state::{
-    AppState, DragHintAction, DragState, EDIT_CONFIG_PULL_TTL, FALLBACK_VIEWPORT_HEIGHT,
-    FALLBACK_VIEWPORT_WIDTH, RECENTLY_HIDDEN_TTL, TRANSIENT_WINDOW_THRESHOLD,
+    AppState, ApplicationFullscreenState, DragHintAction, DragState, EDIT_CONFIG_PULL_TTL,
+    FALLBACK_VIEWPORT_HEIGHT, FALLBACK_VIEWPORT_WIDTH, RECENTLY_HIDDEN_TTL,
+    TRANSIENT_WINDOW_THRESHOLD,
 };
 use leopardwm_core_layout::Rect;
 use leopardwm_platform_win32::{
     enumerate_monitors, find_monitor_for_rect, get_process_executable, is_shift_key_pressed,
-    WindowEvent,
+    MonitorInfo, WindowEvent,
 };
 use tracing::{debug, info, warn};
 
@@ -53,6 +54,185 @@ pub(crate) fn fullscreen_focus_guard(
         return None;
     }
     fullscreen.filter(|&fs| fs != focused_hwnd)
+}
+
+pub(crate) fn detect_application_fullscreen<'a>(
+    monitors: impl IntoIterator<Item = &'a MonitorInfo>,
+    chrome_rect: Option<Rect>,
+    dwm_rect: Option<Rect>,
+    is_zoomed: bool,
+) -> Option<ApplicationFullscreenState> {
+    if is_zoomed {
+        return None;
+    }
+    let rect = chrome_rect.or(dwm_rect)?;
+    let monitor = monitors
+        .into_iter()
+        .find(|monitor| rect_matches_monitor(rect, monitor))?;
+    Some(ApplicationFullscreenState {
+        monitor_id: monitor.id,
+        rect: monitor.rect,
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ApplicationFullscreenLifecycle {
+    Enter,
+    Continue,
+    Reassign,
+    Exit,
+    None,
+}
+
+pub(crate) fn application_fullscreen_lifecycle(
+    tracked: Option<ApplicationFullscreenState>,
+    observed: Option<ApplicationFullscreenState>,
+) -> ApplicationFullscreenLifecycle {
+    match (tracked, observed) {
+        (None, Some(_)) => ApplicationFullscreenLifecycle::Enter,
+        (Some(previous), Some(current)) if previous.monitor_id != current.monitor_id => {
+            ApplicationFullscreenLifecycle::Reassign
+        }
+        (Some(_), Some(_)) => ApplicationFullscreenLifecycle::Continue,
+        (Some(_), None) => ApplicationFullscreenLifecycle::Exit,
+        (None, None) => ApplicationFullscreenLifecycle::None,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MovedOrResizedDecision {
+    Fullscreen(ApplicationFullscreenLifecycle),
+    Suppress,
+    Continue,
+}
+
+pub(crate) fn moved_or_resized_decision(
+    lifecycle: ApplicationFullscreenLifecycle,
+    ordinary_suppressed: bool,
+) -> MovedOrResizedDecision {
+    if lifecycle != ApplicationFullscreenLifecycle::None {
+        MovedOrResizedDecision::Fullscreen(lifecycle)
+    } else if ordinary_suppressed {
+        MovedOrResizedDecision::Suppress
+    } else {
+        MovedOrResizedDecision::Continue
+    }
+}
+
+pub(crate) fn application_fullscreen_expected_layout_rect(
+    current_layout_rect: Option<Rect>,
+    last_placed_layout_rect: Option<Rect>,
+) -> Option<Rect> {
+    current_layout_rect.or(last_placed_layout_rect)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ApplicationFullscreenReconciliation {
+    Retain,
+    Update,
+    Exit,
+}
+
+pub(crate) fn application_fullscreen_reconciliation(
+    is_valid: bool,
+    is_managed: bool,
+    is_zoomed: bool,
+    stored: ApplicationFullscreenState,
+    observed: Option<ApplicationFullscreenState>,
+    current_rect: Option<Rect>,
+    tolerance: i32,
+) -> ApplicationFullscreenReconciliation {
+    if !is_valid || !is_managed || is_zoomed {
+        return ApplicationFullscreenReconciliation::Exit;
+    }
+    if observed.is_some() {
+        return ApplicationFullscreenReconciliation::Update;
+    }
+    if current_rect.is_some_and(|rect| rects_match_with_tolerance(rect, stored.rect, tolerance)) {
+        ApplicationFullscreenReconciliation::Retain
+    } else {
+        ApplicationFullscreenReconciliation::Exit
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ApplicationFullscreenExitRoute {
+    FloatingPreserve,
+    MaximizedAllow,
+    InactivePark,
+    ActiveTiledApply,
+}
+
+pub(crate) fn application_fullscreen_exit_route(
+    is_floating: bool,
+    is_maximized: bool,
+    is_active_workspace: bool,
+) -> ApplicationFullscreenExitRoute {
+    if is_floating {
+        ApplicationFullscreenExitRoute::FloatingPreserve
+    } else if is_maximized {
+        ApplicationFullscreenExitRoute::MaximizedAllow
+    } else if !is_active_workspace {
+        ApplicationFullscreenExitRoute::InactivePark
+    } else {
+        ApplicationFullscreenExitRoute::ActiveTiledApply
+    }
+}
+
+pub(crate) fn application_fullscreen_exit_restores_border(
+    route: ApplicationFullscreenExitRoute,
+    is_focused: bool,
+) -> bool {
+    is_focused
+        && matches!(
+            route,
+            ApplicationFullscreenExitRoute::FloatingPreserve
+                | ApplicationFullscreenExitRoute::MaximizedAllow
+        )
+}
+
+pub(crate) fn fullscreen_rect_tolerance(scale_factor: f64) -> i32 {
+    (scale_factor * 8.0).round().clamp(1.0, 20.0) as i32
+}
+
+fn rect_matches_monitor(rect: Rect, monitor: &MonitorInfo) -> bool {
+    rects_match_with_tolerance(
+        rect,
+        monitor.rect,
+        fullscreen_rect_tolerance(monitor.scale_factor),
+    )
+}
+
+fn rects_match_with_tolerance(left: Rect, right: Rect, tolerance: i32) -> bool {
+    (left.x - right.x).abs() <= tolerance
+        && (left.y - right.y).abs() <= tolerance
+        && (left.x.saturating_add(left.width) - right.x.saturating_add(right.width)).abs()
+            <= tolerance
+        && (left.y.saturating_add(left.height) - right.y.saturating_add(right.height)).abs()
+            <= tolerance
+}
+
+pub(crate) fn chrome_rect_matches_layout_rect(
+    chrome_rect: Rect,
+    layout_rect: Rect,
+    insets: (i32, i32, i32, i32),
+    scale_factor: f64,
+) -> bool {
+    let (left, top, right, bottom) = insets;
+    let visible_rect = Rect::new(
+        chrome_rect.x.saturating_add(left),
+        chrome_rect.y.saturating_add(top),
+        chrome_rect.width.saturating_sub(left).saturating_sub(right),
+        chrome_rect
+            .height
+            .saturating_sub(top)
+            .saturating_sub(bottom),
+    );
+    let tolerance = fullscreen_rect_tolerance(scale_factor);
+    (visible_rect.x - layout_rect.x).abs() <= tolerance
+        && (visible_rect.y - layout_rect.y).abs() <= tolerance
+        && (visible_rect.width - layout_rect.width).abs() <= tolerance
+        && (visible_rect.height - layout_rect.height).abs() <= tolerance
 }
 
 /// True when `title` names `filename` as a whole token, i.e. the filename
@@ -708,6 +888,7 @@ impl AppState {
         // Drop the recorded layout rect so the map doesn't retain
         // entries for windows that no longer exist.
         self.last_placed_layout_rects.remove(&hwnd);
+        self.application_fullscreen.remove(&hwnd);
 
         // Drop any cached overview snapshot for the same reason.
         leopardwm_platform_win32::snapshot::snapshot_remove(hwnd);
@@ -1056,7 +1237,9 @@ impl AppState {
                 // Move exit windows offscreen before clearing the transition
                 if let Some(ref transition) = self.layout_transition {
                     for wid in transition.exit_rects.keys() {
-                        let _ = leopardwm_platform_win32::move_window_offscreen(*wid);
+                        if !self.is_application_fullscreen(*wid) {
+                            let _ = leopardwm_platform_win32::move_window_offscreen(*wid);
+                        }
                     }
                 }
                 self.abort_active_ghost_transition();
@@ -1076,7 +1259,7 @@ impl AppState {
                 let viewport = self.layout_viewport(monitor_id);
 
                 // Snapshot old workspace positions for exit animation.
-                let old_placements: Vec<(u64, leopardwm_core_layout::Rect)> = self
+                let mut old_placements: Vec<(u64, leopardwm_core_layout::Rect)> = self
                     .workspaces
                     .get(&monitor_id)
                     .and_then(|v| v.get(active_idx))
@@ -1087,11 +1270,12 @@ impl AppState {
                             .collect()
                     })
                     .unwrap_or_default();
+                old_placements.retain(|(wid, _)| !self.is_application_fullscreen(*wid));
 
                 self.active_workspace.insert(monitor_id, ws_idx);
 
                 // Compute new workspace's final placements for enter animation.
-                let new_placements: Vec<(u64, leopardwm_core_layout::Rect)> = self
+                let mut new_placements: Vec<(u64, leopardwm_core_layout::Rect)> = self
                     .workspaces
                     .get(&monitor_id)
                     .and_then(|v| v.get(ws_idx))
@@ -1102,6 +1286,7 @@ impl AppState {
                             .collect()
                     })
                     .unwrap_or_default();
+                new_placements.retain(|(wid, _)| !self.is_application_fullscreen(*wid));
 
                 let mut start_rects = std::collections::HashMap::new();
                 let mut exit_rects = std::collections::HashMap::new();
@@ -1140,7 +1325,9 @@ impl AppState {
                     self.start_workspace_switch_transition(start_rects, exit_rects, duration);
                 } else {
                     for (wid, _) in &old_placements {
-                        let _ = leopardwm_platform_win32::move_window_offscreen(*wid);
+                        if !self.is_application_fullscreen(*wid) {
+                            let _ = leopardwm_platform_win32::move_window_offscreen(*wid);
+                        }
                     }
                 }
             }
@@ -1660,15 +1847,207 @@ impl AppState {
         leopardwm_platform_win32::set_dwm_transitions_disabled(hwnd, false);
     }
 
+    fn application_fullscreen_geometry(&self, hwnd: u64) -> (Option<Rect>, Option<Rect>) {
+        let chrome_rect = leopardwm_platform_win32::get_window_chrome_rect(hwnd);
+        let dwm_rect = chrome_rect
+            .is_none()
+            .then(|| leopardwm_platform_win32::get_window_visible_rect(hwnd))
+            .flatten();
+        (chrome_rect, dwm_rect)
+    }
+
+    fn observe_application_fullscreen(
+        &self,
+        hwnd: u64,
+        chrome_rect: Option<Rect>,
+        dwm_rect: Option<Rect>,
+        is_zoomed: bool,
+    ) -> Option<ApplicationFullscreenState> {
+        let (monitor_id, ws_idx) = self.find_window_workspace(hwnd)?;
+        if self
+            .workspaces
+            .get(&monitor_id)
+            .and_then(|workspaces| workspaces.get(ws_idx))
+            .is_some_and(|workspace| workspace.fullscreen_window_id() == Some(hwnd))
+        {
+            return None;
+        }
+        let session = detect_application_fullscreen(
+            self.monitors.values(),
+            chrome_rect,
+            dwm_rect,
+            is_zoomed,
+        )?;
+        if let Some(expected) = application_fullscreen_expected_layout_rect(
+            self.compute_window_layout_rect(hwnd),
+            self.last_placed_layout_rects.get(&hwnd).copied(),
+        ) {
+            let scale_factor = self
+                .monitors
+                .get(&monitor_id)
+                .map(|monitor| monitor.scale_factor)
+                .unwrap_or(1.0);
+            if chrome_rect.is_some_and(|rect| {
+                chrome_rect_matches_layout_rect(
+                    rect,
+                    expected,
+                    leopardwm_platform_win32::get_window_invisible_insets(hwnd),
+                    scale_factor,
+                )
+            }) {
+                return None;
+            }
+        }
+        Some(session)
+    }
+
+    fn exit_application_fullscreen(&mut self, hwnd: u64) {
+        if self.application_fullscreen.remove(&hwnd).is_none() {
+            return;
+        }
+        self.last_placed_layout_rects.remove(&hwnd);
+        info!("Application fullscreen window {} exited", hwnd);
+        let Some((monitor_id, ws_idx)) = self.find_window_workspace(hwnd) else {
+            return;
+        };
+        let is_floating = self
+            .workspaces
+            .get(&monitor_id)
+            .and_then(|workspaces| workspaces.get(ws_idx))
+            .is_some_and(|workspace| workspace.is_floating(hwnd));
+        let route = application_fullscreen_exit_route(
+            is_floating,
+            leopardwm_platform_win32::is_window_maximized(hwnd),
+            ws_idx == self.active_workspace_idx(monitor_id),
+        );
+        let restore_border = application_fullscreen_exit_restores_border(
+            route,
+            self.previous_focused_hwnd == Some(hwnd),
+        );
+        match route {
+            ApplicationFullscreenExitRoute::FloatingPreserve => {
+                if restore_border {
+                    self.show_border(hwnd);
+                }
+            }
+            ApplicationFullscreenExitRoute::MaximizedAllow => {
+                self.window_last_maximized_at
+                    .insert(hwnd, std::time::Instant::now());
+                if restore_border {
+                    self.show_border(hwnd);
+                }
+            }
+            ApplicationFullscreenExitRoute::InactivePark => {
+                let _ = leopardwm_platform_win32::move_window_offscreen(hwnd);
+                leopardwm_platform_win32::taskbar::taskbar_hide(hwnd);
+            }
+            ApplicationFullscreenExitRoute::ActiveTiledApply => {
+                if let Err(e) = self.apply_layout() {
+                    warn!(
+                        "Failed to restore layout after application fullscreen exit: {}",
+                        e
+                    );
+                }
+            }
+        }
+        self.update_tab_strip();
+    }
+
+    fn reconcile_application_fullscreen_sessions(&mut self) {
+        let tracked: Vec<_> = self.application_fullscreen.keys().copied().collect();
+        for hwnd in tracked {
+            let Some(stored) = self.application_fullscreen.get(&hwnd).copied() else {
+                continue;
+            };
+            let is_valid = leopardwm_platform_win32::is_valid_window(hwnd);
+            let is_managed = self.find_window_workspace(hwnd).is_some();
+            let is_zoomed = is_valid && leopardwm_platform_win32::is_window_maximized(hwnd);
+            let (chrome_rect, dwm_rect) = if is_valid {
+                self.application_fullscreen_geometry(hwnd)
+            } else {
+                (None, None)
+            };
+            let observed = if is_managed {
+                self.observe_application_fullscreen(hwnd, chrome_rect, dwm_rect, is_zoomed)
+            } else {
+                None
+            };
+            let scale_factor = self
+                .monitors
+                .get(&stored.monitor_id)
+                .or_else(|| {
+                    self.monitors
+                        .values()
+                        .find(|monitor| monitor.contains_rect_center(&stored.rect))
+                })
+                .map(|monitor| monitor.scale_factor)
+                .unwrap_or(1.0);
+            match application_fullscreen_reconciliation(
+                is_valid,
+                is_managed,
+                is_zoomed,
+                stored,
+                observed,
+                chrome_rect.or(dwm_rect),
+                fullscreen_rect_tolerance(scale_factor),
+            ) {
+                ApplicationFullscreenReconciliation::Retain => {}
+                ApplicationFullscreenReconciliation::Update => {
+                    self.application_fullscreen.insert(hwnd, observed.unwrap());
+                }
+                ApplicationFullscreenReconciliation::Exit => self.exit_application_fullscreen(hwnd),
+            }
+        }
+    }
+
     /// Handle a window move/resize notification.
     fn on_window_moved_or_resized(&mut self, hwnd: u64) {
         // Skip events triggered by our own apply_layout() to avoid feedback loop.
         // Also suppress during display change debounce — Windows resizes windows
         // during contrast theme transitions and the stale border metrics would
         // cause incorrect snap-back sizes.
-        if self.applying_layout
-            || self.display_change_pending
-            || self.should_suppress_moved_or_resized(hwnd)
+        if self.applying_layout || self.display_change_pending {
+            return;
+        }
+        let (chrome_rect, dwm_rect) = self.application_fullscreen_geometry(hwnd);
+        let session = self.observe_application_fullscreen(
+            hwnd,
+            chrome_rect,
+            dwm_rect,
+            leopardwm_platform_win32::is_window_maximized(hwnd),
+        );
+        let prior = self.application_fullscreen.get(&hwnd).copied();
+        let lifecycle = application_fullscreen_lifecycle(prior, session);
+        match lifecycle {
+            ApplicationFullscreenLifecycle::Enter | ApplicationFullscreenLifecycle::Reassign => {
+                let session = session.expect("fullscreen lifecycle requires a session");
+                self.application_fullscreen.insert(hwnd, session);
+                self.stop_ghosting_window(hwnd);
+                if self.previous_focused_hwnd == Some(hwnd) {
+                    self.hide_border();
+                }
+                self.update_tab_strip();
+                match prior {
+                    Some(old) => info!(
+                        "Application fullscreen window {} reassigned from monitor {} to {}",
+                        hwnd, old.monitor_id, session.monitor_id
+                    ),
+                    None => info!(
+                        "Application fullscreen window {} entered on monitor {}",
+                        hwnd, session.monitor_id
+                    ),
+                }
+                return;
+            }
+            ApplicationFullscreenLifecycle::Continue => return,
+            ApplicationFullscreenLifecycle::Exit => {
+                self.exit_application_fullscreen(hwnd);
+                return;
+            }
+            ApplicationFullscreenLifecycle::None => {}
+        }
+        if moved_or_resized_decision(lifecycle, self.should_suppress_moved_or_resized(hwnd))
+            == MovedOrResizedDecision::Suppress
         {
             return;
         }
@@ -1901,6 +2280,7 @@ impl AppState {
 
                 // Reconcile workspaces with new monitor configuration
                 self.reconcile_monitors(new_monitors);
+                self.reconcile_application_fullscreen_sessions();
 
                 // Correct any window whose minimized flag went stale across the
                 // topology change (e.g. a monitor waking un-minimizes its

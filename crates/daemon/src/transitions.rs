@@ -50,8 +50,11 @@ impl AppState {
                 still_animating = true;
             } else {
                 // Transition complete — move exiting windows offscreen.
-                for wid in transition.exit_rects.keys() {
-                    let _ = leopardwm_platform_win32::move_window_offscreen(*wid);
+                let exit_windows: Vec<_> = transition.exit_rects.keys().copied().collect();
+                for wid in exit_windows {
+                    if !self.is_application_fullscreen(wid) {
+                        let _ = leopardwm_platform_win32::move_window_offscreen(wid);
+                    }
                 }
                 self.layout_transition = None;
                 // The slide is done; cloak any settled off-workspace windows
@@ -157,6 +160,39 @@ impl AppState {
         });
     }
 
+    pub(crate) fn stop_ghosting_window(&mut self, hwnd: u64) {
+        let crossfade_epochs: Vec<u64> = self
+            .crossfade_sources
+            .iter()
+            .filter_map(|(&epoch, (sources, _))| sources.contains(&hwnd).then_some(epoch))
+            .collect();
+        if !crossfade_epochs.is_empty() {
+            // Crossfade ownership is batch-global in the worker protocol, so
+            // entering fullscreen aborts each batch that still owns this source.
+            for epoch in &crossfade_epochs {
+                if let Some(ref ctrl) = self.animation_worker_control {
+                    ctrl.send_abort_crossfade(*epoch);
+                }
+            }
+            if self
+                .active_crossfade
+                .as_ref()
+                .is_some_and(|state| crossfade_epochs.contains(&state.epoch))
+            {
+                self.active_crossfade = None;
+            }
+        }
+        if self.ghost_handles.remove(&hwnd).is_some() {
+            leopardwm_platform_win32::unmark_ghost_cloaked(hwnd);
+            leopardwm_platform_win32::apply_cloak_state(hwnd);
+        }
+        if let Some(ref mut transition) = self.layout_transition {
+            transition.ghosted_wids.remove(&hwnd);
+            transition.start_rects.remove(&hwnd);
+            transition.exit_rects.remove(&hwnd);
+        }
+    }
+
     /// Drop any in-flight ghost-animation handles and uncloak their
     /// sources, then signal the worker to abort any running crossfade.
     ///
@@ -230,6 +266,12 @@ impl AppState {
     ) {
         self.sweep_stale_crossfade_barriers();
 
+        if start_rects
+            .keys()
+            .all(|wid| self.is_application_fullscreen(*wid))
+        {
+            return;
+        }
         if !leopardwm_platform_win32::thumbnail::host().is_available() {
             return;
         }
@@ -266,6 +308,9 @@ impl AppState {
             .unwrap_or(self.focused_monitor);
 
         for (&wid, &start_rect) in start_rects {
+            if self.is_application_fullscreen(wid) {
+                continue;
+            }
             let Some(&(target_rect, monitor_id)) = targets.get(&wid) else {
                 continue;
             };

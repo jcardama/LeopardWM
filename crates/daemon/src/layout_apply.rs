@@ -234,14 +234,19 @@ impl AppState {
             }
         }
 
-        self.arm_moved_or_resized_suppression(all_placements.iter().map(|p| p.window_id));
+        let dispatched_placements = self.filter_application_fullscreen_placements(all_placements);
+        self.arm_moved_or_resized_suppression(
+            dispatched_placements
+                .iter()
+                .map(|placement| placement.window_id),
+        );
         self.applying_layout = true;
 
         // Partition into live placements + ghost-thumbnail updates. Ghost
         // wids are excluded from `placements` so the worker doesn't fire
         // per-frame SetWindowPos on the cloaked source HWND.
         let (live_placements, ghost_updates) = Self::partition_for_animation(
-            all_placements,
+            dispatched_placements,
             self.layout_transition.as_ref(),
             &self.ghost_handles,
         );
@@ -334,6 +339,7 @@ impl AppState {
                 "Layout application skipped: previous timed-out apply worker is still finishing"
             ));
         }
+        self.retain_application_fullscreen_sessions();
         self.applying_layout = true;
 
         // Commit any deferred min-size constraint clears scheduled by
@@ -385,17 +391,32 @@ impl AppState {
             return Ok(());
         }
 
-        let timeout_candidate_ids: Vec<u64> = all_placements
+        self.record_last_placed_rects(&all_placements);
+        let dispatched_placements = self.filter_application_fullscreen_placements(all_placements);
+        #[cfg(test)]
+        let invoke_injected_empty_worker =
+            self.injected_apply_placements_behavior.is_some() && dispatched_placements.is_empty();
+        #[cfg(not(test))]
+        let invoke_injected_empty_worker = false;
+        if dispatched_placements.is_empty() && !invoke_injected_empty_worker {
+            self.applying_layout = false;
+            self.finalize_layout_success();
+            return Ok(());
+        }
+
+        let timeout_candidate_ids: Vec<u64> = dispatched_placements
             .iter()
             .map(|placement| placement.window_id)
             .collect();
 
-        self.arm_moved_or_resized_suppression(all_placements.iter().map(|p| p.window_id));
-
-        self.record_last_placed_rects(&all_placements);
+        self.arm_moved_or_resized_suppression(
+            dispatched_placements
+                .iter()
+                .map(|placement| placement.window_id),
+        );
 
         let timeout = self.layout_apply_timeout;
-        let (rx, worker_handle) = self.spawn_apply_worker(all_placements)?;
+        let (rx, worker_handle) = self.spawn_apply_worker(dispatched_placements)?;
 
         let result = match rx.recv_timeout(timeout) {
             Ok((result, width_violations, height_violations)) => {

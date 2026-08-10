@@ -986,7 +986,9 @@ impl AppState {
         // so they don't get stranded at intermediate positions.
         if let Some(ref transition) = self.layout_transition {
             for wid in transition.exit_rects.keys() {
-                let _ = leopardwm_platform_win32::move_window_offscreen(*wid);
+                if !self.is_application_fullscreen(*wid) {
+                    let _ = leopardwm_platform_win32::move_window_offscreen(*wid);
+                }
             }
         }
         self.abort_active_ghost_transition();
@@ -1033,8 +1035,12 @@ impl AppState {
 
         // Keep sticky windows out of the slide animation so they sit
         // still while the rest of the layout scrolls past.
-        old_placements.retain(|(w, _)| !self.sticky_windows.contains(w));
-        new_placements.retain(|(w, _)| !self.sticky_windows.contains(w));
+        old_placements.retain(|(w, _)| {
+            !self.sticky_windows.contains(w) && !self.is_application_fullscreen(*w)
+        });
+        new_placements.retain(|(w, _)| {
+            !self.sticky_windows.contains(w) && !self.is_application_fullscreen(*w)
+        });
 
         // Build animation rects:
         // - Entering windows: start offscreen, end at final position
@@ -1080,7 +1086,9 @@ impl AppState {
             self.start_workspace_switch_transition(start_rects, exit_rects, duration);
         } else {
             for (wid, _) in &old_placements {
-                let _ = move_window_offscreen(*wid);
+                if !self.is_application_fullscreen(*wid) {
+                    let _ = move_window_offscreen(*wid);
+                }
             }
         }
 
@@ -1336,7 +1344,9 @@ impl AppState {
         if self.config.overview.render == crate::config::OverviewRender::Snapshot {
             let _ = leopardwm_platform_win32::snapshot::snapshot_capture(focused_hwnd);
         }
-        let _ = move_window_offscreen(focused_hwnd);
+        if !self.is_application_fullscreen(focused_hwnd) {
+            let _ = move_window_offscreen(focused_hwnd);
+        }
 
         // Ensure the source workspace scrolls to show its new focused window
         let viewport_width = self.viewport_width_for(monitor);

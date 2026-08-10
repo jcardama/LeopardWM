@@ -61,6 +61,7 @@ impl AppState {
         if let Some(ref frame) = self.border_frame {
             // No border while paused or in fullscreen.
             if self.paused
+                || self.is_application_fullscreen(hwnd)
                 || self
                     .focused_workspace()
                     .is_some_and(|ws| ws.is_fullscreen())
@@ -206,7 +207,10 @@ impl AppState {
     /// workspace switch / move-to-column / expel / drag merge while the
     /// windows are still sliding to it (border leads windows by the entire
     /// transition duration).
-    fn compute_window_layout_rect(&self, hwnd: u64) -> Option<leopardwm_core_layout::Rect> {
+    pub(crate) fn compute_window_layout_rect(
+        &self,
+        hwnd: u64,
+    ) -> Option<leopardwm_core_layout::Rect> {
         let (monitor_id, ws_idx) = self.find_window_workspace(hwnd)?;
         self.monitors.get(&monitor_id)?;
         let viewport = self.layout_viewport(monitor_id);
@@ -326,6 +330,9 @@ impl AppState {
                 let Some(visible_hwnd) = col.get(visible_tab) else {
                     continue;
                 };
+                if self.is_application_fullscreen(visible_hwnd) {
+                    continue;
+                }
                 let Some(rect) = self.compute_window_layout_rect(visible_hwnd) else {
                     continue;
                 };

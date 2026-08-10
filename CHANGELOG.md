@@ -10,12 +10,12 @@ All notable changes to LeopardWM will be documented in this file.
   takes precedence over an obsolete matching binding when Settings loads, so
   manual `hotkeys.disabled` entries and cleared rows are not erased on save.
 - **Focus borders no longer linger after their window closes or hides.**
-- **Chrome restores its tile after app fullscreen, transient frameless bounds,
-  and taskbar changes.** A Chrome app's fullscreen exit can briefly report its
-  expanded frame as the visible width and height; placement now refreshes stale
-  frame insets instead of learning those bounds as minimums. Settled work-area
-  changes also discard stale learned row heights instead of retaining fullscreen
-  sizing.
+- **Application-owned fullscreen windows keep their fullscreen bounds.** Managed
+  non-maximized windows that match a monitor's full bounds are temporarily
+  excluded from physical tiling placement until they exit fullscreen. Chrome
+  fullscreen exit refreshes stale frame insets instead of learning expanded
+  bounds as minimums, and settled work-area changes discard stale learned row
+  heights rather than retaining fullscreen sizing.
 - **Workspace wrap animations now travel in the selected direction.**
 
 ## 0.2.6

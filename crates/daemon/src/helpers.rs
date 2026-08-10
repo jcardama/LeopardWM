@@ -9,6 +9,26 @@ use leopardwm_platform_win32::{is_excluded_tool_window_hwnd, is_window_alive_and
 use leopardwm_platform_win32::{scale_px, MonitorId};
 use tracing::{debug, info, warn};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TaskbarButtonAction {
+    Show,
+    Hide,
+    Unchanged,
+}
+
+pub(crate) fn taskbar_button_action(
+    is_application_fullscreen: bool,
+    should_show: bool,
+) -> TaskbarButtonAction {
+    if is_application_fullscreen {
+        TaskbarButtonAction::Unchanged
+    } else if should_show {
+        TaskbarButtonAction::Show
+    } else {
+        TaskbarButtonAction::Hide
+    }
+}
+
 /// Pre-scaled layout parameters for a specific monitor's DPI.
 ///
 /// Config values are in logical pixels (96 DPI). This struct holds the
@@ -246,7 +266,11 @@ impl AppState {
             for ws_vec in self.workspaces.values() {
                 for workspace in ws_vec {
                     for wid in workspace.all_window_ids() {
-                        taskbar_show(wid);
+                        if taskbar_button_action(self.is_application_fullscreen(wid), true)
+                            == TaskbarButtonAction::Show
+                        {
+                            taskbar_show(wid);
+                        }
                     }
                 }
             }
@@ -258,7 +282,11 @@ impl AppState {
             for (idx, workspace) in ws_vec.iter().enumerate() {
                 if idx != active {
                     for wid in workspace.all_window_ids() {
-                        taskbar_hide(wid);
+                        match taskbar_button_action(self.is_application_fullscreen(wid), false) {
+                            TaskbarButtonAction::Show => taskbar_show(wid),
+                            TaskbarButtonAction::Hide => taskbar_hide(wid),
+                            TaskbarButtonAction::Unchanged => {}
+                        }
                     }
                     continue;
                 }
@@ -275,10 +303,10 @@ impl AppState {
                     let keep = workspace.is_floating(wid)
                         || workspace.is_minimized(wid)
                         || visible.contains(&wid);
-                    if keep {
-                        taskbar_show(wid);
-                    } else {
-                        taskbar_hide(wid);
+                    match taskbar_button_action(self.is_application_fullscreen(wid), keep) {
+                        TaskbarButtonAction::Show => taskbar_show(wid),
+                        TaskbarButtonAction::Hide => taskbar_hide(wid),
+                        TaskbarButtonAction::Unchanged => {}
                     }
                 }
             }
@@ -322,13 +350,17 @@ impl AppState {
                     }
                     self.restore_snap_for_window(*wid);
                     self.window_managed_at.remove(wid);
+                    self.application_fullscreen.remove(wid);
                     info!("Pruned stale window {} from monitor {}", wid, monitor_id);
                 }
             }
 
             // Evict orphaned entries from window_managed_at whose HWNDs are
             // no longer managed in any workspace (catches all removal paths).
-            if !self.window_managed_at.is_empty() || !self.window_last_maximized_at.is_empty() {
+            if !self.window_managed_at.is_empty()
+                || !self.window_last_maximized_at.is_empty()
+                || !self.application_fullscreen.is_empty()
+            {
                 let managed: std::collections::HashSet<u64> = self
                     .workspaces
                     .values()
@@ -337,6 +369,8 @@ impl AppState {
                 self.window_managed_at
                     .retain(|hwnd, _| managed.contains(hwnd));
                 self.window_last_maximized_at
+                    .retain(|hwnd, _| managed.contains(hwnd));
+                self.application_fullscreen
                     .retain(|hwnd, _| managed.contains(hwnd));
             }
         }

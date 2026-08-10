@@ -71,7 +71,11 @@ enum WorkerCommand {
     /// Tell the worker to break out of an in-flight fade for this epoch.
     /// Mismatching-epoch aborts are discarded. Cooperative: worker only
     /// checks between fade iterations via `try_recv`.
-    AbortCrossfade { epoch: u64 },
+    AbortCrossfade {
+        epoch: u64,
+        #[cfg(test)]
+        acknowledged: Option<std_mpsc::Sender<()>>,
+    },
     /// Invalidate the placement cache (e.g., after a theme/display change
     /// so stale inset-expanded positions don't survive as cache hits).
     ClearCache,
@@ -114,15 +118,25 @@ pub struct AnimationWorkerHandle {
 #[derive(Clone)]
 pub struct AnimationWorkerControl {
     command_tx: std_mpsc::Sender<WorkerCommand>,
+    #[cfg(test)]
+    abort_acknowledged: Option<std_mpsc::Sender<()>>,
 }
 
 impl AnimationWorkerControl {
     /// Signal the worker to abort an in-flight crossfade for `epoch`.
     /// Cooperative — the worker only checks between fade iterations.
     pub fn send_abort_crossfade(&self, epoch: u64) {
-        let _ = self
-            .command_tx
-            .send(WorkerCommand::AbortCrossfade { epoch });
+        let _ = self.command_tx.send(WorkerCommand::AbortCrossfade {
+            epoch,
+            #[cfg(test)]
+            acknowledged: self.abort_acknowledged.clone(),
+        });
+    }
+
+    #[cfg(test)]
+    pub fn with_abort_acknowledged(mut self, acknowledged: std_mpsc::Sender<()>) -> Self {
+        self.abort_acknowledged = Some(acknowledged);
+        self
     }
 
     /// Wait until commands already queued on the worker have completed.
@@ -181,6 +195,8 @@ impl AnimationWorkerHandle {
     pub fn control(&self) -> AnimationWorkerControl {
         AnimationWorkerControl {
             command_tx: self.command_tx.clone(),
+            #[cfg(test)]
+            abort_acknowledged: None,
         }
     }
 
@@ -284,7 +300,15 @@ fn worker_loop(
                 run_crossfade(&command_rx, &event_tx, epoch, entries, frames, &mut pending);
                 continue;
             }
-            WorkerCommand::AbortCrossfade { epoch: _ } => {
+            WorkerCommand::AbortCrossfade {
+                epoch: _,
+                #[cfg(test)]
+                acknowledged,
+            } => {
+                #[cfg(test)]
+                if let Some(acknowledged) = acknowledged {
+                    let _ = acknowledged.send(());
+                }
                 // No fade in flight at the outer-loop level. Discard.
                 continue;
             }
@@ -395,11 +419,27 @@ fn run_crossfade(
     for i in 0..frames {
         // Cooperative preempt/abort check.
         match command_rx.try_recv() {
-            Ok(WorkerCommand::AbortCrossfade { epoch: e }) if e == epoch => {
+            Ok(WorkerCommand::AbortCrossfade {
+                epoch: e,
+                #[cfg(test)]
+                acknowledged,
+            }) if e == epoch => {
+                #[cfg(test)]
+                if let Some(acknowledged) = acknowledged {
+                    let _ = acknowledged.send(());
+                }
                 aborted = true;
                 break;
             }
-            Ok(WorkerCommand::AbortCrossfade { .. }) => {
+            Ok(WorkerCommand::AbortCrossfade {
+                epoch: _,
+                #[cfg(test)]
+                acknowledged,
+            }) => {
+                #[cfg(test)]
+                if let Some(acknowledged) = acknowledged {
+                    let _ = acknowledged.send(());
+                }
                 // Mismatched epoch — discard (stale).
             }
             Ok(other) => {
@@ -469,6 +509,7 @@ mod tests {
         });
         let control = AnimationWorkerControl {
             command_tx: command_tx.clone(),
+            abort_acknowledged: None,
         };
         let (release_tx, release_rx) = std_mpsc::channel();
         command_tx

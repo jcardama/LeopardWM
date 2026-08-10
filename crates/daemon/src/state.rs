@@ -153,6 +153,12 @@ pub(crate) struct LayoutApplyTimeoutReport {
     pub(crate) candidates: Vec<LayoutApplyTimeoutCandidate>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ApplicationFullscreenState {
+    pub(crate) monitor_id: MonitorId,
+    pub(crate) rect: Rect,
+}
+
 /// Request for the main loop to spawn a resize preview animation thread.
 pub(crate) struct ResizeAnimationRequest {
     pub(crate) start_rect: Rect,
@@ -426,6 +432,7 @@ pub(crate) struct AppState {
     /// rect within a few pixels, the layout is already correct and we skip
     /// the expensive full-retile snap-back.
     pub(crate) last_placed_layout_rects: HashMap<u64, leopardwm_core_layout::Rect>,
+    pub(crate) application_fullscreen: HashMap<u64, ApplicationFullscreenState>,
     /// Cooperative cancellation flag for placement workers during shutdown/revert.
     pub(crate) apply_worker_cancelled: Arc<AtomicBool>,
     /// Monotonic token to invalidate stale workers when shutdown starts.
@@ -755,6 +762,7 @@ impl AppState {
             pending_drag_hint: None,
             moved_or_resized_suppression: HashMap::new(),
             last_placed_layout_rects: HashMap::new(),
+            application_fullscreen: HashMap::new(),
             apply_worker_cancelled: Arc::new(AtomicBool::new(false)),
             apply_epoch: Arc::new(AtomicU64::new(0)),
             pending_apply_workers: Vec::new(),
@@ -802,6 +810,26 @@ impl AppState {
 
     pub(crate) fn take_layout_apply_timeout_report(&mut self) -> Option<LayoutApplyTimeoutReport> {
         self.pending_layout_apply_timeout_report.take()
+    }
+
+    pub(crate) fn is_application_fullscreen(&self, hwnd: u64) -> bool {
+        self.application_fullscreen.contains_key(&hwnd)
+    }
+
+    pub(crate) fn filter_application_fullscreen_placements(
+        &self,
+        placements: Vec<leopardwm_core_layout::WindowPlacement>,
+    ) -> Vec<leopardwm_core_layout::WindowPlacement> {
+        placements
+            .into_iter()
+            .filter(|placement| !self.is_application_fullscreen(placement.window_id))
+            .collect()
+    }
+
+    pub(crate) fn retain_application_fullscreen_sessions(&mut self) {
+        let managed = self.all_managed_window_ids();
+        self.application_fullscreen
+            .retain(|hwnd, _| managed.contains(hwnd));
     }
 
     /// Get the active workspace index (0-based) for a given monitor.

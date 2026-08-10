@@ -25,6 +25,396 @@ fn test_app_state_new() {
 }
 
 #[test]
+fn test_application_fullscreen_detector_prefers_chrome_and_rejects_maximized() {
+    use crate::event_handler::detect_application_fullscreen;
+
+    let monitors = two_monitors();
+    let detected = detect_application_fullscreen(
+        monitors.iter(),
+        Some(Rect::new(1920, 0, 1920, 1080)),
+        Some(Rect::new(0, 0, 1920, 1080)),
+        false,
+    );
+    assert_eq!(detected.map(|state| state.monitor_id), Some(2));
+    assert_eq!(
+        detect_application_fullscreen(
+            monitors.iter(),
+            Some(Rect::new(100, 100, 800, 600)),
+            Some(Rect::new(0, 0, 1920, 1080)),
+            false,
+        ),
+        None,
+        "DWM is not consulted when authoritative Chrome geometry is present"
+    );
+    assert_eq!(
+        detect_application_fullscreen(
+            monitors.iter(),
+            Some(Rect::new(1920, 0, 1920, 1080)),
+            None,
+            true,
+        ),
+        None
+    );
+}
+
+#[test]
+fn test_application_fullscreen_detector_uses_monitor_rect_tolerance() {
+    use crate::event_handler::detect_application_fullscreen;
+
+    let monitor = MonitorInfo {
+        id: 9,
+        rect: Rect::new(-2560, -80, 2560, 1440),
+        work_area: Rect::new(-2560, -80, 2560, 1400),
+        is_primary: false,
+        device_name: "DISPLAY9".to_string(),
+        scale_factor: 4.0,
+    };
+    let expected_rect = monitor.rect;
+    let monitors = vec![monitor];
+    assert_eq!(
+        detect_application_fullscreen(
+            monitors.iter(),
+            Some(Rect::new(-2560, -80, 2560, 1439)),
+            None,
+            false,
+        )
+        .map(|state| state.rect),
+        Some(expected_rect)
+    );
+    assert_eq!(
+        detect_application_fullscreen(
+            monitors.iter(),
+            Some(Rect::new(-2560, -80, 2560, 1400)),
+            None,
+            false,
+        ),
+        None,
+        "work area must not qualify as fullscreen"
+    );
+    assert!(detect_application_fullscreen(
+        monitors.iter(),
+        Some(Rect::new(-2560, -80, 2560, 1419)),
+        None,
+        false,
+    )
+    .is_none());
+}
+
+#[test]
+fn test_application_fullscreen_geometry_rejects_expected_tile_with_insets() {
+    use crate::event_handler::{chrome_rect_matches_layout_rect, fullscreen_rect_tolerance};
+
+    assert_eq!(fullscreen_rect_tolerance(1.5), 12);
+    assert!(fullscreen_rect_tolerance(1.5) < 20);
+    assert!(chrome_rect_matches_layout_rect(
+        Rect::new(-8, -8, 1936, 1056),
+        Rect::new(0, 0, 1920, 1040),
+        (8, 8, 8, 8),
+        1.0,
+    ));
+    assert!(!chrome_rect_matches_layout_rect(
+        Rect::new(-8, -8, 1936, 1096),
+        Rect::new(0, 0, 1920, 1040),
+        (8, 8, 8, 8),
+        1.0,
+    ));
+}
+
+#[test]
+fn test_application_fullscreen_uses_live_layout_target_before_last_placement() {
+    use crate::event_handler::application_fullscreen_expected_layout_rect;
+
+    let current = Rect::new(960, 0, 960, 1040);
+    let stale = Rect::new(0, 0, 1920, 1040);
+    assert_eq!(
+        application_fullscreen_expected_layout_rect(Some(current), Some(stale)),
+        Some(current)
+    );
+    assert_eq!(
+        application_fullscreen_expected_layout_rect(None, Some(stale)),
+        Some(stale)
+    );
+}
+
+#[test]
+fn test_application_fullscreen_lifecycle_and_suppression_precedence() {
+    use crate::event_handler::{
+        application_fullscreen_lifecycle, moved_or_resized_decision,
+        ApplicationFullscreenLifecycle, MovedOrResizedDecision,
+    };
+    use crate::state::ApplicationFullscreenState;
+
+    let first = ApplicationFullscreenState {
+        monitor_id: 1,
+        rect: Rect::new(0, 0, 1920, 1080),
+    };
+    let reassigned = ApplicationFullscreenState {
+        monitor_id: 2,
+        rect: Rect::new(1920, 0, 1920, 1080),
+    };
+    assert_eq!(
+        application_fullscreen_lifecycle(None, Some(first)),
+        ApplicationFullscreenLifecycle::Enter
+    );
+    assert_eq!(
+        application_fullscreen_lifecycle(Some(first), Some(first)),
+        ApplicationFullscreenLifecycle::Continue
+    );
+    assert_eq!(
+        application_fullscreen_lifecycle(Some(first), Some(reassigned)),
+        ApplicationFullscreenLifecycle::Reassign
+    );
+    assert_eq!(
+        application_fullscreen_lifecycle(Some(first), None),
+        ApplicationFullscreenLifecycle::Exit
+    );
+    assert_eq!(
+        moved_or_resized_decision(ApplicationFullscreenLifecycle::Enter, true),
+        MovedOrResizedDecision::Fullscreen(ApplicationFullscreenLifecycle::Enter),
+        "fullscreen entry must precede ordinary suppression"
+    );
+    assert_eq!(
+        moved_or_resized_decision(ApplicationFullscreenLifecycle::Exit, true),
+        MovedOrResizedDecision::Fullscreen(ApplicationFullscreenLifecycle::Exit),
+        "fullscreen exit must precede ordinary suppression"
+    );
+}
+
+#[test]
+fn test_application_fullscreen_reconciliation_retains_only_matching_nonmaximized_windows() {
+    use crate::event_handler::{
+        application_fullscreen_reconciliation, ApplicationFullscreenReconciliation,
+    };
+    use crate::state::ApplicationFullscreenState;
+
+    let stored = ApplicationFullscreenState {
+        monitor_id: 1,
+        rect: Rect::new(0, 0, 1920, 1080),
+    };
+    let reassigned = ApplicationFullscreenState {
+        monitor_id: 2,
+        rect: Rect::new(1920, 0, 1920, 1080),
+    };
+    assert_eq!(
+        application_fullscreen_reconciliation(
+            true,
+            true,
+            false,
+            stored,
+            None,
+            Some(Rect::new(3, -3, 1917, 1086)),
+            8,
+        ),
+        ApplicationFullscreenReconciliation::Retain
+    );
+    assert_eq!(
+        application_fullscreen_reconciliation(true, true, false, stored, Some(reassigned), None, 8),
+        ApplicationFullscreenReconciliation::Update
+    );
+    assert_eq!(
+        application_fullscreen_reconciliation(true, true, true, stored, None, Some(stored.rect), 8),
+        ApplicationFullscreenReconciliation::Exit,
+        "maximized windows must leave application fullscreen protection"
+    );
+    assert_eq!(
+        application_fullscreen_reconciliation(
+            true,
+            true,
+            false,
+            stored,
+            None,
+            Some(Rect::new(0, 0, 1600, 900)),
+            8,
+        ),
+        ApplicationFullscreenReconciliation::Exit
+    );
+}
+
+#[test]
+fn test_application_fullscreen_exit_routes() {
+    use crate::event_handler::{
+        application_fullscreen_exit_restores_border, application_fullscreen_exit_route,
+        ApplicationFullscreenExitRoute,
+    };
+
+    assert_eq!(
+        application_fullscreen_exit_route(true, true, false),
+        ApplicationFullscreenExitRoute::FloatingPreserve
+    );
+    assert_eq!(
+        application_fullscreen_exit_route(false, true, false),
+        ApplicationFullscreenExitRoute::MaximizedAllow
+    );
+    assert_eq!(
+        application_fullscreen_exit_route(false, false, false),
+        ApplicationFullscreenExitRoute::InactivePark
+    );
+    assert_eq!(
+        application_fullscreen_exit_route(false, false, true),
+        ApplicationFullscreenExitRoute::ActiveTiledApply
+    );
+    assert!(application_fullscreen_exit_restores_border(
+        ApplicationFullscreenExitRoute::MaximizedAllow,
+        true
+    ));
+    assert!(!application_fullscreen_exit_restores_border(
+        ApplicationFullscreenExitRoute::MaximizedAllow,
+        false
+    ));
+}
+
+#[test]
+fn test_application_fullscreen_session_filters_physical_dispatch_and_prunes() {
+    use crate::state::ApplicationFullscreenState;
+    use leopardwm_core_layout::{Visibility, WindowPlacement};
+
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .insert_window(100, None)
+        .unwrap();
+    state.application_fullscreen.insert(
+        100,
+        ApplicationFullscreenState {
+            monitor_id: 1,
+            rect: Rect::new(0, 0, 1920, 1080),
+        },
+    );
+    state.application_fullscreen.insert(
+        200,
+        ApplicationFullscreenState {
+            monitor_id: 1,
+            rect: Rect::new(0, 0, 1920, 1080),
+        },
+    );
+    let placements = vec![
+        WindowPlacement {
+            window_id: 100,
+            rect: Rect::new(0, 0, 960, 1040),
+            visibility: Visibility::Visible,
+            column_index: 0,
+        },
+        WindowPlacement {
+            window_id: 300,
+            rect: Rect::new(960, 0, 960, 1040),
+            visibility: Visibility::Visible,
+            column_index: 1,
+        },
+    ];
+
+    let dispatched = state.filter_application_fullscreen_placements(placements.clone());
+    assert_eq!(placements.len(), 2, "logical placements remain intact");
+    assert_eq!(dispatched.len(), 1);
+    assert_eq!(dispatched[0].window_id, 300);
+
+    state.retain_application_fullscreen_sessions();
+    assert!(state.is_application_fullscreen(100));
+    assert!(!state.is_application_fullscreen(200));
+
+    state.paused = false;
+    state.apply_layout().unwrap();
+    assert!(state.last_placed_layout_rects.contains_key(&100));
+    assert!(!state.should_suppress_moved_or_resized(100));
+    assert!(state.pending_apply_workers.is_empty());
+}
+
+#[test]
+fn test_application_fullscreen_entry_removes_only_its_ghost_transition_state() {
+    use crate::state::{ApplicationFullscreenState, GhostEntry, LayoutTransition};
+    use leopardwm_core_layout::{Visibility, WindowPlacement};
+    use std::collections::{HashMap, HashSet};
+
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    let mut ghosted_wids = HashSet::new();
+    ghosted_wids.extend([100, 200]);
+    state.layout_transition = Some(LayoutTransition {
+        start_rects: HashMap::from([
+            (100, Rect::new(0, 0, 800, 600)),
+            (200, Rect::new(800, 0, 800, 600)),
+        ]),
+        exit_rects: HashMap::new(),
+        elapsed_ms: 16,
+        duration_ms: 150,
+        easing: leopardwm_core_layout::Easing::default(),
+        ghosted_wids,
+    });
+    state.ghost_handles.insert(
+        100,
+        GhostEntry::new(0, "Chrome_WidgetWin_1".into(), Rect::new(0, 0, 800, 600)),
+    );
+    state.ghost_handles.insert(
+        200,
+        GhostEntry::new(0, "MozillaWindowClass".into(), Rect::new(800, 0, 800, 600)),
+    );
+    state.application_fullscreen.insert(
+        100,
+        ApplicationFullscreenState {
+            monitor_id: 1,
+            rect: Rect::new(0, 0, 1920, 1080),
+        },
+    );
+
+    state.stop_ghosting_window(100);
+
+    let transition = state.layout_transition.as_ref().unwrap();
+    assert!(!transition.ghosted_wids.contains(&100));
+    assert!(!transition.start_rects.contains_key(&100));
+    assert!(!state.ghost_handles.contains_key(&100));
+    assert!(transition.ghosted_wids.contains(&200));
+    assert!(transition.start_rects.contains_key(&200));
+    assert!(state.ghost_handles.contains_key(&200));
+
+    let placements = state.filter_application_fullscreen_placements(vec![
+        WindowPlacement {
+            window_id: 100,
+            rect: Rect::new(0, 0, 800, 600),
+            visibility: Visibility::Visible,
+            column_index: 0,
+        },
+        WindowPlacement {
+            window_id: 200,
+            rect: Rect::new(800, 0, 800, 600),
+            visibility: Visibility::Visible,
+            column_index: 1,
+        },
+    ]);
+    let (live, ghosts) = AppState::partition_for_animation(
+        placements,
+        state.layout_transition.as_ref(),
+        &state.ghost_handles,
+    );
+    assert!(live.is_empty());
+    assert_eq!(ghosts.len(), 1);
+}
+
+#[test]
+fn test_application_fullscreen_window_skips_ghost_registration() {
+    use crate::state::ApplicationFullscreenState;
+    use std::collections::HashMap;
+
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.config.behavior.swap_chain_ghost_animation = true;
+    state.application_fullscreen.insert(
+        100,
+        ApplicationFullscreenState {
+            monitor_id: 1,
+            rect: Rect::new(0, 0, 1920, 1080),
+        },
+    );
+    state.start_layout_transition_with_duration(
+        HashMap::from([(100, Rect::new(100, 100, 800, 600))]),
+        150,
+    );
+
+    assert!(state.ghost_handles.is_empty());
+    assert!(state
+        .layout_transition
+        .as_ref()
+        .is_some_and(|transition| transition.ghosted_wids.is_empty()));
+}
+
+#[test]
 fn test_app_state_startup_reduce_motion_matches_all_workspaces() {
     let mut monitors = test_monitors();
     monitors.push(MonitorInfo {
@@ -297,6 +687,108 @@ fn test_partition_for_animation_missing_handle_drops_placement() {
         "ghosted wid without handle should be dropped"
     );
     assert_eq!(ghosts.len(), 0);
+}
+
+#[test]
+fn test_application_fullscreen_crossfade_aborts_only_owning_batch() {
+    use crate::state::CrossfadeState;
+
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.active_crossfade = Some(CrossfadeState { epoch: 4 });
+    state.crossfade_sources.insert(
+        4,
+        (
+            std::collections::HashSet::from([100]),
+            std::time::Instant::now(),
+        ),
+    );
+    state.crossfade_sources.insert(
+        3,
+        (
+            std::collections::HashSet::from([200]),
+            std::time::Instant::now(),
+        ),
+    );
+
+    state.stop_ghosting_window(100);
+
+    assert!(state.active_crossfade.is_none());
+    assert!(state.crossfade_sources.contains_key(&4));
+    assert!(state.crossfade_sources.contains_key(&3));
+}
+
+#[test]
+fn test_application_fullscreen_crossfade_abort_reaches_worker() {
+    use crate::state::CrossfadeState;
+    use std::time::Duration;
+
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(4);
+    let worker = animation_worker::AnimationWorkerHandle::spawn(
+        event_tx,
+        state.apply_worker_cancelled.clone(),
+    )
+    .expect("spawn animation worker");
+    let (abort_tx, abort_rx) = std::sync::mpsc::channel();
+    state.animation_worker_control = Some(worker.control().with_abort_acknowledged(abort_tx));
+    state.active_crossfade = Some(CrossfadeState { epoch: 4 });
+    state.crossfade_sources.insert(
+        4,
+        (
+            std::collections::HashSet::from([100]),
+            std::time::Instant::now(),
+        ),
+    );
+    worker
+        .send_crossfade(
+            4,
+            vec![animation_worker::CrossfadeEntry {
+                handle_isize: 0,
+                dest_client_rect: Rect::new(0, 0, 1, 1),
+            }],
+            100_000,
+        )
+        .expect("queue crossfade");
+
+    state.stop_ghosting_window(100);
+
+    assert!(
+        abort_rx.recv_timeout(Duration::from_millis(500)).is_ok(),
+        "worker must receive the abort control"
+    );
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+    assert!(matches!(
+        runtime.block_on(async {
+            tokio::time::timeout(Duration::from_millis(500), event_rx.recv()).await
+        }),
+        Ok(Some(DaemonEvent::CrossfadeComplete { epoch: 4 }))
+    ));
+    drop(worker);
+}
+
+#[test]
+fn test_taskbar_button_action_leaves_application_fullscreen_untouched() {
+    use crate::helpers::{taskbar_button_action, TaskbarButtonAction};
+
+    assert_eq!(
+        taskbar_button_action(true, true),
+        TaskbarButtonAction::Unchanged
+    );
+    assert_eq!(
+        taskbar_button_action(true, false),
+        TaskbarButtonAction::Unchanged
+    );
+    assert_eq!(
+        taskbar_button_action(false, true),
+        TaskbarButtonAction::Show
+    );
+    assert_eq!(
+        taskbar_button_action(false, false),
+        TaskbarButtonAction::Hide
+    );
 }
 
 #[test]
@@ -2740,6 +3232,62 @@ fn test_apply_layout_timeout_worker_is_joined_during_shutdown_begin() {
             "timed-out worker should exit after shutdown cancellation"
         );
     }
+}
+
+#[test]
+fn test_protected_only_animation_frame_dispatches_and_settles_transition() {
+    use crate::state::{ApplicationFullscreenState, LayoutTransition};
+    use std::collections::{HashMap, HashSet};
+    use std::time::Duration;
+
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = false;
+    state.workspaces.get_mut(&1).unwrap()[0]
+        .insert_window(100, Some(800))
+        .unwrap();
+    state.application_fullscreen.insert(
+        100,
+        ApplicationFullscreenState {
+            monitor_id: 1,
+            rect: Rect::new(0, 0, 1920, 1080),
+        },
+    );
+    state.layout_transition = Some(LayoutTransition {
+        start_rects: HashMap::from([(100, Rect::new(0, 0, 800, 1040))]),
+        exit_rects: HashMap::new(),
+        elapsed_ms: 16,
+        duration_ms: 150,
+        easing: leopardwm_core_layout::Easing::default(),
+        ghosted_wids: HashSet::new(),
+    });
+
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(4);
+    let worker = animation_worker::AnimationWorkerHandle::spawn(
+        event_tx,
+        state.apply_worker_cancelled.clone(),
+    )
+    .expect("spawn animation worker");
+
+    assert!(state
+        .send_animation_frame(&worker)
+        .expect("protected-only frame should dispatch"));
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+    assert!(matches!(
+        runtime.block_on(async {
+            tokio::time::timeout(Duration::from_millis(500), event_rx.recv()).await
+        }),
+        Ok(Some(DaemonEvent::AnimationFrameApplied(_)))
+    ));
+    state.applying_layout = false;
+    assert!(state.tick_animations(150));
+    assert!(
+        state.layout_transition.is_none(),
+        "the protected-only frame path must settle its transition"
+    );
+    drop(worker);
 }
 
 #[test]
