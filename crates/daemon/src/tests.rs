@@ -5158,3 +5158,110 @@ fn test_layout_viewport_unknown_monitor_falls_back() {
         "fallback viewport is non-empty"
     );
 }
+
+#[test]
+fn test_taskbar_work_area_invalidation_clears_heights_and_preserves_widths() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    let monitor = state.focused_monitor;
+    let viewport = state.layout_viewport(monitor);
+    state.ensure_workspace_exists(monitor, 1);
+
+    for (workspace_idx, first, second) in [(0, 100, 101), (1, 200, 201)] {
+        let workspace = &mut state.workspaces.get_mut(&monitor).unwrap()[workspace_idx];
+        workspace.insert_window(first, Some(400)).unwrap();
+        workspace.insert_window_in_column(second, 0).unwrap();
+        workspace.set_window_min_width(first, 600);
+        workspace.set_window_min_height(first, 700);
+        let placements = workspace.compute_placements(viewport);
+        let first_height = placements
+            .iter()
+            .find(|placement| placement.window_id == first)
+            .unwrap()
+            .rect
+            .height;
+        let second_height = placements
+            .iter()
+            .find(|placement| placement.window_id == second)
+            .unwrap()
+            .rect
+            .height;
+        assert_ne!(
+            first_height, second_height,
+            "precondition: height is constrained"
+        );
+    }
+
+    state.invalidate_display_change_constraints(false);
+
+    for (workspace_idx, first, second) in [(0, 100, 101), (1, 200, 201)] {
+        let workspace = &mut state.workspaces.get_mut(&monitor).unwrap()[workspace_idx];
+        let placements = workspace.compute_placements(viewport);
+        let first_height = placements
+            .iter()
+            .find(|placement| placement.window_id == first)
+            .unwrap()
+            .rect
+            .height;
+        let second_height = placements
+            .iter()
+            .find(|placement| placement.window_id == second)
+            .unwrap()
+            .rect
+            .height;
+        assert_eq!(
+            first_height, second_height,
+            "heights clear in workspace {workspace_idx}"
+        );
+        workspace.set_all_column_widths(400);
+        assert!(
+            workspace.apply_min_width_constraints(),
+            "width remains constrained in workspace {workspace_idx}"
+        );
+        assert_eq!(workspace.columns()[0].width(), 600);
+    }
+}
+
+#[test]
+fn test_full_display_invalidation_clears_widths_and_heights() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    let monitor = state.focused_monitor;
+    let viewport = state.layout_viewport(monitor);
+    state.ensure_workspace_exists(monitor, 1);
+
+    for (workspace_idx, first, second) in [(0, 100, 101), (1, 200, 201)] {
+        let workspace = &mut state.workspaces.get_mut(&monitor).unwrap()[workspace_idx];
+        workspace.insert_window(first, Some(400)).unwrap();
+        workspace.insert_window_in_column(second, 0).unwrap();
+        workspace.set_window_min_width(first, 600);
+        workspace.set_window_min_height(first, 700);
+    }
+
+    state.invalidate_display_change_constraints(true);
+
+    for (workspace_idx, first, second) in [(0, 100, 101), (1, 200, 201)] {
+        let workspace = &mut state.workspaces.get_mut(&monitor).unwrap()[workspace_idx];
+        let placements = workspace.compute_placements(viewport);
+        let first_height = placements
+            .iter()
+            .find(|placement| placement.window_id == first)
+            .unwrap()
+            .rect
+            .height;
+        let second_height = placements
+            .iter()
+            .find(|placement| placement.window_id == second)
+            .unwrap()
+            .rect
+            .height;
+        assert_eq!(
+            first_height, second_height,
+            "heights clear in workspace {workspace_idx}"
+        );
+        workspace.set_all_column_widths(400);
+        assert!(
+            !workspace.apply_min_width_constraints(),
+            "width clears in workspace {workspace_idx}"
+        );
+        assert_eq!(workspace.columns()[0].width(), 400);
+    }
+}

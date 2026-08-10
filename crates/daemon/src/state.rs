@@ -1100,6 +1100,17 @@ impl AppState {
         ws_vec.get_mut(idx)
     }
 
+    pub(crate) fn invalidate_display_change_constraints(&mut self, needs_full: bool) {
+        for workspaces in self.workspaces.values_mut() {
+            for workspace in workspaces {
+                if needs_full {
+                    workspace.clear_all_min_widths();
+                }
+                workspace.clear_all_min_heights();
+            }
+        }
+    }
+
     /// Get the focused monitor's viewport.
     pub(crate) fn focused_viewport(&self) -> Rect {
         self.monitors

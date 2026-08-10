@@ -3015,19 +3015,10 @@ async fn handle_display_change_settled(ctx: &mut EventLoopCtx<'_>) {
     // The overview's geometry is stale too — hide instead of rebuilding.
     state.hide_overview();
     state.display_change_pending = false;
-    // Clear stale min-width and min-height constraints ONLY for a real
-    // topology/DPI change: they were computed with old border metrics and
-    // cause cumulative column shrinking there. For a work-area-only change
-    // (taskbar toggle), border metrics are unchanged, and clearing them would
-    // recompute column widths and shift partially-visible windows mid-refit.
-    if needs_full {
-        for ws_vec in state.workspaces.values_mut() {
-            for ws in ws_vec.iter_mut() {
-                ws.clear_all_min_widths();
-                ws.clear_all_min_heights();
-            }
-        }
-    }
+    // Width constraints remain stable through taskbar-only refits, avoiding
+    // a horizontal recompute that shifts partially-visible windows. Height
+    // constraints are invalidated for every settled work-area change.
+    state.invalidate_display_change_constraints(needs_full);
     state.display_change_needs_full = false;
     state.handle_window_event(WindowEvent::DisplayChange);
     state.refresh_reduce_motion();

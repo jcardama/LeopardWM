@@ -10,6 +10,9 @@ All notable changes to LeopardWM will be documented in this file.
   takes precedence over an obsolete matching binding when Settings loads, so
   manual `hotkeys.disabled` entries and cleared rows are not erased on save.
 - **Focus borders no longer linger after their window closes or hides.**
+- **Chrome retiles after fullscreen and a taskbar change.** Settled work-area
+  changes now discard stale learned row heights instead of retaining fullscreen
+  sizing.
 - **Workspace wrap animations now travel in the selected direction.**
 
 ## 0.2.6
