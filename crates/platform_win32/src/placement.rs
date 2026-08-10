@@ -4,6 +4,7 @@ use crate::types::{PlatformConfig, Win32Error};
 use crate::window_id_to_hwnd;
 use leopardwm_core_layout::{Rect, Visibility, WindowId, WindowPlacement};
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Mutex;
 use windows::core::BOOL;
 use windows::Win32::Foundation::{HWND, RECT};
@@ -354,6 +355,22 @@ pub struct ApplyPlacementsResult {
 // Collect all (hwnd, adjusted_rect, flags) entries for deferred positioning.
 // Pre-compute border insets and cache checks before the batch to minimize
 // time between BeginDeferWindowPos and EndDeferWindowPos.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InsetSource {
+    LocalCache,
+    GlobalCache,
+    Fresh,
+}
+
+/// Border insets resolved for one placement, tagged with their provenance and
+/// with the global-inset-cache generation they were resolved under.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ResolvedInsets {
+    insets: (i32, i32, i32, i32),
+    source: InsetSource,
+    generation: u64,
+}
+
 struct DeferEntry {
     hwnd: HWND,
     window_id: u64,
@@ -367,6 +384,12 @@ struct DeferEntry {
     layout_w: i32,
     /// Layout-coordinate height requested by the layout engine (pre-insets).
     layout_h: i32,
+    /// Frame insets used to turn the layout request into this SetWindowPos request.
+    insets: (i32, i32, i32, i32),
+    inset_source: InsetSource,
+    /// Global-inset-cache generation `insets` was resolved under; publication
+    /// is skipped when it no longer matches (see `INSET_CACHE_GENERATION`).
+    inset_generation: u64,
     visibility: Visibility,
     flags: windows::Win32::UI::WindowsAndMessaging::SET_WINDOW_POS_FLAGS,
     column_index: usize,
@@ -382,16 +405,32 @@ struct DeferEntry {
 /// where most windows haven't moved.
 pub fn apply_placements(
     placements: &[WindowPlacement],
-    _config: &PlatformConfig,
+    config: &PlatformConfig,
     mut cache: Option<&mut PlacementCache>,
     nudge_sticky_compositors: bool,
+) -> Result<ApplyPlacementsResult, Win32Error> {
+    apply_placements_inner(
+        placements,
+        config,
+        &mut cache,
+        nudge_sticky_compositors,
+        true,
+    )
+}
+
+fn apply_placements_inner(
+    placements: &[WindowPlacement],
+    _config: &PlatformConfig,
+    cache: &mut Option<&mut PlacementCache>,
+    nudge_sticky_compositors: bool,
+    allow_inset_retry: bool,
 ) -> Result<ApplyPlacementsResult, Win32Error> {
     let empty_result = ApplyPlacementsResult {
         width_violations: Vec::new(),
         height_violations: Vec::new(),
     };
     if placements.is_empty() {
-        if let Some(cache) = cache {
+        if let Some(cache) = cache.as_deref_mut() {
             cache.clear();
         }
         // Uncloak all tracked windows — no placements means all previous
@@ -413,63 +452,66 @@ pub fn apply_placements(
     // All windows get full position + size with border inset adjustment.
     // Off-screen windows are kept at their layout-flow position; DWM cloaking
     // makes them invisible.
-    let offscreen_count = placements.iter().filter(|p| p.visibility != Visibility::Visible).count();
+    let offscreen_count = placements
+        .iter()
+        .filter(|p| p.visibility != Visibility::Visible)
+        .count();
 
     // In high contrast mode, DWM paints a visible border in the normally-invisible
-    // frame area.  If we expand by the usual insets, adjacent windows' visible borders
-    // overlap and the layout gaps disappear.  Zero the insets to keep correct spacing.
+    // frame area. If we expand by the usual insets, adjacent windows' visible borders
+    // overlap and the layout gaps disappear. Zero the insets to keep correct spacing.
     let high_contrast = crate::is_high_contrast_enabled();
-
-    let (entries, skipped) = build_defer_entries(placements, &mut cache, async_flag, high_contrast);
-
-    // Uncloak windows that are becoming visible BEFORE positioning,
-    // so DWM starts compositing them at the correct location on this frame.
-    // Also remove from the tracking set — the post-positioning block will
-    // re-add if the window ends up off-screen on this frame.
-    //
-    // Routed through `apply_cloak_state` so a window that's also in
-    // `GHOST_CLOAKED` (e.g. scrolling off-screen → on-screen with ghost
-    // animation in flight) stays cloaked until the ghost path also
-    // releases it.
+    let force_positioning = !allow_inset_retry;
+    let (entries, skipped) = build_defer_entries(
+        placements,
+        cache.as_deref(),
+        async_flag,
+        high_contrast,
+        force_positioning,
+    );
+    // Uncloak before positioning so DWM composites returning windows at their
+    // new rect before the landing measurement. The retry can repeat this safely.
     uncloak_becoming_visible(&entries);
-
     let (applied, failed_window_ids) = position_entries(&entries);
 
-    // Detect size violations by comparing the DWM extended frame bounds
-    // (the window's actual visible content area) against the layout rect the
-    // layout engine asked for. This deliberately bypasses the cached-inset
-    // math used for SetWindowPos: if the cached insets go stale (e.g. apps
-    // like Slack/Spotify toggle custom client frames at runtime) the frame-
-    // vs-frame comparison silently cancels out and violations are missed.
-    //
-    // Visible-bounds-vs-layout-rect is the honest comparison: the layout
-    // engine allocates `placement.rect.width × placement.rect.height` of
-    // visible real estate, and we check whether the window actually fits.
-    //
-    // Skipped during async animation frames — DWM returns stale (pre-resize)
-    // bounds which would create false constraints that prevent columns from
-    // shrinking. The synchronous landing pass detects real violations
-    // authoritatively.
-    let (width_violations, height_violations) = if async_flag == SET_WINDOW_POS_FLAGS(0) {
-        detect_size_violations(&entries, &failed_window_ids, &mut cache)
+    // On the synchronous landing pass, compare the DWM visible measurement to
+    // both the layout request and the expanded SetWindowPos frame request. A
+    // visible rect between them is a stale-inset artifact, not a window minimum:
+    // Slack/Spotify can change their client frame at runtime, and Chromium can
+    // briefly become frameless after app fullscreen. Retry the complete batch
+    // once after evicting the affected tuple; no first-pass cache, compositor
+    // nudge, or suspect-state finalization is allowed to escape.
+    let detection = if async_flag == SET_WINDOW_POS_FLAGS(0) {
+        detect_size_violations(&entries, &failed_window_ids, allow_inset_retry)
     } else {
-        (Vec::new(), Vec::new())
-    }; // end: skip size violation detection during async frames
+        SizeViolationDetection::default()
+    };
+    if should_retry_insets(allow_inset_retry, &detection.inset_artifact_windows) {
+        tracing::debug!(
+            "Retrying placement batch after stale inset measurement for {} window(s)",
+            detection.inset_artifact_windows.len(),
+        );
+        evict_cached_border_insets(&detection.inset_artifact_windows, cache);
+        return apply_placements_inner(placements, _config, cache, nudge_sticky_compositors, false);
+    }
+
+    finalize_cached_border_insets(&entries, &detection.inset_artifact_windows, cache);
+    evict_cached_border_insets(&detection.violating_windows, cache);
 
     // Update cache: remove stale entries (windows no longer in placements),
     // update positioned entries, and keep skipped-unchanged entries intact.
-    if let Some(cache) = cache {
+    if let Some(cache) = cache.as_deref_mut() {
         let current_ids: std::collections::HashSet<u64> =
             placements.iter().map(|p| p.window_id).collect();
         // Remove windows that are no longer in the layout
         cache.positions.retain(|id, _| current_ids.contains(id));
         cache.insets.retain(|id, _| current_ids.contains(id));
         // Update entries for windows that were actually positioned
-        let positioned: std::collections::HashSet<u64> =
-            entries.iter()
-                .filter(|e| !failed_window_ids.contains(&e.window_id))
-                .map(|e| e.window_id)
-                .collect();
+        let positioned: std::collections::HashSet<u64> = entries
+            .iter()
+            .filter(|e| !failed_window_ids.contains(&e.window_id))
+            .map(|e| e.window_id)
+            .collect();
         for p in placements {
             if positioned.contains(&p.window_id) {
                 cache.positions.insert(p.window_id, (p.rect, p.visibility));
@@ -524,27 +566,31 @@ pub fn apply_placements(
     );
 
     Ok(ApplyPlacementsResult {
-        width_violations,
-        height_violations,
+        width_violations: detection.width_violations,
+        height_violations: detection.height_violations,
     })
 }
 
 /// Build the defer-entry list for all placements, skipping cache-unchanged windows.
 fn build_defer_entries(
     placements: &[WindowPlacement],
-    cache: &mut Option<&mut PlacementCache>,
+    cache: Option<&PlacementCache>,
     async_flag: SET_WINDOW_POS_FLAGS,
     high_contrast: bool,
+    force_positioning: bool,
 ) -> (Vec<DeferEntry>, u32) {
     let mut skipped = 0u32;
     let mut entries: Vec<DeferEntry> = Vec::with_capacity(placements.len());
 
     for placement in placements {
-        if let Some(ref cache) = *cache {
-            if cache.positions.get(&placement.window_id) == Some(&(placement.rect, placement.visibility)) {
-                skipped += 1;
-                continue;
-            }
+        if !force_positioning
+            && cache.as_ref().is_some_and(|cache| {
+                cache.positions.get(&placement.window_id)
+                    == Some(&(placement.rect, placement.visibility))
+            })
+        {
+            skipped += 1;
+            continue;
         }
         let Ok(hwnd) = window_id_to_hwnd(placement.window_id) else { continue };
         unsafe {
@@ -563,11 +609,21 @@ fn build_defer_entries(
             }
         }
 
-        let (inset_l, inset_t, inset_r, inset_b) = if high_contrast {
-            (0, 0, 0, 0)
+        let resolved = if high_contrast {
+            ResolvedInsets {
+                insets: (0, 0, 0, 0),
+                source: InsetSource::Fresh,
+                generation: inset_cache_generation(),
+            }
         } else {
-            cached_border_insets(hwnd, placement.window_id, cache.as_deref_mut())
+            cached_border_insets(hwnd, placement.window_id, cache)
         };
+        let ResolvedInsets {
+            insets,
+            source: inset_source,
+            generation: inset_generation,
+        } = resolved;
+        let (inset_l, inset_t, inset_r, inset_b) = insets;
         let frame_w = placement.rect.width + inset_l + inset_r;
         let frame_h = placement.rect.height + inset_t + inset_b;
 
@@ -575,11 +631,9 @@ fn build_defer_entries(
             let mut flags = SWP_NOZORDER | SWP_NOACTIVATE | async_flag;
             // Only send SWP_FRAMECHANGED (expensive WM_NCCALCSIZE) on first
             // frame or landing pass — not every animation frame.
-            let needs_frame_changed = if let Some(ref cache) = *cache {
-                !cache.positions.contains_key(&placement.window_id)
-            } else {
-                true
-            };
+            let needs_frame_changed = cache
+                .as_ref()
+                .is_none_or(|cache| !cache.positions.contains_key(&placement.window_id));
             if needs_frame_changed {
                 flags |= SWP_FRAMECHANGED;
             }
@@ -592,6 +646,9 @@ fn build_defer_entries(
                 h: frame_h,
                 layout_w: placement.rect.width,
                 layout_h: placement.rect.height,
+                insets,
+                inset_source,
+                inset_generation,
                 visibility: placement.visibility,
                 flags,
                 column_index: placement.column_index,
@@ -609,6 +666,9 @@ fn build_defer_entries(
                 h: 0,
                 layout_w: placement.rect.width,
                 layout_h: placement.rect.height,
+                insets,
+                inset_source,
+                inset_generation,
                 visibility: placement.visibility,
                 flags: SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | async_flag,
                 column_index: placement.column_index,
@@ -742,22 +802,94 @@ pub fn clear_suspected_oversize(window_id: WindowId) {
     }
 }
 
-/// Decide how to treat one axis's oversize measurement on the landing pass.
-///
-/// `over` = visibly larger than its slot; `looks_stale` = the excess exceeds the
-/// stale-bounds ratio (a lagging app, but also a genuinely large min-size);
-/// `was_suspected` = this axis was already suspect on the window's previous
-/// landing pass; `absurd` = the excess is implausibly large for a real min-size.
-/// Returns `(record_violation, suspect_now)`.
-///
-/// A small genuine excess is recorded immediately. A moderate suspicious excess
-/// is recorded only once it reproduces across two landing passes — a true stale
-/// read resolves by the next pass and is dropped, while a genuine large min-size
-/// (e.g. a restored column saved narrower than the window's minimum) reproduces
-/// and is honored, so the column stops re-resizing on every switch. An absurd
-/// excess is never trusted, even if it reproduces, so a chronically-lagging app
-/// can't inflate the layout (the case the original ratio guard protected).
-fn classify_oversize(over: bool, looks_stale: bool, was_suspected: bool, absurd: bool) -> (bool, bool) {
+const VISIBLE_SIZE_TOLERANCE: i32 = 2;
+const STALE_BOUNDS_RATIO: i32 = 3;
+const ABSURD_BOUNDS_RATIO: i32 = 4;
+
+#[derive(Debug, PartialEq, Eq)]
+enum AxisSizeClassification {
+    Fits,
+    InsetArtifact,
+    Violation { record: bool, suspect: bool },
+}
+
+#[derive(Clone, Copy)]
+struct SizeMeasurement {
+    hwnd: HWND,
+    window_id: WindowId,
+    layout_size: i32,
+    frame_size: i32,
+    visible_size: i32,
+}
+
+#[derive(Clone, Copy)]
+struct WindowSizeMeasurement {
+    hwnd: HWND,
+    window_id: WindowId,
+    layout_w: i32,
+    layout_h: i32,
+    frame_w: i32,
+    frame_h: i32,
+    visible_w: i32,
+    visible_h: i32,
+}
+
+struct ClassifiedSizeMeasurement {
+    measurement: WindowSizeMeasurement,
+    width: AxisSizeClassification,
+    height: AxisSizeClassification,
+}
+
+#[derive(Default)]
+struct SizeViolationDetection {
+    width_violations: Vec<WidthViolation>,
+    height_violations: Vec<HeightViolation>,
+    inset_artifact_windows: HashSet<WindowId>,
+    violating_windows: HashSet<WindowId>,
+}
+
+/// Decide whether one visible measurement fits, proves the cached insets stale,
+/// or is a real minimum-size candidate. The retry-eligible first pass treats a
+/// measurement inside the frame request as an inset artifact. The authoritative
+/// retry-disabled pass instead records that stable residual as a real minimum.
+fn classify_size_axis(
+    layout_size: i32,
+    frame_size: i32,
+    visible_size: i32,
+    allow_inset_retry: bool,
+    was_suspected: bool,
+) -> AxisSizeClassification {
+    if visible_size <= layout_size + VISIBLE_SIZE_TOLERANCE {
+        return AxisSizeClassification::Fits;
+    }
+    if allow_inset_retry && visible_size <= frame_size + VISIBLE_SIZE_TOLERANCE {
+        return AxisSizeClassification::InsetArtifact;
+    }
+
+    // Confirmation and absurdity are judged against the layout request, as the
+    // pre-existing behavior did. The frame request stays relevant only to the
+    // inset-artifact test above: insets are a few pixels, so folding them into
+    // these ratios would silently widen both thresholds.
+    let looks_stale = layout_size > 0 && visible_size * 2 > layout_size * STALE_BOUNDS_RATIO;
+    let absurd = layout_size > 0 && visible_size > layout_size * ABSURD_BOUNDS_RATIO;
+    let (record, suspect) = classify_oversize(true, looks_stale, was_suspected, absurd);
+    AxisSizeClassification::Violation { record, suspect }
+}
+
+fn is_inset_artifact(layout_size: i32, frame_size: i32, visible_size: i32) -> bool {
+    visible_size > layout_size + VISIBLE_SIZE_TOLERANCE
+        && visible_size <= frame_size + VISIBLE_SIZE_TOLERANCE
+}
+
+/// Decide how to treat a confirmed oversize measurement after it has exceeded
+/// the frame request. A small excess records immediately; a >1.5x excess needs
+/// a second landing pass; a >4x excess is never trusted.
+fn classify_oversize(
+    over: bool,
+    looks_stale: bool,
+    was_suspected: bool,
+    absurd: bool,
+) -> (bool, bool) {
     if !over {
         (false, false)
     } else if !looks_stale {
@@ -771,14 +903,68 @@ fn classify_oversize(over: bool, looks_stale: bool, was_suspected: bool, absurd:
     }
 }
 
+fn should_retry_insets(
+    allow_inset_retry: bool,
+    inset_artifact_windows: &HashSet<WindowId>,
+) -> bool {
+    allow_inset_retry && !inset_artifact_windows.is_empty()
+}
+
+fn classification_outcome(classification: &AxisSizeClassification) -> (bool, bool) {
+    match classification {
+        AxisSizeClassification::Violation { record, suspect } => (*record, *suspect),
+        AxisSizeClassification::Fits | AxisSizeClassification::InsetArtifact => (false, false),
+    }
+}
+
+fn classify_measurements_and_update_suspects(
+    measurements: &[WindowSizeMeasurement],
+    allow_inset_retry: bool,
+    suspects: &mut HashMap<WindowId, (bool, bool)>,
+) -> Vec<ClassifiedSizeMeasurement> {
+    measurements
+        .iter()
+        .map(|measurement| {
+            let (was_w, was_h) = suspects
+                .get(&measurement.window_id)
+                .copied()
+                .unwrap_or((false, false));
+            let width = classify_size_axis(
+                measurement.layout_w,
+                measurement.frame_w,
+                measurement.visible_w,
+                allow_inset_retry,
+                was_w,
+            );
+            let height = classify_size_axis(
+                measurement.layout_h,
+                measurement.frame_h,
+                measurement.visible_h,
+                allow_inset_retry,
+                was_h,
+            );
+            let (_, suspect_w) = classification_outcome(&width);
+            let (_, suspect_h) = classification_outcome(&height);
+            if suspect_w || suspect_h {
+                suspects.insert(measurement.window_id, (suspect_w, suspect_h));
+            } else {
+                suspects.remove(&measurement.window_id);
+            }
+            ClassifiedSizeMeasurement {
+                measurement: *measurement,
+                width,
+                height,
+            }
+        })
+        .collect()
+}
+
 /// Detect min-size violations on the landing pass via DWM visible bounds.
 fn detect_size_violations(
     entries: &[DeferEntry],
     failed_window_ids: &HashSet<u64>,
-    cache: &mut Option<&mut PlacementCache>,
-) -> (Vec<WidthViolation>, Vec<HeightViolation>) {
-    let mut width_violations = Vec::new();
-    let mut height_violations = Vec::new();
+    allow_inset_retry: bool,
+) -> SizeViolationDetection {
     // Wait for the compositor to composite a frame before reading DWM
     // bounds. Sync SetWindowPos only guarantees the target thread received
     // WM_WINDOWPOSCHANGED — it does NOT wait for the target to process and
@@ -794,6 +980,8 @@ fn detect_size_violations(
     unsafe {
         let _ = DwmFlush();
     }
+
+    let mut measurements = Vec::new();
     for entry in entries {
         if entry.column_index == usize::MAX
             || entry.visibility != Visibility::Visible
@@ -817,97 +1005,112 @@ fn detect_size_violations(
             }
             (ext.right - ext.left, ext.bottom - ext.top)
         };
-
-        // Stale-bounds ratio — a genuine min-size violation usually has the
-        // window just barely larger than requested. If DWM reports bounds >1.5x
-        // the requested size, the target thread may be lagging behind our
-        // just-applied resize under CPU pressure (despite the DwmFlush above this
-        // can still happen for unresponsive apps), and recording it would inflate
-        // future layouts. But a genuinely narrow column (e.g. a restored
-        // workspace saved narrower than the window's true minimum) also reports
-        // >1.5x and must not be discarded forever, or the column re-resizes on
-        // every switch. So a suspicious excess is confirmed across two landing
-        // passes (`classify_oversize`): a real min-size reproduces and is
-        // honored; a one-off stale read resolves by the next pass and is dropped.
-        const STALE_BOUNDS_RATIO: i32 = 3; // visible > requested * 3/2 → suspect
-        const ABSURD_BOUNDS_RATIO: i32 = 4; // visible > requested * 4 → never trust
-        let looks_stale_w = entry.layout_w > 0
-            && visible_w * 2 > entry.layout_w * STALE_BOUNDS_RATIO;
-        let looks_stale_h = entry.layout_h > 0
-            && visible_h * 2 > entry.layout_h * STALE_BOUNDS_RATIO;
-        let absurd_w = entry.layout_w > 0 && visible_w > entry.layout_w * ABSURD_BOUNDS_RATIO;
-        let absurd_h = entry.layout_h > 0 && visible_h > entry.layout_h * ABSURD_BOUNDS_RATIO;
-        let w_over = visible_w > entry.layout_w + 2;
-        let h_over = visible_h > entry.layout_h + 2;
-
-        // Read the prior-pass per-axis suspect state and update it for this
-        // window in one locked section.
-        let (record_w, suspect_w, record_h, suspect_h) = {
-            let mut guard = lock_suspected_oversize();
-            let map = guard.get_or_insert_with(HashMap::new);
-            let (was_w, was_h) = map.get(&entry.window_id).copied().unwrap_or((false, false));
-            let (record_w, suspect_w) = classify_oversize(w_over, looks_stale_w, was_w, absurd_w);
-            let (record_h, suspect_h) = classify_oversize(h_over, looks_stale_h, was_h, absurd_h);
-            if suspect_w || suspect_h {
-                map.insert(entry.window_id, (suspect_w, suspect_h));
-            } else {
-                map.remove(&entry.window_id);
-            }
-            (record_w, suspect_w, record_h, suspect_h)
-        };
-
-        let mut mismatched = false;
-        if record_w {
-            tracing::debug!(
-                "Width violation: {:?} requested {}px, visible {}px",
-                entry.hwnd, entry.layout_w, visible_w,
-            );
-            width_violations.push(WidthViolation {
-                window_id: entry.window_id,
-                min_width: visible_w,
-            });
-            mismatched = true;
-        } else if suspect_w {
-            tracing::debug!(
-                "Deferring suspect width until next landing confirms: {:?} \
-                 requested {}px, visible {}px",
-                entry.hwnd, entry.layout_w, visible_w,
-            );
-        }
-        if record_h {
-            tracing::debug!(
-                "Height violation: {:?} requested {}px, visible {}px",
-                entry.hwnd, entry.layout_h, visible_h,
-            );
-            height_violations.push(HeightViolation {
-                window_id: entry.window_id,
-                min_height: visible_h,
-            });
-            mismatched = true;
-        } else if suspect_h {
-            tracing::debug!(
-                "Deferring suspect height until next landing confirms: {:?} \
-                 requested {}px, visible {}px",
-                entry.hwnd, entry.layout_h, visible_h,
-            );
-        }
-
-        // On any mismatch, invalidate the cached border insets for this
-        // window. Stale insets are the most likely reason a prior frame
-        // sized the frame incorrectly, and the next SetWindowPos should
-        // re-query DWM for fresh values.
-        if mismatched {
-            if let Some(ref mut cache) = *cache {
-                cache.insets.remove(&entry.window_id);
-            }
-            if let Ok(mut global) = GLOBAL_INSET_CACHE.lock() {
-                if let Some(ref mut m) = *global {
-                    m.remove(&entry.window_id);
-                }
-            }
-        }
+        measurements.push(WindowSizeMeasurement {
+            hwnd: entry.hwnd,
+            window_id: entry.window_id,
+            layout_w: entry.layout_w,
+            layout_h: entry.layout_h,
+            frame_w: entry.w,
+            frame_h: entry.h,
+            visible_w,
+            visible_h,
+        });
     }
-    (width_violations, height_violations)
+
+    let artifact_windows: HashSet<WindowId> = if allow_inset_retry {
+        measurements
+            .iter()
+            .filter(|measurement| {
+                is_inset_artifact(
+                    measurement.layout_w,
+                    measurement.frame_w,
+                    measurement.visible_w,
+                ) || is_inset_artifact(
+                    measurement.layout_h,
+                    measurement.frame_h,
+                    measurement.visible_h,
+                )
+            })
+            .map(|measurement| measurement.window_id)
+            .collect()
+    } else {
+        HashSet::new()
+    };
+    if should_retry_insets(allow_inset_retry, &artifact_windows) {
+        return SizeViolationDetection {
+            inset_artifact_windows: artifact_windows,
+            ..Default::default()
+        };
+    }
+
+    let classified = {
+        let mut guard = lock_suspected_oversize();
+        let suspects = guard.get_or_insert_with(HashMap::new);
+        classify_measurements_and_update_suspects(&measurements, allow_inset_retry, suspects)
+    };
+
+    let mut detection = SizeViolationDetection::default();
+    for classified in classified {
+        let width = SizeMeasurement {
+            hwnd: classified.measurement.hwnd,
+            window_id: classified.measurement.window_id,
+            layout_size: classified.measurement.layout_w,
+            frame_size: classified.measurement.frame_w,
+            visible_size: classified.measurement.visible_w,
+        };
+        let height = SizeMeasurement {
+            hwnd: classified.measurement.hwnd,
+            window_id: classified.measurement.window_id,
+            layout_size: classified.measurement.layout_h,
+            frame_size: classified.measurement.frame_h,
+            visible_size: classified.measurement.visible_h,
+        };
+        report_axis_size_outcome(&mut detection, width, &classified.width, true);
+        report_axis_size_outcome(&mut detection, height, &classified.height, false);
+    }
+    detection
+}
+
+fn report_axis_size_outcome(
+    detection: &mut SizeViolationDetection,
+    measurement: SizeMeasurement,
+    classification: &AxisSizeClassification,
+    is_width: bool,
+) {
+    let (record, suspect) = classification_outcome(classification);
+    if record {
+        let axis = if is_width { "Width" } else { "Height" };
+        tracing::debug!(
+            "{} violation: {:?} layout request {}px, frame request {}px, visible measurement {}px",
+            axis,
+            measurement.hwnd,
+            measurement.layout_size,
+            measurement.frame_size,
+            measurement.visible_size,
+        );
+        detection.violating_windows.insert(measurement.window_id);
+        if is_width {
+            detection.width_violations.push(WidthViolation {
+                window_id: measurement.window_id,
+                min_width: measurement.visible_size,
+            });
+        } else {
+            detection.height_violations.push(HeightViolation {
+                window_id: measurement.window_id,
+                min_height: measurement.visible_size,
+            });
+        }
+    } else if suspect {
+        let axis = if is_width { "width" } else { "height" };
+        tracing::debug!(
+            "Deferring suspect {} until next landing confirms: {:?} layout request {}px, frame request {}px, visible measurement {}px",
+            axis,
+            measurement.hwnd,
+            measurement.layout_size,
+            measurement.frame_size,
+            measurement.visible_size,
+        );
+    }
 }
 
 /// Cloak newly off-screen entries and prune cloaks for windows no longer in the layout.
@@ -1038,53 +1241,165 @@ type InsetMap = HashMap<WindowId, (i32, i32, i32, i32)>;
 /// a per-worker PlacementCache.
 static GLOBAL_INSET_CACHE: Mutex<Option<InsetMap>> = Mutex::new(None);
 
+/// Monotonic generation of the global inset cache, bumped by every
+/// `clear_inset_cache` call while the cache lock is held.
+///
+/// Inset tuples are resolved in `build_defer_entries` but published only after
+/// positioning and the landing `DwmFlush`, so an invalidation can land in
+/// between. Each resolved tuple carries the generation it was resolved under;
+/// publication compares it against the generation observed while holding the
+/// cache lock, so a tuple measured before an invalidation can never be promoted
+/// afterwards.
+static INSET_CACHE_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+fn inset_cache_generation() -> u64 {
+    INSET_CACHE_GENERATION.load(AtomicOrdering::SeqCst)
+}
+
 /// Clear the global inset cache. Must be called when system theme or DWM
 /// metrics change (e.g., high contrast toggle, display change) so that stale
 /// invisible-border values don't cause incorrect window sizing.
 pub fn clear_inset_cache() {
     if let Ok(mut global) = GLOBAL_INSET_CACHE.lock() {
         *global = None;
+        // Bump under the cache lock so a concurrent publication either observes
+        // the pre-clear generation before we clear, or the post-clear one.
+        INSET_CACHE_GENERATION.fetch_add(1, AtomicOrdering::SeqCst);
     }
 }
 
 /// Look up border insets for a window, using a sticky cache to protect against
 /// stale DWM data for windows that were parked off-screen.
 ///
-/// Border insets are determined by window style and DPI, not position, so they
-/// should be stable for a window's lifetime. Once cached, we never re-query DWM.
+/// The caller finalizes a freshly queried tuple only after the batch's visible
+/// measurements are accepted. This lets a stale cached Slack/Spotify or
+/// transient Chromium client frame be evicted and re-queried without leaking
+/// the first pass into either cache.
 fn cached_border_insets(
     hwnd: HWND,
     window_id: WindowId,
-    local_cache: Option<&mut PlacementCache>,
-) -> (i32, i32, i32, i32) {
-    // Check local (per-worker) cache first
-    if let Some(cached) = local_cache
-        .as_ref()
-        .and_then(|c| c.insets.get(&window_id).copied())
-    {
-        return cached;
+    local_cache: Option<&PlacementCache>,
+) -> ResolvedInsets {
+    // Sampled before any lookup or DWM query so that an invalidation racing
+    // either one is guaranteed to produce a mismatch at publication time.
+    let generation = inset_cache_generation();
+    if let Some(cached) = local_cache.and_then(|cache| cache.insets.get(&window_id).copied()) {
+        return ResolvedInsets {
+            insets: cached,
+            source: InsetSource::LocalCache,
+            generation,
+        };
     }
-    // Check global cache (shared across apply_layout threads)
     if let Ok(global) = GLOBAL_INSET_CACHE.lock() {
-        if let Some(cached) = global.as_ref().and_then(|m| m.get(&window_id).copied()) {
-            // Promote to local cache for fast subsequent lookups
-            if let Some(cache) = local_cache {
-                cache.insets.insert(window_id, cached);
+        if let Some(cached) = global.as_ref().and_then(|map| map.get(&window_id).copied()) {
+            return ResolvedInsets {
+                insets: cached,
+                source: InsetSource::GlobalCache,
+                generation,
+            };
+        }
+    }
+    ResolvedInsets {
+        insets: invisible_border_insets(hwnd),
+        source: InsetSource::Fresh,
+        generation,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct InsetFinalization {
+    local: bool,
+    global: bool,
+}
+
+fn inset_finalization(
+    source: InsetSource,
+    insets: (i32, i32, i32, i32),
+    is_artifact: bool,
+    generation_matches: bool,
+) -> InsetFinalization {
+    if insets == (0, 0, 0, 0) || is_artifact || !generation_matches {
+        return InsetFinalization {
+            local: false,
+            global: false,
+        };
+    }
+    match source {
+        InsetSource::LocalCache => InsetFinalization {
+            local: false,
+            global: false,
+        },
+        InsetSource::GlobalCache => InsetFinalization {
+            local: true,
+            global: false,
+        },
+        InsetSource::Fresh => InsetFinalization {
+            local: true,
+            global: true,
+        },
+    }
+}
+
+fn finalize_cached_border_insets(
+    entries: &[DeferEntry],
+    inset_artifact_windows: &HashSet<WindowId>,
+    cache: &mut Option<&mut PlacementCache>,
+) {
+    if let Some(cache) = cache.as_deref_mut() {
+        let generation = inset_cache_generation();
+        for entry in entries {
+            if inset_finalization(
+                entry.inset_source,
+                entry.insets,
+                inset_artifact_windows.contains(&entry.window_id),
+                entry.inset_generation == generation,
+            )
+            .local
+            {
+                cache.insets.insert(entry.window_id, entry.insets);
             }
-            return cached;
         }
     }
-    // No cache — query DWM and cache if non-zero
-    let fresh = invisible_border_insets(hwnd);
-    if fresh != (0, 0, 0, 0) {
-        if let Some(cache) = local_cache {
-            cache.insets.insert(window_id, fresh);
-        }
-        if let Ok(mut global) = GLOBAL_INSET_CACHE.lock() {
-            global.get_or_insert_with(HashMap::new).insert(window_id, fresh);
+    if let Ok(mut global) = GLOBAL_INSET_CACHE.lock() {
+        // Read under the cache lock: `clear_inset_cache` bumps the generation
+        // while holding it, so a clear cannot slip between this read and the
+        // inserts below.
+        let generation = inset_cache_generation();
+        let global = global.get_or_insert_with(HashMap::new);
+        for entry in entries {
+            if inset_finalization(
+                entry.inset_source,
+                entry.insets,
+                inset_artifact_windows.contains(&entry.window_id),
+                entry.inset_generation == generation,
+            )
+            .global
+            {
+                global.insert(entry.window_id, entry.insets);
+            }
         }
     }
-    fresh
+}
+
+fn evict_cached_border_insets(
+    window_ids: &HashSet<WindowId>,
+    cache: &mut Option<&mut PlacementCache>,
+) {
+    if window_ids.is_empty() {
+        return;
+    }
+    if let Some(cache) = cache.as_deref_mut() {
+        for window_id in window_ids {
+            cache.insets.remove(window_id);
+        }
+    }
+    if let Ok(mut global) = GLOBAL_INSET_CACHE.lock() {
+        if let Some(global) = global.as_mut() {
+            for window_id in window_ids {
+                global.remove(window_id);
+            }
+        }
+    }
 }
 
 /// Public wrapper over `invisible_border_insets` that takes a `WindowId`.
@@ -1139,19 +1454,361 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_classify_oversize() {
-        // (over, looks_stale, was_suspected, absurd)
-        // Not oversize -> never record, never suspect.
-        assert_eq!(classify_oversize(false, false, false, false), (false, false));
-        // Oversize but within the stale ratio -> genuine, record immediately.
-        assert_eq!(classify_oversize(true, false, false, false), (true, false));
-        // Suspiciously large, first sighting -> defer (suspect), don't record.
-        assert_eq!(classify_oversize(true, true, false, false), (false, true));
-        // Suspiciously large, reproduced from last pass -> confirmed, record.
-        assert_eq!(classify_oversize(true, true, true, false), (true, false));
-        // Absurdly large -> never trusted, even reproduced (chronic stale read).
-        assert_eq!(classify_oversize(true, true, true, true), (false, false));
-        assert_eq!(classify_oversize(true, true, false, true), (false, false));
+    fn test_classify_size_axis_distinguishes_insets_from_minimums() {
+        let cases = [
+            (
+                1323,
+                1337,
+                1337,
+                true,
+                false,
+                AxisSizeClassification::InsetArtifact,
+            ),
+            (
+                1372,
+                1379,
+                1379,
+                true,
+                false,
+                AxisSizeClassification::InsetArtifact,
+            ),
+            (400, 400, 400, true, false, AxisSizeClassification::Fits),
+            (400, 400, 402, true, false, AxisSizeClassification::Fits),
+            (
+                400,
+                400,
+                403,
+                true,
+                false,
+                AxisSizeClassification::Violation {
+                    record: true,
+                    suspect: false,
+                },
+            ),
+            (
+                400,
+                400,
+                700,
+                true,
+                false,
+                AxisSizeClassification::Violation {
+                    record: false,
+                    suspect: true,
+                },
+            ),
+            (
+                400,
+                400,
+                700,
+                true,
+                true,
+                AxisSizeClassification::Violation {
+                    record: true,
+                    suspect: false,
+                },
+            ),
+            (
+                400,
+                400,
+                1601,
+                true,
+                true,
+                AxisSizeClassification::Violation {
+                    record: false,
+                    suspect: false,
+                },
+            ),
+            (
+                400,
+                414,
+                403,
+                false,
+                false,
+                AxisSizeClassification::Violation {
+                    record: true,
+                    suspect: false,
+                },
+            ),
+            // Nonzero insets must not widen the >1.5x confirmation threshold:
+            // 605 > 1.5 * 400 (layout), but 605 < 1.5 * 414 (frame). Judged
+            // against the frame this would record a bogus 605px minimum on
+            // first sighting instead of deferring it to a second landing.
+            (
+                400,
+                414,
+                605,
+                false,
+                false,
+                AxisSizeClassification::Violation {
+                    record: false,
+                    suspect: true,
+                },
+            ),
+            (
+                400,
+                414,
+                605,
+                true,
+                false,
+                AxisSizeClassification::Violation {
+                    record: false,
+                    suspect: true,
+                },
+            ),
+            // Nor may they widen the >4x absurdity guard: 1700 > 4 * 400
+            // (layout) but 1700 < 4 * 500 (frame), so a frame-judged absurdity
+            // test would promote this implausible read to a real minimum on the
+            // confirming pass.
+            (
+                400,
+                500,
+                1700,
+                false,
+                true,
+                AxisSizeClassification::Violation {
+                    record: false,
+                    suspect: false,
+                },
+            ),
+        ];
+
+        for (layout, frame, visible, allow_retry, was_suspected, expected) in cases {
+            assert_eq!(
+                classify_size_axis(layout, frame, visible, allow_retry, was_suspected),
+                expected,
+                "layout={layout}, frame={frame}, visible={visible}, allow_retry={allow_retry}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_inset_retry_discards_whole_first_pass_and_records_stable_mixed_minimums() {
+        let measurement = WindowSizeMeasurement {
+            hwnd: HWND::default(),
+            window_id: 7,
+            layout_w: 400,
+            layout_h: 400,
+            frame_w: 414,
+            frame_h: 400,
+            visible_w: 403,
+            visible_h: 500,
+        };
+        assert!(is_inset_artifact(
+            measurement.layout_w,
+            measurement.frame_w,
+            measurement.visible_w,
+        ));
+        let artifact_windows = HashSet::from([measurement.window_id]);
+        assert!(should_retry_insets(true, &artifact_windows));
+        assert!(!should_retry_insets(false, &artifact_windows));
+        assert_eq!(
+            classify_size_axis(
+                measurement.layout_h,
+                measurement.frame_h,
+                measurement.visible_h,
+                true,
+                false,
+            ),
+            AxisSizeClassification::Violation {
+                record: true,
+                suspect: false,
+            },
+            "the first pass may see a genuine height minimum, but the window retry discards it"
+        );
+
+        let mut suspects = HashMap::new();
+        let second = classify_measurements_and_update_suspects(&[measurement], false, &mut suspects);
+        assert_eq!(
+            second[0].width,
+            AxisSizeClassification::Violation {
+                record: true,
+                suspect: false,
+            }
+        );
+        assert_eq!(
+            second[0].height,
+            AxisSizeClassification::Violation {
+                record: true,
+                suspect: false,
+            }
+        );
+    }
+
+    #[test]
+    fn test_inset_finalization_preserves_cache_provenance() {
+        let insets = (7, 0, 7, 7);
+        assert_eq!(
+            inset_finalization(InsetSource::LocalCache, insets, false, true),
+            InsetFinalization {
+                local: false,
+                global: false,
+            },
+            "a worker-local tuple cannot resurrect a globally-cleared DPI cache"
+        );
+        assert_eq!(
+            inset_finalization(InsetSource::GlobalCache, insets, false, true),
+            InsetFinalization {
+                local: true,
+                global: false,
+            }
+        );
+        assert_eq!(
+            inset_finalization(InsetSource::Fresh, insets, false, true),
+            InsetFinalization {
+                local: true,
+                global: true,
+            }
+        );
+        assert_eq!(
+            inset_finalization(InsetSource::Fresh, insets, true, true),
+            InsetFinalization {
+                local: false,
+                global: false,
+            }
+        );
+    }
+
+    #[test]
+    fn test_inset_finalization_requires_a_matching_generation() {
+        let insets = (7, 0, 7, 7);
+        for source in [
+            InsetSource::Fresh,
+            InsetSource::GlobalCache,
+            InsetSource::LocalCache,
+        ] {
+            assert_eq!(
+                inset_finalization(source, insets, false, false),
+                InsetFinalization {
+                    local: false,
+                    global: false,
+                },
+                "a tuple resolved before an invalidation must not be published ({source:?})"
+            );
+        }
+    }
+
+    /// The two generation tests below both observe the process-global
+    /// `INSET_CACHE_GENERATION`, and one of them bumps it. Serialize them so the
+    /// match case cannot be invalidated by the mismatch case running in parallel.
+    static GENERATION_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn fresh_inset_entry(window_id: u64, generation: u64) -> DeferEntry {
+        DeferEntry {
+            hwnd: HWND::default(),
+            window_id,
+            x: 0,
+            y: 0,
+            w: 414,
+            h: 400,
+            layout_w: 400,
+            layout_h: 400,
+            insets: (7, 0, 7, 0),
+            inset_source: InsetSource::Fresh,
+            inset_generation: generation,
+            visibility: Visibility::Visible,
+            flags: SET_WINDOW_POS_FLAGS(0),
+            column_index: 0,
+        }
+    }
+
+    fn global_cached_insets(window_id: WindowId) -> Option<(i32, i32, i32, i32)> {
+        GLOBAL_INSET_CACHE
+            .lock()
+            .ok()
+            .and_then(|global| global.as_ref().and_then(|map| map.get(&window_id).copied()))
+    }
+
+    fn forget_global_insets(window_id: WindowId) {
+        if let Ok(mut global) = GLOBAL_INSET_CACHE.lock() {
+            if let Some(map) = global.as_mut() {
+                map.remove(&window_id);
+            }
+        }
+    }
+
+    #[test]
+    fn test_fresh_insets_publish_when_the_generation_still_matches() {
+        let _serialize = GENERATION_TEST_LOCK
+            .lock()
+            .unwrap_or_else(crate::recover_poisoned_mutex);
+        let wid: WindowId = 0x7FFF_FF11;
+        forget_global_insets(wid);
+        let entry = fresh_inset_entry(wid, inset_cache_generation());
+
+        let mut local = PlacementCache::new();
+        finalize_cached_border_insets(&[entry], &HashSet::new(), &mut Some(&mut local));
+
+        assert_eq!(local.insets.get(&wid), Some(&(7, 0, 7, 0)));
+        assert_eq!(global_cached_insets(wid), Some((7, 0, 7, 0)));
+        forget_global_insets(wid);
+    }
+
+    #[test]
+    fn test_clear_between_lookup_and_publication_blocks_the_stale_fresh_tuple() {
+        let _serialize = GENERATION_TEST_LOCK
+            .lock()
+            .unwrap_or_else(crate::recover_poisoned_mutex);
+        let wid: WindowId = 0x7FFF_FF12;
+        forget_global_insets(wid);
+        // Resolve first, invalidate second — the ordering the deferred
+        // publication widened the window on.
+        let entry = fresh_inset_entry(wid, inset_cache_generation());
+        clear_inset_cache();
+        assert_ne!(entry.inset_generation, inset_cache_generation());
+
+        let mut local = PlacementCache::new();
+        finalize_cached_border_insets(&[entry], &HashSet::new(), &mut Some(&mut local));
+
+        assert_eq!(
+            global_cached_insets(wid),
+            None,
+            "a pre-clear fresh tuple must not repopulate the cleared global cache"
+        );
+        assert_eq!(local.insets.get(&wid), None);
+    }
+
+    #[test]
+    fn test_suspect_updates_merge_current_state_per_measurement() {
+        let mut suspects = HashMap::from([(8, (true, false))]);
+        let measurement = WindowSizeMeasurement {
+            hwnd: HWND::default(),
+            window_id: 7,
+            layout_w: 400,
+            layout_h: 400,
+            frame_w: 400,
+            frame_h: 400,
+            visible_w: 700,
+            visible_h: 400,
+        };
+        let classified = classify_measurements_and_update_suspects(&[measurement], true, &mut suspects);
+        assert_eq!(
+            classified[0].width,
+            AxisSizeClassification::Violation {
+                record: false,
+                suspect: true,
+            }
+        );
+        assert_eq!(suspects.get(&7), Some(&(true, false)));
+        assert_eq!(suspects.get(&8), Some(&(true, false)));
+    }
+
+    #[test]
+    fn test_classify_oversize_confirmation_and_absurd_guard() {
+        let cases = [
+            ((false, false, false, false), (false, false)),
+            ((true, false, false, false), (true, false)),
+            ((true, true, false, false), (false, true)),
+            ((true, true, true, false), (true, false)),
+            ((true, true, true, true), (false, false)),
+            ((true, true, false, true), (false, false)),
+        ];
+
+        for ((over, looks_stale, was_suspected, absurd), expected) in cases {
+            assert_eq!(
+                classify_oversize(over, looks_stale, was_suspected, absurd),
+                expected
+            );
+        }
     }
 
     #[test]
