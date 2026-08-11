@@ -4617,6 +4617,211 @@ fn test_scratchpad_stash_designates_and_removes_window() {
 }
 
 #[test]
+fn test_scratchpad_workspace_capture_short_circuits_native_queries() {
+    let work_areas = [Rect::new(0, 0, 1920, 1040)];
+    let workspace_rect = Rect::new(120, 100, 1000, 700);
+    let mut chrome_queries = 0;
+    let mut visibility_queries = 0;
+    let mut dwm_queries = 0;
+
+    assert_eq!(
+        crate::scratchpad::scratchpad_capture_rect(
+            Some(workspace_rect),
+            &work_areas,
+            || {
+                chrome_queries += 1;
+                Some(Rect::new(-100_000, -100_000, 900, 600))
+            },
+            || {
+                visibility_queries += 1;
+                true
+            },
+            || {
+                dwm_queries += 1;
+                Some(Rect::new(-100_000, -100_000, 900, 600))
+            },
+        ),
+        Some(workspace_rect)
+    );
+    assert_eq!(chrome_queries, 0);
+    assert_eq!(visibility_queries, 0);
+    assert_eq!(dwm_queries, 0);
+}
+
+#[test]
+fn test_scratchpad_capture_rejects_uncertain_chrome_without_dwm_queries() {
+    let work_areas = [Rect::new(0, 0, 1920, 1040)];
+    for (chrome_rect, window_visible) in [
+        (Rect::new(-100_000, -100_000, 900, 600), true),
+        (Rect::new(-1920, 0, 1920, 1040), true),
+        (Rect::new(0, 0, 1920, 1040), false),
+    ] {
+        let mut dwm_queries = 0;
+        assert_eq!(
+            crate::scratchpad::scratchpad_capture_rect(
+                None,
+                &work_areas,
+                || Some(chrome_rect),
+                || window_visible,
+                || {
+                    dwm_queries += 1;
+                    Some(Rect::new(100, 100, 900, 600))
+                },
+            ),
+            None
+        );
+        assert_eq!(dwm_queries, 0);
+
+        let mut inset_queries = 0;
+        assert_eq!(
+            crate::scratchpad::scratchpad_capture_frame_insets(
+                None,
+                &work_areas,
+                || Some(chrome_rect),
+                || window_visible,
+                || {
+                    inset_queries += 1;
+                    Some((7, 1, 7, 8))
+                },
+            ),
+            None
+        );
+        assert_eq!(inset_queries, 0);
+    }
+}
+
+#[test]
+fn test_scratchpad_capture_uses_verified_dwm_fallback() {
+    let work_areas = [Rect::new(0, 0, 1920, 1040)];
+    let mut dwm_queries = 0;
+    assert_eq!(
+        crate::scratchpad::scratchpad_capture_rect(
+            None,
+            &work_areas,
+            || Some(Rect::new(100, 100, 900, 600)),
+            || true,
+            || {
+                dwm_queries += 1;
+                Some(Rect::new(100, 100, 900, 600))
+            },
+        ),
+        Some(Rect::new(100, 100, 900, 600))
+    );
+    assert_eq!(dwm_queries, 1);
+}
+
+#[test]
+fn test_scratchpad_existing_insets_skip_queries_and_are_not_replaced() {
+    let work_areas = [Rect::new(0, 0, 1920, 1040)];
+    let saved_insets = Some((7, 1, 7, 8));
+    let mut chrome_queries = 0;
+    let mut visibility_queries = 0;
+    let mut inset_queries = 0;
+
+    assert_eq!(
+        crate::scratchpad::scratchpad_capture_frame_insets(
+            saved_insets,
+            &work_areas,
+            || {
+                chrome_queries += 1;
+                Some(Rect::new(100, 100, 900, 600))
+            },
+            || {
+                visibility_queries += 1;
+                true
+            },
+            || {
+                inset_queries += 1;
+                Some((0, 0, 0, 0))
+            },
+        ),
+        saved_insets
+    );
+    assert_eq!(chrome_queries, 0);
+    assert_eq!(visibility_queries, 0);
+    assert_eq!(inset_queries, 0);
+}
+
+#[test]
+fn test_scratchpad_initial_insets_capture_once_from_visible_chrome() {
+    let work_areas = [Rect::new(0, 0, 1920, 1040)];
+    let mut chrome_queries = 0;
+    let mut visibility_queries = 0;
+    let mut inset_queries = 0;
+
+    assert_eq!(
+        crate::scratchpad::scratchpad_capture_frame_insets(
+            None,
+            &work_areas,
+            || {
+                chrome_queries += 1;
+                Some(Rect::new(100, 100, 900, 600))
+            },
+            || {
+                visibility_queries += 1;
+                true
+            },
+            || {
+                inset_queries += 1;
+                Some((7, 1, 7, 8))
+            },
+        ),
+        Some((7, 1, 7, 8))
+    );
+    assert_eq!(chrome_queries, 1);
+    assert_eq!(visibility_queries, 1);
+    assert_eq!(inset_queries, 1);
+}
+
+#[test]
+fn test_scratchpad_rejected_initial_insets_remain_uncaptured() {
+    let work_areas = [Rect::new(0, 0, 1920, 1040)];
+    let mut chrome_queries = 0;
+    let mut visibility_queries = 0;
+    let mut inset_queries = 0;
+
+    assert_eq!(
+        crate::scratchpad::scratchpad_capture_frame_insets(
+            None,
+            &work_areas,
+            || {
+                chrome_queries += 1;
+                Some(Rect::new(100, 100, 900, 600))
+            },
+            || {
+                visibility_queries += 1;
+                true
+            },
+            || {
+                inset_queries += 1;
+                None
+            },
+        ),
+        None
+    );
+    assert_eq!(chrome_queries, 1);
+    assert_eq!(visibility_queries, 1);
+    assert_eq!(inset_queries, 1);
+}
+
+#[test]
+fn test_scratchpad_direct_frame_rect_uses_only_recorded_insets() {
+    let rect = Rect::new(120, 100, 1000, 700);
+    assert_eq!(
+        crate::scratchpad::scratchpad_direct_frame_rect(rect, Some((7, 1, 7, 8)), false),
+        Rect::new(113, 99, 1014, 709)
+    );
+    assert_eq!(
+        crate::scratchpad::scratchpad_direct_frame_rect(rect, None, false),
+        rect
+    );
+    assert_eq!(
+        crate::scratchpad::scratchpad_direct_frame_rect(rect, Some((7, 1, 7, 8)), true),
+        rect
+    );
+}
+
+#[test]
 fn test_scratchpad_toggle_summons_then_hides() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
     state
@@ -4626,18 +4831,238 @@ fn test_scratchpad_toggle_summons_then_hides() {
         .unwrap();
     state.scratchpad_stash();
 
-    // Summon: floating + shown.
+    // First summon: floating + shown at the existing centered default.
     state.scratchpad_toggle();
     assert!(state.scratchpad.unwrap().shown);
-    assert!(
-        state.focused_workspace().unwrap().is_floating(100),
-        "summoned scratchpad is a floating window"
-    );
+    assert!(state.scratchpad.unwrap().saved_rect.is_none());
+    let floating = state
+        .focused_workspace()
+        .unwrap()
+        .floating_windows()
+        .iter()
+        .find(|floating| floating.id == 100)
+        .expect("summoned scratchpad is floating");
+    assert_eq!(floating.rect, Rect::new(510, 220, 900, 600));
 
     // Hide: removed + not shown.
     state.scratchpad_toggle();
     assert!(!state.scratchpad.unwrap().shown);
     assert!(!state.focused_workspace().unwrap().contains_window(100));
+}
+
+#[test]
+fn test_scratchpad_toggle_restores_saved_geometry() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .insert_window(100, Some(800))
+        .unwrap();
+    state.scratchpad_stash();
+    state.scratchpad_toggle();
+
+    let first_rect = Rect::new(120, 100, 1000, 700);
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .update_floating(100, first_rect);
+    state.scratchpad_toggle();
+    assert_eq!(state.scratchpad.unwrap().saved_rect, Some(first_rect));
+
+    state.scratchpad_toggle();
+    let floating = state
+        .focused_workspace()
+        .unwrap()
+        .floating_windows()
+        .iter()
+        .find(|floating| floating.id == 100)
+        .expect("scratchpad is re-summoned as floating");
+    assert_eq!(floating.rect, first_rect);
+
+    let second_rect = Rect::new(240, 180, 1100, 650);
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .update_floating(100, second_rect);
+    state.scratchpad_toggle();
+    state.scratchpad_toggle();
+    let floating = state
+        .focused_workspace()
+        .unwrap()
+        .floating_windows()
+        .iter()
+        .find(|floating| floating.id == 100)
+        .expect("scratchpad is re-summoned after a second toggle");
+    assert_eq!(floating.rect, second_rect);
+}
+
+#[test]
+fn test_scratchpad_paused_summon_restores_saved_geometry() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .insert_window(100, Some(800))
+        .unwrap();
+    state.scratchpad_stash();
+    let saved_rect = Rect::new(120, 100, 1000, 700);
+    state.scratchpad.as_mut().unwrap().saved_rect = Some(saved_rect);
+    state.paused = true;
+
+    state.scratchpad_toggle();
+
+    assert!(state.scratchpad.unwrap().shown);
+    let floating = state
+        .focused_workspace()
+        .unwrap()
+        .floating_windows()
+        .iter()
+        .find(|floating| floating.id == 100)
+        .expect("paused scratchpad is summoned as floating");
+    assert_eq!(floating.rect, saved_rect);
+}
+
+#[test]
+fn test_scratchpad_rapid_toggles_keep_workspace_geometry() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .insert_window(100, Some(800))
+        .unwrap();
+    state.scratchpad_stash();
+    state.scratchpad_toggle();
+
+    let saved_before_summon = Rect::new(-100_000, -100_000, 900, 600);
+    let latest_rect = Rect::new(240, 180, 1100, 650);
+    state.scratchpad.as_mut().unwrap().saved_rect = Some(saved_before_summon);
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .update_floating(100, latest_rect);
+
+    for _ in 0..2 {
+        state.scratchpad_toggle();
+        assert_eq!(state.scratchpad.unwrap().saved_rect, Some(latest_rect));
+        state.scratchpad_toggle();
+        let floating = state
+            .focused_workspace()
+            .unwrap()
+            .floating_windows()
+            .iter()
+            .find(|floating| floating.id == 100)
+            .expect("scratchpad is re-summoned after rapid toggling");
+        assert_eq!(floating.rect, latest_rect);
+    }
+}
+
+#[test]
+fn test_scratchpad_saved_small_geometry_is_preserved() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .insert_window(100, Some(800))
+        .unwrap();
+    state.scratchpad_stash();
+    state.scratchpad.as_mut().unwrap().saved_rect = Some(Rect::new(120, 100, 80, 60));
+
+    state.scratchpad_toggle();
+    let floating = state
+        .focused_workspace()
+        .unwrap()
+        .floating_windows()
+        .iter()
+        .find(|floating| floating.id == 100)
+        .expect("small scratchpad is summoned");
+    assert_eq!(floating.rect, Rect::new(120, 100, 80, 60));
+
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .update_floating(100, Rect::new(240, 180, 199, 149));
+    state.scratchpad_toggle();
+    state.scratchpad_toggle();
+    let floating = state
+        .focused_workspace()
+        .unwrap()
+        .floating_windows()
+        .iter()
+        .find(|floating| floating.id == 100)
+        .expect("second small scratchpad is re-summoned");
+    assert_eq!(floating.rect, Rect::new(240, 180, 199, 149));
+}
+
+#[test]
+fn test_scratchpad_nonpositive_saved_geometry_uses_safe_size() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .insert_window(100, Some(800))
+        .unwrap();
+    state.scratchpad_stash();
+    state.scratchpad.as_mut().unwrap().saved_rect = Some(Rect::new(120, 100, 0, -1));
+
+    state.scratchpad_toggle();
+
+    let floating = state
+        .focused_workspace()
+        .unwrap()
+        .floating_windows()
+        .iter()
+        .find(|floating| floating.id == 100)
+        .expect("scratchpad with invalid saved size is summoned");
+    assert_eq!(floating.rect, Rect::new(120, 100, 900, 600));
+}
+
+#[test]
+fn test_scratchpad_saved_geometry_clamps_to_work_area() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .insert_window(100, Some(800))
+        .unwrap();
+    state.scratchpad_stash();
+    state.scratchpad.as_mut().unwrap().saved_rect = Some(Rect::new(3000, 1500, 1000, 700));
+
+    state.scratchpad_toggle();
+
+    let floating = state
+        .focused_workspace()
+        .unwrap()
+        .floating_windows()
+        .iter()
+        .find(|floating| floating.id == 100)
+        .expect("scratchpad is summoned within the work area");
+    assert_eq!(floating.rect, Rect::new(920, 340, 1000, 700));
+}
+
+#[test]
+fn test_scratchpad_saved_geometry_shrinks_after_work_area_change() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .insert_window(100, Some(800))
+        .unwrap();
+    state.scratchpad_stash();
+    state.scratchpad.as_mut().unwrap().saved_rect = Some(Rect::new(0, 0, 1920, 1040));
+    let monitor = state.monitors.get_mut(&1).unwrap();
+    monitor.rect = Rect::new(0, 0, 1366, 768);
+    monitor.work_area = Rect::new(0, 0, 1366, 728);
+
+    state.scratchpad_toggle();
+
+    let floating = state
+        .focused_workspace()
+        .unwrap()
+        .floating_windows()
+        .iter()
+        .find(|floating| floating.id == 100)
+        .expect("scratchpad is re-summoned in the changed work area");
+    assert_eq!(floating.rect, Rect::new(0, 0, 1366, 728));
 }
 
 #[test]
@@ -4666,7 +5091,7 @@ fn test_scratchpad_cleared_when_window_destroyed() {
 }
 
 #[test]
-fn test_scratchpad_stash_on_scratchpad_releases_to_tiling() {
+fn test_scratchpad_release_clears_saved_geometry_and_returns_to_tiling() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
     state
         .focused_workspace_mut()
@@ -4676,6 +5101,7 @@ fn test_scratchpad_stash_on_scratchpad_releases_to_tiling() {
     state.scratchpad_stash(); // designate + hide 100
     state.scratchpad_toggle(); // summon (floating, focused)
     assert!(state.focused_workspace().unwrap().is_floating(100));
+    state.scratchpad.as_mut().unwrap().saved_rect = Some(Rect::new(120, 100, 1000, 700));
 
     // Simulate the OS foreground landing on the summoned (floating)
     // scratchpad, as the EVENT_SYSTEM_FOREGROUND handler does in production.

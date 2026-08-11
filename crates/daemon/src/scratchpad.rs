@@ -1,5 +1,5 @@
 //! Scratchpad: one designated window that hides to a holding area and
-//! re-summons floating + centered on a hotkey.
+//! re-summons floating on a hotkey.
 //!
 //! While hidden, the window is removed from every workspace (so the
 //! layout engine never touches it) and DWM-cloaked in place. While shown,
@@ -10,6 +10,85 @@
 use crate::state::{AppState, ScratchpadState};
 use leopardwm_core_layout::Rect;
 use tracing::{info, warn};
+
+type FrameInsets = (i32, i32, i32, i32);
+
+fn valid_scratchpad_rect(rect: Rect) -> bool {
+    rect.width > 0 && rect.height > 0
+}
+
+pub(crate) fn scratchpad_direct_frame_rect(
+    rect: Rect,
+    frame_insets: Option<FrameInsets>,
+    high_contrast: bool,
+) -> Rect {
+    leopardwm_platform_win32::visible_rect_to_frame_rect(
+        rect,
+        frame_insets.unwrap_or_default(),
+        high_contrast,
+    )
+}
+
+pub(crate) fn scratchpad_capture_rect<C, V, D>(
+    workspace_rect: Option<Rect>,
+    work_areas: &[Rect],
+    query_chrome_rect: C,
+    query_window_visible: V,
+    query_dwm_rect: D,
+) -> Option<Rect>
+where
+    C: FnOnce() -> Option<Rect>,
+    V: FnOnce() -> bool,
+    D: FnOnce() -> Option<Rect>,
+{
+    if let Some(rect) = workspace_rect.filter(|rect| valid_scratchpad_rect(*rect)) {
+        return Some(rect);
+    }
+    let chrome_rect = query_chrome_rect()?;
+    if !scratchpad_has_visible_chrome(chrome_rect, query_window_visible(), work_areas) {
+        return None;
+    }
+    query_dwm_rect().filter(|rect| {
+        valid_scratchpad_rect(*rect)
+            && work_areas
+                .iter()
+                .any(|work_area| rect.intersects(work_area))
+    })
+}
+
+pub(crate) fn scratchpad_has_visible_chrome(
+    chrome_rect: Rect,
+    window_visible: bool,
+    work_areas: &[Rect],
+) -> bool {
+    window_visible
+        && valid_scratchpad_rect(chrome_rect)
+        && !leopardwm_platform_win32::is_move_offscreen_sentinel_rect(&chrome_rect)
+        && work_areas
+            .iter()
+            .any(|work_area| chrome_rect.intersects(work_area))
+}
+
+pub(crate) fn scratchpad_capture_frame_insets<C, V, I>(
+    saved_insets: Option<FrameInsets>,
+    work_areas: &[Rect],
+    query_chrome_rect: C,
+    query_window_visible: V,
+    query_insets: I,
+) -> Option<FrameInsets>
+where
+    C: FnOnce() -> Option<Rect>,
+    V: FnOnce() -> bool,
+    I: FnOnce() -> Option<FrameInsets>,
+{
+    saved_insets.or_else(|| {
+        query_chrome_rect().and_then(|chrome_rect| {
+            scratchpad_has_visible_chrome(chrome_rect, query_window_visible(), work_areas)
+                .then(query_insets)
+                .flatten()
+        })
+    })
+}
 
 impl AppState {
     /// Remove `wid` from whichever workspace currently holds it (tiled or
@@ -39,6 +118,103 @@ impl AppState {
         let w = 900.min((wa.width - 80).max(200));
         let h = 600.min((wa.height - 80).max(150));
         Rect::new(wa.x + (wa.width - w) / 2, wa.y + (wa.height - h) / 2, w, h)
+    }
+
+    fn clamp_scratchpad_rect(&self, rect: Rect) -> Rect {
+        let wa = self.focused_viewport();
+        let width = if rect.width > 0 {
+            rect.width.min(wa.width.max(1))
+        } else {
+            900.min(wa.width.max(1))
+        };
+        let height = if rect.height > 0 {
+            rect.height.min(wa.height.max(1))
+        } else {
+            600.min(wa.height.max(1))
+        };
+        let max_x = (wa.right() - width).max(wa.x);
+        let max_y = (wa.bottom() - height).max(wa.y);
+        Rect::new(
+            rect.x.clamp(wa.x, max_x),
+            rect.y.clamp(wa.y, max_y),
+            width,
+            height,
+        )
+    }
+
+    fn scratchpad_workspace_rect(&self, wid: u64) -> Option<Rect> {
+        let (mon, ws_idx) = self.find_window_workspace(wid)?;
+        self.workspaces
+            .get(&mon)?
+            .get(ws_idx)?
+            .floating_windows()
+            .iter()
+            .find(|floating| floating.id == wid)
+            .map(|floating| floating.rect)
+    }
+
+    fn scratchpad_work_areas(&self) -> Vec<Rect> {
+        self.monitors
+            .values()
+            .map(|monitor| monitor.work_area)
+            .collect()
+    }
+
+    fn scratchpad_visible_rect(&self, wid: u64) -> Option<Rect> {
+        let workspace_rect = self.scratchpad_workspace_rect(wid);
+        let work_areas = self.scratchpad_work_areas();
+        #[cfg(not(test))]
+        {
+            scratchpad_capture_rect(
+                workspace_rect,
+                &work_areas,
+                || leopardwm_platform_win32::get_window_chrome_rect(wid),
+                || leopardwm_platform_win32::is_window_visible(wid),
+                || leopardwm_platform_win32::get_window_visible_rect(wid),
+            )
+        }
+        #[cfg(test)]
+        {
+            let _ = wid;
+            scratchpad_capture_rect(workspace_rect, &work_areas, || None, || false, || None)
+        }
+    }
+
+    fn scratchpad_frame_insets(
+        &self,
+        wid: u64,
+        saved_insets: Option<FrameInsets>,
+    ) -> Option<FrameInsets> {
+        #[cfg(not(test))]
+        {
+            let work_areas = self.scratchpad_work_areas();
+            scratchpad_capture_frame_insets(
+                saved_insets,
+                &work_areas,
+                || leopardwm_platform_win32::get_window_chrome_rect(wid),
+                || leopardwm_platform_win32::is_window_visible(wid),
+                || leopardwm_platform_win32::get_window_frame_insets(wid),
+            )
+        }
+        #[cfg(test)]
+        {
+            let _ = wid;
+            saved_insets
+        }
+    }
+
+    fn position_scratchpad_window(&self, wid: u64, rect: Rect, frame_insets: Option<FrameInsets>) {
+        #[cfg(not(test))]
+        {
+            let frame_rect = scratchpad_direct_frame_rect(
+                rect,
+                frame_insets,
+                leopardwm_platform_win32::is_high_contrast_enabled(),
+            );
+            let _ = leopardwm_platform_win32::position_window(wid, frame_rect);
+        }
+        #[cfg(test)]
+        let _ = (wid, rect, frame_insets);
     }
 
     /// Designate the focused window as the scratchpad and hide it. If a
@@ -73,7 +249,7 @@ impl AppState {
         if let Some(sp) = self.scratchpad {
             if sp.window_id == wid {
                 self.scratchpad = None;
-                self.release_to_tiling(wid, sp.origin_column, sp.origin_sibling);
+                self.release_to_tiling(wid, sp.origin_column, sp.origin_sibling, sp.frame_insets);
                 // Keep focus on the returned window — it was focused while
                 // summoned, so re-tiling it (especially back into a stack)
                 // shouldn't hand focus to a sibling.
@@ -103,7 +279,12 @@ impl AppState {
         // designation up front, so a failure mid-release can never leave the
         // daemon pointing at a window that is already back in the layout.
         if let Some(prev) = self.scratchpad.take() {
-            self.release_to_tiling(prev.window_id, prev.origin_column, prev.origin_sibling);
+            self.release_to_tiling(
+                prev.window_id,
+                prev.origin_column,
+                prev.origin_sibling,
+                prev.frame_insets,
+            );
         }
 
         // Remember where it sat so releasing later restores it to the same
@@ -128,6 +309,8 @@ impl AppState {
                 (col, None)
             });
 
+        let frame_insets = self.scratchpad_frame_insets(wid, None);
+
         // Record the designation BEFORE hiding, so if anything aborts
         // mid-hide the daemon still knows it owns this window (the destroyed
         // handler, next toggle, and shutdown/emergency recovery can all act
@@ -135,6 +318,8 @@ impl AppState {
         self.scratchpad = Some(ScratchpadState {
             window_id: wid,
             shown: false,
+            saved_rect: None,
+            frame_insets,
             origin_column,
             origin_sibling,
         });
@@ -150,7 +335,13 @@ impl AppState {
     /// works even if column indices shifted). If that column is gone, fall back
     /// to a new column at `origin_column`. The subsequent `apply_layout`
     /// repositions it on-screen, overriding any off-screen parking.
-    fn release_to_tiling(&mut self, wid: u64, origin_column: usize, origin_sibling: Option<u64>) {
+    fn release_to_tiling(
+        &mut self,
+        wid: u64,
+        origin_column: usize,
+        origin_sibling: Option<u64>,
+        frame_insets: Option<FrameInsets>,
+    ) {
         self.detach_window_from_workspace(wid);
         leopardwm_platform_win32::dwm_uncloak_window(wid);
         let reinserted = self
@@ -175,7 +366,7 @@ impl AppState {
                 wid
             );
             let rect = self.centered_float_rect();
-            let _ = leopardwm_platform_win32::position_window(wid, rect);
+            self.position_scratchpad_window(wid, rect, frame_insets);
         }
     }
 
@@ -191,17 +382,16 @@ impl AppState {
         let _ = leopardwm_platform_win32::move_window_offscreen(wid);
     }
 
-    /// Add `wid` as a floating, centered window on the active workspace,
-    /// uncloak it, position it, and let the OS foreground event drive
-    /// focus + the border. Returns `false` if the window is gone or could
-    /// not be floated, so the caller can drop the designation.
-    fn scratchpad_show(&mut self, wid: u64) -> bool {
+    /// Add `wid` as a floating window on the active workspace, uncloak it,
+    /// position it, and let the OS foreground event drive focus + the border.
+    /// Returns `false` if the window is gone or could not be floated, so the
+    /// caller can drop the designation.
+    fn scratchpad_show(&mut self, wid: u64, rect: Rect, frame_insets: Option<FrameInsets>) -> bool {
         #[cfg(not(test))]
         if !leopardwm_platform_win32::is_window_valid(wid) {
             warn!("Scratchpad: cannot summon window {}; it is gone", wid);
             return false;
         }
-        let rect = self.centered_float_rect();
         self.detach_window_from_workspace(wid);
         leopardwm_platform_win32::dwm_uncloak_window(wid);
         let floated = self
@@ -218,13 +408,14 @@ impl AppState {
             // Uncloaked but not attached to a workspace. Pull it on-screen so
             // the now-visible window is not stranded at its off-screen park.
             warn!("Scratchpad: could not float window {} on summon", wid);
-            let _ = leopardwm_platform_win32::position_window(wid, rect);
+            self.position_scratchpad_window(wid, rect, frame_insets);
             return false;
         }
+        // Rehome the parked HWND from the pre-hide inset record before layout
+        // can query frame metrics. This is also the positioning path while
+        // tiling is paused, when apply_layout is a no-op.
+        self.position_scratchpad_window(wid, rect, frame_insets);
         let _ = self.apply_layout();
-        // Layout places floating windows asynchronously; force the final
-        // position synchronously so the window is physically centered.
-        let _ = leopardwm_platform_win32::position_window(wid, rect);
         // Deliberately do NOT pre-set previous_focused_hwnd here. Setting
         // the OS foreground fires EVENT_SYSTEM_FOREGROUND; the Focused
         // handler then shows the border once the window has composited at
@@ -240,10 +431,12 @@ impl AppState {
     }
 
     /// Hide the currently-shown scratchpad window.
-    fn scratchpad_hide(&mut self, wid: u64) {
+    fn scratchpad_hide(&mut self, wid: u64) -> Option<Rect> {
+        let rect = self.scratchpad_visible_rect(wid);
         self.hide_window_to_holding(wid);
         let _ = self.apply_layout();
         self.sync_foreground_window();
+        rect
     }
 
     /// Toggle scratchpad visibility (summon if hidden, hide if shown).
@@ -253,26 +446,33 @@ impl AppState {
             return;
         };
         if state.shown {
-            self.scratchpad_hide(state.window_id);
+            let saved_rect = self.scratchpad_hide(state.window_id).or(state.saved_rect);
             self.scratchpad = Some(ScratchpadState {
                 shown: false,
+                saved_rect,
                 ..state
             });
             info!("Scratchpad: hid window {}", state.window_id);
-        } else if self.scratchpad_show(state.window_id) {
-            self.scratchpad = Some(ScratchpadState {
-                shown: true,
-                ..state
-            });
-            info!("Scratchpad: summoned window {}", state.window_id);
         } else {
-            // Window vanished or could not be floated; drop the designation
-            // rather than keep a dangling, un-summonable scratchpad.
-            self.scratchpad = None;
-            info!(
-                "Scratchpad: summon of window {} failed; cleared designation",
-                state.window_id
-            );
+            let rect = state
+                .saved_rect
+                .map(|rect| self.clamp_scratchpad_rect(rect))
+                .unwrap_or_else(|| self.centered_float_rect());
+            if self.scratchpad_show(state.window_id, rect, state.frame_insets) {
+                self.scratchpad = Some(ScratchpadState {
+                    shown: true,
+                    ..state
+                });
+                info!("Scratchpad: summoned window {}", state.window_id);
+            } else {
+                // Window vanished or could not be floated; drop the designation
+                // rather than keep a dangling, un-summonable scratchpad.
+                self.scratchpad = None;
+                info!(
+                    "Scratchpad: summon of window {} failed; cleared designation",
+                    state.window_id
+                );
+            }
         }
     }
 

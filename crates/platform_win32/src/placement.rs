@@ -623,9 +623,7 @@ fn build_defer_entries(
             source: inset_source,
             generation: inset_generation,
         } = resolved;
-        let (inset_l, inset_t, inset_r, inset_b) = insets;
-        let frame_w = placement.rect.width + inset_l + inset_r;
-        let frame_h = placement.rect.height + inset_t + inset_b;
+        let frame_rect = visible_rect_to_frame_rect(placement.rect, insets, high_contrast);
 
         if placement.visibility == Visibility::Visible {
             let mut flags = SWP_NOZORDER | SWP_NOACTIVATE | async_flag;
@@ -640,10 +638,10 @@ fn build_defer_entries(
             entries.push(DeferEntry {
                 hwnd,
                 window_id: placement.window_id,
-                x: placement.rect.x - inset_l,
-                y: placement.rect.y - inset_t,
-                w: frame_w,
-                h: frame_h,
+                x: frame_rect.x,
+                y: frame_rect.y,
+                w: frame_rect.width,
+                h: frame_rect.height,
                 layout_w: placement.rect.width,
                 layout_h: placement.rect.height,
                 insets,
@@ -660,9 +658,9 @@ fn build_defer_entries(
             entries.push(DeferEntry {
                 hwnd,
                 window_id: placement.window_id,
-                x: placement.rect.x - inset_l,
-                y: placement.rect.y - inset_t,
-                w: frame_w,
+                x: frame_rect.x,
+                y: frame_rect.y,
+                w: frame_rect.width,
                 h: 0,
                 layout_w: placement.rect.width,
                 layout_h: placement.rect.height,
@@ -1402,6 +1400,104 @@ fn evict_cached_border_insets(
     }
 }
 
+pub fn visible_rect_to_frame_rect(
+    visible_rect: Rect,
+    insets: (i32, i32, i32, i32),
+    high_contrast: bool,
+) -> Rect {
+    let (left, top, right, bottom) = if high_contrast { (0, 0, 0, 0) } else { insets };
+    Rect::new(
+        visible_rect.x.saturating_sub(left),
+        visible_rect.y.saturating_sub(top),
+        visible_rect.width.saturating_add(left).saturating_add(right),
+        visible_rect.height.saturating_add(top).saturating_add(bottom),
+    )
+}
+
+#[cfg(test)]
+fn frame_rect_to_visible_rect(
+    frame_rect: Rect,
+    insets: (i32, i32, i32, i32),
+    high_contrast: bool,
+) -> Rect {
+    let (left, top, right, bottom) = if high_contrast { (0, 0, 0, 0) } else { insets };
+    Rect::new(
+        frame_rect.x.saturating_add(left),
+        frame_rect.y.saturating_add(top),
+        frame_rect.width.saturating_sub(left).saturating_sub(right),
+        frame_rect.height.saturating_sub(top).saturating_sub(bottom),
+    )
+}
+
+const MAX_INVISIBLE_FRAME_INSET: i64 = 64;
+
+fn frame_insets_from_rects(
+    frame_rect: Rect,
+    visible_rect: Rect,
+) -> Option<(i32, i32, i32, i32)> {
+    if frame_rect.width <= 0
+        || frame_rect.height <= 0
+        || visible_rect.width <= 0
+        || visible_rect.height <= 0
+    {
+        return None;
+    }
+
+    let left = i64::from(visible_rect.x) - i64::from(frame_rect.x);
+    let top = i64::from(visible_rect.y) - i64::from(frame_rect.y);
+    let right = i64::from(frame_rect.x) + i64::from(frame_rect.width)
+        - i64::from(visible_rect.x)
+        - i64::from(visible_rect.width);
+    let bottom = i64::from(frame_rect.y) + i64::from(frame_rect.height)
+        - i64::from(visible_rect.y)
+        - i64::from(visible_rect.height);
+    let insets = [left, top, right, bottom];
+    if insets
+        .iter()
+        .any(|inset| !(0..=MAX_INVISIBLE_FRAME_INSET).contains(inset))
+    {
+        return None;
+    }
+
+    Some((left as i32, top as i32, right as i32, bottom as i32))
+}
+
+fn query_window_frame_insets(hwnd: HWND) -> Option<(i32, i32, i32, i32)> {
+    unsafe {
+        let mut frame_rect = RECT::default();
+        GetWindowRect(hwnd, &mut frame_rect).ok()?;
+
+        let mut visible_rect = RECT::default();
+        DwmGetWindowAttribute(
+            hwnd,
+            DWMWA_EXTENDED_FRAME_BOUNDS,
+            &mut visible_rect as *mut RECT as *mut _,
+            std::mem::size_of::<RECT>() as u32,
+        )
+        .ok()?;
+
+        frame_insets_from_rects(
+            Rect::new(
+                frame_rect.left,
+                frame_rect.top,
+                frame_rect.right - frame_rect.left,
+                frame_rect.bottom - frame_rect.top,
+            ),
+            Rect::new(
+                visible_rect.left,
+                visible_rect.top,
+                visible_rect.right - visible_rect.left,
+                visible_rect.bottom - visible_rect.top,
+            ),
+        )
+    }
+}
+
+pub fn get_window_frame_insets(window_id: WindowId) -> Option<(i32, i32, i32, i32)> {
+    let Ok(hwnd) = window_id_to_hwnd(window_id) else { return None };
+    query_window_frame_insets(hwnd)
+}
+
 /// Public wrapper over `invisible_border_insets` that takes a `WindowId`.
 /// Returns `(left, top, right, bottom)` insets, or `(0, 0, 0, 0)` if the
 /// window has no DWM bounds available. Used by callers that need to
@@ -1452,6 +1548,56 @@ pub(crate) fn invisible_border_insets(hwnd: HWND) -> (i32, i32, i32, i32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_visible_and_frame_rects_round_trip_with_insets() {
+        let visible = Rect::new(120, 100, 1000, 700);
+        let insets = (7, 1, 7, 8);
+        let frame = visible_rect_to_frame_rect(visible, insets, false);
+        assert_eq!(frame, Rect::new(113, 99, 1014, 709));
+        assert_eq!(frame_rect_to_visible_rect(frame, insets, false), visible);
+    }
+
+    #[test]
+    fn test_visible_and_frame_rects_ignore_insets_in_high_contrast() {
+        let visible = Rect::new(120, 100, 1000, 700);
+        let insets = (7, 1, 7, 8);
+        assert_eq!(visible_rect_to_frame_rect(visible, insets, true), visible);
+        assert_eq!(frame_rect_to_visible_rect(visible, insets, true), visible);
+    }
+
+    #[test]
+    fn test_frame_insets_accept_aligned_normal_sample() {
+        assert_eq!(
+            frame_insets_from_rects(
+                Rect::new(100, 100, 914, 709),
+                Rect::new(107, 101, 900, 700),
+            ),
+            Some((7, 1, 7, 8))
+        );
+    }
+
+    #[test]
+    fn test_frame_insets_reject_stale_or_misaligned_samples() {
+        let frame = Rect::new(100, 100, 914, 709);
+        for visible in [
+            Rect::new(117, 101, 900, 700),
+            Rect::new(93, 101, 900, 700),
+        ] {
+            assert_eq!(frame_insets_from_rects(frame, visible), None);
+        }
+    }
+
+    #[test]
+    fn test_frame_insets_reject_implausible_deltas() {
+        assert_eq!(
+            frame_insets_from_rects(
+                Rect::new(100, 100, 1100, 900),
+                Rect::new(200, 200, 900, 700),
+            ),
+            None
+        );
+    }
 
     #[test]
     fn test_classify_size_axis_distinguishes_insets_from_minimums() {

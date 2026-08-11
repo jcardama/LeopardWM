@@ -52,6 +52,8 @@ pub(crate) struct DropTarget {
 pub(crate) struct ScratchpadState {
     pub(crate) window_id: u64,
     pub(crate) shown: bool,
+    pub(crate) saved_rect: Option<Rect>,
+    pub(crate) frame_insets: Option<(i32, i32, i32, i32)>,
     /// Column index the window occupied before being stashed. Used as the
     /// fallback insert position when the original column no longer exists.
     pub(crate) origin_column: usize,

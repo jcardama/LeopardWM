@@ -17,6 +17,9 @@ All notable changes to LeopardWM will be documented in this file.
   bounds as minimums, and settled work-area changes discard stale learned row
   heights rather than retaining fullscreen sizing.
 - **Workspace wrap animations now travel in the selected direction.**
+- **Scratchpads retain their latest floating size and position while hidden.**
+  The saved session-only geometry is clamped to the active work area on summon,
+  so display topology changes cannot leave the scratchpad off-screen.
 
 ## 0.2.6
 
