@@ -139,6 +139,7 @@ pub(crate) const EDIT_CONFIG_PULL_TTL: Duration = Duration::from_secs(10);
 pub(crate) enum TestApplyPlacementsBehavior {
     SleepAndSucceed(Duration),
     SleepAndFail(Duration),
+    SucceedWithMaximizedSkip(u64),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -556,6 +557,8 @@ pub(crate) struct AppState {
     /// Optional test-only behavior override for placement application.
     #[cfg(test)]
     pub(crate) injected_apply_placements_behavior: Option<TestApplyPlacementsBehavior>,
+    #[cfg(test)]
+    pub(crate) injected_apply_placements_call_count: Arc<AtomicUsize>,
     /// Number of late-worker recovery passes executed after cancellation.
     #[cfg(test)]
     pub(crate) late_worker_recovery_count: Arc<AtomicUsize>,
@@ -795,6 +798,8 @@ impl AppState {
             #[cfg(test)]
             injected_apply_placements_behavior: None,
             #[cfg(test)]
+            injected_apply_placements_call_count: Arc::new(AtomicUsize::new(0)),
+            #[cfg(test)]
             late_worker_recovery_count: Arc::new(AtomicUsize::new(0)),
             // Capacity 256 is comfortable for human-rate events. A
             // subscriber that lags >256 events behind receives `Lagged`
@@ -816,6 +821,12 @@ impl AppState {
 
     pub(crate) fn is_application_fullscreen(&self, hwnd: u64) -> bool {
         self.application_fullscreen.contains_key(&hwnd)
+    }
+
+    pub(crate) fn acknowledge_crossfade_target_drop(&mut self, epoch: u64, window_id: u64) {
+        if let Some((sources, _)) = self.crossfade_sources.get_mut(&epoch) {
+            sources.remove(&window_id);
+        }
     }
 
     pub(crate) fn filter_application_fullscreen_placements(

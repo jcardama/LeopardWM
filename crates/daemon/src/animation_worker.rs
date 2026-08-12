@@ -52,6 +52,23 @@ pub struct FrameResult {
     pub width_violations: Vec<leopardwm_platform_win32::WidthViolation>,
     /// Height violations detected (windows enforcing a minimum height).
     pub height_violations: Vec<leopardwm_platform_win32::HeightViolation>,
+    /// Visible tiled windows omitted because they maximized after dispatch.
+    pub maximized_skipped_window_ids: Vec<u64>,
+}
+
+impl FrameResult {
+    pub(crate) fn from_platform(
+        result: leopardwm_platform_win32::ApplyPlacementsResult,
+        frame_time: Duration,
+    ) -> Self {
+        Self {
+            apply_result: Ok(()),
+            frame_time,
+            width_violations: result.width_violations,
+            height_violations: result.height_violations,
+            maximized_skipped_window_ids: result.maximized_skipped_window_ids,
+        }
+    }
 }
 
 /// Commands the main thread can send to the worker.
@@ -76,6 +93,9 @@ enum WorkerCommand {
         #[cfg(test)]
         acknowledged: Option<std_mpsc::Sender<()>>,
     },
+    /// Remove one target from a shared in-flight crossfade without stopping
+    /// the remaining targets in the epoch.
+    DropCrossfadeTarget { epoch: u64, window_id: u64 },
     /// Invalidate the placement cache (e.g., after a theme/display change
     /// so stale inset-expanded positions don't survive as cache hits).
     ClearCache,
@@ -90,8 +110,11 @@ enum WorkerCommand {
 /// Worker-owned thumbnail handle during a crossfade. Drop unregisters,
 /// so panic-unwind and normal end-of-fade both unregister cleanly.
 pub struct CrossfadeEntry {
+    pub window_id: u64,
     pub handle_isize: isize,
     pub dest_client_rect: Rect,
+    #[cfg(test)]
+    pub dropped: Option<std_mpsc::Sender<u64>>,
 }
 
 impl Drop for CrossfadeEntry {
@@ -99,6 +122,10 @@ impl Drop for CrossfadeEntry {
         if self.handle_isize != 0 {
             leopardwm_platform_win32::thumbnail::unregister_raw(self.handle_isize);
             self.handle_isize = 0;
+        }
+        #[cfg(test)]
+        if let Some(dropped) = self.dropped.take() {
+            let _ = dropped.send(self.window_id);
         }
     }
 }
@@ -131,6 +158,13 @@ impl AnimationWorkerControl {
             #[cfg(test)]
             acknowledged: self.abort_acknowledged.clone(),
         });
+    }
+
+    /// Drop one target from a shared in-flight crossfade.
+    pub fn send_drop_crossfade_target(&self, epoch: u64, window_id: u64) {
+        let _ = self
+            .command_tx
+            .send(WorkerCommand::DropCrossfadeTarget { epoch, window_id });
     }
 
     #[cfg(test)]
@@ -312,6 +346,10 @@ fn worker_loop(
                 // No fade in flight at the outer-loop level. Discard.
                 continue;
             }
+            WorkerCommand::DropCrossfadeTarget { .. } => {
+                // No fade in flight at the outer-loop level. Discard.
+                continue;
+            }
             WorkerCommand::Frame(request) => {
                 let frame_start = Instant::now();
 
@@ -325,6 +363,7 @@ fn worker_loop(
                         frame_time: frame_start.elapsed(),
                         width_violations: Vec::new(),
                         height_violations: Vec::new(),
+                        maximized_skipped_window_ids: Vec::new(),
                     };
                     if event_tx
                         .blocking_send(super::DaemonEvent::AnimationFrameApplied(result))
@@ -340,16 +379,12 @@ fn worker_loop(
                 // Animation frames are SWP_ASYNCWINDOWPOS so the sticky-compositor
                 // nudge inside `apply_placements` is a no-op; pass `false` to keep
                 // the call signature explicit.
-                let (apply_result, width_violations, height_violations) =
-                    match leopardwm_platform_win32::apply_placements(
-                        &request.placements,
-                        &request.platform_config,
-                        Some(&mut placement_cache),
-                        false,
-                    ) {
-                        Ok(r) => (Ok(()), r.width_violations, r.height_violations),
-                        Err(e) => (Err(e.to_string()), Vec::new(), Vec::new()),
-                    };
+                let apply_result = leopardwm_platform_win32::apply_placements(
+                    &request.placements,
+                    &request.platform_config,
+                    Some(&mut placement_cache),
+                    false,
+                );
 
                 // Apply per-frame thumbnail updates for ghost-animated windows.
                 // Failures are logged but don't fail the frame — a ghost that
@@ -370,11 +405,15 @@ fn worker_loop(
 
                 let frame_time = frame_start.elapsed();
 
-                let result = FrameResult {
-                    apply_result,
-                    frame_time,
-                    width_violations,
-                    height_violations,
+                let result = match apply_result {
+                    Ok(result) => FrameResult::from_platform(result, frame_time),
+                    Err(e) => FrameResult {
+                        apply_result: Err(e.to_string()),
+                        frame_time,
+                        width_violations: Vec::new(),
+                        height_violations: Vec::new(),
+                        maximized_skipped_window_ids: Vec::new(),
+                    },
                 };
 
                 // Send result back to main event loop
@@ -390,6 +429,12 @@ fn worker_loop(
     }
 
     debug!("Animation worker thread exiting");
+}
+
+fn drop_crossfade_target(entries: &mut Vec<CrossfadeEntry>, window_id: u64) -> bool {
+    let count_before = entries.len();
+    entries.retain(|entry| entry.window_id != window_id);
+    entries.len() != count_before
 }
 
 /// Run a cooperative crossfade on owned thumbnail entries. Between each
@@ -415,10 +460,23 @@ fn run_crossfade(
 ) {
     use std::sync::mpsc::TryRecvError;
 
+    let mut entries = entries;
     let mut aborted = false;
     for i in 0..frames {
         // Cooperative preempt/abort check.
         match command_rx.try_recv() {
+            Ok(WorkerCommand::DropCrossfadeTarget {
+                epoch: e,
+                window_id,
+            }) if e == epoch => {
+                if drop_crossfade_target(&mut entries, window_id) {
+                    let _ = event_tx.blocking_send(super::DaemonEvent::CrossfadeTargetDropped {
+                        epoch,
+                        window_id,
+                    });
+                }
+            }
+            Ok(WorkerCommand::DropCrossfadeTarget { .. }) => {}
             Ok(WorkerCommand::AbortCrossfade {
                 epoch: e,
                 #[cfg(test)]
@@ -499,6 +557,74 @@ fn dwm_flush_or_fallback() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dropping_one_crossfade_target_keeps_its_peer_epoch_running() {
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(4);
+        let worker = AnimationWorkerHandle::spawn(event_tx, Arc::new(AtomicBool::new(false)))
+            .expect("spawn animation worker");
+        let (abort_tx, abort_rx) = std_mpsc::channel();
+        let (drop_tx, drop_rx) = std_mpsc::channel();
+        let control = worker.control().with_abort_acknowledged(abort_tx);
+        worker
+            .send_crossfade(
+                7,
+                vec![
+                    CrossfadeEntry {
+                        window_id: 100,
+                        handle_isize: 0,
+                        dest_client_rect: Rect::new(0, 0, 1, 1),
+                        dropped: Some(drop_tx.clone()),
+                    },
+                    CrossfadeEntry {
+                        window_id: 200,
+                        handle_isize: 0,
+                        dest_client_rect: Rect::new(1, 0, 1, 1),
+                        dropped: Some(drop_tx),
+                    },
+                ],
+                100_000,
+            )
+            .expect("queue crossfade");
+        control.send_drop_crossfade_target(7, 100);
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        assert!(matches!(
+            runtime.block_on(async {
+                tokio::time::timeout(Duration::from_millis(500), event_rx.recv()).await
+            }),
+            Ok(Some(super::super::DaemonEvent::CrossfadeTargetDropped {
+                epoch: 7,
+                window_id: 100
+            }))
+        ));
+        assert_eq!(
+            drop_rx.recv_timeout(Duration::from_millis(500)).unwrap(),
+            100,
+            "target barrier must not release before its owned entry drops"
+        );
+        assert!(matches!(
+            drop_rx.recv_timeout(Duration::from_millis(50)),
+            Err(std_mpsc::RecvTimeoutError::Timeout)
+        ));
+
+        control.send_abort_crossfade(7);
+        assert!(abort_rx.recv_timeout(Duration::from_millis(500)).is_ok());
+        assert!(matches!(
+            runtime.block_on(async {
+                tokio::time::timeout(Duration::from_millis(500), event_rx.recv()).await
+            }),
+            Ok(Some(super::super::DaemonEvent::CrossfadeComplete { epoch: 7 }))
+        ));
+        assert_eq!(
+            drop_rx.recv_timeout(Duration::from_millis(500)).unwrap(),
+            200,
+            "peer must remain owned until the epoch ends"
+        );
+    }
 
     #[test]
     fn session_end_barrier_waits_for_prior_worker_command() {

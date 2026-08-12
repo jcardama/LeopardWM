@@ -13,6 +13,9 @@ All notable changes to LeopardWM will be documented in this file.
   gesture commands now display and remain disabled, while unknown custom values
   display their raw command and survive unrelated Settings saves.
 - **Focus borders no longer linger after their window closes or hides.**
+- **Windows that open maximized keep their maximized state while settling.** Tiled
+  startup windows are held out of physical placement without leaving the layout,
+  while manually restored established windows snap back immediately.
 - **Application-owned fullscreen windows keep their fullscreen bounds.** Managed
   non-maximized windows that match a monitor's full bounds are temporarily
   excluded from physical tiling placement until they exit fullscreen. Chrome

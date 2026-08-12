@@ -45,25 +45,24 @@ impl AppState {
         if scroll_anims_settled {
             self.sync_taskbar_buttons();
         }
-        if let Some(ref mut transition) = self.layout_transition {
-            if transition.tick(delta_ms) {
-                still_animating = true;
-            } else {
-                // Transition complete — move exiting windows offscreen.
-                let exit_windows: Vec<_> = transition.exit_rects.keys().copied().collect();
-                for wid in exit_windows {
-                    if !self.is_application_fullscreen(wid) {
-                        let _ = leopardwm_platform_win32::move_window_offscreen(wid);
-                    }
-                }
-                self.layout_transition = None;
-                // The slide is done; cloak any settled off-workspace windows
-                // that were skipped while animating so their taskbar buttons go.
-                self.sync_taskbar_buttons();
-                // Signal one more frame so entering windows land at their
-                // exact final positions (previous frame had t < 1.0).
-                still_animating = true;
+        let transition_complete = self
+            .layout_transition
+            .as_mut()
+            .is_some_and(|transition| !transition.tick(delta_ms));
+        if transition_complete {
+            // Transition complete — move exiting windows offscreen.
+            for wid in self.layout_transition_exit_windows_to_park() {
+                let _ = leopardwm_platform_win32::park_window_for_placement(wid);
             }
+            self.layout_transition = None;
+            // The slide is done; cloak any settled off-workspace windows
+            // that were skipped while animating so their taskbar buttons go.
+            self.sync_taskbar_buttons();
+            // Signal one more frame so entering windows land at their
+            // exact final positions (previous frame had t < 1.0).
+            still_animating = true;
+        } else if self.layout_transition.is_some() {
+            still_animating = true;
         }
         still_animating
     }
@@ -160,26 +159,15 @@ impl AppState {
         });
     }
 
-    pub(crate) fn stop_ghosting_window(&mut self, hwnd: u64) {
+    pub(crate) fn stop_ghosting_window_visuals(&mut self, hwnd: u64) {
         let crossfade_epochs: Vec<u64> = self
             .crossfade_sources
             .iter()
             .filter_map(|(&epoch, (sources, _))| sources.contains(&hwnd).then_some(epoch))
             .collect();
-        if !crossfade_epochs.is_empty() {
-            // Crossfade ownership is batch-global in the worker protocol, so
-            // entering fullscreen aborts each batch that still owns this source.
-            for epoch in &crossfade_epochs {
-                if let Some(ref ctrl) = self.animation_worker_control {
-                    ctrl.send_abort_crossfade(*epoch);
-                }
-            }
-            if self
-                .active_crossfade
-                .as_ref()
-                .is_some_and(|state| crossfade_epochs.contains(&state.epoch))
-            {
-                self.active_crossfade = None;
+        for epoch in crossfade_epochs {
+            if let Some(ref ctrl) = self.animation_worker_control {
+                ctrl.send_drop_crossfade_target(epoch, hwnd);
             }
         }
         if self.ghost_handles.remove(&hwnd).is_some() {
@@ -188,9 +176,42 @@ impl AppState {
         }
         if let Some(ref mut transition) = self.layout_transition {
             transition.ghosted_wids.remove(&hwnd);
+        }
+    }
+
+    pub(crate) fn stop_ghosting_window(&mut self, hwnd: u64) {
+        let crossfade_epochs: Vec<u64> = self
+            .crossfade_sources
+            .iter()
+            .filter_map(|(&epoch, (sources, _))| sources.contains(&hwnd).then_some(epoch))
+            .collect();
+        self.stop_ghosting_window_visuals(hwnd);
+        for epoch in crossfade_epochs {
+            if let Some(ref ctrl) = self.animation_worker_control {
+                ctrl.send_abort_crossfade(epoch);
+            }
+            if self
+                .active_crossfade
+                .as_ref()
+                .is_some_and(|state| state.epoch == epoch)
+            {
+                self.active_crossfade = None;
+            }
+        }
+        if let Some(ref mut transition) = self.layout_transition {
             transition.start_rects.remove(&hwnd);
             transition.exit_rects.remove(&hwnd);
         }
+    }
+
+    pub(crate) fn layout_transition_exit_windows_to_park(&self) -> Vec<u64> {
+        self.layout_transition
+            .as_ref()
+            .into_iter()
+            .flat_map(|transition| transition.exit_rects.keys())
+            .copied()
+            .filter(|wid| !self.is_application_fullscreen(*wid))
+            .collect()
     }
 
     /// Drop any in-flight ghost-animation handles and uncloak their

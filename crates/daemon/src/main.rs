@@ -2727,7 +2727,7 @@ async fn handle_animation_frame_applied(
 ) {
     {
         let mut state = ctx.state.lock().await;
-        state.applying_layout = false;
+        state.handle_animation_placement_result(&frame_result);
         // Feed width violations back to the layout engine so it can
         // allocate correct column widths on subsequent frames.
         if !frame_result.width_violations.is_empty() {
@@ -2927,8 +2927,11 @@ async fn handle_animation_frame_applied(
                     if let Some(entry) = state.ghost_handles.remove(wid) {
                         let dest = entry.final_dest_client_rect;
                         entries.push(animation_worker::CrossfadeEntry {
+                            window_id: *wid,
                             handle_isize: entry.take_isize(),
                             dest_client_rect: dest,
+                            #[cfg(test)]
+                            dropped: None,
                         });
                         sources.insert(*wid);
                     }
@@ -3362,6 +3365,10 @@ async fn main() -> Result<()> {
             }
             DaemonEvent::AnimationFrameApplied(frame_result) => {
                 handle_animation_frame_applied(&mut ctx, frame_result).await;
+            }
+            DaemonEvent::CrossfadeTargetDropped { epoch, window_id } => {
+                let mut state = state.lock().await;
+                state.acknowledge_crossfade_target_drop(epoch, window_id);
             }
             DaemonEvent::CrossfadeComplete { epoch } => {
                 let mut state = state.lock().await;

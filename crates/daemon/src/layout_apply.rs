@@ -9,6 +9,14 @@ use tracing::{debug, warn};
 
 const MAX_TIMEOUT_DIAGNOSTIC_CHARS: usize = 256;
 
+pub(crate) fn should_dispatch_visible_tiled_placement(
+    maximized: bool,
+    settling: bool,
+    placement_parked: bool,
+) -> bool {
+    !settling && (!maximized || placement_parked)
+}
+
 fn bounded_timeout_diagnostic(value: String) -> Option<String> {
     if value.is_empty() {
         return None;
@@ -34,6 +42,7 @@ type ApplyWorkerMsg = (
     Result<()>,
     Vec<leopardwm_platform_win32::WidthViolation>,
     Vec<leopardwm_platform_win32::HeightViolation>,
+    Vec<u64>,
 );
 
 /// Re-park any off-screen placement that would land on a NEIGHBOR monitor to an
@@ -147,6 +156,171 @@ impl AppState {
             .is_some_and(|deadline| *deadline > now)
     }
 
+    pub(crate) fn handle_maximized_placement_skips(&mut self, window_ids: &[u64]) {
+        for window_id in window_ids {
+            self.moved_or_resized_suppression.remove(window_id);
+            self.last_placed_layout_rects.remove(window_id);
+        }
+        self.record_maximized_observations(&window_ids.iter().copied().collect());
+    }
+
+    pub(crate) fn handle_animation_placement_result(
+        &mut self,
+        frame_result: &animation_worker::FrameResult,
+    ) {
+        self.applying_layout = false;
+        self.handle_maximized_placement_skips(&frame_result.maximized_skipped_window_ids);
+    }
+
+    fn observe_maximized_placements(
+        &mut self,
+        placements: &[leopardwm_core_layout::WindowPlacement],
+    ) -> std::collections::HashSet<u64> {
+        let maximized: std::collections::HashSet<u64> = placements
+            .iter()
+            .filter(|placement| {
+                placement.visibility == leopardwm_core_layout::Visibility::Visible
+                    && placement.column_index != usize::MAX
+                    && leopardwm_platform_win32::is_window_maximized(placement.window_id)
+            })
+            .map(|placement| placement.window_id)
+            .collect();
+        self.record_maximized_observations(&maximized);
+        maximized
+    }
+
+    pub(crate) fn record_maximized_observations(
+        &mut self,
+        maximized: &std::collections::HashSet<u64>,
+    ) {
+        let now = std::time::Instant::now();
+        for hwnd in maximized {
+            self.window_last_maximized_at.insert(*hwnd, now);
+            self.stop_ghosting_window_visuals(*hwnd);
+        }
+    }
+
+    pub(crate) fn observe_tiled_window_maximized(&mut self, hwnd: u64) {
+        self.record_maximized_observations(&std::collections::HashSet::from([hwnd]));
+    }
+
+    fn prepare_physical_placements(
+        &mut self,
+        placements: Vec<leopardwm_core_layout::WindowPlacement>,
+    ) -> Vec<leopardwm_core_layout::WindowPlacement> {
+        let maximized = self.observe_maximized_placements(&placements);
+        self.prepare_physical_placements_with_parked(
+            placements,
+            &maximized,
+            leopardwm_platform_win32::is_placement_parked,
+        )
+    }
+
+    pub(crate) fn prepare_physical_placements_with_parked<F>(
+        &mut self,
+        placements: Vec<leopardwm_core_layout::WindowPlacement>,
+        maximized: &std::collections::HashSet<u64>,
+        is_placement_parked: F,
+    ) -> Vec<leopardwm_core_layout::WindowPlacement>
+    where
+        F: Fn(u64) -> bool,
+    {
+        self.filter_physical_placements_with_parked(placements, maximized, is_placement_parked)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn filter_physical_placements_observed(
+        &mut self,
+        placements: Vec<leopardwm_core_layout::WindowPlacement>,
+        maximized: &std::collections::HashSet<u64>,
+    ) -> Vec<leopardwm_core_layout::WindowPlacement> {
+        self.filter_physical_placements_with_parked(
+            placements,
+            maximized,
+            leopardwm_platform_win32::is_placement_parked,
+        )
+    }
+
+    fn filter_physical_placements_with_parked<F>(
+        &mut self,
+        placements: Vec<leopardwm_core_layout::WindowPlacement>,
+        maximized: &std::collections::HashSet<u64>,
+        is_placement_parked: F,
+    ) -> Vec<leopardwm_core_layout::WindowPlacement>
+    where
+        F: Fn(u64) -> bool,
+    {
+        let now = std::time::Instant::now();
+        placements
+            .into_iter()
+            .filter(|placement| {
+                if placement.visibility != leopardwm_core_layout::Visibility::Visible
+                    || placement.column_index == usize::MAX
+                {
+                    return true;
+                }
+                let settling = crate::event_handler::defer_snapback_while_settling(
+                    self.window_managed_at.get(&placement.window_id).copied(),
+                    self.window_last_maximized_at
+                        .get(&placement.window_id)
+                        .copied(),
+                    now,
+                );
+                let maximized = maximized.contains(&placement.window_id);
+                if !should_dispatch_visible_tiled_placement(
+                    maximized,
+                    settling,
+                    is_placement_parked(placement.window_id),
+                ) {
+                    return false;
+                }
+                self.window_last_maximized_at.remove(&placement.window_id);
+                true
+            })
+            .collect()
+    }
+
+    pub(crate) fn prepare_animation_frame(
+        &mut self,
+        placements: Vec<leopardwm_core_layout::WindowPlacement>,
+        maximized: &std::collections::HashSet<u64>,
+    ) -> animation_worker::FrameRequest {
+        self.prepare_animation_frame_with_parked(
+            placements,
+            maximized,
+            leopardwm_platform_win32::is_placement_parked,
+        )
+    }
+
+    pub(crate) fn prepare_animation_frame_with_parked<F>(
+        &mut self,
+        placements: Vec<leopardwm_core_layout::WindowPlacement>,
+        maximized: &std::collections::HashSet<u64>,
+        is_placement_parked: F,
+    ) -> animation_worker::FrameRequest
+    where
+        F: Fn(u64) -> bool,
+    {
+        let (live_placements, ghost_updates) = Self::partition_for_animation(
+            placements,
+            self.layout_transition.as_ref(),
+            &self.ghost_handles,
+        );
+        let live_placements = self.filter_physical_placements_with_parked(
+            live_placements,
+            maximized,
+            is_placement_parked,
+        );
+        self.arm_moved_or_resized_suppression(
+            live_placements.iter().map(|placement| placement.window_id),
+        );
+        animation_worker::FrameRequest {
+            placements: live_placements,
+            ghost_updates,
+            platform_config: self.platform_config.clone(),
+        }
+    }
+
     /// Join any finished timed-out apply workers so the pending list does not grow indefinitely.
     /// Returns the number of workers reaped in this pass.
     pub(crate) fn reap_finished_pending_apply_workers(&mut self) -> usize {
@@ -235,27 +409,14 @@ impl AppState {
         }
 
         let dispatched_placements = self.filter_application_fullscreen_placements(all_placements);
-        self.arm_moved_or_resized_suppression(
-            dispatched_placements
-                .iter()
-                .map(|placement| placement.window_id),
-        );
-        self.applying_layout = true;
+        let maximized = self.observe_maximized_placements(&dispatched_placements);
 
         // Partition into live placements + ghost-thumbnail updates. Ghost
         // wids are excluded from `placements` so the worker doesn't fire
         // per-frame SetWindowPos on the cloaked source HWND.
-        let (live_placements, ghost_updates) = Self::partition_for_animation(
-            dispatched_placements,
-            self.layout_transition.as_ref(),
-            &self.ghost_handles,
-        );
+        let request = self.prepare_animation_frame(dispatched_placements, &maximized);
+        self.applying_layout = true;
 
-        let request = animation_worker::FrameRequest {
-            placements: live_placements,
-            ghost_updates,
-            platform_config: self.platform_config.clone(),
-        };
         if let Err(e) = worker.send_frame(request) {
             self.applying_layout = false;
             return Err(anyhow::anyhow!(e));
@@ -393,6 +554,7 @@ impl AppState {
 
         self.record_last_placed_rects(&all_placements);
         let dispatched_placements = self.filter_application_fullscreen_placements(all_placements);
+        let dispatched_placements = self.prepare_physical_placements(dispatched_placements);
         #[cfg(test)]
         let invoke_injected_empty_worker =
             self.injected_apply_placements_behavior.is_some() && dispatched_placements.is_empty();
@@ -419,16 +581,27 @@ impl AppState {
         let (rx, worker_handle) = self.spawn_apply_worker(dispatched_placements)?;
 
         let result = match rx.recv_timeout(timeout) {
-            Ok((result, width_violations, height_violations)) => {
+            Ok((result, width_violations, height_violations, maximized_skipped_window_ids)) => {
                 let _ = worker_handle.join();
                 if result.is_err() {
                     self.moved_or_resized_suppression.clear();
+                } else {
+                    self.handle_maximized_placement_skips(&maximized_skipped_window_ids);
                 }
                 let constraints_changed = if result.is_ok() {
                     self.propagate_size_violations(&width_violations, &height_violations)
                 } else {
                     false
                 };
+                let restored_during_apply = result.is_ok()
+                    && maximized_skipped_window_ids.iter().any(|window_id| {
+                        !leopardwm_platform_win32::is_window_maximized(*window_id)
+                            && !crate::event_handler::defer_snapback_while_settling(
+                                self.window_managed_at.get(window_id).copied(),
+                                self.window_last_maximized_at.get(window_id).copied(),
+                                std::time::Instant::now(),
+                            )
+                    });
                 // If any constraint was added, run a single guarded re-apply
                 // so the corrected layout lands on the current frame instead
                 // of waiting for the next user-triggered event. The inner
@@ -439,7 +612,9 @@ impl AppState {
                 // surface that error in place of the outer Ok — the outer
                 // placements may have already landed, but the daemon state
                 // needs to reflect that the corrective pass didn't complete.
-                if constraints_changed && !self.reapplying_after_violation {
+                if (constraints_changed || restored_during_apply)
+                    && !self.reapplying_after_violation
+                {
                     self.reapplying_after_violation = true;
                     self.applying_layout = false;
                     let reapply = self.apply_layout();
@@ -569,7 +744,7 @@ impl AppState {
     }
 
     /// Record layout rects for visible placements and drain stale entries.
-    fn record_last_placed_rects(
+    pub(crate) fn record_last_placed_rects(
         &mut self,
         all_placements: &[leopardwm_core_layout::WindowPlacement],
     ) {
@@ -621,6 +796,9 @@ impl AppState {
         #[cfg(test)]
         let injected_behavior = self.injected_apply_placements_behavior;
         #[cfg(test)]
+        let injected_apply_placements_call_count =
+            self.injected_apply_placements_call_count.clone();
+        #[cfg(test)]
         let late_worker_recovery_count = self.late_worker_recovery_count.clone();
 
         let (tx, rx) = std::sync::mpsc::channel::<ApplyWorkerMsg>();
@@ -632,20 +810,30 @@ impl AppState {
                         || apply_epoch_ref.load(Ordering::SeqCst) != apply_epoch
                 };
                 if should_cancel() {
-                    let _ = tx.send((Ok(()), Vec::new(), Vec::new()));
+                    let _ = tx.send((Ok(()), Vec::new(), Vec::new(), Vec::new()));
                     return;
                 }
 
                 #[cfg(test)]
                 if let Some(behavior) = injected_behavior {
-                    let result = match behavior {
+                    let call_index =
+                        injected_apply_placements_call_count.fetch_add(1, Ordering::SeqCst);
+                    let (result, maximized_skipped_window_ids) = match behavior {
                         TestApplyPlacementsBehavior::SleepAndSucceed(delay) => {
                             std::thread::sleep(delay);
-                            Ok(())
+                            (Ok(()), Vec::new())
                         }
                         TestApplyPlacementsBehavior::SleepAndFail(delay) => {
                             std::thread::sleep(delay);
-                            Err(anyhow!("injected apply_placements failure"))
+                            (Err(anyhow!("injected apply_placements failure")), Vec::new())
+                        }
+                        TestApplyPlacementsBehavior::SucceedWithMaximizedSkip(window_id) => {
+                            let skipped = if call_index == 0 {
+                                vec![window_id]
+                            } else {
+                                Vec::new()
+                            };
+                            (Ok(()), skipped)
                         }
                     };
                     if should_cancel() {
@@ -655,26 +843,36 @@ impl AppState {
                         );
                         #[cfg(test)]
                         late_worker_recovery_count.fetch_add(1, Ordering::SeqCst);
-                        let _ = tx.send((Ok(()), Vec::new(), Vec::new()));
+                        let _ = tx.send((Ok(()), Vec::new(), Vec::new(), Vec::new()));
                         return;
                     }
-                    let _ = tx.send((result, Vec::new(), Vec::new()));
+                    let _ = tx.send((result, Vec::new(), Vec::new(), maximized_skipped_window_ids));
                     return;
                 }
 
                 if should_cancel() {
-                    let _ = tx.send((Ok(()), Vec::new(), Vec::new()));
+                    let _ = tx.send((Ok(()), Vec::new(), Vec::new(), Vec::new()));
                     return;
                 }
-                let (result, width_violations, height_violations) =
+                let (result, width_violations, height_violations, maximized_skipped_window_ids) =
                     match leopardwm_platform_win32::apply_placements(
                         &all_placements,
                         &platform_config,
                         None,
                         post_animation_nudge,
                     ) {
-                        Ok(r) => (Ok(()), r.width_violations, r.height_violations),
-                        Err(e) => (Err(anyhow!(e.to_string())), Vec::new(), Vec::new()),
+                        Ok(r) => (
+                            Ok(()),
+                            r.width_violations,
+                            r.height_violations,
+                            r.maximized_skipped_window_ids,
+                        ),
+                        Err(e) => (
+                            Err(anyhow!(e.to_string())),
+                            Vec::new(),
+                            Vec::new(),
+                            Vec::new(),
+                        ),
                     };
                 if should_cancel() {
                     run_layout_apply_recovery_pass(
@@ -683,10 +881,15 @@ impl AppState {
                     );
                     #[cfg(test)]
                     late_worker_recovery_count.fetch_add(1, Ordering::SeqCst);
-                    let _ = tx.send((Ok(()), Vec::new(), Vec::new()));
+                    let _ = tx.send((Ok(()), Vec::new(), Vec::new(), Vec::new()));
                     return;
                 }
-                let _ = tx.send((result, width_violations, height_violations));
+                let _ = tx.send((
+                    result,
+                    width_violations,
+                    height_violations,
+                    maximized_skipped_window_ids,
+                ));
             });
 
         match spawn_result {

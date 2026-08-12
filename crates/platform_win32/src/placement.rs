@@ -14,8 +14,8 @@ use windows::Win32::Graphics::Dwm::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     BeginDeferWindowPos, DeferWindowPos, EndDeferWindowPos, GetClassNameW, GetWindowRect, IsIconic,
-    IsWindow, IsZoomed, SetWindowPos, ShowWindow, SET_WINDOW_POS_FLAGS, SWP_ASYNCWINDOWPOS,
-    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SW_RESTORE,
+    IsWindow, IsZoomed, SetWindowPos, SET_WINDOW_POS_FLAGS, SWP_ASYNCWINDOWPOS, SWP_FRAMECHANGED,
+    SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
 };
 
 /// Undocumented but well-known DWM attribute for cloaking windows.
@@ -255,6 +255,51 @@ pub fn dwm_uncloak_all() {
     }
 }
 
+fn mark_placement_parked(window_id: WindowId) {
+    let mut cloaked = lock_cloaked();
+    cloaked.get_or_insert_with(HashSet::new).insert(window_id);
+}
+
+/// Park a window at the placement sentinel and record that placement owns its
+/// return-to-layout recovery. The logical park is rolled back if the physical
+/// move fails, so visible maximized recovery never infers ownership from raw
+/// coordinates.
+pub fn park_window_for_placement(window_id: WindowId) -> Result<(), Win32Error> {
+    let hwnd = window_id_to_hwnd(window_id)?;
+    mark_placement_parked(window_id);
+    apply_cloak_state(window_id);
+    let moved = unsafe {
+        SetWindowPos(
+            hwnd,
+            None,
+            crate::MOVE_OFFSCREEN_SENTINEL_COORD,
+            crate::MOVE_OFFSCREEN_SENTINEL_COORD,
+            0,
+            0,
+            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+        )
+    };
+    if let Err(error) = moved {
+        {
+            let mut cloaked = lock_cloaked();
+            if let Some(set) = cloaked.as_mut() {
+                set.remove(&window_id);
+            }
+        }
+        apply_cloak_state(window_id);
+        return Err(Win32Error::SetPositionFailed(format!(
+            "Failed to park window {} for placement: {}",
+            window_id, error
+        )));
+    }
+    Ok(())
+}
+
+/// Whether placement, rather than ghost animation, owns an off-screen park.
+pub fn is_placement_parked(window_id: WindowId) -> bool {
+    global_cloaked_contains(window_id)
+}
+
 /// Check if a window is currently cloaked by the placement system OR the
 /// ghost-animation system. Used by the event hook to suppress spurious
 /// SHOW/LOCATIONCHANGE events fired by DWM when we cloak/uncloak windows
@@ -350,6 +395,8 @@ pub struct ApplyPlacementsResult {
     pub width_violations: Vec<WidthViolation>,
     /// Height violations detected after positioning (windows taller than requested).
     pub height_violations: Vec<HeightViolation>,
+    /// Visible tiled windows omitted because they were maximized at execution time.
+    pub maximized_skipped_window_ids: Vec<WindowId>,
 }
 
 // Collect all (hwnd, adjusted_rect, flags) entries for deferred positioning.
@@ -428,6 +475,7 @@ fn apply_placements_inner(
     let empty_result = ApplyPlacementsResult {
         width_violations: Vec::new(),
         height_violations: Vec::new(),
+        maximized_skipped_window_ids: Vec::new(),
     };
     if placements.is_empty() {
         if let Some(cache) = cache.as_deref_mut() {
@@ -462,9 +510,9 @@ fn apply_placements_inner(
     // overlap and the layout gaps disappear. Zero the insets to keep correct spacing.
     let high_contrast = crate::is_high_contrast_enabled();
     let force_positioning = !allow_inset_retry;
-    let (entries, skipped) = build_defer_entries(
+    let (entries, skipped, maximized_skipped_window_ids) = build_defer_entries(
         placements,
-        cache.as_deref(),
+        cache,
         async_flag,
         high_contrast,
         force_positioning,
@@ -568,45 +616,113 @@ fn apply_placements_inner(
     Ok(ApplyPlacementsResult {
         width_violations: detection.width_violations,
         height_violations: detection.height_violations,
+        maximized_skipped_window_ids,
     })
+}
+
+fn recover_placement_parked<F>(
+    window_id: WindowId,
+    async_flag: SET_WINDOW_POS_FLAGS,
+    position: F,
+) -> bool
+where
+    F: FnOnce(SET_WINDOW_POS_FLAGS) -> bool,
+{
+    if !is_placement_parked(window_id) {
+        return false;
+    }
+    let flags = SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | async_flag;
+    if !position(flags) {
+        return false;
+    }
+    let released = {
+        let mut cloaked = lock_cloaked();
+        cloaked
+            .as_mut()
+            .is_some_and(|set| set.remove(&window_id))
+    };
+    if released {
+        apply_cloak_state(window_id);
+    }
+    released
+}
+
+fn skip_visible_tiled_maximized(
+    placement: &WindowPlacement,
+    is_zoomed: bool,
+    cache: Option<&mut PlacementCache>,
+    async_flag: SET_WINDOW_POS_FLAGS,
+) -> bool {
+    let skip = placement.visibility == Visibility::Visible
+        && placement.column_index != usize::MAX
+        && is_zoomed;
+    if skip {
+        if let Some(cache) = cache {
+            cache.positions.remove(&placement.window_id);
+        }
+        // Skipped entries never reach `uncloak_becoming_visible` or
+        // `sync_cloak_state`, so a window held in `GLOBAL_CLOAKED` from an
+        // earlier off-screen placement would stay cloaked while visible in
+        // the layout. Return a placement-parked maximized HWND before
+        // releasing that cloak. SWP_NOSIZE deliberately preserves maximized
+        // dimensions and does not restore ordinary visible maximized windows.
+        let _ = recover_placement_parked(
+            placement.window_id,
+            async_flag,
+            |flags| {
+                let Ok(hwnd) = window_id_to_hwnd(placement.window_id) else {
+                    return false;
+                };
+                unsafe {
+                    SetWindowPos(
+                        hwnd,
+                        None,
+                        placement.rect.x,
+                        placement.rect.y,
+                        0,
+                        0,
+                        flags,
+                    )
+                    .is_ok()
+                }
+            },
+        );
+    }
+    skip
 }
 
 /// Build the defer-entry list for all placements, skipping cache-unchanged windows.
 fn build_defer_entries(
     placements: &[WindowPlacement],
-    cache: Option<&PlacementCache>,
+    cache: &mut Option<&mut PlacementCache>,
     async_flag: SET_WINDOW_POS_FLAGS,
     high_contrast: bool,
     force_positioning: bool,
-) -> (Vec<DeferEntry>, u32) {
+) -> (Vec<DeferEntry>, u32, Vec<WindowId>) {
     let mut skipped = 0u32;
     let mut entries: Vec<DeferEntry> = Vec::with_capacity(placements.len());
+    let mut maximized_skipped_window_ids = Vec::new();
 
     for placement in placements {
+        let Ok(hwnd) = window_id_to_hwnd(placement.window_id) else { continue };
+        let is_zoomed = unsafe {
+            if !IsWindow(Some(hwnd)).as_bool() || IsIconic(hwnd).as_bool() {
+                continue;
+            }
+            IsZoomed(hwnd).as_bool()
+        };
+        if skip_visible_tiled_maximized(placement, is_zoomed, cache.as_deref_mut(), async_flag) {
+            maximized_skipped_window_ids.push(placement.window_id);
+            continue;
+        }
         if !force_positioning
-            && cache.as_ref().is_some_and(|cache| {
+            && cache.as_deref().is_some_and(|cache| {
                 cache.positions.get(&placement.window_id)
                     == Some(&(placement.rect, placement.visibility))
             })
         {
             skipped += 1;
             continue;
-        }
-        let Ok(hwnd) = window_id_to_hwnd(placement.window_id) else { continue };
-        unsafe {
-            if !IsWindow(Some(hwnd)).as_bool() || IsIconic(hwnd).as_bool() {
-                continue;
-            }
-            // Restore maximized tiled windows before positioning — WS_MAXIMIZE
-            // causes some windows to ignore SetWindowPos size changes.
-            // Only for tiled windows (column_index != MAX); floating windows
-            // may be intentionally maximized by the user.
-            if placement.visibility == Visibility::Visible
-                && placement.column_index != usize::MAX
-                && IsZoomed(hwnd).as_bool()
-            {
-                let _ = ShowWindow(hwnd, SW_RESTORE);
-            }
         }
 
         let resolved = if high_contrast {
@@ -616,7 +732,7 @@ fn build_defer_entries(
                 generation: inset_cache_generation(),
             }
         } else {
-            cached_border_insets(hwnd, placement.window_id, cache)
+            cached_border_insets(hwnd, placement.window_id, cache.as_deref())
         };
         let ResolvedInsets {
             insets,
@@ -674,7 +790,7 @@ fn build_defer_entries(
         }
     }
 
-    (entries, skipped)
+    (entries, skipped, maximized_skipped_window_ids)
 }
 
 /// Uncloak entries becoming visible and drop them from the tracking set.
@@ -2056,6 +2172,110 @@ mod tests {
             let mut g = lock_cloaked();
             let s = g.get_or_insert_with(HashSet::new);
             s.insert(wid);
+        }
+        if had_ghost_before {
+            mark_ghost_cloaked(wid);
+        }
+    }
+
+    /// Regression: a visible tiled placement skipped because the HWND is
+    /// maximized retains placement ownership if position-only recovery fails,
+    /// then releases exactly that ownership after a successful recovery.
+    #[test]
+    fn test_skip_visible_tiled_maximized_recovers_only_after_position_succeeds() {
+        let wid: WindowId = 0xFFFF_FFFF_FFFF_FF10;
+        let visible_tiled = WindowPlacement {
+            window_id: wid,
+            rect: Rect::new(0, 0, 800, 600),
+            visibility: Visibility::Visible,
+            column_index: 0,
+        };
+        let landing_flags = SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE;
+
+        let had_global_before = global_cloaked_contains(wid);
+        let had_ghost_before = ghost_cloaked_contains(wid);
+        {
+            let mut g = lock_cloaked();
+            if let Some(ref mut s) = *g { s.remove(&wid); }
+        }
+        unmark_ghost_cloaked(wid);
+
+        let mut cache = PlacementCache::new();
+        assert!(!skip_visible_tiled_maximized(
+            &visible_tiled,
+            false,
+            Some(&mut cache),
+            SET_WINDOW_POS_FLAGS(0),
+        ));
+        let offscreen = WindowPlacement {
+            visibility: Visibility::OffScreenLeft,
+            ..visible_tiled
+        };
+        assert!(!skip_visible_tiled_maximized(
+            &offscreen,
+            true,
+            None,
+            SET_WINDOW_POS_FLAGS(0),
+        ));
+
+        cache
+            .positions
+            .insert(wid, (visible_tiled.rect, Visibility::Visible));
+        mark_placement_parked(wid);
+        assert!(skip_visible_tiled_maximized(
+            &visible_tiled,
+            true,
+            Some(&mut cache),
+            SET_WINDOW_POS_FLAGS(0),
+        ));
+        assert!(
+            is_placement_parked(wid) && is_placement_cloaked(wid),
+            "invalid recovery must retain placement ownership and its effective cloak"
+        );
+        assert!(
+            !cache.positions.contains_key(&wid),
+            "failed recovery may invalidate the position cache"
+        );
+        assert!(!recover_placement_parked(
+            wid,
+            SET_WINDOW_POS_FLAGS(0),
+            |_| false,
+        ));
+        assert!(
+            is_placement_parked(wid) && is_placement_cloaked(wid),
+            "failed positioning must preserve placement ownership and its effective cloak"
+        );
+
+        assert!(recover_placement_parked(
+            wid,
+            SET_WINDOW_POS_FLAGS(0),
+            |flags| flags == landing_flags,
+        ));
+        assert!(
+            !is_placement_parked(wid),
+            "successful landing recovery releases placement ownership exactly once"
+        );
+        assert!(!recover_placement_parked(
+            wid,
+            SET_WINDOW_POS_FLAGS(0),
+            |_| true,
+        ));
+
+        mark_placement_parked(wid);
+        mark_ghost_cloaked(wid);
+        assert!(recover_placement_parked(wid, SWP_ASYNCWINDOWPOS, |flags| {
+            flags == (landing_flags | SWP_ASYNCWINDOWPOS)
+        }));
+        assert!(!is_placement_parked(wid));
+        assert!(
+            is_placement_cloaked(wid),
+            "successful recovery must retain a ghost-owned effective cloak"
+        );
+        unmark_ghost_cloaked(wid);
+
+        if had_global_before {
+            let mut g = lock_cloaked();
+            g.get_or_insert_with(HashSet::new).insert(wid);
         }
         if had_ghost_before {
             mark_ghost_cloaked(wid);

@@ -15,10 +15,12 @@ use tracing::{debug, info, warn};
 
 /// How long after a window is first managed to treat it as still settling its
 /// initial geometry.
-const SNAPBACK_SETTLE_AFTER_CREATE: std::time::Duration = std::time::Duration::from_millis(2000);
+pub(crate) const SNAPBACK_SETTLE_AFTER_CREATE: std::time::Duration =
+    std::time::Duration::from_millis(2000);
 /// How recently a window must have been seen maximized to defer snapping it back
 /// while settling.
-const SNAPBACK_MAXIMIZE_GRACE: std::time::Duration = std::time::Duration::from_millis(1200);
+pub(crate) const SNAPBACK_MAXIMIZE_GRACE: std::time::Duration =
+    std::time::Duration::from_millis(1200);
 
 /// Whether to defer snapping a tiled window back to its layout slot because it
 /// opened maximized and is still settling. An app opening several windows/tabs
@@ -27,7 +29,7 @@ const SNAPBACK_MAXIMIZE_GRACE: std::time::Duration = std::time::Duration::from_m
 /// Deferred only while the window is both freshly managed and was maximized very
 /// recently, so a normal manual un-maximize of an established window still
 /// re-tiles immediately.
-fn defer_snapback_while_settling(
+pub(crate) fn defer_snapback_while_settling(
     managed_at: Option<std::time::Instant>,
     last_maximized_at: Option<std::time::Instant>,
     now: std::time::Instant,
@@ -104,6 +106,20 @@ pub(crate) enum MovedOrResizedDecision {
     Fullscreen(ApplicationFullscreenLifecycle),
     Suppress,
     Continue,
+}
+
+pub(crate) fn should_observe_maximize_during_suppression(
+    applying_layout: bool,
+    display_change_pending: bool,
+    managed_tiled: bool,
+    application_fullscreen: bool,
+    is_maximized: bool,
+) -> bool {
+    applying_layout
+        && !display_change_pending
+        && managed_tiled
+        && !application_fullscreen
+        && is_maximized
 }
 
 pub(crate) fn moved_or_resized_decision(
@@ -2002,11 +2018,32 @@ impl AppState {
 
     /// Handle a window move/resize notification.
     fn on_window_moved_or_resized(&mut self, hwnd: u64) {
-        // Skip events triggered by our own apply_layout() to avoid feedback loop.
-        // Also suppress during display change debounce — Windows resizes windows
-        // during contrast theme transitions and the stale border metrics would
-        // cause incorrect snap-back sizes.
+        // Placement feedback stays suppressed, except a direct maximize of a
+        // managed tiled window needs its timestamp and target-only visual cleanup
+        // immediately so the later restore is classified correctly.
         if self.applying_layout || self.display_change_pending {
+            let managed_tiled = self
+                .find_window_workspace(hwnd)
+                .and_then(|(monitor_id, ws_idx)| {
+                    self.workspaces
+                        .get(&monitor_id)?
+                        .get(ws_idx)
+                        .map(|workspace| {
+                            !workspace.is_floating(hwnd)
+                                && workspace.fullscreen_window_id() != Some(hwnd)
+                        })
+                })
+                .unwrap_or(false);
+            let is_maximized = leopardwm_platform_win32::is_window_maximized(hwnd);
+            if should_observe_maximize_during_suppression(
+                self.applying_layout,
+                self.display_change_pending,
+                managed_tiled,
+                self.is_application_fullscreen(hwnd),
+                is_maximized,
+            ) {
+                self.observe_tiled_window_maximized(hwnd);
+            }
             return;
         }
         let (chrome_rect, dwm_rect) = self.application_fullscreen_geometry(hwnd);
@@ -2134,9 +2171,9 @@ impl AppState {
             } else if leopardwm_platform_win32::is_window_maximized(hwnd) {
                 // User maximized a tiled window — let it stay maximized. Record
                 // the maximize so a brief restore mid-burst is treated as
-                // settling rather than a snap-back trigger.
-                self.window_last_maximized_at
-                    .insert(hwnd, std::time::Instant::now());
+                // settling rather than a snap-back trigger, and remove only
+                // this target's ghost/crossfade visual immediately.
+                self.observe_tiled_window_maximized(hwnd);
                 debug!("Tiled window {} maximized — allowing", hwnd);
             } else if defer_snapback_while_settling(
                 self.window_managed_at.get(&hwnd).copied(),
@@ -2148,6 +2185,7 @@ impl AppState {
                 // can re-assert maximize instead of being tiled narrow.
                 debug!("Deferring snap-back for settling maximized window {}", hwnd);
             } else {
+                self.window_last_maximized_at.remove(&hwnd);
                 // Position-based false-positive filter: EVENT_OBJECT_LOCATIONCHANGE
                 // fires for many reasons besides actual movement (Z-order,
                 // DWM composition, focus shuffles, DPI nudges, app-internal
@@ -2538,6 +2576,28 @@ impl AppState {
 mod snapback_settle_tests {
     use super::*;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn observes_direct_managed_maximize_during_apply_without_releasing_ordinary_suppression() {
+        assert!(should_observe_maximize_during_suppression(
+            true, false, true, false, true
+        ));
+        assert!(!should_observe_maximize_during_suppression(
+            true, false, false, false, true
+        ));
+        assert!(!should_observe_maximize_during_suppression(
+            true, false, true, true, true
+        ));
+        assert!(!should_observe_maximize_during_suppression(
+            true, true, true, false, true
+        ));
+        assert!(!should_observe_maximize_during_suppression(
+            true, false, true, false, false
+        ));
+        assert!(!should_observe_maximize_during_suppression(
+            false, false, true, false, true
+        ));
+    }
 
     #[test]
     fn defers_only_while_recently_created_and_recently_maximized() {

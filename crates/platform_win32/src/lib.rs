@@ -56,7 +56,8 @@ pub use event_hooks::{install_event_hooks, EventHookHandle, WindowEvent};
 pub use placement::{
     apply_placements, clear_inset_cache, drain_ghost_cloaked, dwm_cloak_window, dwm_uncloak_all,
     dwm_uncloak_window, get_window_frame_insets, get_window_invisible_insets,
-    is_placement_cloaked, mark_ghost_cloaked, set_dwm_transitions_disabled, unmark_ghost_cloaked,
+    is_placement_cloaked, is_placement_parked, mark_ghost_cloaked, park_window_for_placement,
+    set_dwm_transitions_disabled, unmark_ghost_cloaked,
     visible_rect_to_frame_rect,
     ApplyPlacementsResult, HeightViolation, PlacementCache, WidthViolation,
 };

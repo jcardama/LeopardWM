@@ -320,6 +320,291 @@ fn test_application_fullscreen_session_filters_physical_dispatch_and_prunes() {
 }
 
 #[test]
+fn test_startup_maximize_hold_is_applied_to_each_animation_duration() {
+    use leopardwm_core_layout::{Visibility, WindowPlacement};
+    use std::collections::{HashMap, HashSet};
+    use std::time::{Duration, Instant};
+
+    for duration_ms in [0, 1, 150] {
+        let mut state = AppState::new_with_config(test_config(), test_monitors());
+        state.config.behavior.swap_chain_ghost_animation = false;
+        state.workspaces.get_mut(&1).unwrap()[0]
+            .insert_window(100, Some(800))
+            .unwrap();
+        state.workspaces.get_mut(&1).unwrap()[0]
+            .insert_window(200, Some(800))
+            .unwrap();
+        state.previous_focused_hwnd = Some(100);
+        let now = Instant::now();
+        state.window_managed_at.insert(100, now);
+        state.window_last_maximized_at.insert(100, now);
+        state.start_layout_transition_with_duration(
+            HashMap::from([
+                (100, Rect::new(-400, 0, 800, 1040)),
+                (200, Rect::new(1200, 0, 800, 1040)),
+            ]),
+            duration_ms,
+        );
+        let mut placements = vec![
+            WindowPlacement {
+                window_id: 100,
+                rect: Rect::new(0, 0, 800, 1040),
+                visibility: Visibility::Visible,
+                column_index: 0,
+            },
+            WindowPlacement {
+                window_id: 200,
+                rect: Rect::new(800, 0, 800, 1040),
+                visibility: Visibility::Visible,
+                column_index: 1,
+            },
+        ];
+        state.record_last_placed_rects(&placements);
+        AppState::apply_transition_interpolation(
+            state.layout_transition.as_ref().unwrap(),
+            &mut placements,
+        );
+        let peer_frame_rect = placements
+            .iter()
+            .find(|placement| placement.window_id == 200)
+            .unwrap()
+            .rect;
+        if duration_ms == 150 {
+            assert_ne!(peer_frame_rect, Rect::new(800, 0, 800, 1040));
+        } else {
+            assert_eq!(peer_frame_rect, Rect::new(800, 0, 800, 1040));
+        }
+
+        let request = state.prepare_animation_frame(placements, &HashSet::new());
+
+        assert_eq!(
+            request
+                .placements
+                .iter()
+                .map(|placement| placement.window_id)
+                .collect::<Vec<_>>(),
+            vec![200]
+        );
+        assert_eq!(request.placements[0].rect, peer_frame_rect);
+        assert!(request.ghost_updates.is_empty());
+        assert!(!state.should_suppress_moved_or_resized(100));
+        assert!(state.should_suppress_moved_or_resized(200));
+        assert_eq!(state.previous_focused_hwnd, Some(100));
+        assert!(state.focused_workspace().unwrap().contains_window(100));
+        assert!(state.last_placed_layout_rects.contains_key(&100));
+
+        state
+            .window_managed_at
+            .insert(100, now - Duration::from_secs(3));
+        let restored = state.filter_physical_placements_observed(
+            vec![WindowPlacement {
+                window_id: 100,
+                rect: Rect::new(0, 0, 800, 1040),
+                visibility: Visibility::Visible,
+                column_index: 0,
+            }],
+            &HashSet::new(),
+        );
+        assert_eq!(restored.len(), 1);
+        assert!(!state.window_last_maximized_at.contains_key(&100));
+    }
+}
+
+#[test]
+fn test_placement_parked_maximized_target_reaches_sync_and_animation_dispatch() {
+    use crate::layout_apply::should_dispatch_visible_tiled_placement;
+    use leopardwm_core_layout::{Visibility, WindowPlacement};
+    use std::collections::HashSet;
+    use std::time::Instant;
+
+    let placement = WindowPlacement {
+        window_id: 100,
+        rect: Rect::new(0, 0, 800, 1040),
+        visibility: Visibility::Visible,
+        column_index: 0,
+    };
+    let maximized = HashSet::from([100]);
+
+    assert!(!should_dispatch_visible_tiled_placement(true, false, false));
+    assert!(should_dispatch_visible_tiled_placement(true, false, true));
+    assert!(!should_dispatch_visible_tiled_placement(true, true, true));
+
+    let mut sync_state = AppState::new_with_config(test_config(), test_monitors());
+    assert!(sync_state
+        .prepare_physical_placements_with_parked(vec![placement.clone()], &maximized, |_| false)
+        .is_empty());
+    assert_eq!(
+        sync_state
+            .prepare_physical_placements_with_parked(vec![placement.clone()], &maximized, |wid| wid == 100)
+            .iter()
+            .map(|placement| placement.window_id)
+            .collect::<Vec<_>>(),
+        vec![100],
+        "placement-owned parking must reach synchronous platform recovery"
+    );
+
+    let mut animation_state = AppState::new_with_config(test_config(), test_monitors());
+    assert_eq!(
+        animation_state
+            .prepare_animation_frame_with_parked(vec![placement.clone()], &maximized, |wid| wid == 100)
+            .placements
+            .iter()
+            .map(|placement| placement.window_id)
+            .collect::<Vec<_>>(),
+        vec![100],
+        "placement-owned parking must reach animation platform recovery"
+    );
+
+    let mut settling_state = AppState::new_with_config(test_config(), test_monitors());
+    let now = Instant::now();
+    settling_state.window_managed_at.insert(100, now);
+    settling_state.window_last_maximized_at.insert(100, now);
+    assert!(settling_state
+        .prepare_physical_placements_with_parked(vec![placement.clone()], &maximized, |_| true)
+        .is_empty());
+}
+
+#[test]
+fn test_animation_maximized_skip_result_invalidates_daemon_bookkeeping() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.applying_layout = true;
+    state.moved_or_resized_suppression.insert(
+        100,
+        std::time::Instant::now() + std::time::Duration::from_secs(1),
+    );
+    state
+        .last_placed_layout_rects
+        .insert(100, Rect::new(0, 0, 800, 1040));
+
+    let platform_result = leopardwm_platform_win32::ApplyPlacementsResult {
+        width_violations: Vec::new(),
+        height_violations: Vec::new(),
+        maximized_skipped_window_ids: vec![100],
+    };
+    let frame_result =
+        animation_worker::FrameResult::from_platform(platform_result, std::time::Duration::ZERO);
+
+    state.handle_animation_placement_result(&frame_result);
+
+    assert!(!state.applying_layout);
+    assert!(!state.should_suppress_moved_or_resized(100));
+    assert!(!state.last_placed_layout_rects.contains_key(&100));
+}
+
+#[test]
+fn test_sync_established_maximized_skip_restored_before_receipt_forces_follow_up_dispatch() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = false;
+    state.workspaces.get_mut(&1).unwrap()[0]
+        .insert_window(100, Some(800))
+        .unwrap();
+    state.injected_apply_placements_behavior =
+        Some(TestApplyPlacementsBehavior::SucceedWithMaximizedSkip(100));
+
+    state.apply_layout().unwrap();
+
+    assert_eq!(
+        state
+            .injected_apply_placements_call_count
+            .load(Ordering::SeqCst),
+        2,
+        "established restored skip must bypass unchanged-layout fast path once"
+    );
+    assert!(
+        state.should_suppress_moved_or_resized(100),
+        "the physically dispatched follow-up owns a fresh suppression lease"
+    );
+    assert!(state.last_placed_layout_rects.contains_key(&100));
+}
+
+#[test]
+fn test_sync_fresh_maximized_skip_restored_before_receipt_defers_follow_up_dispatch() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = false;
+    state.workspaces.get_mut(&1).unwrap()[0]
+        .insert_window(100, Some(800))
+        .unwrap();
+    state
+        .window_managed_at
+        .insert(100, std::time::Instant::now());
+    state.injected_apply_placements_behavior =
+        Some(TestApplyPlacementsBehavior::SucceedWithMaximizedSkip(100));
+
+    state.apply_layout().unwrap();
+
+    assert_eq!(
+        state
+            .injected_apply_placements_call_count
+            .load(Ordering::SeqCst),
+        1,
+        "fresh restored skip must stay within maximize settling rather than reapply"
+    );
+    assert!(state.window_last_maximized_at.contains_key(&100));
+}
+
+#[test]
+fn test_current_maximize_hold_cleans_only_target_ghost_state() {
+    use crate::state::{GhostEntry, LayoutTransition};
+    use leopardwm_core_layout::{Visibility, WindowPlacement};
+    use std::collections::{HashMap, HashSet};
+
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    let target_exit_rect = Rect::new(0, 1200, 800, 600);
+    state.layout_transition = Some(LayoutTransition {
+        start_rects: HashMap::from([
+            (100, Rect::new(0, 0, 800, 600)),
+            (200, Rect::new(800, 0, 800, 600)),
+        ]),
+        exit_rects: HashMap::from([(100, target_exit_rect)]),
+        elapsed_ms: 16,
+        duration_ms: 150,
+        easing: leopardwm_core_layout::Easing::default(),
+        ghosted_wids: HashSet::from([100, 200]),
+    });
+    state.ghost_handles.insert(
+        100,
+        GhostEntry::new(0, "Chrome_WidgetWin_1".into(), Rect::new(0, 0, 800, 600)),
+    );
+    state.ghost_handles.insert(
+        200,
+        GhostEntry::new(0, "MozillaWindowClass".into(), Rect::new(800, 0, 800, 600)),
+    );
+    let maximized = HashSet::from([100]);
+
+    state.record_maximized_observations(&maximized);
+    let transition = state.layout_transition.as_ref().unwrap();
+    assert!(!transition.ghosted_wids.contains(&100));
+    assert!(!state.ghost_handles.contains_key(&100));
+    assert!(transition.ghosted_wids.contains(&200));
+    assert!(state.ghost_handles.contains_key(&200));
+    assert!(transition.start_rects.contains_key(&100));
+    assert_eq!(transition.exit_rects.get(&100), Some(&target_exit_rect));
+    assert_eq!(state.layout_transition_exit_windows_to_park(), vec![100]);
+
+    let dispatched = state.filter_physical_placements_observed(
+        vec![
+            WindowPlacement {
+                window_id: 100,
+                rect: Rect::new(0, 0, 800, 600),
+                visibility: Visibility::Visible,
+                column_index: 0,
+            },
+            WindowPlacement {
+                window_id: 300,
+                rect: Rect::new(800, 0, 800, 600),
+                visibility: Visibility::Visible,
+                column_index: 1,
+            },
+        ],
+        &maximized,
+    );
+    assert_eq!(
+        dispatched.iter().map(|p| p.window_id).collect::<Vec<_>>(),
+        vec![300]
+    );
+}
+
+#[test]
 fn test_application_fullscreen_entry_removes_only_its_ghost_transition_state() {
     use crate::state::{ApplicationFullscreenState, GhostEntry, LayoutTransition};
     use leopardwm_core_layout::{Visibility, WindowPlacement};
@@ -333,7 +618,7 @@ fn test_application_fullscreen_entry_removes_only_its_ghost_transition_state() {
             (100, Rect::new(0, 0, 800, 600)),
             (200, Rect::new(800, 0, 800, 600)),
         ]),
-        exit_rects: HashMap::new(),
+        exit_rects: HashMap::from([(100, Rect::new(0, 1200, 800, 600))]),
         elapsed_ms: 16,
         duration_ms: 150,
         easing: leopardwm_core_layout::Easing::default(),
@@ -360,6 +645,7 @@ fn test_application_fullscreen_entry_removes_only_its_ghost_transition_state() {
     let transition = state.layout_transition.as_ref().unwrap();
     assert!(!transition.ghosted_wids.contains(&100));
     assert!(!transition.start_rects.contains_key(&100));
+    assert!(!transition.exit_rects.contains_key(&100));
     assert!(!state.ghost_handles.contains_key(&100));
     assert!(transition.ghosted_wids.contains(&200));
     assert!(transition.start_rects.contains_key(&200));
@@ -690,6 +976,60 @@ fn test_partition_for_animation_missing_handle_drops_placement() {
 }
 
 #[test]
+fn test_crossfade_target_barrier_releases_only_after_worker_acknowledgment() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.crossfade_sources.insert(
+        4,
+        (
+            std::collections::HashSet::from([100, 200]),
+            std::time::Instant::now(),
+        ),
+    );
+
+    state.stop_ghosting_window_visuals(100);
+    assert_eq!(
+        state.crossfade_sources.get(&4).map(|(sources, _)| sources),
+        Some(&std::collections::HashSet::from([100, 200])),
+        "visual cleanup must not release the same-source barrier before worker drop"
+    );
+
+    state.acknowledge_crossfade_target_drop(4, 100);
+    assert_eq!(
+        state.crossfade_sources.get(&4).map(|(sources, _)| sources),
+        Some(&std::collections::HashSet::from([200])),
+        "worker acknowledgment releases only the dropped target barrier"
+    );
+}
+
+#[test]
+fn test_maximized_target_drops_only_its_shared_crossfade_visual() {
+    use crate::state::CrossfadeState;
+
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.active_crossfade = Some(CrossfadeState { epoch: 4 });
+    state.crossfade_sources.insert(
+        4,
+        (
+            std::collections::HashSet::from([100, 200]),
+            std::time::Instant::now(),
+        ),
+    );
+
+    state.observe_tiled_window_maximized(100);
+
+    assert!(state.window_last_maximized_at.contains_key(&100));
+    assert_eq!(
+        state.active_crossfade.as_ref().map(|state| state.epoch),
+        Some(4)
+    );
+    assert_eq!(
+        state.crossfade_sources.get(&4).map(|(sources, _)| sources),
+        Some(&std::collections::HashSet::from([100, 200])),
+        "visual cleanup must retain the shared barrier until worker acknowledgment"
+    );
+}
+
+#[test]
 fn test_application_fullscreen_crossfade_aborts_only_owning_batch() {
     use crate::state::CrossfadeState;
 
@@ -743,8 +1083,10 @@ fn test_application_fullscreen_crossfade_abort_reaches_worker() {
         .send_crossfade(
             4,
             vec![animation_worker::CrossfadeEntry {
+                window_id: 100,
                 handle_isize: 0,
                 dest_client_rect: Rect::new(0, 0, 1, 1),
+                dropped: None,
             }],
             100_000,
         )
@@ -760,6 +1102,15 @@ fn test_application_fullscreen_crossfade_abort_reaches_worker() {
         .enable_time()
         .build()
         .unwrap();
+    assert!(matches!(
+        runtime.block_on(async {
+            tokio::time::timeout(Duration::from_millis(500), event_rx.recv()).await
+        }),
+        Ok(Some(DaemonEvent::CrossfadeTargetDropped {
+            epoch: 4,
+            window_id: 100
+        }))
+    ));
     assert!(matches!(
         runtime.block_on(async {
             tokio::time::timeout(Duration::from_millis(500), event_rx.recv()).await

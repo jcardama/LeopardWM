@@ -51,6 +51,9 @@ pub(crate) enum DaemonEvent {
     Settings(settings::SettingsEvent),
     /// An animation frame was applied by the worker thread.
     AnimationFrameApplied(animation_worker::FrameResult),
+    /// A worker-driven crossfade target was actually dropped. Daemon releases
+    /// only that target's same-source re-registration barrier.
+    CrossfadeTargetDropped { epoch: u64, window_id: u64 },
     /// A worker-driven crossfade for the given epoch completed (normal
     /// end-of-fade OR aborted). Daemon clears `active_crossfade` and
     /// releases the `crossfade_sources` re-registration barrier when the
