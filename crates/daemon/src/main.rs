@@ -1886,6 +1886,22 @@ async fn handle_hotkey_event(
     false
 }
 
+enum GestureCommand<'a> {
+    NoAction,
+    Known(IpcCommand),
+    Unknown(&'a str),
+}
+
+fn classify_gesture_command(cmd: &str) -> GestureCommand<'_> {
+    if cmd.is_empty() {
+        GestureCommand::NoAction
+    } else if let Some(cmd) = config::parse_command(cmd) {
+        GestureCommand::Known(cmd)
+    } else {
+        GestureCommand::Unknown(cmd)
+    }
+}
+
 /// Handle a touchpad/scroll gesture; returns true when the daemon should shut down.
 async fn handle_gesture_event(ctx: &mut EventLoopCtx<'_>, gesture_event: GestureEvent) -> bool {
     // Map gesture to command from config
@@ -1903,33 +1919,35 @@ async fn handle_gesture_event(ctx: &mut EventLoopCtx<'_>, gesture_event: Gesture
         GestureEvent::ScrollDown => &gesture_config.scroll_down,
     };
 
-    if let Some(cmd) = config::parse_command(cmd_str) {
-        debug!("Gesture {:?} triggered, executing {:?}", gesture_event, cmd);
-        if let Some(mode) = shutdown_mode_for_command(&cmd) {
-            warn!(
-                "Gesture {:?} requested {}; running shutdown cleanup",
-                gesture_event,
-                mode.label()
-            );
-            run_shutdown_cleanup(ctx.state, mode).await;
-            return true;
-        }
-        {
-            let mut state = ctx.state.lock().await;
-            let response = state.handle_command(cmd);
-            if let IpcResponse::Error { message } = response {
-                warn!("Gesture command failed: {}", message);
+    match classify_gesture_command(cmd_str) {
+        GestureCommand::NoAction => {}
+        GestureCommand::Known(cmd) => {
+            debug!("Gesture {:?} triggered, executing {:?}", gesture_event, cmd);
+            if let Some(mode) = shutdown_mode_for_command(&cmd) {
+                warn!(
+                    "Gesture {:?} requested {}; running shutdown cleanup",
+                    gesture_event,
+                    mode.label()
+                );
+                run_shutdown_cleanup(ctx.state, mode).await;
+                return true;
             }
-            if state.is_animating() && !*ctx.animation_active {
-                state.tick_animations(0);
-                if let Ok(true) = state.send_animation_frame(ctx.animation_worker) {
-                    *ctx.animation_active = true;
-                    *ctx.last_frame_instant = Some(std::time::Instant::now());
+            {
+                let mut state = ctx.state.lock().await;
+                let response = state.handle_command(cmd);
+                if let IpcResponse::Error { message } = response {
+                    warn!("Gesture command failed: {}", message);
+                }
+                if state.is_animating() && !*ctx.animation_active {
+                    state.tick_animations(0);
+                    if let Ok(true) = state.send_animation_frame(ctx.animation_worker) {
+                        *ctx.animation_active = true;
+                        *ctx.last_frame_instant = Some(std::time::Instant::now());
+                    }
                 }
             }
         }
-    } else {
-        warn!("Unknown command for gesture: {}", cmd_str);
+        GestureCommand::Unknown(cmd) => warn!("Unknown command for gesture: {}", cmd),
     }
 
     false

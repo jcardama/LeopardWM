@@ -1146,6 +1146,22 @@ fn test_shutdown_mode_for_command_maps_shutdown_variants() {
 }
 
 #[test]
+fn test_gesture_command_classification_distinguishes_no_action_and_unknown() {
+    assert!(matches!(
+        classify_gesture_command(""),
+        GestureCommand::NoAction
+    ));
+    assert!(matches!(
+        classify_gesture_command("focus_left"),
+        GestureCommand::Known(IpcCommand::FocusLeft)
+    ));
+    assert!(matches!(
+        classify_gesture_command("custom_command"),
+        GestureCommand::Unknown("custom_command")
+    ));
+}
+
+#[test]
 fn test_session_end_restore_orders_recovery_before_shutdown() {
     let (event_tx, mut event_rx) = mpsc::channel(1);
     let apply_worker_cancelled = std::sync::atomic::AtomicBool::new(false);

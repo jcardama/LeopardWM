@@ -1495,18 +1495,21 @@ function cbVal(id) {
   var el = document.getElementById(id);
   return el ? (el.dataset.value || '') : '';
 }
-function setCb(id, value) {
+function setCb(id, value, showUnknown) {
   var cb = document.getElementById(id);
   if (!cb) return;
   cb.dataset.value = value;
+  var matched = false;
   var opts = cb.querySelectorAll('.combobox-option');
   opts.forEach(function(o) {
     o.classList.remove('selected');
     if (o.dataset.value === value) {
+      matched = true;
       o.classList.add('selected');
       cb.querySelector('.combobox-text').textContent = o.textContent;
     }
   });
+  if (!matched && showUnknown) cb.querySelector('.combobox-text').textContent = value;
 }
 function hexToInput(hex) { return '#' + (hex || '000000').toLowerCase(); }
 function inputToHex(v) { return v.replace('#', '').toUpperCase(); }
@@ -1576,12 +1579,12 @@ function init(cfg) {
   if (cfg.window_rules) { cfg.window_rules.forEach(function(r) { addRuleRow(r); }); }
 
   setChecked('gestures-enabled', cfg.gestures.enabled);
-  setCb('cb-gestures-swipe_left', cfg.gestures.swipe_left);
-  setCb('cb-gestures-swipe_right', cfg.gestures.swipe_right);
-  setCb('cb-gestures-swipe_up', cfg.gestures.swipe_up);
-  setCb('cb-gestures-swipe_down', cfg.gestures.swipe_down);
-  setCb('cb-gestures-scroll_up', cfg.gestures.scroll_up);
-  setCb('cb-gestures-scroll_down', cfg.gestures.scroll_down);
+  setCb('cb-gestures-swipe_left', cfg.gestures.swipe_left, true);
+  setCb('cb-gestures-swipe_right', cfg.gestures.swipe_right, true);
+  setCb('cb-gestures-swipe_up', cfg.gestures.swipe_up, true);
+  setCb('cb-gestures-swipe_down', cfg.gestures.swipe_down, true);
+  setCb('cb-gestures-scroll_up', cfg.gestures.scroll_up, true);
+  setCb('cb-gestures-scroll_down', cfg.gestures.scroll_down, true);
   updateScrollLabels();
 
   setChecked('snaphints-enabled', cfg.snap_hints.enabled);
@@ -1658,10 +1661,12 @@ function initGestureCombo(id) {
   if (!cb) return;
   var chevron = '<svg class="combobox-chevron" viewBox="0 0 12 12"><path d="M2.15 4.65a.5.5 0 01.7 0L6 7.79l3.15-3.14a.5.5 0 11.7.7l-3.5 3.5a.5.5 0 01-.7 0l-3.5-3.5a.5.5 0 010-.7z"/></svg>';
   var current = cb.dataset.value || '';
-  var options = CMD_ORDER.map(function(cmd) {
-    return '<div class="combobox-option' + (cmd === current ? ' selected' : '') + '" data-value="' + cmd + '">' + cmdLabel(cmd) + '</div>';
-  }).join('');
-  cb.innerHTML = '<button class="combobox-trigger" type="button"><span class="combobox-text">' + cmdLabel(current) + '</span>' + chevron + '</button>' +
+  var options = '<div class="combobox-option' + (current === '' ? ' selected' : '') + '" data-value="">No action</div>' +
+    CMD_ORDER.map(function(cmd) {
+      return '<div class="combobox-option' + (cmd === current ? ' selected' : '') + '" data-value="' + cmd + '">' + cmdLabel(cmd) + '</div>';
+    }).join('');
+  var currentLabel = current === '' ? 'No action' : cmdLabel(current);
+  cb.innerHTML = '<button class="combobox-trigger" type="button"><span class="combobox-text">' + currentLabel + '</span>' + chevron + '</button>' +
     '<div class="combobox-popup">' + options + '</div>';
   initCombobox(cb);
 }
@@ -2347,5 +2352,24 @@ mod tests {
             "var key = disabledSet.indexOf(cmd) !== -1 ? '' : (cmdToKey[cmd] || defaultKeyForCmd(cmd));"
         ));
         assert!(SETTINGS_HTML.contains("if (!k && c && defaultKeyForCmd(c)) d.push(c);"));
+    }
+
+    #[test]
+    fn gesture_combos_offer_and_preserve_no_action_and_custom_commands() {
+        let no_action = "var options = '<div class=\"combobox-option' + (current === '' ? ' selected' : '') + '\" data-value=\"\">No action</div>' +";
+        let catalog_options = "CMD_ORDER.map(function(cmd) {";
+        assert!(
+            SETTINGS_HTML.find(no_action).unwrap() < SETTINGS_HTML.find(catalog_options).unwrap()
+        );
+        assert!(SETTINGS_HTML
+            .contains("var currentLabel = current === '' ? 'No action' : cmdLabel(current);"));
+        assert!(SETTINGS_HTML.contains(
+            "if (!matched && showUnknown) cb.querySelector('.combobox-text').textContent = value;"
+        ));
+        assert!(SETTINGS_HTML
+            .contains("setCb('cb-gestures-swipe_left', cfg.gestures.swipe_left, true);"));
+        assert!(SETTINGS_HTML.contains("return el ? (el.dataset.value || '') : '';"));
+        assert!(SETTINGS_HTML.contains("swipe_left: cbVal('cb-gestures-swipe_left')"));
+        assert!(SETTINGS_HTML.contains("scroll_down: cbVal('cb-gestures-scroll_down')"));
     }
 }

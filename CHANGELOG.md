@@ -9,6 +9,9 @@ All notable changes to LeopardWM will be documented in this file.
 - **Disabled hotkeys survive unrelated Settings saves.** A disabled action now
   takes precedence over an obsolete matching binding when Settings loads, so
   manual `hotkeys.disabled` entries and cleared rows are not erased on save.
+- **Individual gestures can be set to No action in Settings.** Existing empty
+  gesture commands now display and remain disabled, while unknown custom values
+  display their raw command and survive unrelated Settings saves.
 - **Focus borders no longer linger after their window closes or hides.**
 - **Application-owned fullscreen windows keep their fullscreen bounds.** Managed
   non-maximized windows that match a monitor's full bounds are temporarily
