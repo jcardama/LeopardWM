@@ -8,6 +8,7 @@ use tracing::{debug, info};
 pub(crate) struct DepartingFocusDecision {
     pub recover: bool,
     pub suppress_landing_resync: bool,
+    pub replacement_hwnd: Option<u64>,
 }
 
 pub(crate) fn departing_focus_decision(
@@ -16,13 +17,14 @@ pub(crate) fn departing_focus_decision(
     foreground: Option<u64>,
     foreground_is_valid: bool,
 ) -> DepartingFocusDecision {
-    let suppress_landing_resync = matches!(
-        foreground,
-        Some(id) if id != 0 && id != departing_hwnd && foreground_is_valid
-    );
+    let replacement_hwnd = match foreground {
+        Some(id) if id != 0 && id != departing_hwnd && foreground_is_valid => Some(id),
+        _ => None,
+    };
     DepartingFocusDecision {
-        recover: was_tracked_focus && !suppress_landing_resync,
-        suppress_landing_resync,
+        recover: was_tracked_focus && replacement_hwnd.is_none(),
+        suppress_landing_resync: replacement_hwnd.is_some(),
+        replacement_hwnd,
     }
 }
 
@@ -87,6 +89,13 @@ impl AppState {
     /// During an active tiled drag, the border is hidden so it doesn't follow
     /// the OS-dragged window — the ghost overlay provides visual feedback instead.
     pub(crate) fn show_border(&self, hwnd: u64) {
+        #[cfg(test)]
+        {
+            self.border_show_count
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.last_border_show_hwnd
+                .store(hwnd, std::sync::atomic::Ordering::Relaxed);
+        }
         if let Some(ref frame) = self.border_frame {
             // No border while paused or in fullscreen.
             if self.paused
@@ -262,6 +271,28 @@ impl AppState {
         if let Some(ref frame) = self.border_frame {
             frame.hide();
         }
+    }
+
+    pub(crate) fn reconcile_border_without_stealing_focus(&self) {
+        self.reconcile_border_without_stealing_focus_for(None);
+    }
+
+    pub(crate) fn reconcile_border_without_stealing_focus_for(&self, replacement: Option<u64>) {
+        if let Some(hwnd) = replacement {
+            if self.find_window_workspace(hwnd).is_some() {
+                self.show_border(hwnd);
+                return;
+            }
+            self.hide_border();
+            return;
+        }
+        if let Some(hwnd) = self.previous_focused_hwnd {
+            if self.find_window_workspace(hwnd).is_some() {
+                self.show_border(hwnd);
+                return;
+            }
+        }
+        self.hide_border();
     }
 
     /// Hide every tab strip overlay if installed. Used by paths that

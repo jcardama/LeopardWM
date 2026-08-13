@@ -555,14 +555,30 @@ impl AppState {
     fn handle_refresh(&mut self) -> IpcResponse {
         match self.enumerate_and_add_windows() {
             Ok(added) => {
-                self.prune_stale_windows();
+                let prune = self.prune_stale_windows();
                 info!("Refreshed: added {} new windows across all monitors", added);
-                if let Err(e) = self.apply_layout() {
-                    return IpcResponse::error(format!("Failed to apply layout: {}", e));
-                }
-                IpcResponse::Ok
+                self.complete_refresh_layout(prune)
             }
             Err(e) => IpcResponse::error(format!("Failed to enumerate windows: {}", e)),
+        }
+    }
+
+    pub(crate) fn complete_refresh_layout(
+        &mut self,
+        prune: crate::helpers::StalePruneLayout,
+    ) -> IpcResponse {
+        match prune {
+            crate::helpers::StalePruneLayout::Applied => IpcResponse::Ok,
+            crate::helpers::StalePruneLayout::Unchanged => {
+                if let Err(e) = self.apply_layout() {
+                    IpcResponse::error(format!("Failed to apply layout: {}", e))
+                } else {
+                    IpcResponse::Ok
+                }
+            }
+            crate::helpers::StalePruneLayout::Failed(e) => {
+                IpcResponse::error(format!("Failed to apply layout: {}", e))
+            }
         }
     }
 

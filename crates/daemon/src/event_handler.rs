@@ -41,6 +41,21 @@ pub(crate) fn defer_snapback_while_settling(
     settling && recently_maximized
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct MoveSizeCancelResult {
+    pub cancelled_resize: bool,
+    pub cancelled_drag: bool,
+    pub removed_placeholder: bool,
+    pub removed_from_source: bool,
+    pub drag_source: Option<(leopardwm_platform_win32::MonitorId, usize)>,
+}
+
+impl MoveSizeCancelResult {
+    pub(crate) fn needs_layout(self) -> bool {
+        self.removed_placeholder || self.removed_from_source
+    }
+}
+
 /// Whether to keep the fullscreen window focused instead of following a focus
 /// event to `focused_hwnd`. Returns the fullscreen window to re-assert, or
 /// `None` to let the focus change proceed. A non-user-initiated focus to a
@@ -898,9 +913,14 @@ impl AppState {
         // EVENT_OBJECT_HIDE on their main window during internal
         // state changes (notification badges, focus between panes).
         // If the HWND is still valid and visible, ignore the event.
+        let is_managed = self.find_window_workspace(hwnd).is_some()
+            || self
+                .drag_state
+                .as_ref()
+                .is_some_and(|drag| drag.hwnd == hwnd && drag.is_tiled);
         if should_ignore_hidden_still_visible(
             is_hidden_event,
-            self.find_window_workspace(hwnd).is_some(),
+            is_managed,
             self.is_hidden_event_still_visible(hwnd),
         ) {
             debug!(
@@ -910,6 +930,12 @@ impl AppState {
             return;
         }
 
+        let matching_drag = self.drag_state.as_ref().filter(|d| d.hwnd == hwnd);
+        let drag_source = matching_drag.map(|d| (d.source_monitor, d.source_workspace_idx));
+        let layout_home = self.find_window_workspace(hwnd).or(drag_source);
+        let snapshot = layout_home.map(|_| self.snapshot_layout());
+
+        let cancel = self.cancel_matching_unfinished_move_size_ui(hwnd);
         self.release_departing_hwnd_ghost(hwnd);
 
         // Drop the recorded layout rect so the map doesn't retain
@@ -952,7 +978,7 @@ impl AppState {
         self.recently_hidden_hwnds
             .retain(|_, t| t.elapsed() < RECENTLY_HIDDEN_TTL);
 
-        // Clear stale focus reference
+        // Clear stale focus reference before sampling replacement evidence.
         let was_tracked_focus = self.previous_focused_hwnd == Some(hwnd);
         if was_tracked_focus {
             self.hide_border();
@@ -962,12 +988,9 @@ impl AppState {
         }
         let decision = self.departing_focus_decision_for(hwnd, was_tracked_focus);
 
-        // Find which workspace contains this window
+        let mut was_tiled = false;
         if let Some((monitor_id, ws_idx)) = self.find_window_workspace(hwnd) {
             let viewport_width = self.viewport_width_for(monitor_id);
-
-            let snapshot = self.snapshot_layout();
-            let mut was_tiled = false;
             // Remember the column width before removal so a hidden-then-reshown
             // window (e.g. a virtual-desktop tool that hides/shows on switch)
             // re-tiles at its prior width instead of the default.
@@ -1011,23 +1034,45 @@ impl AppState {
                 .retain(|_, (t, _)| t.elapsed() < RECENTLY_HIDDEN_TTL);
             // Restore WS_MAXIMIZEBOX (no-op if not tracked)
             self.restore_snap_for_window(hwnd);
+        } else if cancel.removed_from_source {
+            if let Some((monitor_id, ws_idx)) = drag_source {
+                let viewport_width = self.viewport_width_for(monitor_id);
+                if let Some(workspace) = self
+                    .workspaces
+                    .get_mut(&monitor_id)
+                    .and_then(|v| v.get_mut(ws_idx))
+                {
+                    workspace.ensure_focused_visible_animated(viewport_width);
+                }
+            }
+        }
 
-            if was_tiled {
+        if let Some(snapshot) = snapshot {
+            if was_tiled || cancel.needs_layout() {
                 let mut snapshot = snapshot;
                 snapshot.remove(&hwnd);
+                snapshot.remove(&crate::state::DRAG_PLACEHOLDER_HWND);
                 if self.start_layout_transition(snapshot) && decision.suppress_landing_resync {
                     if let Some(ref mut transition) = self.layout_transition {
                         transition.suppress_landing_focus_resync = true;
                     }
                 }
-            }
-            if let Err(e) = self.apply_layout() {
-                warn!("Failed to apply layout after window {}: {}", event_name, e);
+                if let Err(e) = self.apply_layout() {
+                    warn!("Failed to apply layout after window {}: {}", event_name, e);
+                }
             }
         }
 
         if decision.recover {
             self.sync_foreground_window();
+        } else if was_tracked_focus {
+            if let Some(replacement) = decision.replacement_hwnd {
+                if !self.adopt_managed_replacement_without_stealing_focus(replacement) {
+                    self.reconcile_border_without_stealing_focus_for(Some(replacement));
+                }
+            }
+        } else {
+            self.reconcile_border_without_stealing_focus_for(decision.replacement_hwnd);
         }
     }
 
@@ -1049,6 +1094,7 @@ impl AppState {
             return crate::ui_sync::DepartingFocusDecision {
                 recover: false,
                 suppress_landing_resync: false,
+                replacement_hwnd: None,
             };
         };
         crate::ui_sync::departing_focus_decision(
@@ -1208,6 +1254,176 @@ impl AppState {
         true
     }
 
+    fn follow_workspace_without_stealing_focus(
+        &mut self,
+        monitor_id: leopardwm_platform_win32::MonitorId,
+        ws_idx: usize,
+    ) {
+        self.focused_monitor = monitor_id;
+
+        // Auto-switch workspace if the focused window is on an inactive workspace
+        // (e.g., user Alt+Tabbed to it)
+        let active_idx = self.active_workspace_idx(monitor_id);
+        if ws_idx == active_idx {
+            return;
+        }
+        info!(
+            "Auto-switching to workspace {} on monitor {} (focus follows window)",
+            ws_idx + 1,
+            monitor_id
+        );
+
+        // Clean up any in-progress drag: reinsert window if it was
+        // removed from source during live preview, then remove placeholders.
+        // Only reinsert if the window still exists (it may have been closed).
+        if let Some(drag) = self.drag_state.take() {
+            if drag.removed_from_source
+                && drag.is_tiled
+                && leopardwm_platform_win32::is_valid_window(drag.hwnd)
+            {
+                if let Some(ws) = self
+                    .workspaces
+                    .get_mut(&drag.source_monitor)
+                    .and_then(|v| v.get_mut(drag.source_workspace_idx))
+                {
+                    let _ = ws.insert_window(drag.hwnd, None);
+                }
+            }
+            for ws_vec in self.workspaces.values_mut() {
+                for ws in ws_vec.iter_mut() {
+                    let _ = ws.remove_window(crate::state::DRAG_PLACEHOLDER_HWND);
+                }
+            }
+        }
+        self.pending_drag_hint = Some(crate::state::DragHintAction::Hide);
+        // Move exit windows offscreen before clearing the transition
+        if let Some(ref transition) = self.layout_transition {
+            for wid in transition.exit_rects.keys() {
+                if !self.is_application_fullscreen(*wid) {
+                    let _ = leopardwm_platform_win32::move_window_offscreen(*wid);
+                }
+            }
+        }
+        self.abort_active_ghost_transition();
+        self.abort_layout_transition();
+
+        let slide_height = self
+            .monitors
+            .get(&monitor_id)
+            .map(|m| m.work_area.height)
+            .unwrap_or(crate::state::FALLBACK_WORK_AREA_HEIGHT);
+        let y_offset = if ws_idx > active_idx {
+            slide_height
+        } else {
+            -slide_height
+        };
+
+        let viewport = self.layout_viewport(monitor_id);
+
+        // Snapshot old workspace positions for exit animation.
+        let mut old_placements: Vec<(u64, leopardwm_core_layout::Rect)> = self
+            .workspaces
+            .get(&monitor_id)
+            .and_then(|v| v.get(active_idx))
+            .map(|ws| {
+                ws.compute_placements_animated(viewport)
+                    .into_iter()
+                    .map(|p| (p.window_id, p.rect))
+                    .collect()
+            })
+            .unwrap_or_default();
+        old_placements.retain(|(wid, _)| !self.is_application_fullscreen(*wid));
+
+        self.active_workspace.insert(monitor_id, ws_idx);
+
+        // Compute new workspace's final placements for enter animation.
+        let mut new_placements: Vec<(u64, leopardwm_core_layout::Rect)> = self
+            .workspaces
+            .get(&monitor_id)
+            .and_then(|v| v.get(ws_idx))
+            .map(|ws| {
+                ws.compute_placements_animated(viewport)
+                    .into_iter()
+                    .map(|p| (p.window_id, p.rect))
+                    .collect()
+            })
+            .unwrap_or_default();
+        new_placements.retain(|(wid, _)| !self.is_application_fullscreen(*wid));
+
+        let mut start_rects = std::collections::HashMap::new();
+        let mut exit_rects = std::collections::HashMap::new();
+
+        for (wid, rect) in &new_placements {
+            start_rects.insert(
+                *wid,
+                leopardwm_core_layout::Rect::new(
+                    rect.x,
+                    rect.y + y_offset,
+                    rect.width,
+                    rect.height,
+                ),
+            );
+        }
+        for (wid, rect) in &old_placements {
+            start_rects.insert(*wid, *rect);
+            exit_rects.insert(
+                *wid,
+                leopardwm_core_layout::Rect::new(
+                    rect.x,
+                    rect.y - y_offset,
+                    rect.width,
+                    rect.height,
+                ),
+            );
+        }
+
+        // As in handle_switch_workspace: animate only when motion isn't
+        // reduced, otherwise hide the leaving windows immediately so they
+        // don't linger as ghosts (reduce_motion skips the transition that
+        // would otherwise move them off-screen).
+        let animating = !start_rects.is_empty() && !self.reduce_motion;
+        if animating {
+            let duration = self.config.animation.workspace_switch_duration_ms;
+            self.start_workspace_switch_transition(start_rects, exit_rects, duration);
+        } else {
+            for (wid, _) in &old_placements {
+                if !self.is_application_fullscreen(*wid) {
+                    let _ = leopardwm_platform_win32::move_window_offscreen(*wid);
+                }
+            }
+        }
+    }
+
+    fn adopt_managed_replacement_without_stealing_focus(&mut self, hwnd: u64) -> bool {
+        let Some((monitor_id, ws_idx)) = self.find_window_workspace(hwnd) else {
+            return false;
+        };
+        self.follow_workspace_without_stealing_focus(monitor_id, ws_idx);
+        if let Some(ref mut transition) = self.layout_transition {
+            transition.suppress_landing_focus_resync = true;
+        }
+        let viewport_width = self.viewport_width_for(monitor_id);
+        if let Some(workspace) = self
+            .workspaces
+            .get_mut(&monitor_id)
+            .and_then(|v| v.get_mut(ws_idx))
+        {
+            if let Err(e) = workspace.focus_window(hwnd) {
+                debug!("Failed to focus replacement window {}: {}", hwnd, e);
+            } else {
+                workspace.ensure_focused_visible_animated(viewport_width);
+            }
+        }
+        if let Err(e) = self.apply_layout() {
+            warn!("Failed to apply layout after replacement adoption: {}", e);
+        }
+        self.previous_focused_hwnd = Some(hwnd);
+        self.last_focus_change_at = Some(std::time::Instant::now());
+        self.show_border(hwnd);
+        self.broadcast_focused_window_if_changed(monitor_id as i64, Some(hwnd));
+        true
+    }
+
     fn on_window_focused(&mut self, hwnd: u64) {
         // Skip if this window is already our tracked focus — avoids
         // feedback loops where sync_foreground_window triggers another
@@ -1276,15 +1492,25 @@ impl AppState {
         {
             self.last_prune_at = Some(now);
             let pre_count = self.all_managed_window_ids().len();
-            self.prune_stale_windows();
+            let prune = self.prune_stale_windows();
             let pruned = pre_count - self.all_managed_window_ids().len();
-            if pruned > 0 {
-                if let Err(e) = self.apply_layout() {
+            match prune {
+                crate::helpers::StalePruneLayout::Applied => {}
+                crate::helpers::StalePruneLayout::Failed(e) => {
                     warn!(
                         "Failed to apply layout after pruning {} stale window(s): {}",
                         pruned, e
                     );
                 }
+                crate::helpers::StalePruneLayout::Unchanged if pruned > 0 => {
+                    if let Err(e) = self.apply_layout() {
+                        warn!(
+                            "Failed to apply layout after pruning {} stale window(s): {}",
+                            pruned, e
+                        );
+                    }
+                }
+                crate::helpers::StalePruneLayout::Unchanged => {}
             }
         }
 
@@ -1296,139 +1522,7 @@ impl AppState {
             if self.try_edit_config_pull(hwnd, monitor_id, ws_idx) {
                 return;
             }
-            // Update focused monitor to match the window's monitor
-            self.focused_monitor = monitor_id;
-
-            // Auto-switch workspace if the focused window is on an inactive workspace
-            // (e.g., user Alt+Tabbed to it)
-            let active_idx = self.active_workspace_idx(monitor_id);
-            if ws_idx != active_idx {
-                info!(
-                    "Auto-switching to workspace {} on monitor {} (focus follows window)",
-                    ws_idx + 1,
-                    monitor_id
-                );
-
-                // Clean up any in-progress drag: reinsert window if it was
-                // removed from source during live preview, then remove placeholders.
-                // Only reinsert if the window still exists (it may have been closed).
-                if let Some(drag) = self.drag_state.take() {
-                    if drag.removed_from_source
-                        && drag.is_tiled
-                        && leopardwm_platform_win32::is_valid_window(drag.hwnd)
-                    {
-                        if let Some(ws) = self
-                            .workspaces
-                            .get_mut(&drag.source_monitor)
-                            .and_then(|v| v.get_mut(drag.source_workspace_idx))
-                        {
-                            let _ = ws.insert_window(drag.hwnd, None);
-                        }
-                    }
-                    for ws_vec in self.workspaces.values_mut() {
-                        for ws in ws_vec.iter_mut() {
-                            let _ = ws.remove_window(crate::state::DRAG_PLACEHOLDER_HWND);
-                        }
-                    }
-                }
-                self.pending_drag_hint = Some(crate::state::DragHintAction::Hide);
-                // Move exit windows offscreen before clearing the transition
-                if let Some(ref transition) = self.layout_transition {
-                    for wid in transition.exit_rects.keys() {
-                        if !self.is_application_fullscreen(*wid) {
-                            let _ = leopardwm_platform_win32::move_window_offscreen(*wid);
-                        }
-                    }
-                }
-                self.abort_active_ghost_transition();
-                self.abort_layout_transition();
-
-                let slide_height = self
-                    .monitors
-                    .get(&monitor_id)
-                    .map(|m| m.work_area.height)
-                    .unwrap_or(crate::state::FALLBACK_WORK_AREA_HEIGHT);
-                let y_offset = if ws_idx > active_idx {
-                    slide_height
-                } else {
-                    -slide_height
-                };
-
-                let viewport = self.layout_viewport(monitor_id);
-
-                // Snapshot old workspace positions for exit animation.
-                let mut old_placements: Vec<(u64, leopardwm_core_layout::Rect)> = self
-                    .workspaces
-                    .get(&monitor_id)
-                    .and_then(|v| v.get(active_idx))
-                    .map(|ws| {
-                        ws.compute_placements_animated(viewport)
-                            .into_iter()
-                            .map(|p| (p.window_id, p.rect))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                old_placements.retain(|(wid, _)| !self.is_application_fullscreen(*wid));
-
-                self.active_workspace.insert(monitor_id, ws_idx);
-
-                // Compute new workspace's final placements for enter animation.
-                let mut new_placements: Vec<(u64, leopardwm_core_layout::Rect)> = self
-                    .workspaces
-                    .get(&monitor_id)
-                    .and_then(|v| v.get(ws_idx))
-                    .map(|ws| {
-                        ws.compute_placements_animated(viewport)
-                            .into_iter()
-                            .map(|p| (p.window_id, p.rect))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                new_placements.retain(|(wid, _)| !self.is_application_fullscreen(*wid));
-
-                let mut start_rects = std::collections::HashMap::new();
-                let mut exit_rects = std::collections::HashMap::new();
-
-                for (wid, rect) in &new_placements {
-                    start_rects.insert(
-                        *wid,
-                        leopardwm_core_layout::Rect::new(
-                            rect.x,
-                            rect.y + y_offset,
-                            rect.width,
-                            rect.height,
-                        ),
-                    );
-                }
-                for (wid, rect) in &old_placements {
-                    start_rects.insert(*wid, *rect);
-                    exit_rects.insert(
-                        *wid,
-                        leopardwm_core_layout::Rect::new(
-                            rect.x,
-                            rect.y - y_offset,
-                            rect.width,
-                            rect.height,
-                        ),
-                    );
-                }
-
-                // As in handle_switch_workspace: animate only when motion isn't
-                // reduced, otherwise hide the leaving windows immediately so they
-                // don't linger as ghosts (reduce_motion skips the transition that
-                // would otherwise move them off-screen).
-                let animating = !start_rects.is_empty() && !self.reduce_motion;
-                if animating {
-                    let duration = self.config.animation.workspace_switch_duration_ms;
-                    self.start_workspace_switch_transition(start_rects, exit_rects, duration);
-                } else {
-                    for (wid, _) in &old_placements {
-                        if !self.is_application_fullscreen(*wid) {
-                            let _ = leopardwm_platform_win32::move_window_offscreen(*wid);
-                        }
-                    }
-                }
-            }
+            self.follow_workspace_without_stealing_focus(monitor_id, ws_idx);
 
             let viewport_width = self.viewport_width_for(monitor_id);
 
@@ -1766,6 +1860,87 @@ impl AppState {
         }
     }
 
+    pub(crate) fn cancel_matching_unfinished_move_size_ui(
+        &mut self,
+        hwnd: u64,
+    ) -> MoveSizeCancelResult {
+        let cancelled_resize = self.cancel_matching_unfinished_resize(hwnd);
+        let (cancelled_drag, removed_placeholder, removed_from_source, drag_source) =
+            self.cancel_matching_unfinished_drag(hwnd);
+        if cancelled_resize || cancelled_drag {
+            self.hide_move_size_hint_if_unowned(hwnd);
+        }
+        MoveSizeCancelResult {
+            cancelled_resize,
+            cancelled_drag,
+            removed_placeholder,
+            removed_from_source,
+            drag_source,
+        }
+    }
+
+    fn hide_move_size_hint_if_unowned(&mut self, hwnd: u64) {
+        let peer_drag = self.drag_state.as_ref().is_some_and(|d| d.hwnd != hwnd);
+        let peer_resize = self.resize_hwnd.is_some_and(|id| id != hwnd);
+        if !peer_drag && !peer_resize {
+            self.pending_drag_hint = Some(crate::state::DragHintAction::Hide);
+        }
+    }
+
+    fn cancel_matching_unfinished_resize(&mut self, hwnd: u64) -> bool {
+        if self.resize_hwnd != Some(hwnd) {
+            return false;
+        }
+        self.resize_hwnd = None;
+        self.clear_resize_preview_state();
+        true
+    }
+
+    fn teardown_resize_preview_ui(&mut self) {
+        self.pending_drag_hint = Some(crate::state::DragHintAction::Hide);
+        self.clear_resize_preview_state();
+    }
+
+    fn clear_resize_preview_state(&mut self) {
+        self.resize_preview_cancel
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.resize_preview_target = None;
+        self.resize_preview_display_rect = None;
+        self.pending_resize_animation = None;
+        self.last_resize_hint_update = None;
+    }
+
+    fn cancel_matching_unfinished_drag(
+        &mut self,
+        hwnd: u64,
+    ) -> (
+        bool,
+        bool,
+        bool,
+        Option<(leopardwm_platform_win32::MonitorId, usize)>,
+    ) {
+        let Some(drag) = self.drag_state.as_ref() else {
+            return (false, false, false, None);
+        };
+        if drag.hwnd != hwnd {
+            return (false, false, false, None);
+        }
+        let drag_hwnd = drag.hwnd;
+        let removed_from_source = drag.removed_from_source;
+        let drag_source = Some((drag.source_monitor, drag.source_workspace_idx));
+        self.drag_state = None;
+        let removed_placeholder = self.clear_drag_placeholder();
+        if leopardwm_platform_win32::is_valid_window(drag_hwnd) {
+            leopardwm_platform_win32::set_dwm_transitions_disabled(drag_hwnd, false);
+        }
+        (
+            true,
+            removed_placeholder,
+            removed_from_source,
+            drag_source,
+        )
+    }
+
     /// Handle the start of a user drag or resize.
     fn on_move_size_start(&mut self, hwnd: u64) {
         debug!("User started dragging/resizing window {}", hwnd);
@@ -1841,7 +2016,8 @@ impl AppState {
         self.last_placed_layout_rects.remove(&hwnd);
 
         // Handle resize completion (border drag) — snap to nearest preset.
-        if self.resize_hwnd.take() == Some(hwnd) {
+        if self.resize_hwnd == Some(hwnd) {
+            self.resize_hwnd = None;
             self.handle_resize_complete(hwnd);
             // Re-enable DWM transitions before returning (paired
             // with MoveSizeStart's disable). Each early-return path
@@ -2498,14 +2674,10 @@ impl AppState {
     /// Handle resize completion: snap the resized window's column width and height
     /// to the nearest presets, then re-apply layout.
     fn handle_resize_complete(&mut self, hwnd: u64) {
-        // Hide the resize preview overlay and clear all preview state.
-        self.pending_drag_hint = Some(crate::state::DragHintAction::Hide);
-        self.resize_preview_cancel
-            .store(true, std::sync::atomic::Ordering::Relaxed);
-        self.resize_preview_target = None;
-        self.resize_preview_display_rect = None;
-        self.pending_resize_animation = None;
-        self.last_resize_hint_update = None;
+        #[cfg(test)]
+        self.resize_complete_count
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.teardown_resize_preview_ui();
         let Some((monitor_id, ws_idx)) = self.find_window_workspace(hwnd) else {
             let _ = self.apply_layout();
             return;

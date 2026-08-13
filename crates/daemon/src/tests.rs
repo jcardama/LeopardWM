@@ -1198,6 +1198,649 @@ fn test_hidden_still_visible_skips_departure_cleanup() {
     assert!(state.window_managed_at.contains_key(&100));
 }
 
+fn seed_resize_session(state: &mut AppState, hwnd: u64) {
+    state.resize_hwnd = Some(hwnd);
+    state.resize_preview_target = Some(Rect::new(0, 0, 800, 600));
+    state.resize_preview_display_rect = Some(Rect::new(0, 0, 800, 600));
+    state.pending_resize_animation = Some(ResizeAnimationRequest {
+        start_rect: Rect::new(0, 0, 800, 600),
+        target_rect: Rect::new(0, 0, 960, 600),
+    });
+    state.last_resize_hint_update = Some(std::time::Instant::now());
+    state.pending_drag_hint = Some(DragHintAction::ShowGhost {
+        rect: Rect::new(0, 0, 800, 600),
+    });
+    state
+        .resize_preview_cancel
+        .store(false, Ordering::Relaxed);
+}
+
+fn drag_hint_rect() -> Rect {
+    Rect::new(100, 0, 400, 600)
+}
+
+fn pending_show_ghost_rect(state: &AppState) -> Option<Rect> {
+    match state.pending_drag_hint {
+        Some(DragHintAction::ShowGhost { rect }) => Some(rect),
+        _ => None,
+    }
+}
+
+fn seed_drag_session(state: &mut AppState, hwnd: u64) {
+    let (monitor, ws_idx) = state
+        .find_window_workspace(hwnd)
+        .unwrap_or((state.focused_monitor, 0));
+    state.drag_state = Some(DragState {
+        hwnd,
+        is_tiled: true,
+        source_monitor: monitor,
+        source_workspace_idx: ws_idx,
+        current_column_index: 0,
+        last_drop_target: None,
+        last_hint_update: None,
+        removed_from_source: false,
+    });
+    if let Some(ws) = state
+        .workspaces
+        .get_mut(&monitor)
+        .and_then(|v| v.get_mut(ws_idx))
+    {
+        let _ = ws.insert_window(DRAG_PLACEHOLDER_HWND, Some(800));
+    }
+    state.pending_drag_hint = Some(DragHintAction::ShowGhost {
+        rect: drag_hint_rect(),
+    });
+}
+
+fn seed_removed_from_source_drag(state: &mut AppState, hwnd: u64) {
+    seed_drag_session(state, hwnd);
+    if let Some((monitor, ws_idx)) = state.find_window_workspace(hwnd) {
+        if let Some(ws) = state
+            .workspaces
+            .get_mut(&monitor)
+            .and_then(|v| v.get_mut(ws_idx))
+        {
+            let _ = ws.remove_window(hwnd);
+        }
+    }
+    if let Some(drag) = state.drag_state.as_mut() {
+        drag.removed_from_source = true;
+    }
+}
+
+fn assert_resize_session_cleared(state: &AppState) {
+    assert_eq!(state.resize_hwnd, None);
+    assert_eq!(state.resize_preview_target, None);
+    assert_eq!(state.resize_preview_display_rect, None);
+    assert!(state.pending_resize_animation.is_none());
+    assert!(state.last_resize_hint_update.is_none());
+    assert!(state.resize_preview_cancel.load(Ordering::Relaxed));
+    assert!(matches!(state.pending_drag_hint, Some(DragHintAction::Hide)));
+}
+
+fn two_managed_windows() -> AppState {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    for hwnd in [100, 200] {
+        state
+            .injected_window_info
+            .insert(hwnd, make_test_window_info(hwnd));
+        state.handle_window_event(WindowEvent::Created(hwnd));
+    }
+    state
+}
+
+#[test]
+fn test_matching_resize_departure_cancels_preview_without_completing() {
+    for event in [WindowEvent::Destroyed(100), WindowEvent::Hidden(100)] {
+        let mut state = two_managed_windows();
+        seed_resize_session(&mut state, 100);
+
+        state.handle_window_event(event);
+
+        assert_resize_session_cleared(&state);
+        assert_eq!(state.resize_complete_count.load(Ordering::Relaxed), 0);
+        assert!(!state.focused_workspace().unwrap().contains_window(100));
+        assert!(state.focused_workspace().unwrap().contains_window(200));
+    }
+}
+
+#[test]
+fn test_matching_drag_departure_clears_session_and_placeholder() {
+    for event in [WindowEvent::Destroyed(100), WindowEvent::Hidden(100)] {
+        let mut state = two_managed_windows();
+        seed_drag_session(&mut state, 100);
+        assert!(state
+            .focused_workspace()
+            .unwrap()
+            .contains_window(DRAG_PLACEHOLDER_HWND));
+
+        state.handle_window_event(event);
+
+        assert!(state.drag_state.is_none());
+        assert!(matches!(state.pending_drag_hint, Some(DragHintAction::Hide)));
+        assert!(!state
+            .focused_workspace()
+            .unwrap()
+            .contains_window(DRAG_PLACEHOLDER_HWND));
+        assert!(!state.focused_workspace().unwrap().contains_window(100));
+        assert!(state.focused_workspace().unwrap().contains_window(200));
+    }
+}
+
+#[test]
+fn test_unmatched_peer_resize_and_drag_sessions_survive_departure() {
+    let mut state = two_managed_windows();
+    seed_resize_session(&mut state, 200);
+    state.handle_window_event(WindowEvent::Destroyed(100));
+    assert_eq!(state.resize_hwnd, Some(200));
+    assert!(state.resize_preview_display_rect.is_some());
+    assert!(state.pending_resize_animation.is_some());
+    assert_eq!(state.resize_complete_count.load(Ordering::Relaxed), 0);
+    assert!(state.focused_workspace().unwrap().contains_window(200));
+
+    let mut state = two_managed_windows();
+    seed_drag_session(&mut state, 200);
+    state.handle_window_event(WindowEvent::Hidden(100));
+    assert_eq!(state.drag_state.as_ref().map(|d| d.hwnd), Some(200));
+    assert!(state
+        .focused_workspace()
+        .unwrap()
+        .contains_window(DRAG_PLACEHOLDER_HWND));
+    assert_eq!(pending_show_ghost_rect(&state), Some(drag_hint_rect()));
+}
+
+#[test]
+fn test_visible_hidden_suppression_preserves_resize_and_drag_sessions() {
+    let mut state = two_managed_windows();
+    seed_resize_session(&mut state, 100);
+    seed_drag_session(&mut state, 200);
+    state.injected_visible_hwnds.insert(100);
+
+    state.handle_window_event(WindowEvent::Hidden(100));
+
+    assert_eq!(state.resize_hwnd, Some(100));
+    assert!(state.resize_preview_display_rect.is_some());
+    assert!(state.pending_resize_animation.is_some());
+    assert!(!state.resize_preview_cancel.load(Ordering::Relaxed));
+    assert_eq!(state.drag_state.as_ref().map(|d| d.hwnd), Some(200));
+    assert!(state
+        .focused_workspace()
+        .unwrap()
+        .contains_window(DRAG_PLACEHOLDER_HWND));
+    assert!(state.focused_workspace().unwrap().contains_window(100));
+    assert_eq!(state.resize_complete_count.load(Ordering::Relaxed), 0);
+
+    let mut state = two_managed_windows();
+    seed_removed_from_source_drag(&mut state, 100);
+    state.injected_visible_hwnds.insert(100);
+    let drag = state.drag_state.as_ref().unwrap();
+    let drag_metadata = (
+        drag.hwnd,
+        drag.is_tiled,
+        drag.source_monitor,
+        drag.source_workspace_idx,
+        drag.current_column_index,
+        drag.last_drop_target,
+        drag.last_hint_update,
+        drag.removed_from_source,
+    );
+
+    state.handle_window_event(WindowEvent::Hidden(100));
+
+    let drag = state.drag_state.as_ref().expect("active drag survives");
+    assert_eq!(
+        (
+            drag.hwnd,
+            drag.is_tiled,
+            drag.source_monitor,
+            drag.source_workspace_idx,
+            drag.current_column_index,
+            drag.last_drop_target,
+            drag.last_hint_update,
+            drag.removed_from_source,
+        ),
+        drag_metadata
+    );
+    assert!(state
+        .focused_workspace()
+        .unwrap()
+        .contains_window(DRAG_PLACEHOLDER_HWND));
+    assert_eq!(pending_show_ghost_rect(&state), Some(drag_hint_rect()));
+    assert!(!state.focused_workspace().unwrap().contains_window(100));
+    assert!(state.focused_workspace().unwrap().contains_window(200));
+    assert!(state.window_managed_at.contains_key(&100));
+}
+
+#[test]
+fn test_matching_move_size_end_completes_resize_and_ignores_mismatch() {
+    let mut state = two_managed_windows();
+    seed_resize_session(&mut state, 100);
+    state.handle_window_event(WindowEvent::MoveSizeEnd(200));
+    assert_eq!(state.resize_hwnd, Some(100));
+    assert!(state.pending_resize_animation.is_some());
+    assert_eq!(state.resize_complete_count.load(Ordering::Relaxed), 0);
+
+    state.handle_window_event(WindowEvent::MoveSizeEnd(100));
+    assert_resize_session_cleared(&state);
+    assert_eq!(state.resize_complete_count.load(Ordering::Relaxed), 1);
+    assert!(state.focused_workspace().unwrap().contains_window(100));
+}
+
+#[test]
+fn test_stale_prune_cancels_matching_resize_and_leaves_peer() {
+    let mut state = two_managed_windows();
+    seed_resize_session(&mut state, 100);
+    seed_drag_session(&mut state, 200);
+    let (monitor, ws_idx) = state.find_window_workspace(100).unwrap();
+
+    state.prune_stale_window(monitor, ws_idx, 100);
+
+    assert_eq!(state.resize_hwnd, None);
+    assert!(state.resize_preview_display_rect.is_none());
+    assert!(state.pending_resize_animation.is_none());
+    assert_eq!(state.resize_complete_count.load(Ordering::Relaxed), 0);
+    assert!(!state.focused_workspace().unwrap().contains_window(100));
+    assert_eq!(state.drag_state.as_ref().map(|d| d.hwnd), Some(200));
+    assert!(state
+        .focused_workspace()
+        .unwrap()
+        .contains_window(DRAG_PLACEHOLDER_HWND));
+    assert_eq!(pending_show_ghost_rect(&state), Some(drag_hint_rect()));
+}
+
+#[test]
+fn test_stale_prune_releases_only_target_ghost_and_keeps_peer_barrier() {
+    let mut state = departing_ghost_fixture();
+    state.reduce_motion = true;
+    for hwnd in [100, 200] {
+        state
+            .injected_window_info
+            .insert(hwnd, make_test_window_info(hwnd));
+        state
+            .focused_workspace_mut()
+            .unwrap()
+            .insert_window(hwnd, Some(800))
+            .unwrap();
+    }
+    seed_drag_session(&mut state, 200);
+
+    let applied = state.prune_stale_windows_for_test(&[100]);
+
+    assert!(matches!(applied, crate::helpers::StalePruneLayout::Applied));
+    assert!(!state.focused_workspace().unwrap().contains_window(100));
+    assert!(state.focused_workspace().unwrap().contains_window(200));
+    assert!(!state.ghost_handles.contains_key(&100));
+    assert!(state.ghost_handles.contains_key(&200));
+    assert_eq!(
+        state.crossfade_sources.get(&4).map(|(sources, _)| sources),
+        Some(&std::collections::HashSet::from([100, 200])),
+        "stale prune must retain the same-source barrier until worker ack"
+    );
+    assert_eq!(
+        state.active_crossfade.as_ref().map(|state| state.epoch),
+        Some(4)
+    );
+    let transition = state.layout_transition.as_ref().unwrap();
+    assert!(!transition.ghosted_wids.contains(&100));
+    assert!(transition.ghosted_wids.contains(&200));
+    assert!(!transition.start_rects.contains_key(&100));
+    assert!(transition.start_rects.contains_key(&200));
+    assert_eq!(state.drag_state.as_ref().map(|d| d.hwnd), Some(200));
+    assert_eq!(pending_show_ghost_rect(&state), Some(drag_hint_rect()));
+
+    state.acknowledge_crossfade_target_drop(4, 100);
+    assert_eq!(
+        state.crossfade_sources.get(&4).map(|(sources, _)| sources),
+        Some(&std::collections::HashSet::from([200])),
+        "ack releases only the pruned hwnd; peers remain"
+    );
+    assert_eq!(
+        state.active_crossfade.as_ref().map(|state| state.epoch),
+        Some(4)
+    );
+}
+
+#[test]
+fn test_matching_resize_departure_preserves_peer_drag_hint() {
+    for event in [WindowEvent::Destroyed(100), WindowEvent::Hidden(100)] {
+        let mut state = two_managed_windows();
+        seed_resize_session(&mut state, 100);
+        seed_drag_session(&mut state, 200);
+
+        state.handle_window_event(event);
+
+        assert_eq!(state.resize_hwnd, None);
+        assert!(state.resize_preview_display_rect.is_none());
+        assert!(state.pending_resize_animation.is_none());
+        assert!(state.resize_preview_cancel.load(Ordering::Relaxed));
+        assert_eq!(state.resize_complete_count.load(Ordering::Relaxed), 0);
+        assert_eq!(state.drag_state.as_ref().map(|d| d.hwnd), Some(200));
+        assert!(state
+            .focused_workspace()
+            .unwrap()
+            .contains_window(DRAG_PLACEHOLDER_HWND));
+        assert_eq!(pending_show_ghost_rect(&state), Some(drag_hint_rect()));
+    }
+}
+
+#[test]
+fn test_matching_drag_departure_preserves_peer_resize_preview_and_hint() {
+    for event in [WindowEvent::Destroyed(100), WindowEvent::Hidden(100)] {
+        let mut state = two_managed_windows();
+        seed_drag_session(&mut state, 100);
+        seed_resize_session(&mut state, 200);
+
+        state.handle_window_event(event);
+
+        assert!(state.drag_state.is_none());
+        assert!(!state
+            .focused_workspace()
+            .unwrap()
+            .contains_window(DRAG_PLACEHOLDER_HWND));
+        assert_eq!(state.resize_hwnd, Some(200));
+        assert!(state.resize_preview_display_rect.is_some());
+        assert!(state.pending_resize_animation.is_some());
+        assert!(!state.resize_preview_cancel.load(Ordering::Relaxed));
+        assert_eq!(state.resize_complete_count.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            pending_show_ghost_rect(&state),
+            Some(Rect::new(0, 0, 800, 600))
+        );
+    }
+}
+
+#[test]
+fn test_departure_reconciles_border_to_replacement_without_focus_recovery() {
+    let mut state = two_managed_windows();
+    seed_resize_session(&mut state, 100);
+    state.previous_focused_hwnd = Some(100);
+    state.injected_foreground_hwnd = Some(Some(200));
+    let shows_before = state.border_show_count.load(Ordering::Relaxed);
+
+    state.handle_window_event(WindowEvent::Destroyed(100));
+
+    assert_eq!(state.previous_focused_hwnd, Some(200));
+    assert_eq!(
+        state.focused_workspace().unwrap().focused_window(),
+        Some(200)
+    );
+    assert_eq!(state.focused_monitor, 1);
+    assert_eq!(state.active_workspace_idx(1), 0);
+    assert_resize_session_cleared(&state);
+    assert_eq!(state.resize_complete_count.load(Ordering::Relaxed), 0);
+    assert!(state.border_show_count.load(Ordering::Relaxed) > shows_before);
+    assert_eq!(state.last_border_show_hwnd.load(Ordering::Relaxed), 200);
+    assert_eq!(state.last_broadcast_focused, Some((1, Some(200))));
+}
+
+#[test]
+fn test_departure_hides_border_for_valid_unmanaged_replacement() {
+    let mut state = two_managed_windows();
+    seed_resize_session(&mut state, 100);
+    state.previous_focused_hwnd = Some(100);
+    state.injected_foreground_hwnd = Some(Some(999));
+    let shows_before = state.border_show_count.load(Ordering::Relaxed);
+    let hides_before = state.border_hide_count.load(Ordering::Relaxed);
+    state.last_border_show_hwnd.store(0, Ordering::Relaxed);
+
+    state.handle_window_event(WindowEvent::Destroyed(100));
+
+    assert_eq!(state.previous_focused_hwnd, None);
+    assert_resize_session_cleared(&state);
+    assert_eq!(state.resize_complete_count.load(Ordering::Relaxed), 0);
+    assert!(state.focused_workspace().unwrap().contains_window(200));
+    assert!(state.border_hide_count.load(Ordering::Relaxed) > hides_before);
+    assert_eq!(state.border_show_count.load(Ordering::Relaxed), shows_before);
+    assert_eq!(state.last_border_show_hwnd.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+fn test_unfocused_departure_hides_border_for_unmanaged_replacement() {
+    let mut state = two_managed_windows();
+    state.previous_focused_hwnd = Some(200);
+    state.injected_foreground_hwnd = Some(Some(999));
+    let shows_before = state.border_show_count.load(Ordering::Relaxed);
+    let hides_before = state.border_hide_count.load(Ordering::Relaxed);
+    state.last_border_show_hwnd.store(200, Ordering::Relaxed);
+
+    state.handle_window_event(WindowEvent::Destroyed(100));
+
+    assert_eq!(state.previous_focused_hwnd, Some(200));
+    assert!(state.focused_workspace().unwrap().contains_window(200));
+    assert!(state.border_hide_count.load(Ordering::Relaxed) > hides_before);
+    assert_eq!(state.border_show_count.load(Ordering::Relaxed), shows_before);
+    assert_eq!(state.last_border_show_hwnd.load(Ordering::Relaxed), 200);
+}
+
+#[test]
+fn test_departure_hides_border_when_no_replacement_window() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state
+        .injected_window_info
+        .insert(100, make_test_window_info(100));
+    state.handle_window_event(WindowEvent::Created(100));
+    seed_resize_session(&mut state, 100);
+    state.previous_focused_hwnd = Some(100);
+    state.injected_foreground_hwnd = Some(Some(999));
+    let hides_before = state.border_hide_count.load(Ordering::Relaxed);
+
+    state.handle_window_event(WindowEvent::Destroyed(100));
+
+    assert_eq!(state.previous_focused_hwnd, None);
+    assert_resize_session_cleared(&state);
+    assert_eq!(state.resize_complete_count.load(Ordering::Relaxed), 0);
+    assert!(state.border_hide_count.load(Ordering::Relaxed) > hides_before);
+}
+
+#[test]
+fn test_removed_from_source_drag_departure_applies_peer_layout() {
+    for (event, visible) in [
+        (WindowEvent::Hidden(100), false),
+        (WindowEvent::Destroyed(100), true),
+    ] {
+        let mut state = two_managed_windows();
+        seed_removed_from_source_drag(&mut state, 100);
+        if visible {
+            state.injected_visible_hwnds.insert(100);
+        }
+        assert!(!state.focused_workspace().unwrap().contains_window(100));
+        assert!(state
+            .focused_workspace()
+            .unwrap()
+            .contains_window(DRAG_PLACEHOLDER_HWND));
+        assert!(state.snapshot_layout().contains_key(&DRAG_PLACEHOLDER_HWND));
+
+        state.handle_window_event(event);
+
+        assert!(state.drag_state.is_none());
+        assert!(matches!(state.pending_drag_hint, Some(DragHintAction::Hide)));
+        assert!(!state
+            .focused_workspace()
+            .unwrap()
+            .contains_window(DRAG_PLACEHOLDER_HWND));
+        assert!(!state.focused_workspace().unwrap().contains_window(100));
+        assert!(state.focused_workspace().unwrap().contains_window(200));
+        let transition = state.layout_transition.as_ref().expect("peer relayout");
+        assert!(transition.start_rects.contains_key(&200));
+        assert!(!transition.start_rects.contains_key(&100));
+        assert!(!transition.start_rects.contains_key(&DRAG_PLACEHOLDER_HWND));
+    }
+}
+
+#[test]
+fn test_removed_from_source_drag_prune_cancels_session_and_relayouts() {
+    let mut state = two_managed_windows();
+    seed_removed_from_source_drag(&mut state, 100);
+    seed_resize_session(&mut state, 200);
+    assert!(!state.focused_workspace().unwrap().contains_window(100));
+
+    let applied = state.prune_stale_windows_for_test(&[100]);
+
+    assert!(matches!(applied, crate::helpers::StalePruneLayout::Applied));
+    assert!(state.drag_state.is_none());
+    assert!(!state
+        .focused_workspace()
+        .unwrap()
+        .contains_window(DRAG_PLACEHOLDER_HWND));
+    assert_eq!(state.resize_hwnd, Some(200));
+    assert_eq!(
+        pending_show_ghost_rect(&state),
+        Some(Rect::new(0, 0, 800, 600))
+    );
+    let transition = state.layout_transition.as_ref().expect("peer relayout");
+    assert!(transition.start_rects.contains_key(&200));
+    assert!(!transition.start_rects.contains_key(&100));
+    assert!(!transition.start_rects.contains_key(&DRAG_PLACEHOLDER_HWND));
+}
+
+#[test]
+fn test_placeholder_shifted_snapshot_drives_departure_transition() {
+    let mut state = two_managed_windows();
+    seed_drag_session(&mut state, 100);
+    let pre = state.snapshot_layout();
+    assert!(pre.contains_key(&DRAG_PLACEHOLDER_HWND));
+    let peer_start = *pre.get(&200).expect("peer geometry");
+
+    state.handle_window_event(WindowEvent::Destroyed(100));
+
+    let transition = state.layout_transition.as_ref().expect("departure transition");
+    assert_eq!(transition.start_rects.get(&200), Some(&peer_start));
+    assert!(!transition.start_rects.contains_key(&100));
+    assert!(!transition.start_rects.contains_key(&DRAG_PLACEHOLDER_HWND));
+}
+
+#[test]
+fn test_tracked_focus_prune_hides_border_without_foreground_sample() {
+    let mut state = two_managed_windows();
+    state.previous_focused_hwnd = Some(100);
+    state.injected_foreground_hwnd = Some(Some(200));
+    let hides_before = state.border_hide_count.load(Ordering::Relaxed);
+    let shows_before = state.border_show_count.load(Ordering::Relaxed);
+    state.last_border_show_hwnd.store(0, Ordering::Relaxed);
+
+    state.prune_stale_windows_for_test(&[100]);
+
+    assert_eq!(state.previous_focused_hwnd, None);
+    assert_eq!(state.departing_foreground_evidence_reads, 0);
+    assert!(state.border_hide_count.load(Ordering::Relaxed) > hides_before);
+    assert_eq!(state.border_show_count.load(Ordering::Relaxed), shows_before);
+    assert_eq!(state.last_border_show_hwnd.load(Ordering::Relaxed), 0);
+    assert_eq!(state.last_broadcast_focused, Some((1, None)));
+}
+
+#[test]
+fn test_batch_prune_applies_and_reconciles_once() {
+    let mut state = two_managed_windows();
+    state
+        .injected_window_info
+        .insert(300, make_test_window_info(300));
+    state.handle_window_event(WindowEvent::Created(300));
+    state.previous_focused_hwnd = Some(100);
+    let hides_before = state.border_hide_count.load(Ordering::Relaxed);
+
+    let applied = state.prune_stale_windows_for_test(&[100, 300]);
+
+    assert!(matches!(applied, crate::helpers::StalePruneLayout::Applied));
+    assert!(!state.focused_workspace().unwrap().contains_window(100));
+    assert!(!state.focused_workspace().unwrap().contains_window(300));
+    assert!(state.focused_workspace().unwrap().contains_window(200));
+    assert_eq!(state.previous_focused_hwnd, None);
+    assert_eq!(state.departing_foreground_evidence_reads, 0);
+    assert!(state.border_hide_count.load(Ordering::Relaxed) > hides_before);
+    assert!(state.layout_transition.is_some());
+}
+
+#[test]
+fn test_empty_prune_reports_unchanged_layout() {
+    let mut state = two_managed_windows();
+    let result = state.prune_stale_windows_for_test(&[]);
+    assert!(matches!(result, crate::helpers::StalePruneLayout::Unchanged));
+    assert!(state.focused_workspace().unwrap().contains_window(100));
+    assert!(state.focused_workspace().unwrap().contains_window(200));
+}
+
+#[test]
+fn test_prune_apply_failure_is_reported_not_success() {
+    let mut state = two_managed_windows();
+    state.reduce_motion = true;
+    state.abort_layout_transition();
+    state.paused = false;
+    state.injected_apply_placements_behavior = Some(
+        TestApplyPlacementsBehavior::SleepAndFail(std::time::Duration::from_millis(1)),
+    );
+
+    let result = state.prune_stale_windows_for_test(&[100]);
+
+    match result {
+        crate::helpers::StalePruneLayout::Failed(err) => {
+            assert!(
+                err.to_string().contains("injected apply_placements failure"),
+                "unexpected apply failure: {err}"
+            );
+        }
+        other => panic!("expected Failed prune apply, got {other:?}"),
+    }
+    assert!(!state.focused_workspace().unwrap().contains_window(100));
+    assert!(state.focused_workspace().unwrap().contains_window(200));
+}
+
+#[test]
+fn test_refresh_propagates_prune_apply_failure() {
+    let mut state = two_managed_windows();
+    let resp = state.complete_refresh_layout(crate::helpers::StalePruneLayout::Failed(
+        anyhow::anyhow!("injected prune apply failure"),
+    ));
+    match resp {
+        leopardwm_ipc::IpcResponse::Error { message } => {
+            assert!(message.contains("Failed to apply layout"));
+            assert!(message.contains("injected prune apply failure"));
+        }
+        other => panic!("expected Error, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_refresh_skips_second_apply_after_successful_prune() {
+    let mut state = two_managed_windows();
+    state
+        .apply_worker_cancelled
+        .store(true, Ordering::SeqCst);
+    let resp = state.complete_refresh_layout(crate::helpers::StalePruneLayout::Applied);
+    assert_eq!(resp, leopardwm_ipc::IpcResponse::Ok);
+}
+
+#[test]
+fn test_border_only_helper_hides_when_no_tracked_or_sampled_replacement() {
+    let mut state = two_managed_windows();
+    state.previous_focused_hwnd = None;
+    let hides_before = state.border_hide_count.load(Ordering::Relaxed);
+    let shows_before = state.border_show_count.load(Ordering::Relaxed);
+    state.last_border_show_hwnd.store(0, Ordering::Relaxed);
+
+    state.reconcile_border_without_stealing_focus_for(None);
+
+    assert_eq!(state.previous_focused_hwnd, None);
+    assert!(state.border_hide_count.load(Ordering::Relaxed) > hides_before);
+    assert_eq!(state.border_show_count.load(Ordering::Relaxed), shows_before);
+    assert_eq!(state.last_border_show_hwnd.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+fn test_reconcile_hides_border_for_unmanaged_replacement_despite_tracked_peer() {
+    let mut state = two_managed_windows();
+    state.previous_focused_hwnd = Some(200);
+    let hides_before = state.border_hide_count.load(Ordering::Relaxed);
+    let shows_before = state.border_show_count.load(Ordering::Relaxed);
+    state.last_border_show_hwnd.store(200, Ordering::Relaxed);
+
+    state.reconcile_border_without_stealing_focus_for(Some(999));
+
+    assert_eq!(state.previous_focused_hwnd, Some(200));
+    assert!(state.border_hide_count.load(Ordering::Relaxed) > hides_before);
+    assert_eq!(state.border_show_count.load(Ordering::Relaxed), shows_before);
+    assert_eq!(state.last_border_show_hwnd.load(Ordering::Relaxed), 200);
+}
+
 #[test]
 fn test_departing_hwnd_releases_own_ghost_and_keeps_peers() {
     for event in [WindowEvent::Destroyed(100), WindowEvent::Hidden(100)] {
@@ -1379,22 +2022,27 @@ fn test_should_recover_focus_after_departing_distinguishes_foreground() {
     let tracked_null = departing_focus_decision(true, 100, None, false);
     assert!(tracked_null.recover);
     assert!(!tracked_null.suppress_landing_resync);
+    assert_eq!(tracked_null.replacement_hwnd, None);
 
     let tracked_replacement = departing_focus_decision(true, 100, Some(200), true);
     assert!(!tracked_replacement.recover);
     assert!(tracked_replacement.suppress_landing_resync);
+    assert_eq!(tracked_replacement.replacement_hwnd, Some(200));
 
     let unfocused_null = departing_focus_decision(false, 100, None, false);
     assert!(!unfocused_null.recover);
     assert!(!unfocused_null.suppress_landing_resync);
+    assert_eq!(unfocused_null.replacement_hwnd, None);
 
     let unfocused_invalid = departing_focus_decision(false, 100, Some(999), false);
     assert!(!unfocused_invalid.recover);
     assert!(!unfocused_invalid.suppress_landing_resync);
+    assert_eq!(unfocused_invalid.replacement_hwnd, None);
 
     let unfocused_replacement = departing_focus_decision(false, 100, Some(200), true);
     assert!(!unfocused_replacement.recover);
     assert!(unfocused_replacement.suppress_landing_resync);
+    assert_eq!(unfocused_replacement.replacement_hwnd, Some(200));
 }
 
 #[test]
@@ -1411,8 +2059,188 @@ fn test_departing_focus_recovery_does_not_steal_valid_foreground() {
 
     state.handle_window_event(WindowEvent::Destroyed(100));
 
-    assert_eq!(state.previous_focused_hwnd, None);
+    assert_eq!(state.previous_focused_hwnd, Some(200));
     assert!(state.focused_workspace().unwrap().contains_window(200));
+    assert_eq!(
+        state.focused_workspace().unwrap().focused_window(),
+        Some(200)
+    );
+    assert_eq!(state.last_border_show_hwnd.load(Ordering::Relaxed), 200);
+    assert_eq!(state.last_broadcast_focused, Some((1, Some(200))));
+}
+
+#[test]
+fn test_managed_replacement_adopts_logical_focus_and_same_hwnd_focus_is_noop() {
+    let mut state = two_managed_windows();
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .focus_window(100)
+        .unwrap();
+    state.previous_focused_hwnd = Some(100);
+    state.injected_foreground_hwnd = Some(Some(200));
+    let shows_after_destroy_baseline = state.border_show_count.load(Ordering::Relaxed);
+
+    state.handle_window_event(WindowEvent::Destroyed(100));
+
+    assert_eq!(state.previous_focused_hwnd, Some(200));
+    assert_eq!(state.focused_monitor, 1);
+    assert_eq!(state.active_workspace_idx(1), 0);
+    assert_eq!(
+        state.focused_workspace().unwrap().focused_window(),
+        Some(200)
+    );
+    assert_eq!(state.last_broadcast_focused, Some((1, Some(200))));
+    assert!(
+        state.border_show_count.load(Ordering::Relaxed) > shows_after_destroy_baseline
+    );
+    let shows_after_adopt = state.border_show_count.load(Ordering::Relaxed);
+
+    state.handle_window_event(WindowEvent::Focused(200));
+
+    assert_eq!(state.previous_focused_hwnd, Some(200));
+    assert_eq!(
+        state.focused_workspace().unwrap().focused_window(),
+        Some(200)
+    );
+    assert_eq!(state.last_broadcast_focused, Some((1, Some(200))));
+    assert_eq!(
+        state.border_show_count.load(Ordering::Relaxed),
+        shows_after_adopt,
+        "same-HWND Focused after adoption must not re-enter OS focus logic"
+    );
+}
+
+#[test]
+fn test_managed_replacement_adopts_other_workspace() {
+    let mut state = two_managed_windows();
+    let mon = state.focused_monitor;
+    state.ensure_workspace_exists(mon, 1);
+    if let Some((home_mon, home_idx)) = state.find_window_workspace(200) {
+        let _ = state
+            .workspaces
+            .get_mut(&home_mon)
+            .and_then(|v| v.get_mut(home_idx))
+            .map(|ws| ws.remove_window(200));
+    }
+    state.workspaces.get_mut(&mon).unwrap()[1]
+        .insert_window(200, Some(800))
+        .unwrap();
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .focus_window(100)
+        .unwrap();
+    state.previous_focused_hwnd = Some(100);
+    state.injected_foreground_hwnd = Some(Some(200));
+
+    state.handle_window_event(WindowEvent::Destroyed(100));
+
+    assert_eq!(state.focused_monitor, mon);
+    assert_eq!(state.active_workspace_idx(mon), 1);
+    assert_eq!(state.previous_focused_hwnd, Some(200));
+    assert_eq!(
+        state.focused_workspace().unwrap().focused_window(),
+        Some(200)
+    );
+    assert!(state.focused_workspace().unwrap().contains_window(200));
+    assert!(!state.workspaces.get(&mon).unwrap()[0].contains_window(100));
+    assert_eq!(state.last_broadcast_focused, Some((mon as i64, Some(200))));
+    assert_eq!(state.last_border_show_hwnd.load(Ordering::Relaxed), 200);
+
+    state.handle_window_event(WindowEvent::Focused(200));
+    assert_eq!(state.previous_focused_hwnd, Some(200));
+    assert_eq!(state.active_workspace_idx(mon), 1);
+}
+
+#[test]
+fn test_managed_replacement_parks_old_workspace_peer() {
+    let mut state = two_managed_windows();
+    state
+        .injected_window_info
+        .insert(300, make_test_window_info(300));
+    state.handle_window_event(WindowEvent::Created(300));
+    state.reduce_motion = false;
+    let mon = state.focused_monitor;
+    state.ensure_workspace_exists(mon, 1);
+    if let Some((home_mon, home_idx)) = state.find_window_workspace(200) {
+        let _ = state
+            .workspaces
+            .get_mut(&home_mon)
+            .and_then(|v| v.get_mut(home_idx))
+            .map(|ws| ws.remove_window(200));
+    }
+    state.workspaces.get_mut(&mon).unwrap()[1]
+        .insert_window(200, Some(800))
+        .unwrap();
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .focus_window(100)
+        .unwrap();
+    state.previous_focused_hwnd = Some(100);
+    state.injected_foreground_hwnd = Some(Some(200));
+
+    state.handle_window_event(WindowEvent::Destroyed(100));
+
+    assert_eq!(state.focused_monitor, mon);
+    assert_eq!(state.active_workspace_idx(mon), 1);
+    assert_eq!(state.previous_focused_hwnd, Some(200));
+    assert_eq!(
+        state.focused_workspace().unwrap().focused_window(),
+        Some(200)
+    );
+    assert!(state.workspaces.get(&mon).unwrap()[0].contains_window(300));
+    assert!(!state.workspaces.get(&mon).unwrap()[0].contains_window(100));
+    assert_eq!(state.last_broadcast_focused, Some((mon as i64, Some(200))));
+    assert_eq!(state.last_border_show_hwnd.load(Ordering::Relaxed), 200);
+    let transition = state
+        .layout_transition
+        .as_ref()
+        .expect("cross-workspace adoption must start a workspace-switch transition");
+    assert!(
+        transition.exit_rects.contains_key(&300),
+        "remaining old-workspace peer must slide off as an exit target"
+    );
+    assert!(!transition.exit_rects.contains_key(&100));
+    assert!(transition.start_rects.contains_key(&200));
+    assert!(transition.suppress_landing_focus_resync);
+}
+
+#[test]
+fn test_managed_replacement_adopts_other_monitor() {
+    let mut state = AppState::new_with_config(test_config(), two_monitors());
+    state
+        .injected_window_info
+        .insert(100, make_test_window_info(100));
+    state.handle_window_event(WindowEvent::Created(100));
+    state
+        .injected_window_info
+        .insert(200, make_test_window_info(200));
+    state.workspaces.get_mut(&2).unwrap()[0]
+        .insert_window(200, Some(800))
+        .unwrap();
+    state
+        .window_managed_at
+        .insert(200, std::time::Instant::now());
+    state.previous_focused_hwnd = Some(100);
+    state.injected_foreground_hwnd = Some(Some(200));
+
+    state.handle_window_event(WindowEvent::Destroyed(100));
+
+    assert_eq!(state.focused_monitor, 2);
+    assert_eq!(state.active_workspace_idx(2), 0);
+    assert_eq!(state.previous_focused_hwnd, Some(200));
+    assert_eq!(
+        state.focused_workspace().unwrap().focused_window(),
+        Some(200)
+    );
+    assert_eq!(state.last_broadcast_focused, Some((2, Some(200))));
+    assert_eq!(state.last_border_show_hwnd.load(Ordering::Relaxed), 200);
+
+    state.handle_window_event(WindowEvent::Focused(200));
+    assert_eq!(state.focused_monitor, 2);
+    assert_eq!(state.previous_focused_hwnd, Some(200));
 }
 
 #[test]
@@ -1426,11 +2254,17 @@ fn test_departing_focus_recovery_does_not_steal_unmanaged_foreground() {
     }
     state.previous_focused_hwnd = Some(100);
     state.injected_foreground_hwnd = Some(Some(999));
+    let shows_before = state.border_show_count.load(Ordering::Relaxed);
+    let hides_before = state.border_hide_count.load(Ordering::Relaxed);
+    state.last_border_show_hwnd.store(0, Ordering::Relaxed);
 
     state.handle_window_event(WindowEvent::Destroyed(100));
 
     assert_eq!(state.previous_focused_hwnd, None);
     assert!(state.focused_workspace().unwrap().contains_window(200));
+    assert!(state.border_hide_count.load(Ordering::Relaxed) > hides_before);
+    assert_eq!(state.border_show_count.load(Ordering::Relaxed), shows_before);
+    assert_eq!(state.last_border_show_hwnd.load(Ordering::Relaxed), 0);
 }
 
 #[test]
@@ -1575,7 +2409,7 @@ fn test_departing_recovery_decision_is_sampled_once() {
                 "first-sample recovery must not suppress landing after a later valid replacement"
             );
         } else {
-            assert_eq!(state.previous_focused_hwnd, None);
+            assert_eq!(state.previous_focused_hwnd, Some(200));
             assert!(
                 state
                     .layout_transition
@@ -1626,7 +2460,7 @@ fn test_departing_landing_does_not_steal_valid_managed_replacement() {
     let mut state = departing_tiled_state(Some(100), Some(200));
     state.handle_window_event(WindowEvent::Destroyed(100));
 
-    assert_eq!(state.previous_focused_hwnd, None);
+    assert_eq!(state.previous_focused_hwnd, Some(200));
     assert!(
         state
             .layout_transition
@@ -1637,7 +2471,7 @@ fn test_departing_landing_does_not_steal_valid_managed_replacement() {
 
     land_departing_transition(&mut state);
 
-    assert_eq!(state.previous_focused_hwnd, None);
+    assert_eq!(state.previous_focused_hwnd, Some(200));
     assert!(!state.pending_suppress_landing_focus_resync);
 }
 

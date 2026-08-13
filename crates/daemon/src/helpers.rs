@@ -9,6 +9,19 @@ use leopardwm_platform_win32::{is_excluded_tool_window_hwnd, is_window_alive_and
 use leopardwm_platform_win32::{scale_px, MonitorId};
 use tracing::{debug, info, warn};
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct StaleCleanupResult {
+    layout_changed: bool,
+    focus_changed: bool,
+}
+
+#[derive(Debug)]
+pub(crate) enum StalePruneLayout {
+    Unchanged,
+    Applied,
+    Failed(anyhow::Error),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TaskbarButtonAction {
     Show,
@@ -319,61 +332,164 @@ impl AppState {
     /// Win32 destroy/hide events. This reconciliation pass detects and removes them.
     ///
     /// Skipped in test builds because test window IDs are not real Win32 handles.
-    pub(crate) fn prune_stale_windows(&mut self) {
+    /// Distinguishes no apply, successful apply, and failed apply so callers
+    /// do not treat a logged apply error as success.
+    pub(crate) fn prune_stale_windows(&mut self) -> StalePruneLayout {
         #[cfg(test)]
-        return;
+        {
+            return StalePruneLayout::Unchanged;
+        }
 
         #[cfg(not(test))]
         {
-            let mut stale: Vec<(MonitorId, usize, u64)> = Vec::new();
-            for (&monitor_id, ws_vec) in &self.workspaces {
-                for (ws_idx, workspace) in ws_vec.iter().enumerate() {
+            let mut stale: Vec<u64> = Vec::new();
+            for ws_vec in self.workspaces.values() {
+                for workspace in ws_vec.iter() {
                     for &wid in &workspace.all_window_ids() {
                         let alive_visible = is_window_alive_and_visible(wid);
                         let gone = !alive_visible && !workspace.is_minimized(wid);
                         let unmanageable = alive_visible && is_excluded_tool_window_hwnd(wid);
                         if gone || unmanageable {
-                            stale.push((monitor_id, ws_idx, wid));
+                            stale.push(wid);
                         }
                     }
                 }
             }
-            for (monitor_id, ws_idx, wid) in &stale {
-                if let Some(workspace) = self
-                    .workspaces
-                    .get_mut(monitor_id)
-                    .and_then(|v| v.get_mut(*ws_idx))
-                {
-                    let was_floating = workspace.remove_floating(*wid);
-                    if !was_floating {
-                        let _ = workspace.remove_window(*wid);
+            if let Some(drag) = self.drag_state.as_ref() {
+                let hwnd = drag.hwnd;
+                if !stale.contains(&hwnd) {
+                    let alive_visible = is_window_alive_and_visible(hwnd);
+                    let minimized = self
+                        .find_window_workspace(hwnd)
+                        .and_then(|(mid, idx)| self.workspaces.get(&mid)?.get(idx))
+                        .is_some_and(|ws| ws.is_minimized(hwnd));
+                    let gone = !alive_visible && !minimized;
+                    let unmanageable = alive_visible && is_excluded_tool_window_hwnd(hwnd);
+                    if gone || unmanageable {
+                        stale.push(hwnd);
                     }
-                    self.restore_snap_for_window(*wid);
-                    self.window_managed_at.remove(wid);
-                    self.application_fullscreen.remove(wid);
-                    info!("Pruned stale window {} from monitor {}", wid, monitor_id);
                 }
             }
-
-            // Evict orphaned entries from window_managed_at whose HWNDs are
-            // no longer managed in any workspace (catches all removal paths).
-            if !self.window_managed_at.is_empty()
-                || !self.window_last_maximized_at.is_empty()
-                || !self.application_fullscreen.is_empty()
-            {
-                let managed: std::collections::HashSet<u64> = self
-                    .workspaces
-                    .values()
-                    .flat_map(|ws_vec| ws_vec.iter().flat_map(|ws| ws.all_window_ids()))
-                    .collect();
-                self.window_managed_at
-                    .retain(|hwnd, _| managed.contains(hwnd));
-                self.window_last_maximized_at
-                    .retain(|hwnd, _| managed.contains(hwnd));
-                self.application_fullscreen
-                    .retain(|hwnd, _| managed.contains(hwnd));
-            }
+            self.finish_stale_window_prune(&stale)
         }
+    }
+
+    fn finish_stale_window_prune(&mut self, stale: &[u64]) -> StalePruneLayout {
+        if stale.is_empty() {
+            self.evict_unmanaged_window_metadata();
+            return StalePruneLayout::Unchanged;
+        }
+
+        let snapshot = self.snapshot_layout();
+        let mut layout_changed = false;
+        let mut focus_changed = false;
+        for &wid in stale {
+            let result = self.cleanup_stale_managed_window(self.find_window_workspace(wid), wid);
+            layout_changed |= result.layout_changed;
+            focus_changed |= result.focus_changed;
+        }
+        self.evict_unmanaged_window_metadata();
+
+        let apply = if layout_changed {
+            let mut snapshot = snapshot;
+            for &wid in stale {
+                snapshot.remove(&wid);
+            }
+            snapshot.remove(&crate::state::DRAG_PLACEHOLDER_HWND);
+            self.start_layout_transition(snapshot);
+            match self.apply_layout() {
+                Ok(()) => StalePruneLayout::Applied,
+                Err(e) => StalePruneLayout::Failed(e),
+            }
+        } else {
+            StalePruneLayout::Unchanged
+        };
+        if layout_changed || focus_changed {
+            self.reconcile_border_without_stealing_focus();
+        }
+        apply
+    }
+
+    fn evict_unmanaged_window_metadata(&mut self) {
+        if self.window_managed_at.is_empty()
+            && self.window_last_maximized_at.is_empty()
+            && self.application_fullscreen.is_empty()
+        {
+            return;
+        }
+        let managed: std::collections::HashSet<u64> = self
+            .workspaces
+            .values()
+            .flat_map(|ws_vec| ws_vec.iter().flat_map(|ws| ws.all_window_ids()))
+            .collect();
+        self.window_managed_at
+            .retain(|hwnd, _| managed.contains(hwnd));
+        self.window_last_maximized_at
+            .retain(|hwnd, _| managed.contains(hwnd));
+        self.application_fullscreen
+            .retain(|hwnd, _| managed.contains(hwnd));
+    }
+
+    fn cleanup_stale_managed_window(
+        &mut self,
+        home: Option<(MonitorId, usize)>,
+        wid: u64,
+    ) -> StaleCleanupResult {
+        let cancel = self.cancel_matching_unfinished_move_size_ui(wid);
+        self.release_departing_hwnd_ghost(wid);
+        let mut layout_changed = cancel.needs_layout();
+        let home = home.or(cancel.drag_source);
+        if let Some((monitor_id, ws_idx)) = home {
+            let viewport_width = self.viewport_width_for(monitor_id);
+            if let Some(workspace) = self
+                .workspaces
+                .get_mut(&monitor_id)
+                .and_then(|v| v.get_mut(ws_idx))
+            {
+                if workspace.contains_window(wid) {
+                    let was_floating = workspace.remove_floating(wid);
+                    if !was_floating {
+                        let _ = workspace.remove_window(wid);
+                    }
+                    layout_changed = true;
+                }
+                if layout_changed {
+                    workspace.ensure_focused_visible_animated(viewport_width);
+                }
+            }
+            self.restore_snap_for_window(wid);
+            self.window_managed_at.remove(&wid);
+            self.application_fullscreen.remove(&wid);
+            info!("Pruned stale window {} from monitor {}", wid, monitor_id);
+        } else {
+            self.restore_snap_for_window(wid);
+            self.window_managed_at.remove(&wid);
+            self.application_fullscreen.remove(&wid);
+        }
+
+        let mut focus_changed = false;
+        if self.previous_focused_hwnd == Some(wid) {
+            self.hide_border();
+            self.previous_focused_hwnd = None;
+            let monitor = self.focused_monitor as i64;
+            self.broadcast_focused_window_if_changed(monitor, None);
+            focus_changed = true;
+        }
+        StaleCleanupResult {
+            layout_changed,
+            focus_changed,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn prune_stale_window(&mut self, monitor_id: MonitorId, ws_idx: usize, wid: u64) {
+        let _ = (monitor_id, ws_idx);
+        self.prune_stale_windows_for_test(&[wid]);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn prune_stale_windows_for_test(&mut self, stale: &[u64]) -> StalePruneLayout {
+        self.finish_stale_window_prune(stale)
     }
 
     /// Find which workspace contains a window.

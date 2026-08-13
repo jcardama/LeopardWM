@@ -360,6 +360,12 @@ pub(crate) struct AppState {
     pub(crate) border_frame: Option<leopardwm_platform_win32::border::BorderFrame>,
     #[cfg(test)]
     pub(crate) border_hide_count: AtomicUsize,
+    #[cfg(test)]
+    pub(crate) border_show_count: AtomicUsize,
+    #[cfg(test)]
+    pub(crate) last_border_show_hwnd: AtomicU64,
+    #[cfg(test)]
+    pub(crate) resize_complete_count: AtomicUsize,
     /// Tab strip overlays — one per tabbed column across all visible
     /// workspaces. Keyed by `(monitor, workspace_idx, column_idx)`.
     /// `helpers.rs::update_tab_strip` reconciles this map against the
@@ -760,6 +766,12 @@ impl AppState {
             },
             #[cfg(test)]
             border_hide_count: AtomicUsize::new(0),
+            #[cfg(test)]
+            border_show_count: AtomicUsize::new(0),
+            #[cfg(test)]
+            last_border_show_hwnd: AtomicU64::new(0),
+            #[cfg(test)]
+            resize_complete_count: AtomicUsize::new(0),
             // Tab strip overlays are spawned on demand by `update_tab_strip`
             // — there's no global "the strip" anymore. `install_tab_strip`
             // just stashes the action sender so subsequent spawns can wire
