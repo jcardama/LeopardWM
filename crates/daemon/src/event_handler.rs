@@ -251,6 +251,14 @@ pub(crate) fn chrome_rect_matches_layout_rect(
         && (visible_rect.height - layout_rect.height).abs() <= tolerance
 }
 
+pub(crate) fn should_ignore_hidden_still_visible(
+    is_hidden_event: bool,
+    is_managed: bool,
+    is_visible: bool,
+) -> bool {
+    is_hidden_event && is_managed && is_visible
+}
+
 /// True when `title` names `filename` as a whole token, i.e. the filename
 /// appears bounded by the start/end of the title or by a separator (space, tab,
 /// dash, or a path separator). Editors title windows like `config.toml - App`
@@ -890,16 +898,19 @@ impl AppState {
         // EVENT_OBJECT_HIDE on their main window during internal
         // state changes (notification badges, focus between panes).
         // If the HWND is still valid and visible, ignore the event.
-        if is_hidden_event
-            && self.find_window_workspace(hwnd).is_some()
-            && leopardwm_platform_win32::is_window_visible(hwnd)
-        {
+        if should_ignore_hidden_still_visible(
+            is_hidden_event,
+            self.find_window_workspace(hwnd).is_some(),
+            self.is_hidden_event_still_visible(hwnd),
+        ) {
             debug!(
                 "Ignoring spurious Hidden event for still-visible window {}",
                 hwnd
             );
             return;
         }
+
+        self.release_departing_hwnd_ghost(hwnd);
 
         // Drop the recorded layout rect so the map doesn't retain
         // entries for windows that no longer exist.
@@ -942,12 +953,14 @@ impl AppState {
             .retain(|_, t| t.elapsed() < RECENTLY_HIDDEN_TTL);
 
         // Clear stale focus reference
-        if self.previous_focused_hwnd == Some(hwnd) {
+        let was_tracked_focus = self.previous_focused_hwnd == Some(hwnd);
+        if was_tracked_focus {
             self.hide_border();
             self.previous_focused_hwnd = None;
             let monitor = self.focused_monitor as i64;
             self.broadcast_focused_window_if_changed(monitor, None);
         }
+        let decision = self.departing_focus_decision_for(hwnd, was_tracked_focus);
 
         // Find which workspace contains this window
         if let Some((monitor_id, ws_idx)) = self.find_window_workspace(hwnd) {
@@ -1000,11 +1013,80 @@ impl AppState {
             self.restore_snap_for_window(hwnd);
 
             if was_tiled {
-                self.start_layout_transition(snapshot);
+                let mut snapshot = snapshot;
+                snapshot.remove(&hwnd);
+                if self.start_layout_transition(snapshot) && decision.suppress_landing_resync {
+                    if let Some(ref mut transition) = self.layout_transition {
+                        transition.suppress_landing_focus_resync = true;
+                    }
+                }
             }
             if let Err(e) = self.apply_layout() {
                 warn!("Failed to apply layout after window {}: {}", event_name, e);
             }
+        }
+
+        if decision.recover {
+            self.sync_foreground_window();
+        }
+    }
+
+    fn is_hidden_event_still_visible(&self, hwnd: u64) -> bool {
+        #[cfg(test)]
+        if self.injected_visible_hwnds.contains(&hwnd) {
+            return true;
+        }
+        leopardwm_platform_win32::is_window_visible(hwnd)
+    }
+
+    fn departing_focus_decision_for(
+        &mut self,
+        hwnd: u64,
+        was_tracked_focus: bool,
+    ) -> crate::ui_sync::DepartingFocusDecision {
+        let Some((foreground, foreground_is_valid)) = self.departing_foreground_evidence(hwnd)
+        else {
+            return crate::ui_sync::DepartingFocusDecision {
+                recover: false,
+                suppress_landing_resync: false,
+            };
+        };
+        crate::ui_sync::departing_focus_decision(
+            was_tracked_focus,
+            hwnd,
+            foreground,
+            foreground_is_valid,
+        )
+    }
+
+    fn departing_foreground_evidence(
+        &mut self,
+        departing_hwnd: u64,
+    ) -> Option<(Option<u64>, bool)> {
+        #[cfg(test)]
+        {
+            let _ = departing_hwnd;
+            self.departing_foreground_evidence_reads =
+                self.departing_foreground_evidence_reads.saturating_add(1);
+            let foreground = self.injected_foreground_hwnd;
+            if let Some(next) = self.injected_next_foreground_hwnd.take() {
+                self.injected_foreground_hwnd = Some(next);
+            }
+            return foreground.map(|foreground| {
+                (
+                    foreground.filter(|&id| id != 0),
+                    self.injected_foreground_is_valid
+                        .unwrap_or(foreground.is_some_and(|id| id != 0)),
+                )
+            });
+        }
+        #[cfg(not(test))]
+        {
+            let foreground = leopardwm_platform_win32::get_foreground_window();
+            let foreground_is_valid =
+                foreground.is_some_and(leopardwm_platform_win32::is_valid_window);
+            let _ = departing_hwnd;
+            Some((foreground, foreground_is_valid))
         }
     }
 
@@ -1259,7 +1341,7 @@ impl AppState {
                     }
                 }
                 self.abort_active_ghost_transition();
-                self.layout_transition = None;
+                self.abort_layout_transition();
 
                 let slide_height = self
                     .monitors

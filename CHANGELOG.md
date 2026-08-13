@@ -26,6 +26,10 @@ All notable changes to LeopardWM will be documented in this file.
 - **Scratchpads retain their latest floating size and position while hidden.**
   The saved session-only geometry is clamped to the active work area on summon,
   so display topology changes cannot leave the scratchpad off-screen.
+- **Chrome tab tear-off and re-dock no longer freeze focus or leave a stale ghost.**
+  A departing window now drops only its own ghost/crossfade ownership and does
+  not steal focus from a valid replacement window, including when that
+  departure's layout animation lands.
 
 ## 0.2.6
 

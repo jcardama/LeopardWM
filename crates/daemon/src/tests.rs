@@ -435,7 +435,8 @@ fn test_placement_parked_maximized_target_reaches_sync_and_animation_dispatch() 
         .is_empty());
     assert_eq!(
         sync_state
-            .prepare_physical_placements_with_parked(vec![placement.clone()], &maximized, |wid| wid == 100)
+            .prepare_physical_placements_with_parked(vec![placement.clone()], &maximized, |wid| wid
+                == 100)
             .iter()
             .map(|placement| placement.window_id)
             .collect::<Vec<_>>(),
@@ -446,7 +447,8 @@ fn test_placement_parked_maximized_target_reaches_sync_and_animation_dispatch() 
     let mut animation_state = AppState::new_with_config(test_config(), test_monitors());
     assert_eq!(
         animation_state
-            .prepare_animation_frame_with_parked(vec![placement.clone()], &maximized, |wid| wid == 100)
+            .prepare_animation_frame_with_parked(vec![placement.clone()], &maximized, |wid| wid
+                == 100)
             .placements
             .iter()
             .map(|placement| placement.window_id)
@@ -560,6 +562,7 @@ fn test_current_maximize_hold_cleans_only_target_ghost_state() {
         duration_ms: 150,
         easing: leopardwm_core_layout::Easing::default(),
         ghosted_wids: HashSet::from([100, 200]),
+        suppress_landing_focus_resync: false,
     });
     state.ghost_handles.insert(
         100,
@@ -623,6 +626,7 @@ fn test_application_fullscreen_entry_removes_only_its_ghost_transition_state() {
         duration_ms: 150,
         easing: leopardwm_core_layout::Easing::default(),
         ghosted_wids,
+        suppress_landing_focus_resync: false,
     });
     state.ghost_handles.insert(
         100,
@@ -807,6 +811,7 @@ fn test_partition_for_animation_routes_ghosted_wids_to_ghost_stream() {
         duration_ms: 150,
         easing: leopardwm_core_layout::Easing::default(),
         ghosted_wids,
+        suppress_landing_focus_resync: false,
     };
 
     // GhostEntry with handle_isize=0 has a no-op Drop, so it's safe to
@@ -956,6 +961,7 @@ fn test_partition_for_animation_missing_handle_drops_placement() {
         duration_ms: 150,
         easing: leopardwm_core_layout::Easing::default(),
         ghosted_wids,
+        suppress_landing_focus_resync: false,
     };
 
     let placements = vec![WindowPlacement {
@@ -1118,6 +1124,733 @@ fn test_application_fullscreen_crossfade_abort_reaches_worker() {
         Ok(Some(DaemonEvent::CrossfadeComplete { epoch: 4 }))
     ));
     drop(worker);
+}
+
+fn departing_ghost_fixture() -> AppState {
+    use crate::state::{CrossfadeState, GhostEntry, LayoutTransition};
+    use std::collections::{HashMap, HashSet};
+
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.layout_transition = Some(LayoutTransition {
+        start_rects: HashMap::from([
+            (100, Rect::new(0, 0, 800, 600)),
+            (200, Rect::new(800, 0, 800, 600)),
+        ]),
+        exit_rects: HashMap::from([(100, Rect::new(0, 1200, 800, 600))]),
+        elapsed_ms: 16,
+        duration_ms: 150,
+        easing: leopardwm_core_layout::Easing::default(),
+        ghosted_wids: HashSet::from([100, 200]),
+        suppress_landing_focus_resync: false,
+    });
+    state.ghost_handles.insert(
+        100,
+        GhostEntry::new(0, "Chrome_WidgetWin_1".into(), Rect::new(0, 0, 800, 600)),
+    );
+    state.ghost_handles.insert(
+        200,
+        GhostEntry::new(0, "MozillaWindowClass".into(), Rect::new(800, 0, 800, 600)),
+    );
+    state.active_crossfade = Some(CrossfadeState { epoch: 4 });
+    state
+        .crossfade_sources
+        .insert(4, (HashSet::from([100, 200]), std::time::Instant::now()));
+    state
+}
+
+#[test]
+fn test_hidden_still_visible_skips_departure_cleanup() {
+    use crate::event_handler::should_ignore_hidden_still_visible;
+
+    assert!(should_ignore_hidden_still_visible(true, true, true));
+    assert!(!should_ignore_hidden_still_visible(true, true, false));
+    assert!(!should_ignore_hidden_still_visible(false, true, true));
+
+    let mut state = departing_ghost_fixture();
+    state
+        .injected_window_info
+        .insert(100, make_test_window_info(100));
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .insert_window(100, Some(800))
+        .unwrap();
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .insert_window(200, Some(800))
+        .unwrap();
+    state
+        .window_managed_at
+        .insert(100, std::time::Instant::now());
+    state.previous_focused_hwnd = Some(100);
+    state.injected_visible_hwnds.insert(100);
+
+    state.handle_window_event(WindowEvent::Hidden(100));
+
+    assert!(state.focused_workspace().unwrap().contains_window(100));
+    assert_eq!(state.previous_focused_hwnd, Some(100));
+    assert!(state.ghost_handles.contains_key(&100));
+    assert!(state
+        .crossfade_sources
+        .get(&4)
+        .is_some_and(|(sources, _)| sources.contains(&100)));
+    assert!(state.window_managed_at.contains_key(&100));
+}
+
+#[test]
+fn test_departing_hwnd_releases_own_ghost_and_keeps_peers() {
+    for event in [WindowEvent::Destroyed(100), WindowEvent::Hidden(100)] {
+        let mut state = departing_ghost_fixture();
+        // Keep the in-flight peer transition so this asserts departure
+        // cleanup, not start_layout_transition's existing abort-on-new.
+        state.reduce_motion = true;
+        state
+            .injected_window_info
+            .insert(100, make_test_window_info(100));
+        state
+            .injected_window_info
+            .insert(200, make_test_window_info(200));
+        state
+            .focused_workspace_mut()
+            .unwrap()
+            .insert_window(100, Some(800))
+            .unwrap();
+        state
+            .focused_workspace_mut()
+            .unwrap()
+            .insert_window(200, Some(800))
+            .unwrap();
+        state.previous_focused_hwnd = Some(200);
+
+        state.handle_window_event(event);
+
+        assert!(!state.ghost_handles.contains_key(&100));
+        assert!(state.ghost_handles.contains_key(&200));
+        assert_eq!(
+            state.crossfade_sources.get(&4).map(|(sources, _)| sources),
+            Some(&std::collections::HashSet::from([100, 200])),
+            "departure must retain the same-source barrier until worker ack"
+        );
+        assert_eq!(
+            state.active_crossfade.as_ref().map(|state| state.epoch),
+            Some(4)
+        );
+        let transition = state.layout_transition.as_ref().unwrap();
+        assert!(!transition.ghosted_wids.contains(&100));
+        assert!(transition.ghosted_wids.contains(&200));
+        assert!(!transition.start_rects.contains_key(&100));
+        assert!(transition.start_rects.contains_key(&200));
+        assert!(!state.focused_workspace().unwrap().contains_window(100));
+        assert!(state.focused_workspace().unwrap().contains_window(200));
+
+        state.acknowledge_crossfade_target_drop(4, 100);
+        assert_eq!(
+            state.crossfade_sources.get(&4).map(|(sources, _)| sources),
+            Some(&std::collections::HashSet::from([200])),
+            "ack releases only the departing hwnd; peers remain"
+        );
+        assert_eq!(
+            state.active_crossfade.as_ref().map(|state| state.epoch),
+            Some(4)
+        );
+    }
+}
+
+#[test]
+fn test_departing_source_with_peers_does_not_abort_epoch() {
+    let mut state = departing_ghost_fixture();
+    state.release_departing_hwnd_ghost(100);
+    assert_eq!(
+        state.active_crossfade.as_ref().map(|state| state.epoch),
+        Some(4)
+    );
+    assert_eq!(
+        state.crossfade_sources.get(&4).map(|(sources, _)| sources),
+        Some(&std::collections::HashSet::from([100, 200])),
+        "barrier still contains H before worker acknowledgment"
+    );
+
+    state.acknowledge_crossfade_target_drop(4, 100);
+    assert_eq!(
+        state.active_crossfade.as_ref().map(|state| state.epoch),
+        Some(4)
+    );
+    assert_eq!(
+        state.crossfade_sources.get(&4).map(|(sources, _)| sources),
+        Some(&std::collections::HashSet::from([200])),
+        "ack releases only H; peer remains and epoch is not aborted"
+    );
+}
+
+#[test]
+fn test_last_departing_source_waits_for_ack_before_barrier_release() {
+    use crate::state::CrossfadeState;
+
+    let mut state = departing_ghost_fixture();
+    state.crossfade_sources.insert(
+        4,
+        (
+            std::collections::HashSet::from([100]),
+            std::time::Instant::now(),
+        ),
+    );
+    state.crossfade_sources.insert(
+        3,
+        (
+            std::collections::HashSet::from([200]),
+            std::time::Instant::now(),
+        ),
+    );
+    state.active_crossfade = Some(CrossfadeState { epoch: 4 });
+
+    state.release_departing_hwnd_ghost(100);
+
+    assert_eq!(
+        state.active_crossfade.as_ref().map(|state| state.epoch),
+        Some(4),
+        "last-source departure must not abort before worker acknowledgment"
+    );
+    assert_eq!(
+        state.crossfade_sources.get(&4).map(|(sources, _)| sources),
+        Some(&std::collections::HashSet::from([100])),
+        "last-source barrier still contains H before ack"
+    );
+    assert_eq!(
+        state.crossfade_sources.get(&3).map(|(sources, _)| sources),
+        Some(&std::collections::HashSet::from([200]))
+    );
+
+    state.acknowledge_crossfade_target_drop(4, 100);
+    assert!(state
+        .crossfade_sources
+        .get(&4)
+        .is_some_and(|(sources, _)| sources.is_empty()));
+    assert_eq!(
+        state.crossfade_sources.get(&3).map(|(sources, _)| sources),
+        Some(&std::collections::HashSet::from([200]))
+    );
+}
+
+#[test]
+fn test_departing_transition_snapshot_excludes_hwnd() {
+    let mut state = departing_ghost_fixture();
+    state.reduce_motion = false;
+    state.config.behavior.swap_chain_ghost_animation = true;
+    state
+        .injected_window_info
+        .insert(100, make_test_window_info(100));
+    state
+        .injected_window_info
+        .insert(200, make_test_window_info(200));
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .insert_window(100, Some(800))
+        .unwrap();
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .insert_window(200, Some(800))
+        .unwrap();
+
+    state.handle_window_event(WindowEvent::Destroyed(100));
+
+    let transition = state.layout_transition.as_ref().unwrap();
+    assert!(!transition.start_rects.contains_key(&100));
+    assert!(!transition.ghosted_wids.contains(&100));
+    assert!(!state.ghost_handles.contains_key(&100));
+}
+
+#[test]
+fn test_should_recover_focus_after_departing_distinguishes_foreground() {
+    use crate::ui_sync::departing_focus_decision;
+
+    assert!(departing_focus_decision(true, 100, None, false).recover);
+    assert!(departing_focus_decision(true, 100, Some(0), false).recover);
+    assert!(departing_focus_decision(true, 100, Some(100), true).recover);
+    assert!(departing_focus_decision(true, 100, Some(999), false).recover);
+    assert!(!departing_focus_decision(true, 100, Some(200), true).recover);
+    assert!(!departing_focus_decision(true, 100, Some(300), true).recover);
+    assert!(!departing_focus_decision(false, 100, None, false).recover);
+    assert!(!departing_focus_decision(false, 100, Some(0), false).recover);
+    assert!(!departing_focus_decision(false, 100, Some(100), true).recover);
+
+    let tracked_null = departing_focus_decision(true, 100, None, false);
+    assert!(tracked_null.recover);
+    assert!(!tracked_null.suppress_landing_resync);
+
+    let tracked_replacement = departing_focus_decision(true, 100, Some(200), true);
+    assert!(!tracked_replacement.recover);
+    assert!(tracked_replacement.suppress_landing_resync);
+
+    let unfocused_null = departing_focus_decision(false, 100, None, false);
+    assert!(!unfocused_null.recover);
+    assert!(!unfocused_null.suppress_landing_resync);
+
+    let unfocused_invalid = departing_focus_decision(false, 100, Some(999), false);
+    assert!(!unfocused_invalid.recover);
+    assert!(!unfocused_invalid.suppress_landing_resync);
+
+    let unfocused_replacement = departing_focus_decision(false, 100, Some(200), true);
+    assert!(!unfocused_replacement.recover);
+    assert!(unfocused_replacement.suppress_landing_resync);
+}
+
+#[test]
+fn test_departing_focus_recovery_does_not_steal_valid_foreground() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    for hwnd in [100, 200] {
+        state
+            .injected_window_info
+            .insert(hwnd, make_test_window_info(hwnd));
+        state.handle_window_event(WindowEvent::Created(hwnd));
+    }
+    state.previous_focused_hwnd = Some(100);
+    state.injected_foreground_hwnd = Some(Some(200));
+
+    state.handle_window_event(WindowEvent::Destroyed(100));
+
+    assert_eq!(state.previous_focused_hwnd, None);
+    assert!(state.focused_workspace().unwrap().contains_window(200));
+}
+
+#[test]
+fn test_departing_focus_recovery_does_not_steal_unmanaged_foreground() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    for hwnd in [100, 200] {
+        state
+            .injected_window_info
+            .insert(hwnd, make_test_window_info(hwnd));
+        state.handle_window_event(WindowEvent::Created(hwnd));
+    }
+    state.previous_focused_hwnd = Some(100);
+    state.injected_foreground_hwnd = Some(Some(999));
+
+    state.handle_window_event(WindowEvent::Destroyed(100));
+
+    assert_eq!(state.previous_focused_hwnd, None);
+    assert!(state.focused_workspace().unwrap().contains_window(200));
+}
+
+#[test]
+fn test_departing_focus_recovery_runs_when_foreground_is_departed() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    for hwnd in [100, 200] {
+        state
+            .injected_window_info
+            .insert(hwnd, make_test_window_info(hwnd));
+        state.handle_window_event(WindowEvent::Created(hwnd));
+    }
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .focus_window(200)
+        .unwrap();
+    state.previous_focused_hwnd = Some(100);
+    state.injected_foreground_hwnd = Some(Some(100));
+
+    state.handle_window_event(WindowEvent::Destroyed(100));
+
+    assert_eq!(state.previous_focused_hwnd, Some(200));
+    assert_eq!(
+        state.focused_workspace().unwrap().focused_window(),
+        Some(200)
+    );
+}
+
+#[test]
+fn test_departing_focus_recovery_runs_when_foreground_is_null_or_invalid() {
+    for foreground in [None, Some(0)] {
+        let mut state = AppState::new_with_config(test_config(), test_monitors());
+        for hwnd in [100, 200] {
+            state
+                .injected_window_info
+                .insert(hwnd, make_test_window_info(hwnd));
+            state.handle_window_event(WindowEvent::Created(hwnd));
+        }
+        state
+            .focused_workspace_mut()
+            .unwrap()
+            .focus_window(200)
+            .unwrap();
+        state.previous_focused_hwnd = Some(100);
+        state.injected_foreground_hwnd = Some(foreground);
+
+        state.handle_window_event(WindowEvent::Destroyed(100));
+
+        assert_eq!(state.previous_focused_hwnd, Some(200));
+        assert_eq!(
+            state.focused_workspace().unwrap().focused_window(),
+            Some(200)
+        );
+    }
+}
+
+#[test]
+fn test_unfocused_managed_departure_does_not_recover_on_null_foreground() {
+    for foreground in [None, Some(0)] {
+        let mut state = AppState::new_with_config(test_config(), test_monitors());
+        for hwnd in [100, 200] {
+            state
+                .injected_window_info
+                .insert(hwnd, make_test_window_info(hwnd));
+            state.handle_window_event(WindowEvent::Created(hwnd));
+        }
+        state.previous_focused_hwnd = Some(200);
+        state.injected_foreground_hwnd = Some(foreground);
+
+        state.handle_window_event(WindowEvent::Destroyed(100));
+
+        assert_eq!(state.previous_focused_hwnd, Some(200));
+        assert!(state.focused_workspace().unwrap().contains_window(200));
+        assert!(!state.focused_workspace().unwrap().contains_window(100));
+    }
+}
+
+#[test]
+fn test_unmanaged_departure_does_not_recover_on_null_foreground() {
+    for event in [WindowEvent::Destroyed(999), WindowEvent::Hidden(999)] {
+        for foreground in [None, Some(0)] {
+            let mut state = AppState::new_with_config(test_config(), test_monitors());
+            for hwnd in [100, 200] {
+                state
+                    .injected_window_info
+                    .insert(hwnd, make_test_window_info(hwnd));
+                state.handle_window_event(WindowEvent::Created(hwnd));
+            }
+            state.previous_focused_hwnd = Some(200);
+            state.injected_foreground_hwnd = Some(foreground);
+
+            state.handle_window_event(event.clone());
+
+            assert_eq!(state.previous_focused_hwnd, Some(200));
+            assert!(state.focused_workspace().unwrap().contains_window(100));
+            assert!(state.focused_workspace().unwrap().contains_window(200));
+        }
+    }
+}
+
+fn departing_tiled_state(previous_focus: Option<u64>, foreground: Option<u64>) -> AppState {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = false;
+    state.reduce_motion = false;
+    for hwnd in [100, 200] {
+        state
+            .injected_window_info
+            .insert(hwnd, make_test_window_info(hwnd));
+        state.handle_window_event(WindowEvent::Created(hwnd));
+    }
+    state.previous_focused_hwnd = previous_focus;
+    state.injected_foreground_hwnd = Some(foreground);
+    state
+}
+
+#[test]
+fn test_departing_recovery_decision_is_sampled_once() {
+    for (first, second, expect_recover) in [(None, Some(200), true), (Some(200), None, false)] {
+        let mut state = departing_tiled_state(Some(100), first);
+        if expect_recover {
+            state
+                .focused_workspace_mut()
+                .unwrap()
+                .focus_window(200)
+                .unwrap();
+        }
+        state.injected_next_foreground_hwnd = Some(second);
+
+        state.handle_window_event(WindowEvent::Destroyed(100));
+
+        assert_eq!(
+            state.departing_foreground_evidence_reads, 1,
+            "departure must sample foreground evidence once"
+        );
+        if expect_recover {
+            assert_eq!(state.previous_focused_hwnd, Some(200));
+            assert!(
+                state
+                    .layout_transition
+                    .as_ref()
+                    .is_some_and(|transition| !transition.suppress_landing_focus_resync),
+                "first-sample recovery must not suppress landing after a later valid replacement"
+            );
+        } else {
+            assert_eq!(state.previous_focused_hwnd, None);
+            assert!(
+                state
+                    .layout_transition
+                    .as_ref()
+                    .is_some_and(|transition| transition.suppress_landing_focus_resync),
+                "first-sample no-recovery must keep landing suppression after later null foreground"
+            );
+        }
+    }
+
+    let mut unmanaged = departing_tiled_state(Some(200), None);
+    unmanaged.injected_next_foreground_hwnd = Some(Some(200));
+    unmanaged.handle_window_event(WindowEvent::Destroyed(999));
+    assert_eq!(unmanaged.departing_foreground_evidence_reads, 1);
+    assert_eq!(unmanaged.previous_focused_hwnd, Some(200));
+    assert!(
+        unmanaged
+            .layout_transition
+            .as_ref()
+            .is_none_or(|transition| !transition.suppress_landing_focus_resync),
+        "unmanaged departure must not recover or mark landing suppression"
+    );
+}
+
+fn land_departing_transition(state: &mut AppState) {
+    let duration = state
+        .layout_transition
+        .as_ref()
+        .map(|transition| transition.duration_ms)
+        .unwrap_or(0);
+    assert!(state.tick_animations(duration));
+    assert!(state.layout_transition.is_none());
+    state.sync_foreground_after_animation_landing();
+}
+
+#[test]
+fn test_should_sync_foreground_on_animation_landing_respects_pause_and_suppress() {
+    use crate::ui_sync::should_sync_foreground_on_animation_landing;
+
+    assert!(should_sync_foreground_on_animation_landing(false, false));
+    assert!(!should_sync_foreground_on_animation_landing(true, false));
+    assert!(!should_sync_foreground_on_animation_landing(false, true));
+    assert!(!should_sync_foreground_on_animation_landing(true, true));
+}
+
+#[test]
+fn test_departing_landing_does_not_steal_valid_managed_replacement() {
+    let mut state = departing_tiled_state(Some(100), Some(200));
+    state.handle_window_event(WindowEvent::Destroyed(100));
+
+    assert_eq!(state.previous_focused_hwnd, None);
+    assert!(
+        state
+            .layout_transition
+            .as_ref()
+            .is_some_and(|transition| transition.suppress_landing_focus_resync),
+        "valid managed replacement arms landing suppression"
+    );
+
+    land_departing_transition(&mut state);
+
+    assert_eq!(state.previous_focused_hwnd, None);
+    assert!(!state.pending_suppress_landing_focus_resync);
+}
+
+#[test]
+fn test_departing_landing_does_not_steal_valid_unmanaged_replacement() {
+    let mut state = departing_tiled_state(Some(100), Some(999));
+    state.handle_window_event(WindowEvent::Destroyed(100));
+
+    assert_eq!(state.previous_focused_hwnd, None);
+    assert!(
+        state
+            .layout_transition
+            .as_ref()
+            .is_some_and(|transition| transition.suppress_landing_focus_resync),
+        "valid unmanaged replacement arms landing suppression"
+    );
+
+    land_departing_transition(&mut state);
+
+    assert_eq!(state.previous_focused_hwnd, None);
+    assert!(!state.pending_suppress_landing_focus_resync);
+}
+
+#[test]
+fn test_departing_landing_recovers_when_foreground_requires_it() {
+    for foreground in [None, Some(0), Some(100)] {
+        let mut state = departing_tiled_state(Some(100), foreground);
+        state
+            .focused_workspace_mut()
+            .unwrap()
+            .focus_window(200)
+            .unwrap();
+
+        state.handle_window_event(WindowEvent::Destroyed(100));
+
+        assert_eq!(state.previous_focused_hwnd, Some(200));
+        assert!(
+            state
+                .layout_transition
+                .as_ref()
+                .is_some_and(|transition| !transition.suppress_landing_focus_resync),
+            "recovery-required departure must still land with a focus re-sync"
+        );
+
+        state.previous_focused_hwnd = None;
+        land_departing_transition(&mut state);
+
+        assert_eq!(state.previous_focused_hwnd, Some(200));
+        assert!(!state.pending_suppress_landing_focus_resync);
+    }
+}
+
+#[test]
+fn test_departing_landing_suppress_does_not_stale_onto_later_transition() {
+    let mut state = departing_tiled_state(Some(100), Some(200));
+    state.handle_window_event(WindowEvent::Destroyed(100));
+    assert!(state
+        .layout_transition
+        .as_ref()
+        .is_some_and(|transition| transition.suppress_landing_focus_resync));
+
+    land_departing_transition(&mut state);
+    assert!(!state.pending_suppress_landing_focus_resync);
+
+    state.previous_focused_hwnd = None;
+    let snapshot = state.snapshot_layout();
+    state.start_layout_transition(snapshot);
+    assert!(
+        state
+            .layout_transition
+            .as_ref()
+            .is_some_and(|transition| !transition.suppress_landing_focus_resync),
+        "later ordinary transition must not inherit departure suppression"
+    );
+    assert!(!state.pending_suppress_landing_focus_resync);
+
+    land_departing_transition(&mut state);
+
+    assert_eq!(state.previous_focused_hwnd, Some(200));
+    assert!(!state.pending_suppress_landing_focus_resync);
+}
+
+#[test]
+fn test_abort_layout_transition_does_not_strand_landing_suppress() {
+    let mut state = departing_tiled_state(Some(100), Some(200));
+    state.handle_window_event(WindowEvent::Destroyed(100));
+    assert!(state
+        .layout_transition
+        .as_ref()
+        .is_some_and(|transition| transition.suppress_landing_focus_resync));
+
+    state.abort_layout_transition();
+
+    assert!(state.layout_transition.is_none());
+    assert!(!state.pending_suppress_landing_focus_resync);
+
+    state.previous_focused_hwnd = None;
+    let snapshot = state.snapshot_layout();
+    state.start_layout_transition(snapshot);
+    land_departing_transition(&mut state);
+
+    assert_eq!(state.previous_focused_hwnd, Some(200));
+}
+
+#[test]
+fn test_unfocused_tiled_departure_null_or_invalid_still_lands_resync() {
+    for (foreground, valid) in [(None, None), (Some(0), None), (Some(999), Some(false))] {
+        let mut state = departing_tiled_state(Some(200), foreground);
+        state.injected_foreground_is_valid = valid;
+
+        state.handle_window_event(WindowEvent::Destroyed(100));
+
+        assert_eq!(state.previous_focused_hwnd, Some(200));
+        assert!(
+            state
+                .layout_transition
+                .as_ref()
+                .is_some_and(|transition| !transition.suppress_landing_focus_resync),
+            "unfocused departure with null/invalid foreground must not suppress landing"
+        );
+
+        state.previous_focused_hwnd = None;
+        land_departing_transition(&mut state);
+
+        assert_eq!(state.previous_focused_hwnd, Some(200));
+        assert!(!state.pending_suppress_landing_focus_resync);
+    }
+}
+
+#[test]
+fn test_unfocused_tiled_departure_valid_replacement_suppresses_landing() {
+    for replacement in [200, 999] {
+        let mut state = departing_tiled_state(Some(200), Some(replacement));
+        state.handle_window_event(WindowEvent::Destroyed(100));
+
+        assert_eq!(state.previous_focused_hwnd, Some(200));
+        assert!(
+            state
+                .layout_transition
+                .as_ref()
+                .is_some_and(|transition| transition.suppress_landing_focus_resync),
+            "unfocused departure with a valid replacement must suppress landing"
+        );
+
+        land_departing_transition(&mut state);
+
+        assert_eq!(state.previous_focused_hwnd, Some(200));
+        assert!(!state.pending_suppress_landing_focus_resync);
+    }
+}
+
+#[test]
+fn test_tear_off_event_order_does_not_leave_stale_focus_or_ghost() {
+    use crate::state::{CrossfadeState, GhostEntry};
+
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.reduce_motion = false;
+    state.config.behavior.swap_chain_ghost_animation = true;
+    for hwnd in [100, 200] {
+        state
+            .injected_window_info
+            .insert(hwnd, make_test_window_info(hwnd));
+        state.handle_window_event(WindowEvent::Created(hwnd));
+    }
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .focus_window(100)
+        .unwrap();
+    state.previous_focused_hwnd = Some(100);
+
+    state
+        .injected_window_info
+        .insert(300, make_test_window_info(300));
+    state.handle_window_event(WindowEvent::Created(300));
+    state.handle_window_event(WindowEvent::Focused(300));
+    assert_eq!(state.previous_focused_hwnd, Some(300));
+    assert!(state.focused_workspace().unwrap().contains_window(100));
+    assert!(state.focused_workspace().unwrap().contains_window(200));
+    assert!(state.focused_workspace().unwrap().contains_window(300));
+
+    state.ghost_handles.insert(
+        300,
+        GhostEntry::new(0, "Chrome_WidgetWin_1".into(), Rect::new(0, 0, 800, 600)),
+    );
+    if let Some(ref mut transition) = state.layout_transition {
+        transition
+            .start_rects
+            .insert(300, Rect::new(0, 0, 800, 600));
+        transition.ghosted_wids.insert(300);
+    }
+    state.active_crossfade = Some(CrossfadeState { epoch: 4 });
+    state.crossfade_sources.insert(
+        4,
+        (
+            std::collections::HashSet::from([300]),
+            std::time::Instant::now(),
+        ),
+    );
+
+    state.injected_foreground_hwnd = Some(Some(100));
+    state.handle_window_event(WindowEvent::Destroyed(300));
+
+    assert_ne!(state.previous_focused_hwnd, Some(300));
+    assert!(!state.focused_workspace().unwrap().contains_window(300));
+    assert!(state.focused_workspace().unwrap().contains_window(100));
+    assert!(state.focused_workspace().unwrap().contains_window(200));
+    assert!(!state.ghost_handles.contains_key(&300));
+    assert!(!state
+        .layout_transition
+        .as_ref()
+        .is_some_and(|transition| transition.start_rects.contains_key(&300)
+            || transition.ghosted_wids.contains(&300)));
 }
 
 #[test]
@@ -3626,6 +4359,7 @@ fn test_protected_only_animation_frame_dispatches_and_settles_transition() {
         duration_ms: 150,
         easing: leopardwm_core_layout::Easing::default(),
         ghosted_wids: HashSet::new(),
+        suppress_landing_focus_resync: false,
     });
 
     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(4);

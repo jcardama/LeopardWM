@@ -992,7 +992,7 @@ impl AppState {
             }
         }
         self.abort_active_ghost_transition();
-        self.layout_transition = None;
+        self.abort_layout_transition();
 
         let slide_height = self
             .monitors

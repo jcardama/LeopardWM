@@ -4,6 +4,35 @@ use crate::state::*;
 use leopardwm_platform_win32::get_process_executable;
 use tracing::{debug, info};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DepartingFocusDecision {
+    pub recover: bool,
+    pub suppress_landing_resync: bool,
+}
+
+pub(crate) fn departing_focus_decision(
+    was_tracked_focus: bool,
+    departing_hwnd: u64,
+    foreground: Option<u64>,
+    foreground_is_valid: bool,
+) -> DepartingFocusDecision {
+    let suppress_landing_resync = matches!(
+        foreground,
+        Some(id) if id != 0 && id != departing_hwnd && foreground_is_valid
+    );
+    DepartingFocusDecision {
+        recover: was_tracked_focus && !suppress_landing_resync,
+        suppress_landing_resync,
+    }
+}
+
+pub(crate) fn should_sync_foreground_on_animation_landing(
+    paused: bool,
+    suppress_landing_focus_resync: bool,
+) -> bool {
+    !paused && !suppress_landing_focus_resync
+}
+
 impl AppState {
     /// Convert the config border color (hex RGB string) to BGR u32 for Win32.
     /// When high contrast mode is active, returns the system highlight color instead.
@@ -476,6 +505,14 @@ impl AppState {
             debug!("sync_foreground_window: no focused visible window");
             let monitor = self.focused_monitor as i64;
             self.broadcast_focused_window_if_changed(monitor, None);
+        }
+    }
+
+    pub(crate) fn sync_foreground_after_animation_landing(&mut self) {
+        let suppress = self.pending_suppress_landing_focus_resync;
+        self.pending_suppress_landing_focus_resync = false;
+        if should_sync_foreground_on_animation_landing(self.paused, suppress) {
+            self.sync_foreground_window();
         }
     }
 }

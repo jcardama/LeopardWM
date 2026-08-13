@@ -54,7 +54,7 @@ impl AppState {
             for wid in self.layout_transition_exit_windows_to_park() {
                 let _ = leopardwm_platform_win32::park_window_for_placement(wid);
             }
-            self.layout_transition = None;
+            self.complete_layout_transition();
             // The slide is done; cloak any settled off-workspace windows
             // that were skipped while animating so their taskbar buttons go.
             self.sync_taskbar_buttons();
@@ -93,12 +93,13 @@ impl AppState {
     pub(crate) fn start_layout_transition(
         &mut self,
         start_rects: std::collections::HashMap<u64, leopardwm_core_layout::Rect>,
-    ) {
+    ) -> bool {
         if self.reduce_motion {
-            return;
+            return false;
         }
         let duration = self.config.animation.layout_duration_ms;
         self.start_layout_transition_with_duration(start_rects, duration);
+        true
     }
 
     pub(crate) fn start_layout_transition_with_duration(
@@ -121,6 +122,7 @@ impl AppState {
 
         // Start with one frame (~16ms) already elapsed so the first
         // apply_layout/send_animation_frame shows visible movement.
+        self.abort_layout_transition();
         self.layout_transition = Some(LayoutTransition {
             start_rects,
             exit_rects: HashMap::new(),
@@ -128,6 +130,7 @@ impl AppState {
             duration_ms,
             easing: self.config.animation.easing,
             ghosted_wids,
+            suppress_landing_focus_resync: false,
         });
     }
 
@@ -149,6 +152,7 @@ impl AppState {
             return;
         }
         self.abort_active_ghost_transition();
+        self.abort_layout_transition();
         self.layout_transition = Some(LayoutTransition {
             start_rects,
             exit_rects,
@@ -156,7 +160,30 @@ impl AppState {
             duration_ms,
             easing: self.config.animation.easing,
             ghosted_wids: std::collections::HashSet::new(),
+            suppress_landing_focus_resync: false,
         });
+    }
+
+    pub(crate) fn abort_layout_transition(&mut self) {
+        self.layout_transition = None;
+        self.pending_suppress_landing_focus_resync = false;
+    }
+
+    fn complete_layout_transition(&mut self) {
+        let suppress = self
+            .layout_transition
+            .as_ref()
+            .is_some_and(|transition| transition.suppress_landing_focus_resync);
+        self.layout_transition = None;
+        self.pending_suppress_landing_focus_resync = suppress;
+    }
+
+    pub(crate) fn release_departing_hwnd_ghost(&mut self, hwnd: u64) {
+        self.stop_ghosting_window_visuals(hwnd);
+        if let Some(ref mut transition) = self.layout_transition {
+            transition.start_rects.remove(&hwnd);
+            transition.exit_rects.remove(&hwnd);
+        }
     }
 
     pub(crate) fn stop_ghosting_window_visuals(&mut self, hwnd: u64) {

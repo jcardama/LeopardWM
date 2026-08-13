@@ -198,6 +198,11 @@ pub(crate) struct LayoutTransition {
     /// post-landing crossfade. `partition_for_animation` uses this set to
     /// split frame placements into live + ghost streams.
     pub(crate) ghosted_wids: HashSet<u64>,
+    /// One-shot: skip the post-animation `sync_foreground_window` when this
+    /// transition lands. Bound here so a departing window that already
+    /// declined recovery cannot steal a valid replacement at landing, and so
+    /// a later unrelated transition cannot inherit the skip.
+    pub(crate) suppress_landing_focus_resync: bool,
 }
 
 /// Owns a registered DWM thumbnail handle for a single window across a
@@ -329,6 +334,11 @@ pub(crate) struct AppState {
     /// destination's windows mid-slide can clobber `previous_focused_hwnd`,
     /// so the landing re-sync must re-assert the pinned window's focus.
     pub(crate) pending_sticky_refocus: Option<u64>,
+    /// One-shot hoisted from a completed layout transition whose landing
+    /// should not re-sync OS foreground. Survives `layout_transition`
+    /// clearing so the extra post-complete frame can still consume it.
+    /// Cleared on consume, abort, or a newer transition start.
+    pub(crate) pending_suppress_landing_focus_resync: bool,
     /// Previously focused window for border color tracking.
     pub(crate) previous_focused_hwnd: Option<u64>,
     /// `(monitor, hwnd)` of the most-recently-broadcast
@@ -554,6 +564,16 @@ pub(crate) struct AppState {
     /// entries from this map instead of calling `enumerate_windows()`.
     #[cfg(test)]
     pub(crate) injected_window_info: HashMap<u64, leopardwm_platform_win32::WindowInfo>,
+    #[cfg(test)]
+    pub(crate) injected_visible_hwnds: HashSet<u64>,
+    #[cfg(test)]
+    pub(crate) injected_foreground_hwnd: Option<Option<u64>>,
+    #[cfg(test)]
+    pub(crate) injected_foreground_is_valid: Option<bool>,
+    #[cfg(test)]
+    pub(crate) injected_next_foreground_hwnd: Option<Option<u64>>,
+    #[cfg(test)]
+    pub(crate) departing_foreground_evidence_reads: usize,
     /// Optional test-only behavior override for placement application.
     #[cfg(test)]
     pub(crate) injected_apply_placements_behavior: Option<TestApplyPlacementsBehavior>,
@@ -727,6 +747,7 @@ impl AppState {
             scratchpad: None,
             sticky_windows: HashSet::new(),
             pending_sticky_refocus: None,
+            pending_suppress_landing_focus_resync: false,
             previous_focused_hwnd: None,
             last_broadcast_focused: None,
             last_focus_change_at: None,
@@ -795,6 +816,16 @@ impl AppState {
             post_animation_nudge_pending: false,
             #[cfg(test)]
             injected_window_info: HashMap::new(),
+            #[cfg(test)]
+            injected_visible_hwnds: HashSet::new(),
+            #[cfg(test)]
+            injected_foreground_hwnd: None,
+            #[cfg(test)]
+            injected_foreground_is_valid: None,
+            #[cfg(test)]
+            injected_next_foreground_hwnd: None,
+            #[cfg(test)]
+            departing_foreground_evidence_reads: 0,
             #[cfg(test)]
             injected_apply_placements_behavior: None,
             #[cfg(test)]
