@@ -31,6 +31,8 @@ All notable changes to LeopardWM will be documented in this file.
   own ghost/crossfade ownership and unfinished resize/drag preview state, and
   does not steal focus from a valid replacement window, including when that
   departure's layout animation lands.
+- **Re-docking windows is easier from a stable top drag band.** Hovering the
+  top of a target column preserves its geometry while still allowing a drop to merge.
 
 ## 0.2.6
 

@@ -1235,10 +1235,14 @@ fn seed_drag_session(state: &mut AppState, hwnd: u64) {
         is_tiled: true,
         source_monitor: monitor,
         source_workspace_idx: ws_idx,
+        source_window_slot: 0,
         current_column_index: 0,
         last_drop_target: None,
         last_hint_update: None,
         removed_from_source: false,
+        preview_mode: crate::state::DragPreviewMode::None,
+        target_column_peers: Vec::new(),
+        source_column_peers: Vec::new(),
     });
     if let Some(ws) = state
         .workspaces
@@ -1250,6 +1254,978 @@ fn seed_drag_session(state: &mut AppState, hwnd: u64) {
     state.pending_drag_hint = Some(DragHintAction::ShowGhost {
         rect: drag_hint_rect(),
     });
+}
+
+fn safe_band_drag_fixture() -> AppState {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = false;
+    let workspace = state.focused_workspace_mut().unwrap();
+    workspace.insert_window(100, Some(800)).unwrap();
+    workspace.insert_window(200, Some(800)).unwrap();
+    state
+        .injected_window_info
+        .insert(100, make_test_window_info(100));
+    state.drag_state = Some(DragState {
+        hwnd: 100,
+        is_tiled: true,
+        source_monitor: 1,
+        source_workspace_idx: 0,
+        source_window_slot: 0,
+        current_column_index: 0,
+        last_drop_target: None,
+        last_hint_update: None,
+        removed_from_source: false,
+        preview_mode: crate::state::DragPreviewMode::None,
+        target_column_peers: Vec::new(),
+        source_column_peers: Vec::new(),
+    });
+    state
+}
+
+#[test]
+fn test_safe_drag_band_geometry_and_lower_boundary() {
+    use crate::drag::is_safe_drag_band;
+
+    let tall = Rect::new(0, 100, 800, 500);
+    assert!(is_safe_drag_band(&tall, 100));
+    assert!(is_safe_drag_band(&tall, 163));
+    assert!(!is_safe_drag_band(&tall, 164));
+
+    let short = Rect::new(0, 10, 800, 45);
+    assert!(is_safe_drag_band(&short, 18));
+    assert!(!is_safe_drag_band(&short, 19));
+    assert!(!is_safe_drag_band(&Rect::new(0, 0, 800, 0), 0));
+}
+
+#[test]
+fn test_safe_drag_band_preview_transitions_and_restores() {
+    let mut state = safe_band_drag_fixture();
+    let stable = state.snapshot_layout();
+    let target = stable.get(&200).unwrap();
+    let band_y = target.y;
+    let body_y = target.y + 300;
+
+    state.update_drag_hint_at(100, target.x + 10, band_y, 1, false);
+
+    assert!(!state
+        .focused_workspace()
+        .unwrap()
+        .contains_window(DRAG_PLACEHOLDER_HWND));
+    assert_eq!(state.snapshot_layout(), stable);
+    assert_eq!(
+        state.drag_state.as_ref().map(|drag| drag.preview_mode),
+        Some(crate::state::DragPreviewMode::SafeBand)
+    );
+
+    state.update_drag_hint_at(100, target.x + 10, body_y, 1, false);
+
+    assert!(state
+        .focused_workspace()
+        .unwrap()
+        .contains_window(DRAG_PLACEHOLDER_HWND));
+    assert_eq!(
+        state.drag_state.as_ref().map(|drag| drag.preview_mode),
+        Some(crate::state::DragPreviewMode::Body)
+    );
+    let shifted = state.snapshot_layout();
+    let peer_start = *shifted.get(&200).expect("shifted peer geometry");
+
+    state.update_drag_hint_at(100, target.x + 10, band_y, 1, false);
+
+    assert!(!state
+        .focused_workspace()
+        .unwrap()
+        .contains_window(DRAG_PLACEHOLDER_HWND));
+    let transition = state.layout_transition.as_ref().expect("restoration transition");
+    assert_eq!(transition.start_rects.get(&200), Some(&peer_start));
+    assert!(!transition.start_rects.contains_key(&100));
+    assert!(!transition.start_rects.contains_key(&DRAG_PLACEHOLDER_HWND));
+
+    state.update_drag_hint_at(100, target.x + 10, body_y, 1, false);
+
+    assert!(state
+        .focused_workspace()
+        .unwrap()
+        .contains_window(DRAG_PLACEHOLDER_HWND));
+    assert_eq!(
+        state.drag_state.as_ref().map(|drag| drag.preview_mode),
+        Some(crate::state::DragPreviewMode::Body)
+    );
+}
+
+#[test]
+fn test_body_preview_shift_transition_restores_before_reorder() {
+    let mut state = safe_band_drag_fixture();
+    state.monitors.insert(
+        2,
+        MonitorInfo {
+            id: 2,
+            rect: Rect::new(1920, 0, 1920, 1080),
+            work_area: Rect::new(1920, 0, 1920, 1040),
+            is_primary: false,
+            device_name: "DISPLAY2".to_string(),
+            scale_factor: 1.0,
+        },
+    );
+    let mut target_workspace = Workspace::new();
+    target_workspace.insert_window(300, Some(800)).unwrap();
+    state.workspaces.insert(2, vec![target_workspace]);
+    let target = *state.snapshot_layout().get(&200).unwrap();
+    let body_y = target.y + 300;
+    let cross_monitor_target = *state.snapshot_layout().get(&300).unwrap();
+
+    state.update_drag_hint_at(100, target.x + 10, body_y, 1, false);
+    assert!(state
+        .focused_workspace()
+        .unwrap()
+        .contains_window(DRAG_PLACEHOLDER_HWND));
+
+    state.update_drag_hint_at(
+        100,
+        cross_monitor_target.x + 10,
+        cross_monitor_target.y + 300,
+        2,
+        true,
+    );
+
+    let workspace = state.focused_workspace().unwrap();
+    assert!(!workspace.contains_window(DRAG_PLACEHOLDER_HWND));
+    assert_eq!(
+        state.drag_state.as_ref().map(|drag| drag.preview_mode),
+        Some(crate::state::DragPreviewMode::None)
+    );
+    let shift_target = state.drag_state.as_ref().and_then(|drag| drag.last_drop_target);
+    assert_eq!(shift_target.and_then(|target| target.window_slot), None);
+    assert_eq!(shift_target.map(|target| target.monitor), Some(2));
+    assert!(matches!(state.pending_drag_hint, Some(DragHintAction::ShowGhost { .. })));
+    let transition = state.layout_transition.as_ref().expect("restoration transition");
+    assert!(!transition.start_rects.contains_key(&DRAG_PLACEHOLDER_HWND));
+    assert!(!transition.start_rects.contains_key(&100));
+}
+
+#[test]
+fn test_body_preview_shift_restores_multi_window_source_before_same_monitor_reorder() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = false;
+    {
+        let workspace = state.focused_workspace_mut().unwrap();
+        workspace.insert_window(100, Some(800)).unwrap();
+        workspace.insert_window_in_column(101, 0).unwrap();
+        workspace.insert_window(200, Some(800)).unwrap();
+    }
+    state.injected_window_info.insert(100, make_test_window_info(100));
+    state.drag_state = Some(DragState {
+        hwnd: 100,
+        is_tiled: true,
+        source_monitor: 1,
+        source_workspace_idx: 0,
+        source_window_slot: 0,
+        current_column_index: 0,
+        last_drop_target: None,
+        last_hint_update: None,
+        removed_from_source: false,
+        preview_mode: crate::state::DragPreviewMode::None,
+        target_column_peers: Vec::new(),
+        source_column_peers: Vec::new(),
+    });
+
+    let target = *state.snapshot_layout().get(&200).unwrap();
+    state.update_drag_hint_at(100, target.x + 10, target.y + 300, 1, false);
+    let source_after_body = state.focused_workspace().unwrap();
+    assert_eq!(source_after_body.find_window_location(100), None);
+    assert_eq!(source_after_body.find_window_location(101), Some((0, 0)));
+    assert!(source_after_body.contains_window(DRAG_PLACEHOLDER_HWND));
+    assert!(state.drag_state.as_ref().unwrap().removed_from_source);
+    let shifted_peer_rect = *state.snapshot_layout().get(&101).unwrap();
+
+    let source_target = *state.snapshot_layout().get(&200).unwrap();
+    state.update_drag_hint_at(100, source_target.x + 10, source_target.y + 300, 1, true);
+
+    let workspace = state.focused_workspace().unwrap();
+    assert_eq!(workspace.find_window_location(100), Some((1, 0)));
+    assert_eq!(workspace.find_window_location(101), Some((1, 1)));
+    assert_eq!(workspace.find_window_location(200), Some((0, 0)));
+    assert!(!workspace.contains_window(DRAG_PLACEHOLDER_HWND));
+    let drag = state.drag_state.as_ref().unwrap();
+    assert!(!drag.removed_from_source);
+    assert_eq!(drag.preview_mode, crate::state::DragPreviewMode::None);
+    assert!(matches!(state.pending_drag_hint, Some(DragHintAction::ShowGhost { .. })));
+    let transition = state.layout_transition.as_ref().expect("restoration/reorder transition");
+    assert_eq!(transition.start_rects.get(&101), Some(&shifted_peer_rect));
+    assert!(!transition.start_rects.contains_key(&100));
+    assert!(!transition.start_rects.contains_key(&DRAG_PLACEHOLDER_HWND));
+}
+
+#[test]
+fn test_body_preview_shift_restores_multi_window_source_without_reorder() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = false;
+    {
+        let workspace = state.focused_workspace_mut().unwrap();
+        workspace.insert_window(100, Some(800)).unwrap();
+        workspace.insert_window_in_column(101, 0).unwrap();
+        workspace.insert_window(200, Some(800)).unwrap();
+    }
+    state.injected_window_info.insert(100, make_test_window_info(100));
+    state.drag_state = Some(DragState {
+        hwnd: 100,
+        is_tiled: true,
+        source_monitor: 1,
+        source_workspace_idx: 0,
+        source_window_slot: 0,
+        current_column_index: 0,
+        last_drop_target: None,
+        last_hint_update: None,
+        removed_from_source: false,
+        preview_mode: crate::state::DragPreviewMode::None,
+        target_column_peers: Vec::new(),
+        source_column_peers: Vec::new(),
+    });
+
+    let target = *state.snapshot_layout().get(&200).unwrap();
+    state.update_drag_hint_at(100, target.x + 10, target.y + 300, 1, false);
+    let shifted_peer_rect = *state.snapshot_layout().get(&101).unwrap();
+    let current_column_rect = *state.snapshot_layout().get(&101).unwrap();
+
+    state.update_drag_hint_at(
+        100,
+        current_column_rect.x + 10,
+        current_column_rect.y + 300,
+        1,
+        true,
+    );
+
+    let workspace = state.focused_workspace().unwrap();
+    assert_eq!(workspace.find_window_location(100), Some((0, 0)));
+    assert_eq!(workspace.find_window_location(101), Some((0, 1)));
+    assert_eq!(workspace.find_window_location(200), Some((1, 0)));
+    assert!(!workspace.contains_window(DRAG_PLACEHOLDER_HWND));
+    let transition = state.layout_transition.as_ref().expect("restoration transition");
+    assert_eq!(transition.start_rects.get(&101), Some(&shifted_peer_rect));
+    assert!(!transition.start_rects.contains_key(&100));
+    assert!(!transition.start_rects.contains_key(&DRAG_PLACEHOLDER_HWND));
+}
+
+#[test]
+fn test_body_preview_shift_restores_multi_window_source_before_cross_monitor_drop() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = false;
+    {
+        let workspace = state.focused_workspace_mut().unwrap();
+        workspace.insert_window(100, Some(800)).unwrap();
+        workspace.insert_window_in_column(101, 0).unwrap();
+        workspace.insert_window(200, Some(800)).unwrap();
+    }
+    state.monitors.insert(
+        2,
+        MonitorInfo {
+            id: 2,
+            rect: Rect::new(1920, 0, 1920, 1080),
+            work_area: Rect::new(1920, 0, 1920, 1040),
+            is_primary: false,
+            device_name: "DISPLAY2".to_string(),
+            scale_factor: 1.0,
+        },
+    );
+    let mut target_workspace = Workspace::new();
+    target_workspace.insert_window(300, Some(800)).unwrap();
+    state.workspaces.insert(2, vec![target_workspace]);
+    state.injected_window_info.insert(100, make_test_window_info(100));
+    state.drag_state = Some(DragState {
+        hwnd: 100,
+        is_tiled: true,
+        source_monitor: 1,
+        source_workspace_idx: 0,
+        source_window_slot: 0,
+        current_column_index: 0,
+        last_drop_target: None,
+        last_hint_update: None,
+        removed_from_source: false,
+        preview_mode: crate::state::DragPreviewMode::None,
+        target_column_peers: Vec::new(),
+        source_column_peers: Vec::new(),
+    });
+
+    let target = *state.snapshot_layout().get(&200).unwrap();
+    state.update_drag_hint_at(100, target.x + 10, target.y + 300, 1, false);
+    let shifted_peer_rect = *state.snapshot_layout().get(&101).unwrap();
+    let cross_monitor_target = *state.snapshot_layout().get(&300).unwrap();
+    state.update_drag_hint_at(
+        100,
+        cross_monitor_target.x + 10,
+        cross_monitor_target.y + 300,
+        2,
+        true,
+    );
+
+    let source = state
+        .workspaces
+        .get(&1)
+        .and_then(|workspaces| workspaces.first())
+        .unwrap();
+    assert_eq!(source.find_window_location(100), Some((0, 0)));
+    assert_eq!(source.find_window_location(101), Some((0, 1)));
+    assert!(!source.contains_window(DRAG_PLACEHOLDER_HWND));
+    let drag = state.drag_state.as_ref().unwrap();
+    assert!(!drag.removed_from_source);
+    assert_eq!(drag.preview_mode, crate::state::DragPreviewMode::None);
+    assert_eq!(drag.last_drop_target.map(|target| target.monitor), Some(2));
+    assert_eq!(drag.last_drop_target.and_then(|target| target.window_slot), None);
+    assert!(matches!(state.pending_drag_hint, Some(DragHintAction::ShowGhost { .. })));
+    let transition = state.layout_transition.as_ref().expect("restoration transition");
+    assert_eq!(transition.start_rects.get(&101), Some(&shifted_peer_rect));
+    assert!(!transition.start_rects.contains_key(&100));
+    assert!(!transition.start_rects.contains_key(&DRAG_PLACEHOLDER_HWND));
+
+    let drag = state.drag_state.take().unwrap();
+    state.execute_cross_monitor_drag(100, &drag, 2, &cross_monitor_target);
+    let source = state
+        .workspaces
+        .get(&1)
+        .and_then(|workspaces| workspaces.first())
+        .unwrap();
+    assert_eq!(source.find_window_location(100), None);
+    assert_eq!(source.find_window_location(101), None);
+    let destination = state
+        .workspaces
+        .get(&2)
+        .and_then(|workspaces| workspaces.first())
+        .unwrap();
+    assert_eq!(destination.find_window_location(100), Some((1, 0)));
+    assert_eq!(destination.find_window_location(101), Some((1, 1)));
+}
+
+#[test]
+fn test_body_to_safe_band_then_shift_restores_multi_window_source() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = false;
+    {
+        let workspace = state.focused_workspace_mut().unwrap();
+        workspace.insert_window(100, Some(800)).unwrap();
+        workspace.insert_window_in_column(101, 0).unwrap();
+        workspace.insert_window(200, Some(800)).unwrap();
+    }
+    state.injected_window_info.insert(100, make_test_window_info(100));
+    state.drag_state = Some(DragState {
+        hwnd: 100,
+        is_tiled: true,
+        source_monitor: 1,
+        source_workspace_idx: 0,
+        source_window_slot: 0,
+        current_column_index: 0,
+        last_drop_target: None,
+        last_hint_update: None,
+        removed_from_source: false,
+        preview_mode: crate::state::DragPreviewMode::None,
+        target_column_peers: Vec::new(),
+        source_column_peers: Vec::new(),
+    });
+
+    let target = *state.snapshot_layout().get(&200).unwrap();
+    state.update_drag_hint_at(100, target.x + 10, target.y + 300, 1, false);
+    assert!(state.drag_state.as_ref().unwrap().removed_from_source);
+    let shifted_peer_rect = *state.snapshot_layout().get(&101).unwrap();
+
+    state.update_drag_hint_at(100, target.x + 10, target.y, 1, false);
+    assert_eq!(
+        state.drag_state.as_ref().map(|drag| drag.preview_mode),
+        Some(crate::state::DragPreviewMode::SafeBand)
+    );
+    assert!(state.drag_state.as_ref().unwrap().removed_from_source);
+    assert!(!state
+        .focused_workspace()
+        .unwrap()
+        .contains_window(DRAG_PLACEHOLDER_HWND));
+    let intermediate_transition = state
+        .layout_transition
+        .as_ref()
+        .expect("safe-band restoration transition")
+        .start_rects
+        .clone();
+    assert_eq!(intermediate_transition.get(&101), Some(&shifted_peer_rect));
+    assert!(!intermediate_transition.contains_key(&100));
+    assert!(!intermediate_transition.contains_key(&DRAG_PLACEHOLDER_HWND));
+
+    let current_column_rect = *state.snapshot_layout().get(&101).unwrap();
+    state.update_drag_hint_at(
+        100,
+        current_column_rect.x + 10,
+        current_column_rect.y + 300,
+        1,
+        true,
+    );
+
+    let workspace = state.focused_workspace().unwrap();
+    assert_eq!(workspace.find_window_location(100), Some((0, 0)));
+    assert_eq!(workspace.find_window_location(101), Some((0, 1)));
+    assert_eq!(workspace.find_window_location(200), Some((1, 0)));
+    assert!(!workspace.contains_window(DRAG_PLACEHOLDER_HWND));
+    let drag = state.drag_state.as_ref().unwrap();
+    assert!(!drag.removed_from_source);
+    assert_eq!(drag.preview_mode, crate::state::DragPreviewMode::None);
+    assert!(matches!(state.pending_drag_hint, Some(DragHintAction::ShowGhost { .. })));
+    // The safe-band tick already applied the restoration transition; the
+    // Shift tick must not start a duplicate one.
+    assert_eq!(
+        state
+            .layout_transition
+            .as_ref()
+            .expect("intermediate transition preserved")
+            .start_rects,
+        intermediate_transition
+    );
+
+    // Existing Shift reorder still works after the restore.
+    let reorder_target = *state.snapshot_layout().get(&200).unwrap();
+    state.update_drag_hint_at(100, reorder_target.x + 10, reorder_target.y + 300, 1, true);
+    let workspace = state.focused_workspace().unwrap();
+    assert_eq!(workspace.find_window_location(200), Some((0, 0)));
+    assert_eq!(workspace.find_window_location(100), Some((1, 0)));
+    assert_eq!(workspace.find_window_location(101), Some((1, 1)));
+    assert_eq!(
+        state.drag_state.as_ref().map(|drag| drag.current_column_index),
+        Some(1)
+    );
+    assert!(matches!(state.pending_drag_hint, Some(DragHintAction::ShowGhost { .. })));
+}
+
+#[test]
+fn test_body_to_no_target_then_cross_monitor_shift_restores_multi_window_source() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = false;
+    {
+        let workspace = state.focused_workspace_mut().unwrap();
+        workspace.insert_window(100, Some(800)).unwrap();
+        workspace.insert_window_in_column(101, 0).unwrap();
+        workspace.insert_window(200, Some(800)).unwrap();
+    }
+    state.monitors.insert(
+        2,
+        MonitorInfo {
+            id: 2,
+            rect: Rect::new(1920, 0, 1920, 1080),
+            work_area: Rect::new(1920, 0, 1920, 1040),
+            is_primary: false,
+            device_name: "DISPLAY2".to_string(),
+            scale_factor: 1.0,
+        },
+    );
+    let mut target_workspace = Workspace::new();
+    target_workspace.insert_window(300, Some(800)).unwrap();
+    state.workspaces.insert(2, vec![target_workspace]);
+    state.injected_window_info.insert(100, make_test_window_info(100));
+    state.drag_state = Some(DragState {
+        hwnd: 100,
+        is_tiled: true,
+        source_monitor: 1,
+        source_workspace_idx: 0,
+        source_window_slot: 0,
+        current_column_index: 0,
+        last_drop_target: None,
+        last_hint_update: None,
+        removed_from_source: false,
+        preview_mode: crate::state::DragPreviewMode::None,
+        target_column_peers: Vec::new(),
+        source_column_peers: Vec::new(),
+    });
+
+    let target = *state.snapshot_layout().get(&200).unwrap();
+    state.update_drag_hint_at(100, target.x + 10, target.y + 300, 1, false);
+    assert!(state.drag_state.as_ref().unwrap().removed_from_source);
+    let shifted_peer_rect = *state.snapshot_layout().get(&101).unwrap();
+
+    // Cursor leaves every column: preview drops to no-target (None mode).
+    state.update_drag_hint_at(100, -100, target.y + 300, 1, false);
+    assert_eq!(
+        state.drag_state.as_ref().map(|drag| drag.preview_mode),
+        Some(crate::state::DragPreviewMode::None)
+    );
+    assert!(state.drag_state.as_ref().unwrap().removed_from_source);
+    assert!(!state
+        .focused_workspace()
+        .unwrap()
+        .contains_window(DRAG_PLACEHOLDER_HWND));
+    let intermediate_transition = state
+        .layout_transition
+        .as_ref()
+        .expect("no-target restoration transition")
+        .start_rects
+        .clone();
+    assert_eq!(intermediate_transition.get(&101), Some(&shifted_peer_rect));
+    assert!(!intermediate_transition.contains_key(&100));
+    assert!(!intermediate_transition.contains_key(&DRAG_PLACEHOLDER_HWND));
+
+    let cross_monitor_target = *state.snapshot_layout().get(&300).unwrap();
+    state.update_drag_hint_at(
+        100,
+        cross_monitor_target.x + 10,
+        cross_monitor_target.y + 300,
+        2,
+        true,
+    );
+
+    let source = state
+        .workspaces
+        .get(&1)
+        .and_then(|workspaces| workspaces.first())
+        .unwrap();
+    assert_eq!(source.find_window_location(100), Some((0, 0)));
+    assert_eq!(source.find_window_location(101), Some((0, 1)));
+    assert!(!source.contains_window(DRAG_PLACEHOLDER_HWND));
+    let drag = state.drag_state.as_ref().unwrap();
+    assert!(!drag.removed_from_source);
+    assert_eq!(drag.preview_mode, crate::state::DragPreviewMode::None);
+    assert_eq!(drag.last_drop_target.map(|target| target.monitor), Some(2));
+    assert_eq!(drag.last_drop_target.and_then(|target| target.window_slot), None);
+    assert!(matches!(state.pending_drag_hint, Some(DragHintAction::ShowGhost { .. })));
+    // The no-target tick already applied the restoration transition; the
+    // Shift tick must not start a duplicate one.
+    assert_eq!(
+        state
+            .layout_transition
+            .as_ref()
+            .expect("intermediate transition preserved")
+            .start_rects,
+        intermediate_transition
+    );
+
+    let drag = state.drag_state.take().unwrap();
+    state.execute_cross_monitor_drag(100, &drag, 2, &cross_monitor_target);
+    let destination = state
+        .workspaces
+        .get(&2)
+        .and_then(|workspaces| workspaces.first())
+        .unwrap();
+    assert_eq!(destination.find_window_location(100), Some((1, 0)));
+    assert_eq!(destination.find_window_location(101), Some((1, 1)));
+}
+
+#[test]
+fn test_body_preview_shift_restores_same_column_reordered_slot() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = false;
+    {
+        let workspace = state.focused_workspace_mut().unwrap();
+        workspace.insert_window(100, Some(800)).unwrap();
+        workspace.insert_window_in_column(101, 0).unwrap();
+        workspace.insert_window_in_column(102, 0).unwrap();
+        workspace.insert_window(200, Some(800)).unwrap();
+    }
+    state
+        .injected_window_info
+        .insert(100, make_test_window_info(100));
+    state.drag_state = Some(DragState {
+        hwnd: 100,
+        is_tiled: true,
+        source_monitor: 1,
+        source_workspace_idx: 0,
+        source_window_slot: 0,
+        current_column_index: 0,
+        last_drop_target: None,
+        last_hint_update: None,
+        removed_from_source: false,
+        preview_mode: crate::state::DragPreviewMode::None,
+        target_column_peers: Vec::new(),
+        source_column_peers: Vec::new(),
+    });
+
+    // Same-column reorder: drag 100 from slot 0 down into slot 1.
+    let source_layout = state.snapshot_layout();
+    let top = *source_layout.get(&100).unwrap();
+    let bottom = *source_layout.get(&102).unwrap();
+    let column_height = bottom.y + bottom.height - top.y;
+    state.update_drag_hint_at(100, top.x + 10, top.y + column_height / 3 + 5, 1, false);
+    {
+        let workspace = state.focused_workspace().unwrap();
+        assert_eq!(workspace.find_window_location(101), Some((0, 0)));
+        assert_eq!(workspace.find_window_location(100), Some((0, 1)));
+        assert_eq!(workspace.find_window_location(102), Some((0, 2)));
+    }
+    assert!(!state.drag_state.as_ref().unwrap().removed_from_source);
+
+    // Cross-column Body preview removes 100 from the source column. The
+    // reordered slot — not the drag-start slot — must be tracked.
+    let target = *state.snapshot_layout().get(&200).unwrap();
+    state.update_drag_hint_at(100, target.x + 10, target.y + 300, 1, false);
+    {
+        let workspace = state.focused_workspace().unwrap();
+        assert_eq!(workspace.find_window_location(100), None);
+        assert!(workspace.contains_window(DRAG_PLACEHOLDER_HWND));
+    }
+    let drag = state.drag_state.as_ref().unwrap();
+    assert!(drag.removed_from_source);
+    assert_eq!(drag.source_window_slot, 1);
+    let shifted_peer_rect = *state.snapshot_layout().get(&101).unwrap();
+
+    // Shift restoration reinserts at the reordered slot, not slot 0.
+    let source_column_rect = *state.snapshot_layout().get(&101).unwrap();
+    state.update_drag_hint_at(
+        100,
+        source_column_rect.x + 10,
+        source_column_rect.y + 300,
+        1,
+        true,
+    );
+
+    let workspace = state.focused_workspace().unwrap();
+    assert_eq!(workspace.find_window_location(101), Some((0, 0)));
+    assert_eq!(workspace.find_window_location(100), Some((0, 1)));
+    assert_eq!(workspace.find_window_location(102), Some((0, 2)));
+    assert_eq!(workspace.find_window_location(200), Some((1, 0)));
+    assert!(!workspace.contains_window(DRAG_PLACEHOLDER_HWND));
+    let drag = state.drag_state.as_ref().unwrap();
+    assert!(!drag.removed_from_source);
+    assert_eq!(drag.preview_mode, crate::state::DragPreviewMode::None);
+    assert_eq!(drag.current_column_index, 0);
+    assert!(matches!(
+        state.pending_drag_hint,
+        Some(DragHintAction::ShowGhost { .. })
+    ));
+    let transition = state
+        .layout_transition
+        .as_ref()
+        .expect("restoration transition");
+    assert_eq!(transition.start_rects.get(&101), Some(&shifted_peer_rect));
+    assert!(!transition.start_rects.contains_key(&100));
+    assert!(!transition.start_rects.contains_key(&DRAG_PLACEHOLDER_HWND));
+
+    // Existing Shift column reorder still works, preserving the new order.
+    let reorder_target = *state.snapshot_layout().get(&200).unwrap();
+    state.update_drag_hint_at(100, reorder_target.x + 10, reorder_target.y + 300, 1, true);
+    let workspace = state.focused_workspace().unwrap();
+    assert_eq!(workspace.find_window_location(200), Some((0, 0)));
+    assert_eq!(workspace.find_window_location(101), Some((1, 0)));
+    assert_eq!(workspace.find_window_location(100), Some((1, 1)));
+    assert_eq!(workspace.find_window_location(102), Some((1, 2)));
+    assert_eq!(
+        state
+            .drag_state
+            .as_ref()
+            .map(|drag| drag.current_column_index),
+        Some(1)
+    );
+    assert!(matches!(
+        state.pending_drag_hint,
+        Some(DragHintAction::ShowGhost { .. })
+    ));
+}
+
+#[test]
+fn test_safe_band_does_not_override_tabbed_append_preview() {
+    let mut state = safe_band_drag_fixture();
+    let workspace = state.focused_workspace_mut().unwrap();
+    workspace.insert_window_in_column(300, 1).unwrap();
+    workspace.toggle_focused_column_tabbed_mode();
+    let target = *state.snapshot_layout().get(&200).unwrap();
+
+    state.update_drag_hint_at(100, target.x + 10, target.y, 1, false);
+
+    let workspace = state.focused_workspace().unwrap();
+    assert!(workspace.column(1).is_some_and(|column| column.is_tabbed()));
+    assert_eq!(
+        workspace.find_window_location(DRAG_PLACEHOLDER_HWND),
+        Some((1, 2))
+    );
+    assert!(matches!(state.pending_drag_hint, Some(DragHintAction::ShowGhost { rect }) if rect == target));
+    assert_eq!(
+        state.drag_state.as_ref().map(|drag| drag.preview_mode),
+        Some(crate::state::DragPreviewMode::Body)
+    );
+}
+
+#[test]
+fn test_safe_band_drop_uses_no_placeholder_fallback_target() {
+    let mut state = safe_band_drag_fixture();
+    let target = *state.snapshot_layout().get(&200).unwrap();
+    state.update_drag_hint_at(100, target.x + 10, target.y, 1, false);
+    let drag = state.drag_state.take().unwrap();
+
+    state.finalize_drag_merge(100, &drag, 1, &Rect::new(900, 0, 800, 1040));
+
+    let workspace = state.focused_workspace().unwrap();
+    let (column, slot) = workspace.find_window_location(100).unwrap();
+    assert_eq!(column, 0);
+    assert_eq!(slot, 0);
+    assert_eq!(workspace.find_window_location(200), Some((0, 1)));
+}
+
+#[test]
+fn test_safe_band_drop_follows_surviving_target_column_after_peer_lifecycle_shift() {
+    // source [100, 101] | bystander [150] | target [200, 201], SafeBand-hover
+    // the target, then destroy the bystander so the target's numeric index
+    // shifts left before the no-placeholder drop resolves.
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = false;
+    {
+        let workspace = state.focused_workspace_mut().unwrap();
+        workspace.insert_window(100, Some(300)).unwrap();
+        workspace.insert_window_in_column_at(101, 0, 1).unwrap();
+        workspace.insert_window(150, Some(300)).unwrap();
+        workspace.insert_window(200, Some(300)).unwrap();
+        workspace.insert_window_in_column_at(201, 2, 1).unwrap();
+    }
+    state
+        .injected_window_info
+        .insert(100, make_test_window_info(100));
+    state.drag_state = Some(DragState {
+        hwnd: 100,
+        is_tiled: true,
+        source_monitor: 1,
+        source_workspace_idx: 0,
+        source_window_slot: 0,
+        current_column_index: 0,
+        last_drop_target: None,
+        last_hint_update: None,
+        removed_from_source: false,
+        preview_mode: crate::state::DragPreviewMode::None,
+        target_column_peers: Vec::new(),
+        source_column_peers: Vec::new(),
+    });
+
+    let target = *state.snapshot_layout().get(&200).unwrap();
+    state.update_drag_hint_at(100, target.x + 10, target.y, 1, false);
+    {
+        let drag = state.drag_state.as_ref().unwrap();
+        assert_eq!(drag.preview_mode, crate::state::DragPreviewMode::SafeBand);
+        assert_eq!(drag.last_drop_target.unwrap().insert_index, 2);
+        assert_eq!(drag.target_column_peers, vec![200, 201]);
+    }
+
+    // Bystander column (index 1) destroyed mid-drag: an unmatched peer
+    // departure must preserve the drag but shifts the target from index 2 to 1.
+    state.handle_window_event(WindowEvent::Destroyed(150));
+    assert!(
+        state.drag_state.is_some(),
+        "unmatched peer departure must not cancel the drag"
+    );
+    assert_eq!(
+        state
+            .focused_workspace()
+            .unwrap()
+            .find_window_location(200),
+        Some((1, 0))
+    );
+
+    let drag = state.drag_state.take().unwrap();
+    state.finalize_drag_merge(100, &drag, 1, &Rect::new(900, 0, 800, 1040));
+
+    let workspace = state.focused_workspace().unwrap();
+    // Must land in the column that still contains 200/201 (now index 1),
+    // never the stale cached index 2 or an unrelated fallback column. The
+    // surviving source peer remains separate, proving target identity rather
+    // than merely observing a single-column merge.
+    assert_eq!(workspace.column_count(), 2);
+    assert_eq!(workspace.find_window_location(101), Some((0, 0)));
+    assert_eq!(workspace.find_window_location(100).map(|(c, _)| c), Some(1));
+    assert!(workspace.column(1).unwrap().contains(200));
+    assert!(workspace.column(1).unwrap().contains(201));
+}
+
+#[test]
+fn test_safe_band_drop_snaps_back_when_target_identity_vanishes_entirely() {
+    // Same setup, but both target peers are destroyed before the drop lands,
+    // so no surviving identity exists anywhere to resolve against.
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = false;
+    {
+        let workspace = state.focused_workspace_mut().unwrap();
+        workspace.insert_window(100, Some(300)).unwrap();
+        workspace.insert_window(200, Some(300)).unwrap();
+        workspace.insert_window_in_column_at(201, 1, 1).unwrap();
+    }
+    state
+        .injected_window_info
+        .insert(100, make_test_window_info(100));
+    state.drag_state = Some(DragState {
+        hwnd: 100,
+        is_tiled: true,
+        source_monitor: 1,
+        source_workspace_idx: 0,
+        source_window_slot: 0,
+        current_column_index: 0,
+        last_drop_target: None,
+        last_hint_update: None,
+        removed_from_source: false,
+        preview_mode: crate::state::DragPreviewMode::None,
+        target_column_peers: Vec::new(),
+        source_column_peers: Vec::new(),
+    });
+
+    let target = *state.snapshot_layout().get(&200).unwrap();
+    state.update_drag_hint_at(100, target.x + 10, target.y, 1, false);
+    {
+        let drag = state.drag_state.as_ref().unwrap();
+        assert_eq!(drag.preview_mode, crate::state::DragPreviewMode::SafeBand);
+        assert_eq!(drag.target_column_peers, vec![200, 201]);
+    }
+
+    state.handle_window_event(WindowEvent::Destroyed(200));
+    state.handle_window_event(WindowEvent::Destroyed(201));
+    assert!(state.drag_state.is_some());
+
+    let drag = state.drag_state.take().unwrap();
+    // Only the single-window source column [100] survives, so any cursor
+    // resolution is safe: it either recomputes onto the source column
+    // itself (single-window-onto-itself snap-back) or finds nothing
+    // (out-of-bounds snap-back) — never an unrelated/fallback column.
+    state.finalize_drag_merge(100, &drag, 1, &Rect::new(100_000, 0, 800, 600));
+
+    let workspace = state.focused_workspace().unwrap();
+    assert_eq!(workspace.column_count(), 1);
+    assert_eq!(workspace.find_window_location(100), Some((0, 0)));
+}
+
+#[test]
+fn test_shift_restore_follows_surviving_source_column_after_peer_lifecycle_shift() {
+    // bystander [150] | source [100, 101] | target [200]. Body-preview drags
+    // 100 onto the target (removing it from the multi-window source), then
+    // the bystander is destroyed, shifting the source's numeric column index
+    // before the Shift restoration tick lands.
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = false;
+    {
+        let workspace = state.focused_workspace_mut().unwrap();
+        workspace.insert_window(150, Some(300)).unwrap();
+        workspace.insert_window(100, Some(300)).unwrap();
+        workspace.insert_window_in_column_at(101, 1, 1).unwrap();
+        workspace.insert_window(200, Some(300)).unwrap();
+    }
+    state
+        .injected_window_info
+        .insert(100, make_test_window_info(100));
+    state.drag_state = Some(DragState {
+        hwnd: 100,
+        is_tiled: true,
+        source_monitor: 1,
+        source_workspace_idx: 0,
+        source_window_slot: 0,
+        current_column_index: 1,
+        last_drop_target: None,
+        last_hint_update: None,
+        removed_from_source: false,
+        preview_mode: crate::state::DragPreviewMode::None,
+        target_column_peers: Vec::new(),
+        source_column_peers: Vec::new(),
+    });
+
+    // Body-preview onto the target column (below its safe band) so the
+    // dragged window is pulled out of the multi-window source.
+    let target_rect = *state.snapshot_layout().get(&200).unwrap();
+    state.update_drag_hint_at(
+        100,
+        target_rect.x + 10,
+        target_rect.y + target_rect.height - 5,
+        1,
+        false,
+    );
+    {
+        let drag = state.drag_state.as_ref().unwrap();
+        assert_eq!(drag.preview_mode, crate::state::DragPreviewMode::Body);
+        assert!(drag.removed_from_source);
+        assert_eq!(drag.source_column_peers, vec![101]);
+        assert_eq!(drag.current_column_index, 1);
+    }
+    assert_eq!(
+        state.focused_workspace().unwrap().find_window_location(101),
+        Some((1, 0))
+    );
+
+    // Bystander (index 0) destroyed mid-drag: unmatched peer departure
+    // preserves the drag but shifts the source column from index 1 to 0.
+    state.handle_window_event(WindowEvent::Destroyed(150));
+    assert!(
+        state.drag_state.is_some(),
+        "unmatched peer departure must not cancel the drag"
+    );
+    assert_eq!(
+        state.focused_workspace().unwrap().find_window_location(101),
+        Some((0, 0))
+    );
+
+    // Aim the Shift restoration tick at surviving source peer 101. This
+    // isolates source restoration from Shift's separate whole-column reorder
+    // semantics, so the stale cached index cannot redirect the restore into
+    // the target column.
+    let source_rect = *state.snapshot_layout().get(&101).unwrap();
+    state.update_drag_hint_at(100, source_rect.x + 10, source_rect.y, 1, true);
+
+    let workspace = state.focused_workspace().unwrap();
+    assert_eq!(workspace.column_count(), 2);
+    assert_eq!(workspace.find_window_location(100), Some((0, 0)));
+    assert_eq!(workspace.find_window_location(101), Some((0, 1)));
+    // Target column (now index 1) must be untouched by the restore.
+    assert_eq!(workspace.find_window_location(200), Some((1, 0)));
+    assert!(!workspace.column(1).unwrap().contains(100));
+    let drag = state.drag_state.as_ref().unwrap();
+    assert!(!drag.removed_from_source);
+    assert_eq!(drag.current_column_index, 0);
+}
+
+#[test]
+fn test_shift_restore_creates_new_column_when_no_source_peer_survives() {
+    // bystander [150] | source [100, 101], where 101 is also destroyed
+    // before the Shift restoration tick — no surviving source peer exists,
+    // so the dragged window must land in a fresh column, never an
+    // unrelated one.
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = false;
+    {
+        let workspace = state.focused_workspace_mut().unwrap();
+        workspace.insert_window(150, Some(300)).unwrap();
+        workspace.insert_window(100, Some(300)).unwrap();
+        workspace.insert_window_in_column_at(101, 1, 1).unwrap();
+        workspace.insert_window(200, Some(300)).unwrap();
+    }
+    state
+        .injected_window_info
+        .insert(100, make_test_window_info(100));
+    state.drag_state = Some(DragState {
+        hwnd: 100,
+        is_tiled: true,
+        source_monitor: 1,
+        source_workspace_idx: 0,
+        source_window_slot: 0,
+        current_column_index: 1,
+        last_drop_target: None,
+        last_hint_update: None,
+        removed_from_source: false,
+        preview_mode: crate::state::DragPreviewMode::None,
+        target_column_peers: Vec::new(),
+        source_column_peers: Vec::new(),
+    });
+
+    let target_rect = *state.snapshot_layout().get(&200).unwrap();
+    state.update_drag_hint_at(
+        100,
+        target_rect.x + 10,
+        target_rect.y + target_rect.height - 5,
+        1,
+        false,
+    );
+    assert!(state.drag_state.as_ref().unwrap().removed_from_source);
+
+    state.handle_window_event(WindowEvent::Destroyed(150));
+    state.handle_window_event(WindowEvent::Destroyed(101));
+    assert!(state.drag_state.is_some());
+    assert!(!state
+        .focused_workspace()
+        .unwrap()
+        .contains_window(101));
+
+    let target_rect = *state.snapshot_layout().get(&200).unwrap();
+    state.update_drag_hint_at(100, target_rect.x + 10, target_rect.y, 1, true);
+
+    let workspace = state.focused_workspace().unwrap();
+    // 100 must be restored as its own column, not folded into the
+    // surviving target column [200]. The target shifted to index 1 after
+    // the bystander and emptied source column disappeared.
+    let (target_col, target_slot) = workspace.find_window_location(200).unwrap();
+    assert_eq!(target_slot, 0);
+    let (col100, _) = workspace.find_window_location(100).unwrap();
+    assert_ne!(col100, target_col);
+    assert_eq!(workspace.column(col100).unwrap().len(), 1);
+    let drag = state.drag_state.as_ref().unwrap();
+    assert!(!drag.removed_from_source);
 }
 
 fn seed_removed_from_source_drag(state: &mut AppState, hwnd: u64) {

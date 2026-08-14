@@ -1954,29 +1954,30 @@ impl AppState {
             return;
         }
 
-        let (is_tiled, source_monitor, source_ws_idx, col_idx) =
+        let (is_tiled, source_monitor, source_ws_idx, source_window_slot, col_idx) =
             if let Some((monitor_id, ws_idx)) = self.find_window_workspace(hwnd) {
                 let is_floating = self
                     .workspaces
                     .get(&monitor_id)
                     .and_then(|v| v.get(ws_idx))
                     .is_none_or(|ws| ws.is_floating(hwnd));
-                let col_idx = if !is_floating {
+                let (source_window_slot, col_idx) = if !is_floating {
                     self.workspaces
                         .get(&monitor_id)
                         .and_then(|v| v.get(ws_idx))
                         .and_then(|ws| ws.find_window_location(hwnd))
-                        .map(|(col, _)| col)
-                        .unwrap_or(0)
+                        .map(|(col, slot)| (slot, col))
+                        .unwrap_or((0, 0))
                 } else {
-                    0
+                    (0, 0)
                 };
-                (!is_floating, monitor_id, ws_idx, col_idx)
+                (!is_floating, monitor_id, ws_idx, source_window_slot, col_idx)
             } else {
                 (
                     false,
                     self.focused_monitor,
                     self.active_workspace_idx(self.focused_monitor),
+                    0,
                     0,
                 )
             };
@@ -1985,10 +1986,14 @@ impl AppState {
             is_tiled,
             source_monitor,
             source_workspace_idx: source_ws_idx,
+            source_window_slot,
             current_column_index: col_idx,
             last_drop_target: None,
             last_hint_update: None,
             removed_from_source: false,
+            preview_mode: crate::state::DragPreviewMode::None,
+            target_column_peers: Vec::new(),
+            source_column_peers: Vec::new(),
         });
         // Disable DWM-managed position interpolation on the
         // dragged window so its final SetWindowPos on drop

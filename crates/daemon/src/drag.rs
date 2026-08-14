@@ -1,7 +1,8 @@
 //! Drag-and-drop handling for AppState.
 
 use crate::state::{
-    AppState, DragHintAction, DragState, DropTarget, DRAG_PLACEHOLDER_HWND, FALLBACK_VIEWPORT_WIDTH,
+    AppState, DragHintAction, DragPreviewMode, DragState, DropTarget, DRAG_PLACEHOLDER_HWND,
+    FALLBACK_VIEWPORT_WIDTH,
 };
 use leopardwm_core_layout::{Rect, Visibility};
 use leopardwm_platform_win32::{find_monitor_for_rect, is_shift_key_pressed, MonitorId};
@@ -19,6 +20,23 @@ impl AppState {
             }
         }
         removed
+    }
+
+    fn reset_drag_preview_without_target(&mut self, hwnd: u64) {
+        let mut snapshot = self.snapshot_layout();
+        if self.clear_drag_placeholder() {
+            snapshot.remove(&hwnd);
+            snapshot.remove(&DRAG_PLACEHOLDER_HWND);
+            self.start_layout_transition(snapshot);
+            if let Err(e) = self.apply_layout() {
+                warn!("Failed to restore layout after losing drag target: {}", e);
+            }
+        }
+        if let Some(drag) = self.drag_state.as_mut() {
+            drag.last_drop_target = None;
+            drag.preview_mode = DragPreviewMode::None;
+        }
+        self.pending_drag_hint = Some(DragHintAction::Hide);
     }
 
     /// Compute and show a drag hint overlay.
@@ -45,22 +63,35 @@ impl AppState {
 
         // Use actual cursor position for more intuitive hit-testing —
         // the window center lags behind the cursor for large windows.
-        let (cursor_x, cursor_y) =
-            leopardwm_platform_win32::get_cursor_pos().unwrap_or_else(|| {
-                (
-                    win_info.rect.x + win_info.rect.width / 2,
-                    win_info.rect.y + win_info.rect.height / 2,
-                )
-            });
+        let (cursor_x, cursor_y) = leopardwm_platform_win32::get_cursor_pos().unwrap_or_else(|| {
+            (
+                win_info.rect.x + win_info.rect.width / 2,
+                win_info.rect.y + win_info.rect.height / 2,
+            )
+        });
 
         // Determine which monitor the dragged window is on.
         let monitors: Vec<_> = self.monitors.values().cloned().collect();
         let target_monitor_id = find_monitor_for_rect(&monitors, &win_info.rect)
             .map(|m| m.id)
             .unwrap_or(self.focused_monitor);
+        self.update_drag_hint_at(
+            hwnd,
+            cursor_x,
+            cursor_y,
+            target_monitor_id,
+            is_shift_key_pressed(),
+        );
+    }
 
-        let shift_held = is_shift_key_pressed();
-
+    pub(crate) fn update_drag_hint_at(
+        &mut self,
+        hwnd: u64,
+        cursor_x: i32,
+        cursor_y: i32,
+        target_monitor_id: MonitorId,
+        shift_held: bool,
+    ) {
         // Read drag state fields.
         let (current_col, source_monitor, source_ws_idx) = match self.drag_state {
             Some(ref d) => (
@@ -72,12 +103,125 @@ impl AppState {
         };
 
         if shift_held {
+            let mut restoration_snapshot = None;
+            let preview_is_body = self
+                .drag_state
+                .as_ref()
+                .is_some_and(|drag| drag.preview_mode == DragPreviewMode::Body);
+            let needs_source_restore = self
+                .drag_state
+                .as_ref()
+                .is_some_and(|drag| drag.removed_from_source);
+            if preview_is_body || needs_source_restore {
+                // Snapshot only while the placeholder is still present (Body
+                // mode) and the dragged HWND is absent from its source.
+                // Restoration must animate peers from this shifted geometry,
+                // while the dragged HWND remains under OS drag control and the
+                // placeholder is never sent to Win32. When an intermediate
+                // SafeBand/no-target tick already cleared the placeholder and
+                // applied its own restoration transition, only the model HWND
+                // is reinserted here — no duplicate transition/apply, and no
+                // snapping of the OS-dragged HWND.
+                let mut snapshot = preview_is_body.then(|| self.snapshot_layout());
+                let restore = self.drag_state.as_ref().and_then(|drag| {
+                    drag.removed_from_source.then(|| {
+                        (
+                            drag.source_monitor,
+                            drag.source_workspace_idx,
+                            drag.current_column_index,
+                            drag.source_window_slot,
+                            drag.source_column_peers.clone(),
+                        )
+                    })
+                });
+                let placeholder_removed = self.clear_drag_placeholder();
+                let restore_happened = restore.is_some();
+                if let Some((source_monitor, source_ws_idx, cached_col, source_slot, peers)) =
+                    restore
+                {
+                    if let Some(ws) = self
+                        .workspaces
+                        .get_mut(&source_monitor)
+                        .and_then(|v| v.get_mut(source_ws_idx))
+                    {
+                        // A source peer Hidden/Destroyed while unmatched may
+                        // have shifted or removed columns since this slot was
+                        // cached. Re-resolve the source column by surviving
+                        // peer membership rather than trusting the cached
+                        // index verbatim; if no source peer survives, restore
+                        // as a new column instead of landing in an unrelated
+                        // one.
+                        let cached_col_intact = ws
+                            .column(cached_col)
+                            .is_some_and(|c| peers.iter().any(|&peer| c.contains(peer)));
+                        let resolved_col = if cached_col_intact {
+                            Some(cached_col)
+                        } else {
+                            peers
+                                .iter()
+                                .find_map(|&peer| ws.find_window_location(peer).map(|(col, _)| col))
+                        };
+                        let inserted = match resolved_col {
+                            Some(col) => {
+                                let len = ws.column(col).map(|c| c.len()).unwrap_or(0);
+                                ws.insert_window_in_column_at(hwnd, col, source_slot.min(len))
+                                    .is_ok()
+                            }
+                            None => ws.insert_window(hwnd, None).is_ok(),
+                        };
+                        if inserted {
+                            let new_col_idx = ws.find_window_location(hwnd).map(|(col, _)| col);
+                            if let Some(drag) = self.drag_state.as_mut() {
+                                drag.removed_from_source = false;
+                                if let Some(col) = new_col_idx {
+                                    drag.current_column_index = col;
+                                }
+                            }
+                        }
+                    }
+                }
+                if placeholder_removed || restore_happened {
+                    if let Some(mut snapshot) = snapshot.take() {
+                        snapshot.remove(&hwnd);
+                        snapshot.remove(&DRAG_PLACEHOLDER_HWND);
+                        restoration_snapshot = Some(snapshot);
+                    }
+                }
+                if let Some(drag) = self.drag_state.as_mut() {
+                    drag.last_drop_target = None;
+                    drag.preview_mode = DragPreviewMode::None;
+                }
+                self.pending_drag_hint = Some(DragHintAction::Hide);
+            }
+
             // --- Shift+drag: column reorder mode ---
             // Only live-reorder on the source monitor; cross-monitor happens on drop.
             if target_monitor_id != source_monitor {
+                if let Some(snapshot) = restoration_snapshot {
+                    self.start_layout_transition(snapshot);
+                    if let Err(e) = self.apply_layout() {
+                        warn!("Failed to restore layout before Shift drag: {}", e);
+                    }
+                }
                 self.shift_drag_cross_monitor_hint(cursor_x, target_monitor_id);
             } else {
-                self.shift_drag_reorder_hint(cursor_x, source_monitor, source_ws_idx, current_col);
+                // A same-tick source restore above may have re-resolved and
+                // updated `drag.current_column_index` (peer-lifecycle
+                // shift). Re-read it rather than the pre-restore `current_col`
+                // snapshot, or this reorder step would operate on the
+                // stale/unrelated column the restore just moved away from.
+                let current_col = self
+                    .drag_state
+                    .as_ref()
+                    .map(|d| d.current_column_index)
+                    .unwrap_or(current_col);
+                self.shift_drag_reorder_hint(
+                    cursor_x,
+                    source_monitor,
+                    source_ws_idx,
+                    current_col,
+                    restoration_snapshot,
+                );
             }
         } else {
             // --- Default drag: window merge mode with live preview ---
@@ -85,19 +229,17 @@ impl AppState {
             // Target column gets a placeholder so its windows shift to make room.
 
             if !self.monitors.contains_key(&target_monitor_id) {
+                self.reset_drag_preview_without_target(hwnd);
                 return;
             }
             let viewport = self.layout_viewport(target_monitor_id);
-
-            // Remove any existing placeholder before recomputing bounds.
-            self.clear_drag_placeholder();
-
             let ws_idx = self.active_workspace_idx(target_monitor_id);
             let Some(workspace) = self
                 .workspaces
                 .get(&target_monitor_id)
                 .and_then(|v| v.get(ws_idx))
             else {
+                self.reset_drag_preview_without_target(hwnd);
                 return;
             };
             let column_bounds = column_bounds_from_placements(workspace, viewport);
@@ -120,7 +262,10 @@ impl AppState {
                 Some(hit) => hit.column_idx,
                 None => match compute_target_column_index(&column_bounds, cursor_x) {
                     Some(idx) => idx,
-                    None => return,
+                    None => {
+                        self.reset_drag_preview_without_target(hwnd);
+                        return;
+                    }
                 },
             };
 
@@ -128,23 +273,48 @@ impl AppState {
             let is_same_column = workspace
                 .column(target_col)
                 .is_some_and(|c| c.contains(hwnd));
-
             let target_is_tabbed = workspace.column(target_col).is_some_and(|c| c.is_tabbed());
-
-            let n_existing = workspace.column(target_col).map(|c| c.len()).unwrap_or(0);
             // Same column: N slots (reorder). Different column: N+1 (placeholder added).
+            let n_existing = workspace
+                .column(target_col)
+                .map(|column| {
+                    column
+                        .windows()
+                        .iter()
+                        .filter(|&&window| window != DRAG_PLACEHOLDER_HWND)
+                        .count()
+                })
+                .unwrap_or(0);
+            // Snapshot of the target column's current occupants (minus the
+            // dragged window and placeholder), so a later drop can re-resolve
+            // this column by surviving membership if a peer Hidden/Destroyed
+            // event shifts or removes columns before the drop lands.
+            let target_peers: Vec<u64> = workspace
+                .column(target_col)
+                .map(|column| {
+                    column
+                        .windows()
+                        .iter()
+                        .copied()
+                        .filter(|&window| window != hwnd && window != DRAG_PLACEHOLDER_HWND)
+                        .collect()
+                })
+                .unwrap_or_default();
             let n_total = if is_same_column {
                 n_existing
             } else {
                 n_existing + 1
             };
             if n_total == 0 {
+                self.reset_drag_preview_without_target(hwnd);
                 return;
             }
-
             let col_rect = match compute_column_rect(workspace, viewport, target_col) {
                 Some(r) => r,
-                None => return,
+                None => {
+                    self.reset_drag_preview_without_target(hwnd);
+                    return;
+                }
             };
 
             // Slot selection: Tabbed targets always append to the end
@@ -168,21 +338,41 @@ impl AppState {
                 insert_index: target_col,
                 window_slot: Some(window_slot),
             };
-            let drop_target_unchanged = self
+            let (drop_target_unchanged, previous_mode) = self
                 .drag_state
                 .as_ref()
-                .is_some_and(|d| d.last_drop_target == Some(drop_target));
-            if let Some(ref mut drag) = self.drag_state {
+                .map(|drag| {
+                    (
+                        drag.last_drop_target == Some(drop_target),
+                        drag.preview_mode,
+                    )
+                })
+                .unwrap_or((false, DragPreviewMode::None));
+            if let Some(drag) = self.drag_state.as_mut() {
                 drag.last_drop_target = Some(drop_target);
+                drag.target_column_peers = target_peers;
             }
-            if drop_target_unchanged {
-                // Layout is already correct from the previous tick — skip
-                // apply_layout. The `clear_drag_placeholder()` call at the
-                // top of this function did, however, remove the placeholder
-                // we previously inserted; `finalize_drag_merge` relies on
-                // finding the placeholder on drop, so re-insert it at the
-                // same position for cross-column drags. Same-column drags
-                // don't use a placeholder, so nothing to do there.
+
+            if !is_same_column && !target_is_tabbed && is_safe_drag_band(&col_rect, cursor_y) {
+                let mut snapshot = self.snapshot_layout();
+                if self.clear_drag_placeholder() {
+                    snapshot.remove(&hwnd);
+                    snapshot.remove(&DRAG_PLACEHOLDER_HWND);
+                    self.start_layout_transition(snapshot);
+                    if let Err(e) = self.apply_layout() {
+                        warn!("Failed to restore layout from drag safe band: {}", e);
+                    }
+                }
+                if let Some(drag) = self.drag_state.as_mut() {
+                    drag.preview_mode = DragPreviewMode::SafeBand;
+                }
+                self.pending_drag_hint = Some(DragHintAction::Hide);
+                return;
+            }
+
+            // Remove any existing placeholder before recomputing the body preview.
+            self.clear_drag_placeholder();
+            if drop_target_unchanged && previous_mode == DragPreviewMode::Body {
                 if !is_same_column {
                     if let Some(ws) = self
                         .workspaces
@@ -199,15 +389,20 @@ impl AppState {
                 return;
             }
 
+            if let Some(drag) = self.drag_state.as_mut() {
+                drag.preview_mode = if is_same_column {
+                    DragPreviewMode::None
+                } else {
+                    DragPreviewMode::Body
+                };
+            }
             if is_same_column {
                 self.merge_reorder_same_column(hwnd, target_monitor_id, target_col, window_slot);
             } else {
                 // Different column: remove window from multi-window source so
                 // remaining windows expand, then insert placeholder at target.
                 let snapshot = self.snapshot_layout();
-
                 self.remove_drag_window_from_source(hwnd, source_monitor, source_ws_idx);
-
                 let Some(target_is_tabbed_final) = self.insert_drag_placeholder_at_target(
                     viewport,
                     cursor_x,
@@ -219,23 +414,14 @@ impl AppState {
                 };
                 // Skip the live-preview transition for Tabbed targets.
                 // Tabbed columns hide non-active tabs off-screen, so the
-                // placeholder doesn't introduce a visible "gap" to
-                // animate into — running the transition just shifts
-                // every column laterally for ~150ms with no informational
-                // payoff, which reads as the strip-and-column "sliding
-                // weirdly" the user reported. Vertical targets still
-                // animate so the user sees where the dragged window
-                // will land.
+                // placeholder doesn't introduce a visible gap to animate.
                 if !target_is_tabbed_final {
                     self.start_layout_transition(snapshot);
-                } else {
-                    let _ = snapshot;
                 }
                 if let Err(e) = self.apply_layout() {
                     warn!("Failed to apply layout during live drag preview: {}", e);
                 }
             }
-
             // Show ghost at the target slot position (recompute from updated layout).
             self.show_merge_drop_ghost(hwnd, is_same_column, target_monitor_id, viewport);
         }
@@ -283,31 +469,39 @@ impl AppState {
         source_monitor: MonitorId,
         source_ws_idx: usize,
         current_col: usize,
+        restoration_snapshot: Option<std::collections::HashMap<u64, Rect>>,
     ) {
         if !self.monitors.contains_key(&source_monitor) {
             return;
         }
         let viewport = self.layout_viewport(source_monitor);
-        let Some(workspace) = self
-            .workspaces
-            .get(&source_monitor)
-            .and_then(|v| v.get(source_ws_idx))
-        else {
-            return;
-        };
-
-        let column_bounds = column_bounds_from_placements(workspace, viewport);
-        // Trigger reorder when cursor enters another column's area.
-        let target_idx = match compute_target_column_index(&column_bounds, cursor_x) {
-            Some(idx) => idx,
-            None => {
-                // Cursor is in the gap between columns — keep current position.
-                // Still show the ghost at the current column.
-                if let Some(rect) = compute_column_rect(workspace, viewport, current_col) {
-                    self.pending_drag_hint = Some(DragHintAction::ShowGhost { rect });
-                }
+        let (target_idx, current_rect) = {
+            let Some(workspace) = self
+                .workspaces
+                .get(&source_monitor)
+                .and_then(|v| v.get(source_ws_idx))
+            else {
                 return;
+            };
+            let column_bounds = column_bounds_from_placements(workspace, viewport);
+            (
+                compute_target_column_index(&column_bounds, cursor_x),
+                compute_column_rect(workspace, viewport, current_col),
+            )
+        };
+        let Some(target_idx) = target_idx else {
+            // Cursor is in the gap between columns — keep current position.
+            // Still show the ghost at the current column.
+            if let Some(snapshot) = restoration_snapshot {
+                self.start_layout_transition(snapshot);
+                if let Err(e) = self.apply_layout() {
+                    warn!("Failed to restore layout before Shift drag: {}", e);
+                }
             }
+            if let Some(rect) = current_rect {
+                self.pending_drag_hint = Some(DragHintAction::ShowGhost { rect });
+            }
+            return;
         };
 
         if target_idx != current_col {
@@ -315,7 +509,7 @@ impl AppState {
                 "Live drag reorder: column {} → {} on monitor {}",
                 current_col, target_idx, source_monitor
             );
-            let snapshot = self.snapshot_layout();
+            let snapshot = restoration_snapshot.unwrap_or_else(|| self.snapshot_layout());
             if let Some(workspace) = self
                 .workspaces
                 .get_mut(&source_monitor)
@@ -329,6 +523,11 @@ impl AppState {
             self.start_layout_transition(snapshot);
             if let Err(e) = self.apply_layout() {
                 warn!("Failed to apply layout during live drag reorder: {}", e);
+            }
+        } else if let Some(snapshot) = restoration_snapshot {
+            self.start_layout_transition(snapshot);
+            if let Err(e) = self.apply_layout() {
+                warn!("Failed to restore layout before Shift drag: {}", e);
             }
         }
 
@@ -401,16 +600,27 @@ impl AppState {
             // Remove window from multi-window source columns so remaining
             // windows expand. Single-window columns keep the window to
             // preserve column space until drop.
-            let should_remove = self
+            // Capture the window's *current* slot, not the drag-start one:
+            // same-column reorders during this drag may have moved it, and
+            // a later Shift restoration must reinsert at the latest slot.
+            let removal = self
                 .workspaces
                 .get(&source_monitor)
                 .and_then(|v| v.get(source_ws_idx))
                 .and_then(|ws| {
-                    let (col, _) = ws.find_window_location(hwnd)?;
-                    Some(ws.column(col)?.len() > 1)
-                })
-                .unwrap_or(false);
-            if should_remove {
+                    let (col, slot) = ws.find_window_location(hwnd)?;
+                    let column = ws.column(col)?;
+                    (column.len() > 1).then(|| {
+                        let peers: Vec<u64> = column
+                            .windows()
+                            .iter()
+                            .copied()
+                            .filter(|&window| window != hwnd)
+                            .collect();
+                        (slot, peers)
+                    })
+                });
+            if let Some((current_slot, peers)) = removal {
                 if let Some(ws) = self
                     .workspaces
                     .get_mut(&source_monitor)
@@ -420,6 +630,8 @@ impl AppState {
                 }
                 if let Some(ref mut drag) = self.drag_state {
                     drag.removed_from_source = true;
+                    drag.source_window_slot = current_slot;
+                    drag.source_column_peers = peers;
                 }
             }
         }
@@ -565,7 +777,38 @@ impl AppState {
         }
         let target_viewport = self.layout_viewport(target_monitor);
 
-        let (target_col_idx, window_slot) = {
+        // A SafeBand (no-placeholder) drop never touched the live layout, so
+        // this cached target may be stale if a peer Hidden/Destroyed event
+        // shifted or removed columns since the hint was computed. Re-resolve
+        // it by surviving column membership rather than trusting the cached
+        // numeric index verbatim; fall through to a fresh cursor-based
+        // recompute if the target identity no longer exists anywhere.
+        let cached_target = drag
+            .last_drop_target
+            .filter(|target| target.monitor == target_monitor)
+            .and_then(|target| target.window_slot.map(|slot| (target.insert_index, slot)));
+        let resolved_from_cache = cached_target.and_then(|(cached_col, cached_slot)| {
+            let ws_idx = self.active_workspace_idx(target_monitor);
+            let workspace = self.workspaces.get(&target_monitor).and_then(|v| v.get(ws_idx))?;
+            let cached_col_intact = workspace
+                .column(cached_col)
+                .is_some_and(|c| drag.target_column_peers.iter().any(|&peer| c.contains(peer)));
+            let resolved_col = if cached_col_intact {
+                Some(cached_col)
+            } else {
+                drag.target_column_peers
+                    .iter()
+                    .find_map(|&peer| workspace.find_window_location(peer).map(|(col, _)| col))
+            };
+            resolved_col.map(|col| {
+                let len = workspace.column(col).map(|c| c.len()).unwrap_or(0);
+                (col, cached_slot.min(len))
+            })
+        });
+
+        let (target_col_idx, window_slot) = if let Some(target) = resolved_from_cache {
+            target
+        } else {
             let ws_idx = self.active_workspace_idx(target_monitor);
             let Some(workspace) = self
                 .workspaces
@@ -576,13 +819,13 @@ impl AppState {
                 return;
             };
             let column_bounds = column_bounds_from_placements(workspace, target_viewport);
-            // Use cursor position for intuitive drop targeting.
-            let (cx, cy) = leopardwm_platform_win32::get_cursor_pos().unwrap_or_else(|| {
-                (
-                    win_rect.x + win_rect.width / 2,
-                    win_rect.y + win_rect.height / 2,
-                )
-            });
+            let (cursor_x, cursor_y) =
+                leopardwm_platform_win32::get_cursor_pos().unwrap_or_else(|| {
+                    (
+                        win_rect.x + win_rect.width / 2,
+                        win_rect.y + win_rect.height / 2,
+                    )
+                });
 
             // If the drop lands on a visible tab strip, route to that
             // tab's slot in the strip's owning column — overrides the
@@ -590,11 +833,11 @@ impl AppState {
             let strip_hit = self
                 .tab_strip_overlays
                 .values()
-                .find_map(|s| s.hit_test_screen(cx, cy));
+                .find_map(|s| s.hit_test_screen(cursor_x, cursor_y));
             if let Some(hit) = strip_hit {
                 (hit.column_idx, hit.tab_idx)
             } else {
-                let col_idx = match compute_target_column_index(&column_bounds, cx) {
+                let col_idx = match compute_target_column_index(&column_bounds, cursor_x) {
                     Some(idx) => idx,
                     None => {
                         self.snap_back_tiled(source_monitor, drag.source_workspace_idx);
@@ -610,7 +853,7 @@ impl AppState {
                 };
                 let col_rect = compute_column_rect(workspace, target_viewport, col_idx);
                 let slot = match col_rect {
-                    Some(ref r) if n_total > 0 => compute_window_slot(r, n_total, cy),
+                    Some(ref r) if n_total > 0 => compute_window_slot(r, n_total, cursor_y),
                     _ => 0,
                 };
                 (col_idx, slot)
@@ -1165,6 +1408,14 @@ fn compute_column_rect(
     } else {
         None
     }
+}
+
+pub(crate) fn is_safe_drag_band(target_rect: &Rect, cursor_y: i32) -> bool {
+    if target_rect.height <= 0 {
+        return false;
+    }
+    let height = (target_rect.height / 5).clamp(1, 64);
+    cursor_y >= target_rect.y && cursor_y < target_rect.y.saturating_add(height)
 }
 
 /// Compute the vertical insertion slot by dividing the column rect into equal zones.

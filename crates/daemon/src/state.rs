@@ -12,6 +12,13 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::info;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DragPreviewMode {
+    None,
+    Body,
+    SafeBand,
+}
+
 /// Tracks an in-progress window drag for column reorder.
 pub(crate) struct DragState {
     /// HWND being dragged.
@@ -22,6 +29,8 @@ pub(crate) struct DragState {
     pub(crate) source_monitor: MonitorId,
     /// Source workspace index at drag start (0-based).
     pub(crate) source_workspace_idx: usize,
+    /// Original slot within the source column at drag start.
+    pub(crate) source_window_slot: usize,
     /// Current column index (initialized to source, changes as we live-reorder during drag).
     pub(crate) current_column_index: usize,
     /// Last computed drop target (for change detection).
@@ -32,6 +41,18 @@ pub(crate) struct DragState {
     /// (multi-window columns only; single-window columns keep the window to
     /// preserve column space).
     pub(crate) removed_from_source: bool,
+    pub(crate) preview_mode: DragPreviewMode,
+    /// Other windows sharing the target column at the last computed drop
+    /// preview. Lets drop resolve the surviving target column by membership
+    /// (robust to a peer Hidden/Destroyed shifting or removing columns)
+    /// instead of trusting `last_drop_target`'s cached numeric index —
+    /// mirrors `ScratchpadState.origin_sibling`.
+    pub(crate) target_column_peers: Vec<u64>,
+    /// Other windows sharing the source column at the moment the dragged
+    /// window was removed from it. Lets a Shift restore find the surviving
+    /// source column by membership instead of trusting `current_column_index`
+    /// verbatim — mirrors `MoveOrigin.sibling`.
+    pub(crate) source_column_peers: Vec<u64>,
 }
 
 /// Where a column would be inserted if dropped at the current position.
