@@ -83,9 +83,9 @@ static EVENT_SENDER: std::sync::Mutex<Option<mpsc::Sender<WindowEvent>>> =
     std::sync::Mutex::new(None);
 
 pub(crate) fn set_event_sender(sender: mpsc::Sender<WindowEvent>) -> Result<(), crate::Win32Error> {
-    let mut guard = EVENT_SENDER
-        .lock()
-        .map_err(|_| crate::Win32Error::HookInstallFailed("Event sender mutex poisoned".to_string()))?;
+    let mut guard = EVENT_SENDER.lock().map_err(|_| {
+        crate::Win32Error::HookInstallFailed("Event sender mutex poisoned".to_string())
+    })?;
     if guard.is_some() {
         return Err(crate::Win32Error::HookInstallFailed(
             "Event sender already initialized - drop existing EventHookHandle first".to_string(),
@@ -148,7 +148,8 @@ impl Drop for EventHookHandle {
 /// - Drag start/end (EVENT_SYSTEM_MOVESIZESTART/END)
 /// - Move/resize (EVENT_OBJECT_LOCATIONCHANGE)
 /// - Focus within app (EVENT_OBJECT_FOCUS)
-pub fn install_event_hooks() -> Result<(EventHookHandle, mpsc::Receiver<WindowEvent>), crate::Win32Error> {
+pub fn install_event_hooks(
+) -> Result<(EventHookHandle, mpsc::Receiver<WindowEvent>), crate::Win32Error> {
     // Create channel for events
     let (tx, rx) = mpsc::channel();
 
@@ -230,7 +231,10 @@ pub fn install_event_hooks() -> Result<(EventHookHandle, mpsc::Receiver<WindowEv
             }
         })
         .map_err(|e| {
-            crate::Win32Error::HookInstallFailed(format!("Failed to spawn winevent-pump thread: {}", e))
+            crate::Win32Error::HookInstallFailed(format!(
+                "Failed to spawn winevent-pump thread: {}",
+                e
+            ))
         })?;
 
     // Wait for init result
@@ -306,10 +310,7 @@ fn win_event_callback_inner(
     // or OBJID_CLIENT, so allow them regardless. But EVENT_OBJECT_SHOW/HIDE
     // must be OBJID_WINDOW only — child control visibility changes should not
     // be emitted as top-level window lifecycle events.
-    let is_focus_event = matches!(
-        event,
-        EVENT_SYSTEM_FOREGROUND | EVENT_OBJECT_FOCUS
-    );
+    let is_focus_event = matches!(event, EVENT_SYSTEM_FOREGROUND | EVENT_OBJECT_FOCUS);
     if id_object != OBJID_WINDOW && !is_focus_event {
         return;
     }

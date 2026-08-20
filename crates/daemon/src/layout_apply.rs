@@ -825,7 +825,10 @@ impl AppState {
                         }
                         TestApplyPlacementsBehavior::SleepAndFail(delay) => {
                             std::thread::sleep(delay);
-                            (Err(anyhow!("injected apply_placements failure")), Vec::new())
+                            (
+                                Err(anyhow!("injected apply_placements failure")),
+                                Vec::new(),
+                            )
                         }
                         TestApplyPlacementsBehavior::SucceedWithMaximizedSkip(window_id) => {
                             let skipped = if call_index == 0 {

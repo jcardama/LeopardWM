@@ -10,7 +10,7 @@
 
 use std::ffi::c_void;
 use windows::core::{PCWSTR, PWSTR};
-use windows::Win32::Foundation::{CloseHandle, HANDLE, HLOCAL, LocalFree};
+use windows::Win32::Foundation::{CloseHandle, LocalFree, HANDLE, HLOCAL};
 use windows::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
 };
@@ -127,6 +127,9 @@ mod tests {
     #[test]
     fn pipe_security_attributes_build() {
         let sec = PipeSecurityAttributes::new().expect("pipe security attributes build");
-        assert!(!sec.as_ptr().is_null(), "security attributes pointer is non-null");
+        assert!(
+            !sec.as_ptr().is_null(),
+            "security attributes pointer is non-null"
+        );
     }
 }

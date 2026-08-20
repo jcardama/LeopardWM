@@ -51,7 +51,9 @@ impl ManageBlock {
 /// fixed for its lifetime.
 fn daemon_integrity() -> u32 {
     static IL: OnceLock<u32> = OnceLock::new();
-    *IL.get_or_init(|| unsafe { process_integrity(GetCurrentProcess()).unwrap_or(INTEGRITY_MEDIUM) })
+    *IL.get_or_init(|| unsafe {
+        process_integrity(GetCurrentProcess()).unwrap_or(INTEGRITY_MEDIUM)
+    })
 }
 
 /// Read a process handle's mandatory integrity level (the RID of the integrity
@@ -107,7 +109,9 @@ pub fn manage_block(pid: u32) -> ManageBlock {
             Ok(h) => h,
             // Access-denied on a limited-query open means a higher integrity or
             // a protected process we can't manage.
-            Err(e) if e.code() == ERROR_ACCESS_DENIED.to_hresult() => return ManageBlock::Protected,
+            Err(e) if e.code() == ERROR_ACCESS_DENIED.to_hresult() => {
+                return ManageBlock::Protected
+            }
             // Other failures (process exiting, stale pid) aren't a privilege
             // signal — don't skip a window over a transient race.
             Err(_) => return ManageBlock::No,

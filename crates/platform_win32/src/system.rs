@@ -51,8 +51,12 @@ pub fn are_animations_enabled() -> bool {
 /// Returns `true` when the user has activated a high contrast theme
 /// (Settings > Accessibility > Contrast themes).
 pub fn is_high_contrast_enabled() -> bool {
-    use windows::Win32::UI::Accessibility::{HIGHCONTRASTW, HIGHCONTRASTW_FLAGS, HCF_HIGHCONTRASTON};
-    use windows::Win32::UI::WindowsAndMessaging::{SystemParametersInfoW, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS};
+    use windows::Win32::UI::Accessibility::{
+        HCF_HIGHCONTRASTON, HIGHCONTRASTW, HIGHCONTRASTW_FLAGS,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SystemParametersInfoW, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+    };
 
     // SPI_GETHIGHCONTRAST = 0x0042
     const SPI_GETHIGHCONTRAST: u32 = 0x0042;
@@ -63,7 +67,9 @@ pub fn is_high_contrast_enabled() -> bool {
     };
     unsafe {
         let _ = SystemParametersInfoW(
-            windows::Win32::UI::WindowsAndMessaging::SYSTEM_PARAMETERS_INFO_ACTION(SPI_GETHIGHCONTRAST),
+            windows::Win32::UI::WindowsAndMessaging::SYSTEM_PARAMETERS_INFO_ACTION(
+                SPI_GETHIGHCONTRAST,
+            ),
             hc.cbSize,
             Some(&mut hc as *mut HIGHCONTRASTW as *mut std::ffi::c_void),
             SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),

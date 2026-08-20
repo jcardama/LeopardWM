@@ -97,7 +97,9 @@ fn spawn_daemon(safe_mode: bool) -> Result<u32> {
     let stderr = File::create(&stderr_path).context("Failed to create daemon stderr log")?;
 
     let mut cmd = Command::new(daemon_path);
-    cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(stderr);
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(stderr);
     if safe_mode {
         cmd.arg("--safe-mode");
     }
@@ -105,7 +107,10 @@ fn spawn_daemon(safe_mode: bool) -> Result<u32> {
 
     let child = cmd.spawn().context("Failed to start leopardwm daemon")?;
     if safe_mode {
-        println!("Started leopardwm daemon in SAFE MODE (PID {}).", child.id());
+        println!(
+            "Started leopardwm daemon in SAFE MODE (PID {}).",
+            child.id()
+        );
     } else {
         println!("Started leopardwm daemon (PID {}).", child.id());
     }

@@ -63,12 +63,13 @@ impl AppState {
 
         // Use actual cursor position for more intuitive hit-testing —
         // the window center lags behind the cursor for large windows.
-        let (cursor_x, cursor_y) = leopardwm_platform_win32::get_cursor_pos().unwrap_or_else(|| {
-            (
-                win_info.rect.x + win_info.rect.width / 2,
-                win_info.rect.y + win_info.rect.height / 2,
-            )
-        });
+        let (cursor_x, cursor_y) =
+            leopardwm_platform_win32::get_cursor_pos().unwrap_or_else(|| {
+                (
+                    win_info.rect.x + win_info.rect.width / 2,
+                    win_info.rect.y + win_info.rect.height / 2,
+                )
+            });
 
         // Determine which monitor the dragged window is on.
         let monitors: Vec<_> = self.monitors.values().cloned().collect();
@@ -789,10 +790,15 @@ impl AppState {
             .and_then(|target| target.window_slot.map(|slot| (target.insert_index, slot)));
         let resolved_from_cache = cached_target.and_then(|(cached_col, cached_slot)| {
             let ws_idx = self.active_workspace_idx(target_monitor);
-            let workspace = self.workspaces.get(&target_monitor).and_then(|v| v.get(ws_idx))?;
-            let cached_col_intact = workspace
-                .column(cached_col)
-                .is_some_and(|c| drag.target_column_peers.iter().any(|&peer| c.contains(peer)));
+            let workspace = self
+                .workspaces
+                .get(&target_monitor)
+                .and_then(|v| v.get(ws_idx))?;
+            let cached_col_intact = workspace.column(cached_col).is_some_and(|c| {
+                drag.target_column_peers
+                    .iter()
+                    .any(|&peer| c.contains(peer))
+            });
             let resolved_col = if cached_col_intact {
                 Some(cached_col)
             } else {

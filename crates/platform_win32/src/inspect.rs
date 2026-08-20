@@ -271,7 +271,9 @@ unsafe extern "system" fn inspect_windows_callback(hwnd: HWND, lparam: LPARAM) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use windows::Win32::UI::WindowsAndMessaging::{WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_THICKFRAME};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_THICKFRAME,
+    };
 
     #[test]
     fn tool_window_exception_preserved() {

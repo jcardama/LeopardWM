@@ -191,9 +191,7 @@ pub(crate) async fn handle_doctor() -> Result<()> {
                 .print();
 
                 if elevation_blocked_windows.is_empty() {
-                    CheckResult::Pass(
-                        "No windows blocked by privilege level".to_string(),
-                    )
+                    CheckResult::Pass("No windows blocked by privilege level".to_string())
                 } else {
                     CheckResult::Warn(format!(
                         "{} window(s) left floating because they run at a higher privilege level \

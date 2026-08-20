@@ -26,8 +26,8 @@ pub fn get_foreground_window() -> Option<WindowId> {
 /// apps that steal focus on their own (notifications, app-internal focus
 /// shuffles, etc.). Returns `None` if the API call fails.
 pub fn ms_since_last_user_input() -> Option<u32> {
-    use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
     use windows::Win32::System::SystemInformation::GetTickCount;
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
     unsafe {
         let mut lii = LASTINPUTINFO {
             cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32,
@@ -152,12 +152,8 @@ pub fn set_foreground_window(hwnd: WindowId) -> Result<bool, Win32Error> {
 
         // Detach every input queue we attached to.
         for thread in &attached {
-            if !windows::Win32::System::Threading::AttachThreadInput(
-                current_thread,
-                *thread,
-                false,
-            )
-            .as_bool()
+            if !windows::Win32::System::Threading::AttachThreadInput(current_thread, *thread, false)
+                .as_bool()
             {
                 diagnostics.push(format!(
                     "AttachThreadInput detach failed (current_thread={}, other_thread={})",

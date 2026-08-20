@@ -76,7 +76,10 @@ impl Workspace {
                         }
                         let share = ((column.width as f64 / flexible_total as f64) * excess as f64)
                             .round() as i32;
-                        let shrink = share.min(remaining).min(column.width - MIN_COLUMN_WIDTH).max(0);
+                        let shrink = share
+                            .min(remaining)
+                            .min(column.width - MIN_COLUMN_WIDTH)
+                            .max(0);
                         widths[col_idx] -= shrink;
                         remaining -= shrink;
                     }
@@ -128,10 +131,12 @@ impl Workspace {
             // logic so the position transitions atomically with the
             // visibility flip.
             let col_screen_x = match visibility {
-                Visibility::OffScreenRight => natural_screen_x
-                    .max(viewport.x.saturating_add(viewport.width)),
-                Visibility::OffScreenLeft => natural_screen_x
-                    .min(viewport.x.saturating_sub(eff_width)),
+                Visibility::OffScreenRight => {
+                    natural_screen_x.max(viewport.x.saturating_add(viewport.width))
+                }
+                Visibility::OffScreenLeft => {
+                    natural_screen_x.min(viewport.x.saturating_sub(eff_width))
+                }
                 Visibility::Visible => natural_screen_x,
             };
 
@@ -227,13 +232,18 @@ impl Workspace {
             // absorbs rounding remainder so the column stays flush with the
             // viewport — this also means if there are no flexible windows,
             // any leftover space simply flows into the last pinned window.
-            let visible_weights: Vec<f64> = if column.height_weights.len() == column.windows().len() {
-                visible_windows.iter().map(|(i, _)| column.height_weights[*i]).collect()
+            let visible_weights: Vec<f64> = if column.height_weights.len() == column.windows().len()
+            {
+                visible_windows
+                    .iter()
+                    .map(|(i, _)| column.height_weights[*i])
+                    .collect()
             } else {
                 vec![1.0; visible_windows.len()]
             };
 
-            let min_heights: Vec<i32> = visible_windows.iter()
+            let min_heights: Vec<i32> = visible_windows
+                .iter()
                 .map(|(_, wid)| self.window_min_heights.get(wid).copied().unwrap_or(0))
                 .collect();
             let total_min: i32 = min_heights.iter().sum();

@@ -1210,9 +1210,7 @@ fn seed_resize_session(state: &mut AppState, hwnd: u64) {
     state.pending_drag_hint = Some(DragHintAction::ShowGhost {
         rect: Rect::new(0, 0, 800, 600),
     });
-    state
-        .resize_preview_cancel
-        .store(false, Ordering::Relaxed);
+    state.resize_preview_cancel.store(false, Ordering::Relaxed);
 }
 
 fn drag_hint_rect() -> Rect {
@@ -1336,7 +1334,10 @@ fn test_safe_drag_band_preview_transitions_and_restores() {
         .focused_workspace()
         .unwrap()
         .contains_window(DRAG_PLACEHOLDER_HWND));
-    let transition = state.layout_transition.as_ref().expect("restoration transition");
+    let transition = state
+        .layout_transition
+        .as_ref()
+        .expect("restoration transition");
     assert_eq!(transition.start_rects.get(&200), Some(&peer_start));
     assert!(!transition.start_rects.contains_key(&100));
     assert!(!transition.start_rects.contains_key(&DRAG_PLACEHOLDER_HWND));
@@ -1394,11 +1395,20 @@ fn test_body_preview_shift_transition_restores_before_reorder() {
         state.drag_state.as_ref().map(|drag| drag.preview_mode),
         Some(crate::state::DragPreviewMode::None)
     );
-    let shift_target = state.drag_state.as_ref().and_then(|drag| drag.last_drop_target);
+    let shift_target = state
+        .drag_state
+        .as_ref()
+        .and_then(|drag| drag.last_drop_target);
     assert_eq!(shift_target.and_then(|target| target.window_slot), None);
     assert_eq!(shift_target.map(|target| target.monitor), Some(2));
-    assert!(matches!(state.pending_drag_hint, Some(DragHintAction::ShowGhost { .. })));
-    let transition = state.layout_transition.as_ref().expect("restoration transition");
+    assert!(matches!(
+        state.pending_drag_hint,
+        Some(DragHintAction::ShowGhost { .. })
+    ));
+    let transition = state
+        .layout_transition
+        .as_ref()
+        .expect("restoration transition");
     assert!(!transition.start_rects.contains_key(&DRAG_PLACEHOLDER_HWND));
     assert!(!transition.start_rects.contains_key(&100));
 }
@@ -1413,7 +1423,9 @@ fn test_body_preview_shift_restores_multi_window_source_before_same_monitor_reor
         workspace.insert_window_in_column(101, 0).unwrap();
         workspace.insert_window(200, Some(800)).unwrap();
     }
-    state.injected_window_info.insert(100, make_test_window_info(100));
+    state
+        .injected_window_info
+        .insert(100, make_test_window_info(100));
     state.drag_state = Some(DragState {
         hwnd: 100,
         is_tiled: true,
@@ -1449,8 +1461,14 @@ fn test_body_preview_shift_restores_multi_window_source_before_same_monitor_reor
     let drag = state.drag_state.as_ref().unwrap();
     assert!(!drag.removed_from_source);
     assert_eq!(drag.preview_mode, crate::state::DragPreviewMode::None);
-    assert!(matches!(state.pending_drag_hint, Some(DragHintAction::ShowGhost { .. })));
-    let transition = state.layout_transition.as_ref().expect("restoration/reorder transition");
+    assert!(matches!(
+        state.pending_drag_hint,
+        Some(DragHintAction::ShowGhost { .. })
+    ));
+    let transition = state
+        .layout_transition
+        .as_ref()
+        .expect("restoration/reorder transition");
     assert_eq!(transition.start_rects.get(&101), Some(&shifted_peer_rect));
     assert!(!transition.start_rects.contains_key(&100));
     assert!(!transition.start_rects.contains_key(&DRAG_PLACEHOLDER_HWND));
@@ -1466,7 +1484,9 @@ fn test_body_preview_shift_restores_multi_window_source_without_reorder() {
         workspace.insert_window_in_column(101, 0).unwrap();
         workspace.insert_window(200, Some(800)).unwrap();
     }
-    state.injected_window_info.insert(100, make_test_window_info(100));
+    state
+        .injected_window_info
+        .insert(100, make_test_window_info(100));
     state.drag_state = Some(DragState {
         hwnd: 100,
         is_tiled: true,
@@ -1500,7 +1520,10 @@ fn test_body_preview_shift_restores_multi_window_source_without_reorder() {
     assert_eq!(workspace.find_window_location(101), Some((0, 1)));
     assert_eq!(workspace.find_window_location(200), Some((1, 0)));
     assert!(!workspace.contains_window(DRAG_PLACEHOLDER_HWND));
-    let transition = state.layout_transition.as_ref().expect("restoration transition");
+    let transition = state
+        .layout_transition
+        .as_ref()
+        .expect("restoration transition");
     assert_eq!(transition.start_rects.get(&101), Some(&shifted_peer_rect));
     assert!(!transition.start_rects.contains_key(&100));
     assert!(!transition.start_rects.contains_key(&DRAG_PLACEHOLDER_HWND));
@@ -1530,7 +1553,9 @@ fn test_body_preview_shift_restores_multi_window_source_before_cross_monitor_dro
     let mut target_workspace = Workspace::new();
     target_workspace.insert_window(300, Some(800)).unwrap();
     state.workspaces.insert(2, vec![target_workspace]);
-    state.injected_window_info.insert(100, make_test_window_info(100));
+    state
+        .injected_window_info
+        .insert(100, make_test_window_info(100));
     state.drag_state = Some(DragState {
         hwnd: 100,
         is_tiled: true,
@@ -1570,9 +1595,18 @@ fn test_body_preview_shift_restores_multi_window_source_before_cross_monitor_dro
     assert!(!drag.removed_from_source);
     assert_eq!(drag.preview_mode, crate::state::DragPreviewMode::None);
     assert_eq!(drag.last_drop_target.map(|target| target.monitor), Some(2));
-    assert_eq!(drag.last_drop_target.and_then(|target| target.window_slot), None);
-    assert!(matches!(state.pending_drag_hint, Some(DragHintAction::ShowGhost { .. })));
-    let transition = state.layout_transition.as_ref().expect("restoration transition");
+    assert_eq!(
+        drag.last_drop_target.and_then(|target| target.window_slot),
+        None
+    );
+    assert!(matches!(
+        state.pending_drag_hint,
+        Some(DragHintAction::ShowGhost { .. })
+    ));
+    let transition = state
+        .layout_transition
+        .as_ref()
+        .expect("restoration transition");
     assert_eq!(transition.start_rects.get(&101), Some(&shifted_peer_rect));
     assert!(!transition.start_rects.contains_key(&100));
     assert!(!transition.start_rects.contains_key(&DRAG_PLACEHOLDER_HWND));
@@ -1605,7 +1639,9 @@ fn test_body_to_safe_band_then_shift_restores_multi_window_source() {
         workspace.insert_window_in_column(101, 0).unwrap();
         workspace.insert_window(200, Some(800)).unwrap();
     }
-    state.injected_window_info.insert(100, make_test_window_info(100));
+    state
+        .injected_window_info
+        .insert(100, make_test_window_info(100));
     state.drag_state = Some(DragState {
         hwnd: 100,
         is_tiled: true,
@@ -1663,7 +1699,10 @@ fn test_body_to_safe_band_then_shift_restores_multi_window_source() {
     let drag = state.drag_state.as_ref().unwrap();
     assert!(!drag.removed_from_source);
     assert_eq!(drag.preview_mode, crate::state::DragPreviewMode::None);
-    assert!(matches!(state.pending_drag_hint, Some(DragHintAction::ShowGhost { .. })));
+    assert!(matches!(
+        state.pending_drag_hint,
+        Some(DragHintAction::ShowGhost { .. })
+    ));
     // The safe-band tick already applied the restoration transition; the
     // Shift tick must not start a duplicate one.
     assert_eq!(
@@ -1683,10 +1722,16 @@ fn test_body_to_safe_band_then_shift_restores_multi_window_source() {
     assert_eq!(workspace.find_window_location(100), Some((1, 0)));
     assert_eq!(workspace.find_window_location(101), Some((1, 1)));
     assert_eq!(
-        state.drag_state.as_ref().map(|drag| drag.current_column_index),
+        state
+            .drag_state
+            .as_ref()
+            .map(|drag| drag.current_column_index),
         Some(1)
     );
-    assert!(matches!(state.pending_drag_hint, Some(DragHintAction::ShowGhost { .. })));
+    assert!(matches!(
+        state.pending_drag_hint,
+        Some(DragHintAction::ShowGhost { .. })
+    ));
 }
 
 #[test]
@@ -1713,7 +1758,9 @@ fn test_body_to_no_target_then_cross_monitor_shift_restores_multi_window_source(
     let mut target_workspace = Workspace::new();
     target_workspace.insert_window(300, Some(800)).unwrap();
     state.workspaces.insert(2, vec![target_workspace]);
-    state.injected_window_info.insert(100, make_test_window_info(100));
+    state
+        .injected_window_info
+        .insert(100, make_test_window_info(100));
     state.drag_state = Some(DragState {
         hwnd: 100,
         is_tiled: true,
@@ -1776,8 +1823,14 @@ fn test_body_to_no_target_then_cross_monitor_shift_restores_multi_window_source(
     assert!(!drag.removed_from_source);
     assert_eq!(drag.preview_mode, crate::state::DragPreviewMode::None);
     assert_eq!(drag.last_drop_target.map(|target| target.monitor), Some(2));
-    assert_eq!(drag.last_drop_target.and_then(|target| target.window_slot), None);
-    assert!(matches!(state.pending_drag_hint, Some(DragHintAction::ShowGhost { .. })));
+    assert_eq!(
+        drag.last_drop_target.and_then(|target| target.window_slot),
+        None
+    );
+    assert!(matches!(
+        state.pending_drag_hint,
+        Some(DragHintAction::ShowGhost { .. })
+    ));
     // The no-target tick already applied the restoration transition; the
     // Shift tick must not start a duplicate one.
     assert_eq!(
@@ -1926,7 +1979,9 @@ fn test_safe_band_does_not_override_tabbed_append_preview() {
         workspace.find_window_location(DRAG_PLACEHOLDER_HWND),
         Some((1, 2))
     );
-    assert!(matches!(state.pending_drag_hint, Some(DragHintAction::ShowGhost { rect }) if rect == target));
+    assert!(
+        matches!(state.pending_drag_hint, Some(DragHintAction::ShowGhost { rect }) if rect == target)
+    );
     assert_eq!(
         state.drag_state.as_ref().map(|drag| drag.preview_mode),
         Some(crate::state::DragPreviewMode::Body)
@@ -1999,10 +2054,7 @@ fn test_safe_band_drop_follows_surviving_target_column_after_peer_lifecycle_shif
         "unmatched peer departure must not cancel the drag"
     );
     assert_eq!(
-        state
-            .focused_workspace()
-            .unwrap()
-            .find_window_location(200),
+        state.focused_workspace().unwrap().find_window_location(200),
         Some((1, 0))
     );
 
@@ -2207,10 +2259,7 @@ fn test_shift_restore_creates_new_column_when_no_source_peer_survives() {
     state.handle_window_event(WindowEvent::Destroyed(150));
     state.handle_window_event(WindowEvent::Destroyed(101));
     assert!(state.drag_state.is_some());
-    assert!(!state
-        .focused_workspace()
-        .unwrap()
-        .contains_window(101));
+    assert!(!state.focused_workspace().unwrap().contains_window(101));
 
     let target_rect = *state.snapshot_layout().get(&200).unwrap();
     state.update_drag_hint_at(100, target_rect.x + 10, target_rect.y, 1, true);
@@ -2251,7 +2300,10 @@ fn assert_resize_session_cleared(state: &AppState) {
     assert!(state.pending_resize_animation.is_none());
     assert!(state.last_resize_hint_update.is_none());
     assert!(state.resize_preview_cancel.load(Ordering::Relaxed));
-    assert!(matches!(state.pending_drag_hint, Some(DragHintAction::Hide)));
+    assert!(matches!(
+        state.pending_drag_hint,
+        Some(DragHintAction::Hide)
+    ));
 }
 
 fn two_managed_windows() -> AppState {
@@ -2293,7 +2345,10 @@ fn test_matching_drag_departure_clears_session_and_placeholder() {
         state.handle_window_event(event);
 
         assert!(state.drag_state.is_none());
-        assert!(matches!(state.pending_drag_hint, Some(DragHintAction::Hide)));
+        assert!(matches!(
+            state.pending_drag_hint,
+            Some(DragHintAction::Hide)
+        ));
         assert!(!state
             .focused_workspace()
             .unwrap()
@@ -2566,7 +2621,10 @@ fn test_departure_hides_border_for_valid_unmanaged_replacement() {
     assert_eq!(state.resize_complete_count.load(Ordering::Relaxed), 0);
     assert!(state.focused_workspace().unwrap().contains_window(200));
     assert!(state.border_hide_count.load(Ordering::Relaxed) > hides_before);
-    assert_eq!(state.border_show_count.load(Ordering::Relaxed), shows_before);
+    assert_eq!(
+        state.border_show_count.load(Ordering::Relaxed),
+        shows_before
+    );
     assert_eq!(state.last_border_show_hwnd.load(Ordering::Relaxed), 0);
 }
 
@@ -2584,7 +2642,10 @@ fn test_unfocused_departure_hides_border_for_unmanaged_replacement() {
     assert_eq!(state.previous_focused_hwnd, Some(200));
     assert!(state.focused_workspace().unwrap().contains_window(200));
     assert!(state.border_hide_count.load(Ordering::Relaxed) > hides_before);
-    assert_eq!(state.border_show_count.load(Ordering::Relaxed), shows_before);
+    assert_eq!(
+        state.border_show_count.load(Ordering::Relaxed),
+        shows_before
+    );
     assert_eq!(state.last_border_show_hwnd.load(Ordering::Relaxed), 200);
 }
 
@@ -2629,7 +2690,10 @@ fn test_removed_from_source_drag_departure_applies_peer_layout() {
         state.handle_window_event(event);
 
         assert!(state.drag_state.is_none());
-        assert!(matches!(state.pending_drag_hint, Some(DragHintAction::Hide)));
+        assert!(matches!(
+            state.pending_drag_hint,
+            Some(DragHintAction::Hide)
+        ));
         assert!(!state
             .focused_workspace()
             .unwrap()
@@ -2679,7 +2743,10 @@ fn test_placeholder_shifted_snapshot_drives_departure_transition() {
 
     state.handle_window_event(WindowEvent::Destroyed(100));
 
-    let transition = state.layout_transition.as_ref().expect("departure transition");
+    let transition = state
+        .layout_transition
+        .as_ref()
+        .expect("departure transition");
     assert_eq!(transition.start_rects.get(&200), Some(&peer_start));
     assert!(!transition.start_rects.contains_key(&100));
     assert!(!transition.start_rects.contains_key(&DRAG_PLACEHOLDER_HWND));
@@ -2699,7 +2766,10 @@ fn test_tracked_focus_prune_hides_border_without_foreground_sample() {
     assert_eq!(state.previous_focused_hwnd, None);
     assert_eq!(state.departing_foreground_evidence_reads, 0);
     assert!(state.border_hide_count.load(Ordering::Relaxed) > hides_before);
-    assert_eq!(state.border_show_count.load(Ordering::Relaxed), shows_before);
+    assert_eq!(
+        state.border_show_count.load(Ordering::Relaxed),
+        shows_before
+    );
     assert_eq!(state.last_border_show_hwnd.load(Ordering::Relaxed), 0);
     assert_eq!(state.last_broadcast_focused, Some((1, None)));
 }
@@ -2730,7 +2800,10 @@ fn test_batch_prune_applies_and_reconciles_once() {
 fn test_empty_prune_reports_unchanged_layout() {
     let mut state = two_managed_windows();
     let result = state.prune_stale_windows_for_test(&[]);
-    assert!(matches!(result, crate::helpers::StalePruneLayout::Unchanged));
+    assert!(matches!(
+        result,
+        crate::helpers::StalePruneLayout::Unchanged
+    ));
     assert!(state.focused_workspace().unwrap().contains_window(100));
     assert!(state.focused_workspace().unwrap().contains_window(200));
 }
@@ -2741,16 +2814,17 @@ fn test_prune_apply_failure_is_reported_not_success() {
     state.reduce_motion = true;
     state.abort_layout_transition();
     state.paused = false;
-    state.injected_apply_placements_behavior = Some(
-        TestApplyPlacementsBehavior::SleepAndFail(std::time::Duration::from_millis(1)),
-    );
+    state.injected_apply_placements_behavior = Some(TestApplyPlacementsBehavior::SleepAndFail(
+        std::time::Duration::from_millis(1),
+    ));
 
     let result = state.prune_stale_windows_for_test(&[100]);
 
     match result {
         crate::helpers::StalePruneLayout::Failed(err) => {
             assert!(
-                err.to_string().contains("injected apply_placements failure"),
+                err.to_string()
+                    .contains("injected apply_placements failure"),
                 "unexpected apply failure: {err}"
             );
         }
@@ -2778,9 +2852,7 @@ fn test_refresh_propagates_prune_apply_failure() {
 #[test]
 fn test_refresh_skips_second_apply_after_successful_prune() {
     let mut state = two_managed_windows();
-    state
-        .apply_worker_cancelled
-        .store(true, Ordering::SeqCst);
+    state.apply_worker_cancelled.store(true, Ordering::SeqCst);
     let resp = state.complete_refresh_layout(crate::helpers::StalePruneLayout::Applied);
     assert_eq!(resp, leopardwm_ipc::IpcResponse::Ok);
 }
@@ -2797,7 +2869,10 @@ fn test_border_only_helper_hides_when_no_tracked_or_sampled_replacement() {
 
     assert_eq!(state.previous_focused_hwnd, None);
     assert!(state.border_hide_count.load(Ordering::Relaxed) > hides_before);
-    assert_eq!(state.border_show_count.load(Ordering::Relaxed), shows_before);
+    assert_eq!(
+        state.border_show_count.load(Ordering::Relaxed),
+        shows_before
+    );
     assert_eq!(state.last_border_show_hwnd.load(Ordering::Relaxed), 0);
 }
 
@@ -2813,7 +2888,10 @@ fn test_reconcile_hides_border_for_unmanaged_replacement_despite_tracked_peer() 
 
     assert_eq!(state.previous_focused_hwnd, Some(200));
     assert!(state.border_hide_count.load(Ordering::Relaxed) > hides_before);
-    assert_eq!(state.border_show_count.load(Ordering::Relaxed), shows_before);
+    assert_eq!(
+        state.border_show_count.load(Ordering::Relaxed),
+        shows_before
+    );
     assert_eq!(state.last_border_show_hwnd.load(Ordering::Relaxed), 200);
 }
 
@@ -3067,9 +3145,7 @@ fn test_managed_replacement_adopts_logical_focus_and_same_hwnd_focus_is_noop() {
         Some(200)
     );
     assert_eq!(state.last_broadcast_focused, Some((1, Some(200))));
-    assert!(
-        state.border_show_count.load(Ordering::Relaxed) > shows_after_destroy_baseline
-    );
+    assert!(state.border_show_count.load(Ordering::Relaxed) > shows_after_destroy_baseline);
     let shows_after_adopt = state.border_show_count.load(Ordering::Relaxed);
 
     state.handle_window_event(WindowEvent::Focused(200));
@@ -3239,7 +3315,10 @@ fn test_departing_focus_recovery_does_not_steal_unmanaged_foreground() {
     assert_eq!(state.previous_focused_hwnd, None);
     assert!(state.focused_workspace().unwrap().contains_window(200));
     assert!(state.border_hide_count.load(Ordering::Relaxed) > hides_before);
-    assert_eq!(state.border_show_count.load(Ordering::Relaxed), shows_before);
+    assert_eq!(
+        state.border_show_count.load(Ordering::Relaxed),
+        shows_before
+    );
     assert_eq!(state.last_border_show_hwnd.load(Ordering::Relaxed), 0);
 }
 

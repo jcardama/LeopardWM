@@ -98,17 +98,16 @@ pub fn install_mouse_hook(
                 let mut msg = MSG::default();
                 let _ = PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE);
 
-                let hook =
-                    match SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_ll_hook_proc), None, 0) {
-                        Ok(h) => h,
-                        Err(e) => {
-                            let _ = init_tx.send(Err(Win32Error::HookInstallFailed(format!(
-                                "SetWindowsHookExW failed: {}",
-                                e
-                            ))));
-                            return;
-                        }
-                    };
+                let hook = match SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_ll_hook_proc), None, 0) {
+                    Ok(h) => h,
+                    Err(e) => {
+                        let _ = init_tx.send(Err(Win32Error::HookInstallFailed(format!(
+                            "SetWindowsHookExW failed: {}",
+                            e
+                        ))));
+                        return;
+                    }
+                };
 
                 let _ = init_tx.send(Ok(thread_id));
 

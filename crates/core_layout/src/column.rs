@@ -192,7 +192,9 @@ impl Column {
             return;
         }
         let clamped = active_idx.min(self.windows.len() - 1);
-        self.mode = ColumnMode::Tabbed { active_idx: clamped };
+        self.mode = ColumnMode::Tabbed {
+            active_idx: clamped,
+        };
     }
 
     /// Switch this column back to Vertical mode.
@@ -208,7 +210,9 @@ impl Column {
         }
         if let ColumnMode::Tabbed { .. } = self.mode {
             let clamped = index.min(self.windows.len() - 1);
-            self.mode = ColumnMode::Tabbed { active_idx: clamped };
+            self.mode = ColumnMode::Tabbed {
+                active_idx: clamped,
+            };
         }
     }
 
@@ -339,7 +343,9 @@ impl Column {
                 std::cmp::Ordering::Equal => active_idx.min(self.windows.len() - 1),
                 std::cmp::Ordering::Less => active_idx,
             };
-            self.mode = ColumnMode::Tabbed { active_idx: new_active };
+            self.mode = ColumnMode::Tabbed {
+                active_idx: new_active,
+            };
         }
         self.maintain_mode_invariant();
     }
@@ -354,7 +360,9 @@ impl Column {
             } else {
                 active_idx
             };
-            self.mode = ColumnMode::Tabbed { active_idx: new_active };
+            self.mode = ColumnMode::Tabbed {
+                active_idx: new_active,
+            };
         }
         self.maintain_mode_invariant();
     }
@@ -371,7 +379,9 @@ impl Column {
             } else {
                 active_idx
             };
-            self.mode = ColumnMode::Tabbed { active_idx: new_active };
+            self.mode = ColumnMode::Tabbed {
+                active_idx: new_active,
+            };
         }
         self.maintain_mode_invariant();
     }

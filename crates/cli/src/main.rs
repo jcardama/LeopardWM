@@ -11,9 +11,9 @@ mod daemon_cmds;
 mod doctor;
 mod ipc_client;
 mod output;
-mod window_inspect;
 #[cfg(test)]
 mod tests;
+mod window_inspect;
 
 use anyhow::Result;
 use clap::Parser;
@@ -49,12 +49,13 @@ async fn main() -> Result<()> {
         Commands::Status => return handle_status().await,
         Commands::Doctor { action: None } => return handle_doctor().await,
         Commands::Doctor {
-            action: Some(DoctorAction::Windows {
-                watch,
-                delay,
-                include_titles,
-                all,
-            }),
+            action:
+                Some(DoctorAction::Windows {
+                    watch,
+                    delay,
+                    include_titles,
+                    all,
+                }),
         } => return handle_doctor_windows(watch, delay, include_titles, all),
         Commands::Autostart { action } => return handle_autostart(action),
         Commands::CollectLogs => return handle_collect_logs(),

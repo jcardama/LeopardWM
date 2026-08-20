@@ -44,7 +44,8 @@ mod tests {
         assert_eq!(ws.focused_column_index(), 1);
 
         // New column at slot 0 shifts the focused window right; focus follows it.
-        ws.insert_window_at_column_no_focus(3, Some(400), 0).unwrap();
+        ws.insert_window_at_column_no_focus(3, Some(400), 0)
+            .unwrap();
         assert_eq!(ws.column_count(), 3);
         assert_eq!(ws.focused_window(), Some(2));
         assert_eq!(ws.focused_column_index(), 2);
@@ -2204,8 +2205,16 @@ mod tests {
         // Hidden tiled window keeps its real (nonzero) layout rect.
         let w2 = placements.iter().find(|p| p.window_id == 2).unwrap();
         assert_ne!(w2.visibility, Visibility::Visible);
-        assert!(w2.rect.width > 0, "tiled rect width stays real, got {:?}", w2.rect);
-        assert!(w2.rect.height > 0, "tiled rect height stays real, got {:?}", w2.rect);
+        assert!(
+            w2.rect.width > 0,
+            "tiled rect width stays real, got {:?}",
+            w2.rect
+        );
+        assert!(
+            w2.rect.height > 0,
+            "tiled rect height stays real, got {:?}",
+            w2.rect
+        );
 
         // Hidden floating window keeps its real rect.
         let fl = placements.iter().find(|p| p.window_id == 10).unwrap();
@@ -2230,7 +2239,11 @@ mod tests {
 
         let placements = ws.compute_placements(viewport);
         let fl = placements.iter().find(|p| p.window_id == 10).unwrap();
-        assert_eq!(fl.visibility, Visibility::Visible, "pinned floating stays visible");
+        assert_eq!(
+            fl.visibility,
+            Visibility::Visible,
+            "pinned floating stays visible"
+        );
         assert_eq!(fl.rect, float_rect, "pinned floating keeps its rect");
     }
 
@@ -3086,7 +3099,7 @@ mod tests {
         ws.insert_window(1, Some(400)).unwrap(); // col 0: [A]
         ws.insert_window(2, Some(400)).unwrap(); // col 1: [B]
         ws.insert_window_in_column(3, 1).unwrap(); // col 1: [B, C]
-        // Focus B (idx 0 in col 1)
+                                                   // Focus B (idx 0 in col 1)
         ws.test_set_focus_unchecked(1, 0);
 
         ws.move_window_left();
@@ -3132,7 +3145,7 @@ mod tests {
         ws.insert_window(1, Some(400)).unwrap(); // col 0: [A]
         ws.insert_window_in_column(2, 0).unwrap(); // col 0: [A, B]
         ws.insert_window(3, Some(400)).unwrap(); // col 1: [C]
-        // Focus A (idx 0 in col 0)
+                                                 // Focus A (idx 0 in col 0)
         ws.test_set_focus_unchecked(0, 0);
 
         ws.move_window_right();
@@ -4019,7 +4032,7 @@ mod tests {
         ws.toggle_focused_column_tabbed_mode();
         ws.set_active_tab(0, 0).unwrap();
         ws.mark_minimized(2); // window at idx 1 minimized
-        // focus_down from 0 should skip 1 and land on 2.
+                              // focus_down from 0 should skip 1 and land on 2.
         ws.focus_down();
         assert_eq!(ws.focused_window_in_column, 2);
     }

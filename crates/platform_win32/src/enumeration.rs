@@ -20,8 +20,8 @@ use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFOR
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetAncestor, GetClassNameW, GetWindow, GetWindowLongW, GetWindowRect,
     GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow,
-    IsWindowVisible, GA_ROOT, GWL_EXSTYLE, GWL_STYLE, GW_OWNER, WS_EX_APPWINDOW,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_THICKFRAME, WS_VISIBLE,
+    IsWindowVisible, GA_ROOT, GWL_EXSTYLE, GWL_STYLE, GW_OWNER, WS_EX_APPWINDOW, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_THICKFRAME, WS_VISIBLE,
 };
 
 /// Whether a tool window (`WS_EX_TOOLWINDOW`) should be excluded from tiling.
@@ -332,7 +332,11 @@ unsafe extern "system" fn enum_monitors_callback(
             let mut dpi_y: u32 = 96;
             let _ = GetDpiForMonitor(hmonitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y);
             let raw = dpi_x as f64 / 96.0;
-            if raw.is_finite() && raw > 0.0 { raw.clamp(1.0, 8.0) } else { 1.0 }
+            if raw.is_finite() && raw > 0.0 {
+                raw.clamp(1.0, 8.0)
+            } else {
+                1.0
+            }
         };
 
         monitors.push(MonitorInfo {
@@ -575,10 +579,10 @@ pub(crate) fn should_emit_window_event_for(event: u32, hwnd: HWND) -> bool {
         }
         // Restore/minimize/destroy/hide should still pass basic top-level filtering,
         // but visibility/title can be transient during these transitions.
-        EVENT_SYSTEM_MINIMIZESTART | EVENT_SYSTEM_MINIMIZEEND | EVENT_OBJECT_DESTROY
-        | EVENT_OBJECT_HIDE => {
-            should_emit_window_event_with_policy(hwnd, false, false, false)
-        }
+        EVENT_SYSTEM_MINIMIZESTART
+        | EVENT_SYSTEM_MINIMIZEEND
+        | EVENT_OBJECT_DESTROY
+        | EVENT_OBJECT_HIDE => should_emit_window_event_with_policy(hwnd, false, false, false),
         EVENT_OBJECT_LOCATIONCHANGE => should_emit_window_event_with_policy(hwnd, true, true, true),
         EVENT_SYSTEM_MOVESIZESTART | EVENT_SYSTEM_MOVESIZEEND => {
             should_emit_window_event_with_policy(hwnd, false, false, false)
@@ -673,21 +677,21 @@ pub(crate) fn should_skip_window_by_class(class_name: &str) -> bool {
         "MSCTFIME UI",                // Text Services Framework IME helper window
         // ApplicationFrameWindow removed: allows tiling UWP apps (Calculator, Photos, etc.)
         // Empty/cloaked UWP frames are already filtered by the cloaked window check.
-        "XamlExplorerHostIslandWindow", // XAML islands
+        "XamlExplorerHostIslandWindow",        // XAML islands
         "TopLevelWindowForOverflowXamlIsland", // Overflow islands
-        "RAIL_WINDOW",                // WSLg RemoteApp (msrdc.exe) — RDP-projected from Linux;
-                                      // tiling breaks them because the remote session controls sizing
-        "Ghost",                      // DWM hung-window replacement — tiling duplicates the original
-        "#32770",                     // Standard Win32 dialog (Open/Save/Print/Properties)
-        "OperationStatusWindow",      // Shell copy/move/delete progress dialog. Style-based
-                                      // dialog detection misses it: it keeps WS_MINIMIZEBOX,
-                                      // so it fails the "no minimize *and* no maximize" test.
+        "RAIL_WINDOW", // WSLg RemoteApp (msrdc.exe) — RDP-projected from Linux;
+        // tiling breaks them because the remote session controls sizing
+        "Ghost",  // DWM hung-window replacement — tiling duplicates the original
+        "#32770", // Standard Win32 dialog (Open/Save/Print/Properties)
+        "OperationStatusWindow", // Shell copy/move/delete progress dialog. Style-based
+        // dialog detection misses it: it keeps WS_MINIMIZEBOX,
+        // so it fails the "no minimize *and* no maximize" test.
         "Chrome_RenderWidgetHostHWND", // Internal Electron/Chrome render widget, not a real window
-        "LeopardWMSettings",          // Our own settings window
-        "LeopardWMBorderFrame",       // Our own border overlay
-        "LeopardWMThumbnailHost",     // Our own DWM thumbnail host
-        "LeopardWMOverview",          // Our own overview overlay
-        "LeopardWMOverviewMask",      // Our own overview corner-cap mask layer
+        "LeopardWMSettings",           // Our own settings window
+        "LeopardWMBorderFrame",        // Our own border overlay
+        "LeopardWMThumbnailHost",      // Our own DWM thumbnail host
+        "LeopardWMOverview",           // Our own overview overlay
+        "LeopardWMOverviewMask",       // Our own overview corner-cap mask layer
     ];
 
     SKIP_CLASSES.contains(&class_name)

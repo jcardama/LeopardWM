@@ -119,11 +119,11 @@ pub struct TabStripColors {
 impl Default for TabStripColors {
     fn default() -> Self {
         Self {
-            bg: 0x1F1F1F,           // dark gray
+            bg: 0x1F1F1F,            // dark gray
             active_bg: 0x303030,     // slightly lighter for active
             active_text: 0xFFFFFF,   // white
             inactive_text: 0xA0A0A0, // light gray
-            opacity: 230,             // ~90% opaque
+            opacity: 230,            // ~90% opaque
         }
     }
 }
@@ -452,15 +452,11 @@ impl TabStripOverlay {
                             if tooltip_hwnd_raw != 0 {
                                 let popup = HWND(tooltip_hwnd_raw as *mut c_void);
                                 let _ = DestroyWindow(popup);
-                                let _ = registry()
-                                    .tooltip_owners
-                                    .remove(&tooltip_hwnd_raw);
+                                let _ = registry().tooltip_owners.remove(&tooltip_hwnd_raw);
                             }
                             let _ = DestroyWindow(h);
-                            let _ = UnregisterClassW(
-                                windows::core::PCWSTR(class_name.as_ptr()),
-                                None,
-                            );
+                            let _ =
+                                UnregisterClassW(windows::core::PCWSTR(class_name.as_ptr()), None);
                             // Drop the per-instance state. UnregisterClass
                             // for the tooltip class is intentionally not
                             // called: many strip instances may share it,
@@ -553,8 +549,7 @@ impl TabStripOverlay {
         }
 
         // DPI-scaled thresholds for narrow-tab rendering.
-        let close_min_tab_w_px =
-            (CLOSE_BTN_MIN_TAB_W_LOGICAL as f64 * scale_factor).round() as i32;
+        let close_min_tab_w_px = (CLOSE_BTN_MIN_TAB_W_LOGICAL as f64 * scale_factor).round() as i32;
         let title_min_tab_w_px =
             (TITLE_VISIBLE_MIN_TAB_W_LOGICAL as f64 * scale_factor).round() as i32;
 
@@ -636,9 +631,7 @@ impl TabStripOverlay {
             let identity_changed = state.target_monitor != target_monitor
                 || state.target_workspace_idx != target_workspace_idx
                 || state.target_column_idx != target_column_idx;
-            let hover_out_of_range = state
-                .hovered_tab_idx
-                .is_some_and(|i| i >= tabs.len());
+            let hover_out_of_range = state.hovered_tab_idx.is_some_and(|i| i >= tabs.len());
             if identity_changed || hover_out_of_range {
                 state.hovered_tab_idx = None;
                 state.hovered_close_idx = None;
@@ -751,11 +744,7 @@ impl TabStripOverlay {
     /// `None` if the strip isn't currently visible, or the point isn't
     /// over any tab rect. Drag-and-drop callers iterate over every live
     /// strip to find the first hit.
-    pub fn hit_test_screen(
-        &self,
-        screen_x: i32,
-        screen_y: i32,
-    ) -> Option<TabStripHit> {
+    pub fn hit_test_screen(&self, screen_x: i32, screen_y: i32) -> Option<TabStripHit> {
         let reg = registry();
         let state = reg.states.get(&(self.hwnd.0 as isize))?;
         if !state.visible {
@@ -816,8 +805,16 @@ fn pixel_coverage_rounded(
     // pixel grid points where the curve transitions from straight edge
     // to arc. Sub-pixel samples within this pixel get tested against
     // `dx² + dy² <= r²`.
-    let cx = if in_left { (left + radius) as f32 } else { (right - radius) as f32 };
-    let cy = if in_top { (top + radius) as f32 } else { (bottom - radius) as f32 };
+    let cx = if in_left {
+        (left + radius) as f32
+    } else {
+        (right - radius) as f32
+    };
+    let cy = if in_top {
+        (top + radius) as f32
+    } else {
+        (bottom - radius) as f32
+    };
     let r2 = (radius * radius) as f32;
 
     const SAMPLES: i32 = 4;
@@ -1092,7 +1089,9 @@ fn render_strip_now(hwnd: HWND, x: i32, y: i32, w: i32, h: i32) {
     }
     let (tabs, active_idx, colors, transition, hovered, hovered_close, close_min, title_min) = {
         let reg = registry();
-        let Some(s) = reg.states.get(&(hwnd.0 as isize)) else { return };
+        let Some(s) = reg.states.get(&(hwnd.0 as isize)) else {
+            return;
+        };
         (
             s.tabs.clone(),
             s.active_idx,
@@ -1108,8 +1107,19 @@ fn render_strip_now(hwnd: HWND, x: i32, y: i32, w: i32, h: i32) {
         return;
     }
     render_strip_inner(
-        hwnd, x, y, w, h, &tabs, active_idx, colors, transition, hovered, hovered_close,
-        close_min, title_min,
+        hwnd,
+        x,
+        y,
+        w,
+        h,
+        &tabs,
+        active_idx,
+        colors,
+        transition,
+        hovered,
+        hovered_close,
+        close_min,
+        title_min,
     );
 }
 
@@ -1136,416 +1146,412 @@ fn render_strip_inner(
         return;
     }
     unsafe {
-            // 32-bit top-down DIB. We use per-pixel alpha (AC_SRC_ALPHA)
-            // for the layered-window blend so the strip's outer corners can
-            // round into genuine transparency — the corners' alpha byte
-            // stays at 0 and DWM composites the window/desktop through.
-            let bmi = BITMAPINFO {
-                bmiHeader: BITMAPINFOHEADER {
-                    biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-                    biWidth: w,
-                    biHeight: -h, // negative = top-down
-                    biPlanes: 1,
-                    biBitCount: 32,
-                    biCompression: BI_RGB.0,
-                    ..Default::default()
-                },
+        // 32-bit top-down DIB. We use per-pixel alpha (AC_SRC_ALPHA)
+        // for the layered-window blend so the strip's outer corners can
+        // round into genuine transparency — the corners' alpha byte
+        // stays at 0 and DWM composites the window/desktop through.
+        let bmi = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: w,
+                biHeight: -h, // negative = top-down
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
                 ..Default::default()
-            };
+            },
+            ..Default::default()
+        };
 
-            let mut bits: *mut c_void = std::ptr::null_mut();
-            let Ok(hbitmap) = CreateDIBSection(None, &bmi, DIB_RGB_COLORS, &mut bits, None, 0)
-            else {
-                return;
-            };
+        let mut bits: *mut c_void = std::ptr::null_mut();
+        let Ok(hbitmap) = CreateDIBSection(None, &bmi, DIB_RGB_COLORS, &mut bits, None, 0) else {
+            return;
+        };
 
-            // Fill bitmap on a memory DC so we can draw text into it.
-            let hdc_screen = GetDC(None);
-            let hdc_mem = CreateCompatibleDC(Some(hdc_screen));
-            let old_bm = SelectObject(hdc_mem, hbitmap.into());
+        // Fill bitmap on a memory DC so we can draw text into it.
+        let hdc_screen = GetDC(None);
+        let hdc_mem = CreateCompatibleDC(Some(hdc_screen));
+        let old_bm = SelectObject(hdc_mem, hbitmap.into());
 
-            // Zero the bitmap. `CreateDIBSection` doesn't guarantee
-            // zero-init, and our AA fill below SKIPS pixels with zero
-            // coverage rather than writing zeros — so any heap garbage
-            // in the corners would composite as visible junk without
-            // this explicit clear.
-            let pixels =
-                std::slice::from_raw_parts_mut(bits as *mut u8, (w * h * 4) as usize);
-            pixels.fill(0);
+        // Zero the bitmap. `CreateDIBSection` doesn't guarantee
+        // zero-init, and our AA fill below SKIPS pixels with zero
+        // coverage rather than writing zeros — so any heap garbage
+        // in the corners would composite as visible junk without
+        // this explicit clear.
+        let pixels = std::slice::from_raw_parts_mut(bits as *mut u8, (w * h * 4) as usize);
+        pixels.fill(0);
 
-            // Strip outer corner radius — tuned to match Win11's
-            // standard window corner radius (~8 px at 100% DPI).
-            // `h * 2 / 7` gives 8 at h=28 (default strip height) and
-            // scales linearly with the strip's DPI-scaled height, so a
-            // 200% display gets a 16px radius — same proportion as
-            // Win11's own scaled corners. Visually the strip sits as a
-            // sibling to the active window rather than a different
-            // design language.
-            let strip_corner = (h * 2 / 7).max(6);
+        // Strip outer corner radius — tuned to match Win11's
+        // standard window corner radius (~8 px at 100% DPI).
+        // `h * 2 / 7` gives 8 at h=28 (default strip height) and
+        // scales linearly with the strip's DPI-scaled height, so a
+        // 200% display gets a 16px radius — same proportion as
+        // Win11's own scaled corners. Visually the strip sits as a
+        // sibling to the active window rather than a different
+        // design language.
+        let strip_corner = (h * 2 / 7).max(6);
 
-            // AA fill the strip background. GDI's RoundRect is aliased
-            // and produces stair-stepped corner pixels; we rasterize
-            // manually with 4x4 sub-pixel sampling so the curve edges
-            // composite smoothly into the surrounding transparency.
-            aa_fill_rounded(pixels, w, h, 0, 0, w, h, strip_corner, colors.bg);
+        // AA fill the strip background. GDI's RoundRect is aliased
+        // and produces stair-stepped corner pixels; we rasterize
+        // manually with 4x4 sub-pixel sampling so the curve edges
+        // composite smoothly into the surrounding transparency.
+        aa_fill_rounded(pixels, w, h, 0, 0, w, h, strip_corner, colors.bg);
 
-            // Active tab background highlight. When a transition is
-            // in-flight, the highlight slides from the previous tab's
-            // x to the new tab's x over `HIGHLIGHT_ANIM_MS`, using cubic
-            // ease-out so it lands snappy.
-            //
-            // The highlight is drawn as a *rounded* rect inset from the
-            // tab cell: horizontal inset creates a visual gap between
-            // adjacent tabs; vertical inset keeps the rounded shape from
-            // butting against the strip's top/bottom edges. Corner radius
-            // and insets scale with strip height so the look stays
-            // proportional under DPI changes.
-            let n = tabs.len() as i32;
-            let tab_w = w / n;
-            let ai = active_idx.min((n as usize).saturating_sub(1)) as i32;
-            let active_x_settled = ai * tab_w;
-            let (active_left, active_right) = if let Some(t) = transition {
-                let from = t.from_idx.min((n as usize).saturating_sub(1)) as i32;
-                let to = t.to_idx.min((n as usize).saturating_sub(1)) as i32;
-                let elapsed = t.started_at.elapsed().as_millis() as f64;
-                let dur = HIGHLIGHT_ANIM_MS as f64;
-                let raw_t = (elapsed / dur).clamp(0.0, 1.0);
-                // easeOutCubic: 1 - (1-t)^3
-                let eased = 1.0 - (1.0 - raw_t).powi(3);
-                let from_x = (from * tab_w) as f64;
-                let to_x = (to * tab_w) as f64;
-                let interp_x = (from_x + (to_x - from_x) * eased).round() as i32;
-                (interp_x, interp_x + tab_w)
+        // Active tab background highlight. When a transition is
+        // in-flight, the highlight slides from the previous tab's
+        // x to the new tab's x over `HIGHLIGHT_ANIM_MS`, using cubic
+        // ease-out so it lands snappy.
+        //
+        // The highlight is drawn as a *rounded* rect inset from the
+        // tab cell: horizontal inset creates a visual gap between
+        // adjacent tabs; vertical inset keeps the rounded shape from
+        // butting against the strip's top/bottom edges. Corner radius
+        // and insets scale with strip height so the look stays
+        // proportional under DPI changes.
+        let n = tabs.len() as i32;
+        let tab_w = w / n;
+        let ai = active_idx.min((n as usize).saturating_sub(1)) as i32;
+        let active_x_settled = ai * tab_w;
+        let (active_left, active_right) = if let Some(t) = transition {
+            let from = t.from_idx.min((n as usize).saturating_sub(1)) as i32;
+            let to = t.to_idx.min((n as usize).saturating_sub(1)) as i32;
+            let elapsed = t.started_at.elapsed().as_millis() as f64;
+            let dur = HIGHLIGHT_ANIM_MS as f64;
+            let raw_t = (elapsed / dur).clamp(0.0, 1.0);
+            // easeOutCubic: 1 - (1-t)^3
+            let eased = 1.0 - (1.0 - raw_t).powi(3);
+            let from_x = (from * tab_w) as f64;
+            let to_x = (to * tab_w) as f64;
+            let interp_x = (from_x + (to_x - from_x) * eased).round() as i32;
+            (interp_x, interp_x + tab_w)
+        } else {
+            let right = if ai == n - 1 {
+                w
             } else {
-                let right = if ai == n - 1 { w } else { active_x_settled + tab_w };
-                (active_x_settled, right)
+                active_x_settled + tab_w
             };
+            (active_x_settled, right)
+        };
 
-            // Inset and corner-radius derived from strip height — keeps
-            // the look proportional across DPIs without separate pixel
-            // constants. Horizontal inset gives adjacent tabs room to
-            // read as separated pills. The active-tab corner radius
-            // sits 2 px tighter than the strip's outer radius so the
-            // inner curve is consistently smaller (outer > inner) —
-            // matches the visual hierarchy Win11 uses for nested
-            // rounded shapes (e.g. context menus inside flyouts).
-            let h_inset = (h / 6).max(4);
-            let v_inset = (h / 8).max(3);
-            let corner = strip_corner.saturating_sub(2).max(4);
-            let hr_left = active_left + h_inset;
-            let hr_right = (active_right - h_inset).max(hr_left + 1);
-            let hr_top = v_inset;
-            let hr_bottom = (h - v_inset).max(hr_top + 1);
+        // Inset and corner-radius derived from strip height — keeps
+        // the look proportional across DPIs without separate pixel
+        // constants. Horizontal inset gives adjacent tabs room to
+        // read as separated pills. The active-tab corner radius
+        // sits 2 px tighter than the strip's outer radius so the
+        // inner curve is consistently smaller (outer > inner) —
+        // matches the visual hierarchy Win11 uses for nested
+        // rounded shapes (e.g. context menus inside flyouts).
+        let h_inset = (h / 6).max(4);
+        let v_inset = (h / 8).max(3);
+        let corner = strip_corner.saturating_sub(2).max(4);
+        let hr_left = active_left + h_inset;
+        let hr_right = (active_right - h_inset).max(hr_left + 1);
+        let hr_top = v_inset;
+        let hr_bottom = (h - v_inset).max(hr_top + 1);
 
-            // AA-fill the active highlight on top of the strip bg —
-            // same supersampled rasterizer, source-over composites the
-            // highlight over the bg so the highlight's rounded corners
-            // are smooth.
-            aa_fill_rounded(
-                pixels,
-                w,
-                h,
-                hr_left,
-                hr_top,
-                hr_right,
-                hr_bottom,
-                corner,
-                colors.active_bg,
-            );
+        // AA-fill the active highlight on top of the strip bg —
+        // same supersampled rasterizer, source-over composites the
+        // highlight over the bg so the highlight's rounded corners
+        // are smooth.
+        aa_fill_rounded(
+            pixels,
+            w,
+            h,
+            hr_left,
+            hr_top,
+            hr_right,
+            hr_bottom,
+            corner,
+            colors.active_bg,
+        );
 
-            // Font: Segoe UI ~12 px char height (matches Win11
-            // Terminal / Edge tab title) at default DPI. Scales
-            // linearly with strip height; floor of 8 px keeps it
-            // legible at small DPIs. `height < 0` in CreateFontW means
-            // character height (cell ascender), > 0 means cell height.
-            let face: Vec<u16> = "Segoe UI\0".encode_utf16().collect();
-            let hfont = CreateFontW(
-                -(((h as f32 * 0.43).round() as i32).max(8)),
-                0,
-                0,
-                0,
-                FW_NORMAL.0 as i32,
-                0,
-                0,
-                0,
-                DEFAULT_CHARSET,
-                OUT_DEFAULT_PRECIS,
-                CLIP_DEFAULT_PRECIS,
-                CLEARTYPE_QUALITY,
-                FONT_PIPELINE_DEFAULT_PITCH_AND_FAMILY,
-                windows::core::PCWSTR(face.as_ptr()),
-            );
-            let old_font = SelectObject(hdc_mem, hfont.into());
-            SetBkMode(hdc_mem, TRANSPARENT);
+        // Font: Segoe UI ~12 px char height (matches Win11
+        // Terminal / Edge tab title) at default DPI. Scales
+        // linearly with strip height; floor of 8 px keeps it
+        // legible at small DPIs. `height < 0` in CreateFontW means
+        // character height (cell ascender), > 0 means cell height.
+        let face: Vec<u16> = "Segoe UI\0".encode_utf16().collect();
+        let hfont = CreateFontW(
+            -(((h as f32 * 0.43).round() as i32).max(8)),
+            0,
+            0,
+            0,
+            FW_NORMAL.0 as i32,
+            0,
+            0,
+            0,
+            DEFAULT_CHARSET,
+            OUT_DEFAULT_PRECIS,
+            CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY,
+            FONT_PIPELINE_DEFAULT_PITCH_AND_FAMILY,
+            windows::core::PCWSTR(face.as_ptr()),
+        );
+        let old_font = SelectObject(hdc_mem, hfont.into());
+        SetBkMode(hdc_mem, TRANSPARENT);
 
-            for (i, tab) in tabs.iter().enumerate() {
-                let i_i32 = i as i32;
-                let left = i_i32 * tab_w;
-                let right = if i_i32 == n - 1 { w } else { left + tab_w };
-                let tab_rect = RECT {
-                    left,
-                    top: 0,
-                    right,
-                    bottom: h,
-                };
-                let color = if i == active_idx {
-                    colors.active_text
-                } else {
-                    colors.inactive_text
-                };
-                SetTextColor(hdc_mem, windows::Win32::Foundation::COLORREF(color));
+        for (i, tab) in tabs.iter().enumerate() {
+            let i_i32 = i as i32;
+            let left = i_i32 * tab_w;
+            let right = if i_i32 == n - 1 { w } else { left + tab_w };
+            let tab_rect = RECT {
+                left,
+                top: 0,
+                right,
+                bottom: h,
+            };
+            let color = if i == active_idx {
+                colors.active_text
+            } else {
+                colors.inactive_text
+            };
+            SetTextColor(hdc_mem, windows::Win32::Foundation::COLORREF(color));
 
-                // Icon geometry:
-                //   * `icon_size`: shrunk so the icon doesn't kiss the
-                //     highlight's vertical edges — gives breathing room
-                //     so the icon reads as content sitting *inside* the
-                //     button rather than filling it.
-                //   * `icon_top`: arithmetic vertical centerline so the
-                //     icon's center sits at the strip's center,
-                //     regardless of the active-highlight's v_inset.
-                //   * `icon_left`: `h_inset` puts us at the highlight's
-                //     left edge; `icon_inside_pad` then nudges us
-                //     further right so the icon has visible padding
-                //     INSIDE the highlight (otherwise it sits flush
-                //     against the highlight's left edge).
-                //
-                // DrawIconEx writes its own premultiplied alpha; the
-                // post-render fixup only promotes alpha=0 pixels with
-                // non-zero RGB to 0xFF, so the icon's anti-aliased
-                // edges (alpha != 0) are left untouched.
-                let icon_inside_pad = (h / 6).max(4);
-                // Icon size: `0.57 * strip_h` (≈ 16 px at 28 px strip)
-                // matches Win11 Terminal / Edge tab icon proportions.
-                // Floor of 10 px keeps it recognizable at small DPIs.
-                let icon_size = ((h as f32 * 0.57).round() as i32).max(10);
-                let icon_top = (h - icon_size) / 2;
-                let icon_left = tab_rect.left + h_inset + icon_inside_pad;
-                let mut text_left = tab_rect.left + h_inset + icon_inside_pad;
-                if let Some(icon_handle) = tab.icon {
-                    if icon_size > 0 && icon_handle != 0 {
-                        let hicon = windows::Win32::UI::WindowsAndMessaging::HICON(
-                            icon_handle as *mut c_void,
-                        );
-                        let _ = windows::Win32::UI::WindowsAndMessaging::DrawIconEx(
-                            hdc_mem,
-                            icon_left,
-                            icon_top,
-                            hicon,
-                            icon_size,
-                            icon_size,
-                            0,
-                            None,
-                            windows::Win32::UI::WindowsAndMessaging::DI_NORMAL,
-                        );
-                        text_left = icon_left + icon_size + icon_inside_pad;
-                    }
-                }
-
-                // Title is gated on the narrow-tab threshold — below it,
-                // tabs render icon-only so the strip stays legible when
-                // many tabs share a column.
-                if tab_w >= title_min_tab_w_px {
-                    let mut wide: Vec<u16> = tab.title.encode_utf16().collect();
-                    if wide.is_empty() {
-                        wide.push(0);
-                    }
-
-                    // Use DrawTextW with DT_END_ELLIPSIS so over-long titles
-                    // ellipsize automatically rather than overflow into the
-                    // next tab. Right padding mirrors the icon's
-                    // inside-padding so the text has matching breathing
-                    // room from the highlight's right edge.
-                    //
-                    // Reserve room on the right for the close-X glyph
-                    // (only when this tab is the hover target AND the
-                    // strip is wide enough to draw it) — otherwise the
-                    // ellipsis lands underneath the X.
-                    let mut padded = tab_rect;
-                    padded.left = text_left;
-                    let mut right_pad = h_inset + icon_inside_pad;
-                    if tab_w >= close_min_tab_w_px
-                        && hovered_tab_idx == Some(i)
-                    {
-                        // Reserve space for the bg pill + its outer
-                        // breathing room so the title ellipsis lands
-                        // well clear of the button.
-                        let pill_target = (h * 2 / 3).max(16).min(h - 4);
-                        let pill = snap_to_parity(pill_target, h);
-                        let glyph_target = (pill * 4 / 9).max(8);
-                        let glyph = snap_to_parity(glyph_target, pill);
-                        let bg_pad = (pill - glyph) / 2;
-                        let right_breathing = bg_pad.max(h_inset);
-                        right_pad = right_pad.max(right_breathing + pill + (h_inset / 2).max(3));
-                    }
-                    padded.right = tab_rect.right.saturating_sub(right_pad);
-                    let _ = DrawTextW(
+            // Icon geometry:
+            //   * `icon_size`: shrunk so the icon doesn't kiss the
+            //     highlight's vertical edges — gives breathing room
+            //     so the icon reads as content sitting *inside* the
+            //     button rather than filling it.
+            //   * `icon_top`: arithmetic vertical centerline so the
+            //     icon's center sits at the strip's center,
+            //     regardless of the active-highlight's v_inset.
+            //   * `icon_left`: `h_inset` puts us at the highlight's
+            //     left edge; `icon_inside_pad` then nudges us
+            //     further right so the icon has visible padding
+            //     INSIDE the highlight (otherwise it sits flush
+            //     against the highlight's left edge).
+            //
+            // DrawIconEx writes its own premultiplied alpha; the
+            // post-render fixup only promotes alpha=0 pixels with
+            // non-zero RGB to 0xFF, so the icon's anti-aliased
+            // edges (alpha != 0) are left untouched.
+            let icon_inside_pad = (h / 6).max(4);
+            // Icon size: `0.57 * strip_h` (≈ 16 px at 28 px strip)
+            // matches Win11 Terminal / Edge tab icon proportions.
+            // Floor of 10 px keeps it recognizable at small DPIs.
+            let icon_size = ((h as f32 * 0.57).round() as i32).max(10);
+            let icon_top = (h - icon_size) / 2;
+            let icon_left = tab_rect.left + h_inset + icon_inside_pad;
+            let mut text_left = tab_rect.left + h_inset + icon_inside_pad;
+            if let Some(icon_handle) = tab.icon {
+                if icon_size > 0 && icon_handle != 0 {
+                    let hicon =
+                        windows::Win32::UI::WindowsAndMessaging::HICON(icon_handle as *mut c_void);
+                    let _ = windows::Win32::UI::WindowsAndMessaging::DrawIconEx(
                         hdc_mem,
-                        &mut wide,
-                        &mut padded,
-                        DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX,
+                        icon_left,
+                        icon_top,
+                        hicon,
+                        icon_size,
+                        icon_size,
+                        0,
+                        None,
+                        windows::Win32::UI::WindowsAndMessaging::DI_NORMAL,
                     );
+                    text_left = icon_left + icon_size + icon_inside_pad;
+                }
+            }
+
+            // Title is gated on the narrow-tab threshold — below it,
+            // tabs render icon-only so the strip stays legible when
+            // many tabs share a column.
+            if tab_w >= title_min_tab_w_px {
+                let mut wide: Vec<u16> = tab.title.encode_utf16().collect();
+                if wide.is_empty() {
+                    wide.push(0);
                 }
 
-                // Close-X glyph on hover. Geometry mirrors
-                // `close_hit_rects` in `show()` exactly — parity-snapped
-                // pill so the pill centers cleanly in the strip and the
-                // glyph centers cleanly in the pill. Inside pad (glyph
-                // → pill edge) equals outside pad (pill → tab edge) for
-                // visually even spacing on both sides.
+                // Use DrawTextW with DT_END_ELLIPSIS so over-long titles
+                // ellipsize automatically rather than overflow into the
+                // next tab. Right padding mirrors the icon's
+                // inside-padding so the text has matching breathing
+                // room from the highlight's right edge.
+                //
+                // Reserve room on the right for the close-X glyph
+                // (only when this tab is the hover target AND the
+                // strip is wide enough to draw it) — otherwise the
+                // ellipsis lands underneath the X.
+                let mut padded = tab_rect;
+                padded.left = text_left;
+                let mut right_pad = h_inset + icon_inside_pad;
                 if tab_w >= close_min_tab_w_px && hovered_tab_idx == Some(i) {
+                    // Reserve space for the bg pill + its outer
+                    // breathing room so the title ellipsis lands
+                    // well clear of the button.
                     let pill_target = (h * 2 / 3).max(16).min(h - 4);
                     let pill = snap_to_parity(pill_target, h);
-                    // Glyph is a touch smaller than 1/2 the pill so the
-                    // X has room to breathe inside the button.
                     let glyph_target = (pill * 4 / 9).max(8);
                     let glyph = snap_to_parity(glyph_target, pill);
                     let bg_pad = (pill - glyph) / 2;
                     let right_breathing = bg_pad.max(h_inset);
-                    let bg_right = tab_rect.right - right_breathing;
-                    let bg_left = bg_right - pill;
-                    let bg_top = (h - pill) / 2;
-                    let bg_bottom = bg_top + pill;
-                    let glyph_right = bg_right - bg_pad;
-                    let glyph_left = glyph_right - glyph;
-                    let glyph_top = bg_top + bg_pad;
-                    let glyph_bottom = glyph_top + glyph;
-
-                    // Rounded-square hover background (Zen-style). Only
-                    // drawn when the mouse is directly over the pill —
-                    // when the user is just hovering the tab body, the
-                    // X stays glyph-only for a lighter feel.
-                    if hovered_close_idx == Some(i) {
-                        let bg_radius = (pill / 3).clamp(3, pill / 2);
-                        let bg_color: u32 = 0x3A3A3A;
-                        aa_fill_rounded(
-                            pixels, w, h, bg_left, bg_top, bg_right, bg_bottom, bg_radius,
-                            bg_color,
-                        );
-                    }
-
-                    // Stroke half-width scales with strip height for
-                    // DPI-aware thickness. At default h=28, this is
-                    // 28/37 ≈ 0.76, yielding a ~1.5px visual stroke.
-                    // At higher DPI strip heights (e.g. h=42 / 150%),
-                    // scales to ~1.14 → ~2.3px stroke.
-                    let half_width = (h as f32 / 37.0).max(0.6);
-                    // Center the line on the half-pixel boundary so the
-                    // 1.5px stroke samples symmetrically around the
-                    // pill's geometric diagonal.
-                    let gl = glyph_left as f32 + 0.5;
-                    let gt = glyph_top as f32 + 0.5;
-                    let gr = glyph_right as f32 - 0.5;
-                    let gb = glyph_bottom as f32 - 0.5;
-                    aa_fill_line_stroke(pixels, w, h, gl, gt, gr, gb, half_width, color);
-                    aa_fill_line_stroke(pixels, w, h, gr, gt, gl, gb, half_width, color);
+                    right_pad = right_pad.max(right_breathing + pill + (h_inset / 2).max(3));
                 }
+                padded.right = tab_rect.right.saturating_sub(right_pad);
+                let _ = DrawTextW(
+                    hdc_mem,
+                    &mut wide,
+                    &mut padded,
+                    DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX,
+                );
             }
 
-            SelectObject(hdc_mem, old_font);
-            let _ = DeleteObject(hfont.into());
+            // Close-X glyph on hover. Geometry mirrors
+            // `close_hit_rects` in `show()` exactly — parity-snapped
+            // pill so the pill centers cleanly in the strip and the
+            // glyph centers cleanly in the pill. Inside pad (glyph
+            // → pill edge) equals outside pad (pill → tab edge) for
+            // visually even spacing on both sides.
+            if tab_w >= close_min_tab_w_px && hovered_tab_idx == Some(i) {
+                let pill_target = (h * 2 / 3).max(16).min(h - 4);
+                let pill = snap_to_parity(pill_target, h);
+                // Glyph is a touch smaller than 1/2 the pill so the
+                // X has room to breathe inside the button.
+                let glyph_target = (pill * 4 / 9).max(8);
+                let glyph = snap_to_parity(glyph_target, pill);
+                let bg_pad = (pill - glyph) / 2;
+                let right_breathing = bg_pad.max(h_inset);
+                let bg_right = tab_rect.right - right_breathing;
+                let bg_left = bg_right - pill;
+                let bg_top = (h - pill) / 2;
+                let bg_bottom = bg_top + pill;
+                let glyph_right = bg_right - bg_pad;
+                let glyph_left = glyph_right - glyph;
+                let glyph_top = bg_top + bg_pad;
+                let glyph_bottom = glyph_top + glyph;
 
-            // Alpha-channel fixup + premultiplication for per-pixel
-            // `AC_SRC_ALPHA` compositing.
-            //
-            // After this point the buffer holds a mix of:
-            //   * AA-rasterized strip/highlight pixels with correct
-            //     non-premultiplied RGB and the right alpha already set.
-            //   * GDI-rendered text pixels (RGB blended over the
-            //     underlying bg color but alpha still at whatever the
-            //     AA fill left it).
-            //   * GDI-rendered icon pixels (DrawIconEx writes BGRA
-            //     including its own alpha; treated as premultiplied
-            //     output by the OS).
-            //
-            // Two passes:
-            //   1. For any pixel where alpha is still 0 but RGB is
-            //      non-zero, GDI wrote color without touching alpha —
-            //      promote alpha to 0xFF so the pixel becomes
-            //      hit-testable and opaque in the composite.
-            //   2. Premultiply RGB by alpha so the buffer is in the
-            //      premultiplied form `AC_SRC_ALPHA` expects.
-            //
-            // Bytes are BGRA little-endian → alpha is byte 3 of each
-            // 4-byte pixel.
-            let mut i = 0usize;
-            while i < pixels.len() {
-                let mut a = pixels[i + 3];
-                if a == 0
-                    && (pixels[i] != 0 || pixels[i + 1] != 0 || pixels[i + 2] != 0)
-                {
-                    a = 0xFF;
-                    pixels[i + 3] = a;
+                // Rounded-square hover background (Zen-style). Only
+                // drawn when the mouse is directly over the pill —
+                // when the user is just hovering the tab body, the
+                // X stays glyph-only for a lighter feel.
+                if hovered_close_idx == Some(i) {
+                    let bg_radius = (pill / 3).clamp(3, pill / 2);
+                    let bg_color: u32 = 0x3A3A3A;
+                    aa_fill_rounded(
+                        pixels, w, h, bg_left, bg_top, bg_right, bg_bottom, bg_radius, bg_color,
+                    );
                 }
-                if a < 0xFF {
-                    // Premultiply: stored = color * alpha / 255. At a=0
-                    // RGB stays at whatever it was, but the composite
-                    // ignores those bytes since the layer is transparent.
-                    let af = a as u32;
-                    pixels[i] = ((pixels[i] as u32 * af) / 255) as u8;
-                    pixels[i + 1] = ((pixels[i + 1] as u32 * af) / 255) as u8;
-                    pixels[i + 2] = ((pixels[i + 2] as u32 * af) / 255) as u8;
-                }
-                i += 4;
+
+                // Stroke half-width scales with strip height for
+                // DPI-aware thickness. At default h=28, this is
+                // 28/37 ≈ 0.76, yielding a ~1.5px visual stroke.
+                // At higher DPI strip heights (e.g. h=42 / 150%),
+                // scales to ~1.14 → ~2.3px stroke.
+                let half_width = (h as f32 / 37.0).max(0.6);
+                // Center the line on the half-pixel boundary so the
+                // 1.5px stroke samples symmetrically around the
+                // pill's geometric diagonal.
+                let gl = glyph_left as f32 + 0.5;
+                let gt = glyph_top as f32 + 0.5;
+                let gr = glyph_right as f32 - 0.5;
+                let gb = glyph_bottom as f32 - 0.5;
+                aa_fill_line_stroke(pixels, w, h, gl, gt, gr, gb, half_width, color);
+                aa_fill_line_stroke(pixels, w, h, gr, gt, gl, gb, half_width, color);
             }
-
-            // Push to the layered window with per-pixel-alpha blending.
-            // `AC_SRC_ALPHA` requires the bitmap to be premultiplied; we
-            // satisfy this because all of our explicitly-drawn pixels are
-            // fully opaque (alpha=0xFF after the fixup above, and
-            // premultiplication is a no-op at full alpha). Outer-corner
-            // pixels are (0,0,0,0), the valid premultiplied representation
-            // of fully transparent.
-            //
-            // `SourceConstantAlpha` still applies as a uniform multiplier
-            // on top of per-pixel alpha, so the configured strip opacity
-            // setting keeps working — the strip stays translucent over
-            // the underlying window/desktop.
-            let pt_dst = POINT { x, y };
-            let sz = SIZE { cx: w, cy: h };
-            let pt_src = POINT { x: 0, y: 0 };
-            let blend = BLENDFUNCTION {
-                BlendOp: AC_SRC_OVER as u8,
-                BlendFlags: 0,
-                SourceConstantAlpha: colors.opacity,
-                AlphaFormat: AC_SRC_ALPHA as u8,
-            };
-
-            let _ = UpdateLayeredWindow(
-                hwnd,
-                Some(hdc_screen),
-                Some(&pt_dst),
-                Some(&sz),
-                Some(hdc_mem),
-                Some(&pt_src),
-                windows::Win32::Foundation::COLORREF(0),
-                Some(&blend),
-                ULW_ALPHA,
-            );
-
-            SelectObject(hdc_mem, old_bm);
-            let _ = DeleteDC(hdc_mem);
-            ReleaseDC(None, hdc_screen);
-            let _ = DeleteObject(hbitmap.into());
-
-            // Pin the strip to the top of the z-order on every paint.
-            // Without this, OS-driven SetWindowPos calls during a drag
-            // (the dragged window gets raised to HWND_TOP) push the
-            // strip behind the active window, making it appear to vanish
-            // mid-drag and only re-appear on the next focus change. The
-            // `SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOSIZE` combo
-            // mirrors `BorderFrame`'s pattern: stay on top, stay visible,
-            // don't steal focus, keep current size.
-            let _ = SetWindowPos(
-                hwnd,
-                Some(HWND_TOP),
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
-            );
-            let _ = ShowWindow(hwnd, SW_SHOWNA);
         }
+
+        SelectObject(hdc_mem, old_font);
+        let _ = DeleteObject(hfont.into());
+
+        // Alpha-channel fixup + premultiplication for per-pixel
+        // `AC_SRC_ALPHA` compositing.
+        //
+        // After this point the buffer holds a mix of:
+        //   * AA-rasterized strip/highlight pixels with correct
+        //     non-premultiplied RGB and the right alpha already set.
+        //   * GDI-rendered text pixels (RGB blended over the
+        //     underlying bg color but alpha still at whatever the
+        //     AA fill left it).
+        //   * GDI-rendered icon pixels (DrawIconEx writes BGRA
+        //     including its own alpha; treated as premultiplied
+        //     output by the OS).
+        //
+        // Two passes:
+        //   1. For any pixel where alpha is still 0 but RGB is
+        //      non-zero, GDI wrote color without touching alpha —
+        //      promote alpha to 0xFF so the pixel becomes
+        //      hit-testable and opaque in the composite.
+        //   2. Premultiply RGB by alpha so the buffer is in the
+        //      premultiplied form `AC_SRC_ALPHA` expects.
+        //
+        // Bytes are BGRA little-endian → alpha is byte 3 of each
+        // 4-byte pixel.
+        let mut i = 0usize;
+        while i < pixels.len() {
+            let mut a = pixels[i + 3];
+            if a == 0 && (pixels[i] != 0 || pixels[i + 1] != 0 || pixels[i + 2] != 0) {
+                a = 0xFF;
+                pixels[i + 3] = a;
+            }
+            if a < 0xFF {
+                // Premultiply: stored = color * alpha / 255. At a=0
+                // RGB stays at whatever it was, but the composite
+                // ignores those bytes since the layer is transparent.
+                let af = a as u32;
+                pixels[i] = ((pixels[i] as u32 * af) / 255) as u8;
+                pixels[i + 1] = ((pixels[i + 1] as u32 * af) / 255) as u8;
+                pixels[i + 2] = ((pixels[i + 2] as u32 * af) / 255) as u8;
+            }
+            i += 4;
+        }
+
+        // Push to the layered window with per-pixel-alpha blending.
+        // `AC_SRC_ALPHA` requires the bitmap to be premultiplied; we
+        // satisfy this because all of our explicitly-drawn pixels are
+        // fully opaque (alpha=0xFF after the fixup above, and
+        // premultiplication is a no-op at full alpha). Outer-corner
+        // pixels are (0,0,0,0), the valid premultiplied representation
+        // of fully transparent.
+        //
+        // `SourceConstantAlpha` still applies as a uniform multiplier
+        // on top of per-pixel alpha, so the configured strip opacity
+        // setting keeps working — the strip stays translucent over
+        // the underlying window/desktop.
+        let pt_dst = POINT { x, y };
+        let sz = SIZE { cx: w, cy: h };
+        let pt_src = POINT { x: 0, y: 0 };
+        let blend = BLENDFUNCTION {
+            BlendOp: AC_SRC_OVER as u8,
+            BlendFlags: 0,
+            SourceConstantAlpha: colors.opacity,
+            AlphaFormat: AC_SRC_ALPHA as u8,
+        };
+
+        let _ = UpdateLayeredWindow(
+            hwnd,
+            Some(hdc_screen),
+            Some(&pt_dst),
+            Some(&sz),
+            Some(hdc_mem),
+            Some(&pt_src),
+            windows::Win32::Foundation::COLORREF(0),
+            Some(&blend),
+            ULW_ALPHA,
+        );
+
+        SelectObject(hdc_mem, old_bm);
+        let _ = DeleteDC(hdc_mem);
+        ReleaseDC(None, hdc_screen);
+        let _ = DeleteObject(hbitmap.into());
+
+        // Pin the strip to the top of the z-order on every paint.
+        // Without this, OS-driven SetWindowPos calls during a drag
+        // (the dragged window gets raised to HWND_TOP) push the
+        // strip behind the active window, making it appear to vanish
+        // mid-drag and only re-appear on the next focus change. The
+        // `SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOSIZE` combo
+        // mirrors `BorderFrame`'s pattern: stay on top, stay visible,
+        // don't steal focus, keep current size.
+        let _ = SetWindowPos(
+            hwnd,
+            Some(HWND_TOP),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        );
+        let _ = ShowWindow(hwnd, SW_SHOWNA);
+    }
 }
 
 impl Drop for TabStripOverlay {
@@ -1620,9 +1626,7 @@ unsafe fn sys_color_bgr(idx: windows::Win32::Graphics::Gdi::SYS_COLOR_INDEX) -> 
 ///
 /// Returns `(bg, text, border)` packed as `0xBBGGRR`.
 pub(crate) unsafe fn tooltip_theme_colors() -> (u32, u32, u32) {
-    use windows::Win32::Graphics::Gdi::{
-        COLOR_WINDOW, COLOR_WINDOWFRAME, COLOR_WINDOWTEXT,
-    };
+    use windows::Win32::Graphics::Gdi::{COLOR_WINDOW, COLOR_WINDOWFRAME, COLOR_WINDOWTEXT};
     if crate::is_high_contrast_enabled() {
         return (
             sys_color_bgr(COLOR_WINDOW),
@@ -1907,8 +1911,7 @@ pub(crate) unsafe fn render_tooltip_layered(
         ..Default::default()
     };
     let mut bits: *mut c_void = std::ptr::null_mut();
-    let Ok(hbitmap) = CreateDIBSection(None, &bmi, DIB_RGB_COLORS, &mut bits, None, 0)
-    else {
+    let Ok(hbitmap) = CreateDIBSection(None, &bmi, DIB_RGB_COLORS, &mut bits, None, 0) else {
         return;
     };
 
@@ -2005,7 +2008,10 @@ pub(crate) unsafe fn render_tooltip_layered(
         }
     }
 
-    let pt_dst = POINT { x: window_x, y: window_y };
+    let pt_dst = POINT {
+        x: window_x,
+        y: window_y,
+    };
     let sz = SIZE { cx: w, cy: h };
     let pt_src = POINT { x: 0, y: 0 };
     // SourceConstantAlpha scales the per-pixel alpha uniformly — drives
@@ -2123,12 +2129,7 @@ unsafe extern "system" fn tooltip_popup_proc(
 /// alpha — used by the fade-in WM_TIMER to drive the animation. Factored
 /// out of `show_tooltip_popup` so the initial show and each fade tick
 /// can share the same measurement and positioning code path.
-unsafe fn render_tooltip_at_alpha(
-    popup: HWND,
-    text: &str,
-    anchor_screen_rect: &RECT,
-    alpha: u8,
-) {
+unsafe fn render_tooltip_at_alpha(popup: HWND, text: &str, anchor_screen_rect: &RECT, alpha: u8) {
     let hdc_screen = GetDC(None);
     let font = create_tooltip_font();
     let old_font = SelectObject(hdc_screen, font.into());
@@ -2184,11 +2185,7 @@ pub(crate) unsafe fn create_menu_glyph_bitmap(glyph: u16, color_bgr: u32) -> HBI
 /// pixel size. Used by the rename popup's check button, where the
 /// target rect is computed from the tab cell rather than the menu's
 /// fixed 16-logical-pixel icon column.
-pub(crate) unsafe fn create_glyph_bitmap_at_size(
-    glyph: u16,
-    color_bgr: u32,
-    size: i32,
-) -> HBITMAP {
+pub(crate) unsafe fn create_glyph_bitmap_at_size(glyph: u16, color_bgr: u32, size: i32) -> HBITMAP {
     if size <= 0 {
         return HBITMAP::default();
     }
@@ -2210,8 +2207,7 @@ pub(crate) unsafe fn create_glyph_bitmap_at_size(
         ..Default::default()
     };
     let mut big_bits: *mut c_void = std::ptr::null_mut();
-    let Ok(big_bmp) =
-        CreateDIBSection(None, &bmi_big, DIB_RGB_COLORS, &mut big_bits, None, 0)
+    let Ok(big_bmp) = CreateDIBSection(None, &bmi_big, DIB_RGB_COLORS, &mut big_bits, None, 0)
     else {
         return HBITMAP::default();
     };
@@ -2219,8 +2215,7 @@ pub(crate) unsafe fn create_glyph_bitmap_at_size(
     let hdc_mem = CreateCompatibleDC(Some(hdc_screen));
     let old_bm = SelectObject(hdc_mem, big_bmp.into());
 
-    let big_pixels =
-        std::slice::from_raw_parts_mut(big_bits as *mut u8, (big * big * 4) as usize);
+    let big_pixels = std::slice::from_raw_parts_mut(big_bits as *mut u8, (big * big * 4) as usize);
     big_pixels.fill(0);
 
     let face: Vec<u16> = "Segoe Fluent Icons\0".encode_utf16().collect();
@@ -2293,12 +2288,10 @@ pub(crate) unsafe fn create_glyph_bitmap_at_size(
         ..Default::default()
     };
     let mut bits: *mut c_void = std::ptr::null_mut();
-    let Ok(hbitmap) = CreateDIBSection(None, &bmi, DIB_RGB_COLORS, &mut bits, None, 0)
-    else {
+    let Ok(hbitmap) = CreateDIBSection(None, &bmi, DIB_RGB_COLORS, &mut bits, None, 0) else {
         return HBITMAP::default();
     };
-    let pixels =
-        std::slice::from_raw_parts_mut(bits as *mut u8, (size * size * 4) as usize);
+    let pixels = std::slice::from_raw_parts_mut(bits as *mut u8, (size * size * 4) as usize);
     pixels.fill(0);
 
     let src_b = color_bgr & 0xFF;
@@ -2334,9 +2327,9 @@ unsafe fn on_highlight_anim_tick(hwnd: HWND) -> LRESULT {
         let Some(state) = reg.states.get_mut(&(hwnd.0 as isize)) else {
             return LRESULT(0);
         };
-        let finished = state.transition.is_none_or(|t| {
-            t.started_at.elapsed().as_millis() as u64 >= HIGHLIGHT_ANIM_MS
-        });
+        let finished = state
+            .transition
+            .is_none_or(|t| t.started_at.elapsed().as_millis() as u64 >= HIGHLIGHT_ANIM_MS);
         if finished {
             state.transition = None;
         }
@@ -2377,11 +2370,7 @@ unsafe fn on_strip_mouse_move(hwnd: HWND, lparam: LPARAM) -> LRESULT {
             state.mouse_tracking_armed = true;
         }
         let new_hover = state.hit_rects.iter().enumerate().find_map(|(i, r)| {
-            if mouse_x >= r.left
-                && mouse_x < r.right
-                && mouse_y >= r.top
-                && mouse_y < r.bottom
-            {
+            if mouse_x >= r.left && mouse_x < r.right && mouse_y >= r.top && mouse_y < r.bottom {
                 Some(i)
             } else {
                 None
@@ -2391,18 +2380,13 @@ unsafe fn on_strip_mouse_move(hwnd: HWND, lparam: LPARAM) -> LRESULT {
         // Drives the button-style hover bg behind the X — so the X
         // reads as a clickable button when targeted, plain when the
         // user is just hovering the tab body.
-        let new_close_hover =
-            state.close_hit_rects.iter().enumerate().find_map(|(i, r)| {
-                if mouse_x >= r.left
-                    && mouse_x < r.right
-                    && mouse_y >= r.top
-                    && mouse_y < r.bottom
-                {
-                    Some(i)
-                } else {
-                    None
-                }
-            });
+        let new_close_hover = state.close_hit_rects.iter().enumerate().find_map(|(i, r)| {
+            if mouse_x >= r.left && mouse_x < r.right && mouse_y >= r.top && mouse_y < r.bottom {
+                Some(i)
+            } else {
+                None
+            }
+        });
         if state.hovered_tab_idx != new_hover {
             state.hovered_tab_idx = new_hover;
             needs_repaint = true;
@@ -2433,12 +2417,7 @@ unsafe fn on_strip_mouse_move(hwnd: HWND, lparam: LPARAM) -> LRESULT {
         let _ = KillTimer(Some(hwnd), TOOLTIP_DELAY_TIMER_ID);
         hide_tooltip_popup(hwnd);
         if now_over_close {
-            let _ = SetTimer(
-                Some(hwnd),
-                TOOLTIP_DELAY_TIMER_ID,
-                TOOLTIP_DELAY_MS,
-                None,
-            );
+            let _ = SetTimer(Some(hwnd), TOOLTIP_DELAY_TIMER_ID, TOOLTIP_DELAY_MS, None);
         }
     }
     LRESULT(0)
@@ -2451,8 +2430,7 @@ unsafe fn on_strip_mouse_leave(hwnd: HWND) -> LRESULT {
         let Some(state) = reg.states.get_mut(&(hwnd.0 as isize)) else {
             return LRESULT(0);
         };
-        let had_hover = state.hovered_tab_idx.is_some()
-            || state.hovered_close_idx.is_some();
+        let had_hover = state.hovered_tab_idx.is_some() || state.hovered_close_idx.is_some();
         state.hovered_tab_idx = None;
         state.hovered_close_idx = None;
         state.tooltip_pending_tab = None;
@@ -2500,7 +2478,10 @@ unsafe fn on_tooltip_delay_fired(hwnd: HWND) -> LRESULT {
             right: state.strip_screen_x + rect.right,
             bottom: state.strip_screen_y + rect.bottom,
         };
-        (tooltip_text_for(state.close_action).to_string(), screen_rect)
+        (
+            tooltip_text_for(state.close_action).to_string(),
+            screen_rect,
+        )
     };
     let (text, screen_rect) = snapshot;
     show_tooltip_popup(hwnd, &text, screen_rect);
@@ -2676,11 +2657,7 @@ unsafe fn on_tab_context_menu(hwnd: HWND, lparam: LPARAM) -> LRESULT {
             return LRESULT(0);
         };
         let idx = state.hit_rects.iter().enumerate().find_map(|(i, r)| {
-            if click_x >= r.left
-                && click_x < r.right
-                && click_y >= r.top
-                && click_y < r.bottom
-            {
+            if click_x >= r.left && click_x < r.right && click_y >= r.top && click_y < r.bottom {
                 Some(i)
             } else {
                 None

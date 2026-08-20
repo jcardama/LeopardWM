@@ -289,9 +289,7 @@ fn install_console_control_signal_handlers(
             apply_epoch.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             uncloak_all_visible_windows();
             if source == "ctrl_c" {
-                info!(
-                    "Ctrl+C received; restored off-screen windows, initiating shutdown..."
-                );
+                info!("Ctrl+C received; restored off-screen windows, initiating shutdown...");
             } else {
                 info!(
                     "Console control signal ({}) received; restored off-screen windows, initiating shutdown...",

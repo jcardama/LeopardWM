@@ -1933,12 +1933,7 @@ impl AppState {
         if leopardwm_platform_win32::is_valid_window(drag_hwnd) {
             leopardwm_platform_win32::set_dwm_transitions_disabled(drag_hwnd, false);
         }
-        (
-            true,
-            removed_placeholder,
-            removed_from_source,
-            drag_source,
-        )
+        (true, removed_placeholder, removed_from_source, drag_source)
     }
 
     /// Handle the start of a user drag or resize.
@@ -1971,7 +1966,13 @@ impl AppState {
                 } else {
                     (0, 0)
                 };
-                (!is_floating, monitor_id, ws_idx, source_window_slot, col_idx)
+                (
+                    !is_floating,
+                    monitor_id,
+                    ws_idx,
+                    source_window_slot,
+                    col_idx,
+                )
             } else {
                 (
                     false,

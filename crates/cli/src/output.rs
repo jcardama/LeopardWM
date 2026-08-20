@@ -109,7 +109,10 @@ pub(crate) fn print_response(response: &IpcResponse) {
             println!("OK");
         }
         IpcResponse::AutoStartState { enabled } => {
-            println!("Auto-start: {}", if *enabled { "enabled" } else { "disabled" });
+            println!(
+                "Auto-start: {}",
+                if *enabled { "enabled" } else { "disabled" }
+            );
         }
         IpcResponse::BoolValue { value } => {
             println!("{}", if *value { "enabled" } else { "disabled" });

@@ -104,10 +104,8 @@ impl BorderFrame {
                 };
                 RegisterClassW(&wc);
 
-                let ex_style = WS_EX_LAYERED
-                    | WS_EX_TOOLWINDOW
-                    | WS_EX_NOACTIVATE
-                    | WS_EX_TRANSPARENT;
+                let ex_style =
+                    WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT;
 
                 match CreateWindowExW(
                     ex_style,
@@ -130,10 +128,7 @@ impl BorderFrame {
                             let _ = DispatchMessageW(&msg);
                         }
                         let _ = DestroyWindow(h);
-                        let _ = UnregisterClassW(
-                            windows::core::PCWSTR(class_name.as_ptr()),
-                            None,
-                        );
+                        let _ = UnregisterClassW(windows::core::PCWSTR(class_name.as_ptr()), None);
                     }
                     Err(e) => {
                         let _ = tx.send(Err(Win32Error::HookInstallFailed(format!(
@@ -211,12 +206,7 @@ impl BorderFrame {
         };
 
         let (x, y, w, h) = match position {
-            BorderPosition::Outside => (
-                rx - bw,
-                ry - bw,
-                tw + 2 * bw,
-                th + 2 * bw,
-            ),
+            BorderPosition::Outside => (rx - bw, ry - bw, tw + 2 * bw, th + 2 * bw),
             BorderPosition::Inside => (rx, ry, tw, th),
         };
 
@@ -296,12 +286,9 @@ impl BorderFrame {
             let th = rect.bottom - rect.top;
 
             let (x, y, w, h) = match position {
-                BorderPosition::Outside => (
-                    rect.left - bw,
-                    rect.top - bw,
-                    tw + 2 * bw,
-                    th + 2 * bw,
-                ),
+                BorderPosition::Outside => {
+                    (rect.left - bw, rect.top - bw, tw + 2 * bw, th + 2 * bw)
+                }
                 BorderPosition::Inside => (rect.left, rect.top, tw, th),
             };
 
@@ -418,14 +405,12 @@ impl BorderFrame {
             };
 
             let mut bits: *mut c_void = std::ptr::null_mut();
-            let hbitmap =
-                CreateDIBSection(None, &bmi, DIB_RGB_COLORS, &mut bits, None, 0);
+            let hbitmap = CreateDIBSection(None, &bmi, DIB_RGB_COLORS, &mut bits, None, 0);
             let Ok(hbitmap) = hbitmap else {
                 return;
             };
 
-            let pixels =
-                std::slice::from_raw_parts_mut(bits as *mut u32, (w * h) as usize);
+            let pixels = std::slice::from_raw_parts_mut(bits as *mut u32, (w * h) as usize);
 
             // Only iterate over pixels near the border edges (optimization).
             // The band must be wide enough to capture corner rounding where the
@@ -453,15 +438,8 @@ impl BorderFrame {
 
                     // Signed distance to outer and inner rounded rects
                     let sdf_outer = rounded_rect_sdf(pxf, pyf, 0.0, 0.0, wf, hf, outer_r);
-                    let sdf_inner = rounded_rect_sdf(
-                        pxf,
-                        pyf,
-                        bw,
-                        bw,
-                        wf - 2.0 * bw,
-                        hf - 2.0 * bw,
-                        inner_r,
-                    );
+                    let sdf_inner =
+                        rounded_rect_sdf(pxf, pyf, bw, bw, wf - 2.0 * bw, hf - 2.0 * bw, inner_r);
 
                     // Anti-aliased alpha: smooth transition at both edges
                     let alpha_outer = clamp(0.5 - sdf_outer, 0.0, 1.0);

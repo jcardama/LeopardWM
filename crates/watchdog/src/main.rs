@@ -18,12 +18,12 @@ use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
 use windows::core::BOOL;
 use windows::Win32::System::Console::{
-    SetConsoleCtrlHandler, CTRL_BREAK_EVENT, CTRL_C_EVENT, CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT,
+    SetConsoleCtrlHandler, CTRL_BREAK_EVENT, CTRL_CLOSE_EVENT, CTRL_C_EVENT, CTRL_LOGOFF_EVENT,
     CTRL_SHUTDOWN_EVENT,
 };
 use windows::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, SetInformationJobObject,
-    JobObjectExtendedLimitInformation, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+    SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
     JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
 use windows::Win32::System::Threading::GetCurrentProcess;
@@ -235,9 +235,13 @@ fn record_crash_and_decide(
     crashes.retain(|t| now.duration_since(*t) < window);
     crashes.push(now);
     if crashes.len() >= max_per_window {
-        CrashDecision::GiveUp { count: crashes.len() }
+        CrashDecision::GiveUp {
+            count: crashes.len(),
+        }
     } else {
-        CrashDecision::Restart { attempt: crashes.len() }
+        CrashDecision::Restart {
+            attempt: crashes.len(),
+        }
     }
 }
 
@@ -286,8 +290,7 @@ fn recover_from_crash() {
 
 fn install_kill_on_close_job() -> Result<()> {
     unsafe {
-        let job =
-            CreateJobObjectW(None, None).context("CreateJobObjectW failed")?;
+        let job = CreateJobObjectW(None, None).context("CreateJobObjectW failed")?;
         let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
         info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
         SetInformationJobObject(
@@ -385,12 +388,8 @@ mod tests {
         let mut crashes = Vec::new();
         for i in 0..10 {
             // Each crash is a full window apart — none should ever accumulate.
-            let decision = record_crash_and_decide(
-                &mut crashes,
-                t(i * 120),
-                Duration::from_secs(60),
-                3,
-            );
+            let decision =
+                record_crash_and_decide(&mut crashes, t(i * 120), Duration::from_secs(60), 3);
             assert_eq!(decision, CrashDecision::Restart { attempt: 1 });
         }
     }

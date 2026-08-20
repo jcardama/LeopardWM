@@ -43,12 +43,42 @@ pub fn hotkey_catalog() -> Vec<HotkeyAction> {
         action("focus_right", Some("Ctrl+Alt+L"), "Focus right", "Focus"),
         action("focus_up", Some("Ctrl+Alt+K"), "Focus up", "Focus"),
         action("focus_down", Some("Ctrl+Alt+J"), "Focus down", "Focus"),
-        action("focus_start", Some("Ctrl+Alt+Home"), "Focus start of strip", "Focus"),
-        action("focus_end", Some("Ctrl+Alt+End"), "Focus end of strip", "Focus"),
-        action("move_column_left", Some("Ctrl+Alt+Shift+H"), "Move column left", "Move column"),
-        action("move_column_right", Some("Ctrl+Alt+Shift+L"), "Move column right", "Move column"),
-        action("move_column_to_start", Some("Ctrl+Alt+Shift+Home"), "Move column to start", "Move column"),
-        action("move_column_to_end", Some("Ctrl+Alt+Shift+End"), "Move column to end", "Move column"),
+        action(
+            "focus_start",
+            Some("Ctrl+Alt+Home"),
+            "Focus start of strip",
+            "Focus",
+        ),
+        action(
+            "focus_end",
+            Some("Ctrl+Alt+End"),
+            "Focus end of strip",
+            "Focus",
+        ),
+        action(
+            "move_column_left",
+            Some("Ctrl+Alt+Shift+H"),
+            "Move column left",
+            "Move column",
+        ),
+        action(
+            "move_column_right",
+            Some("Ctrl+Alt+Shift+L"),
+            "Move column right",
+            "Move column",
+        ),
+        action(
+            "move_column_to_start",
+            Some("Ctrl+Alt+Shift+Home"),
+            "Move column to start",
+            "Move column",
+        ),
+        action(
+            "move_column_to_end",
+            Some("Ctrl+Alt+Shift+End"),
+            "Move column to end",
+            "Move column",
+        ),
         action(
             "move_window_left",
             Some("Ctrl+Alt+["),
@@ -85,20 +115,60 @@ pub fn hotkey_catalog() -> Vec<HotkeyAction> {
             "Consume from right",
             "Stack the neighbor's window into the focused column",
         ),
-        action("move_window_up", Some("Ctrl+Alt+Shift+K"), "Move window up", "Move window within column"),
+        action(
+            "move_window_up",
+            Some("Ctrl+Alt+Shift+K"),
+            "Move window up",
+            "Move window within column",
+        ),
         action(
             "move_window_down",
             Some("Ctrl+Alt+Shift+J"),
             "Move window down",
             "Move window within column",
         ),
-        action("cycle_width_down", Some("Ctrl+Alt+-"), "Cycle width down", "Column width"),
-        action("cycle_width_up", Some("Ctrl+Alt+="), "Cycle width up", "Column width"),
-        action("equalize_widths", Some("Ctrl+Alt+0"), "Equalize widths", "Column width"),
-        action("cycle_height_down", Some("Ctrl+Alt+Shift+-"), "Cycle height down", "Window height"),
-        action("cycle_height_up", Some("Ctrl+Alt+Shift+="), "Cycle height up", "Window height"),
-        action("equalize_heights", Some("Ctrl+Alt+Shift+0"), "Equalize heights", "Window height"),
-        action("focus_monitor_left", Some("Ctrl+Alt+Win+,"), "Focus monitor left", "Monitor focus"),
+        action(
+            "cycle_width_down",
+            Some("Ctrl+Alt+-"),
+            "Cycle width down",
+            "Column width",
+        ),
+        action(
+            "cycle_width_up",
+            Some("Ctrl+Alt+="),
+            "Cycle width up",
+            "Column width",
+        ),
+        action(
+            "equalize_widths",
+            Some("Ctrl+Alt+0"),
+            "Equalize widths",
+            "Column width",
+        ),
+        action(
+            "cycle_height_down",
+            Some("Ctrl+Alt+Shift+-"),
+            "Cycle height down",
+            "Window height",
+        ),
+        action(
+            "cycle_height_up",
+            Some("Ctrl+Alt+Shift+="),
+            "Cycle height up",
+            "Window height",
+        ),
+        action(
+            "equalize_heights",
+            Some("Ctrl+Alt+Shift+0"),
+            "Equalize heights",
+            "Window height",
+        ),
+        action(
+            "focus_monitor_left",
+            Some("Ctrl+Alt+Win+,"),
+            "Focus monitor left",
+            "Monitor focus",
+        ),
         action(
             "focus_monitor_right",
             Some("Ctrl+Alt+Win+."),
@@ -141,28 +211,98 @@ pub fn hotkey_catalog() -> Vec<HotkeyAction> {
             "Move to monitor down",
             "Move window to monitor",
         ),
-        action("center_column", Some("Ctrl+Alt+C"), "Center column", "Column layout"),
-        action("maximize_column", Some("Ctrl+Alt+M"), "Maximize column", "Column layout"),
+        action(
+            "center_column",
+            Some("Ctrl+Alt+C"),
+            "Center column",
+            "Column layout",
+        ),
+        action(
+            "maximize_column",
+            Some("Ctrl+Alt+M"),
+            "Maximize column",
+            "Column layout",
+        ),
         action("close_window", Some("Ctrl+Alt+W"), "Close window", "Window"),
-        action("toggle_floating", Some("Ctrl+Alt+F"), "Toggle floating", "Window"),
-        action("toggle_fullscreen", Some("Ctrl+Alt+Shift+F"), "Toggle fullscreen", "Window"),
-        action("toggle_tabbed", Some("Ctrl+Alt+T"), "Toggle tabbed column", "Window"),
-        action("scratchpad_toggle", Some("Ctrl+Alt+S"), "Toggle scratchpad", "Window"),
-        action("scratchpad_stash", Some("Ctrl+Alt+Shift+S"), "Stash to scratchpad", "Window"),
-        action("toggle_sticky", Some("Ctrl+Alt+Y"), "Toggle sticky", "Window"),
+        action(
+            "toggle_floating",
+            Some("Ctrl+Alt+F"),
+            "Toggle floating",
+            "Window",
+        ),
+        action(
+            "toggle_fullscreen",
+            Some("Ctrl+Alt+Shift+F"),
+            "Toggle fullscreen",
+            "Window",
+        ),
+        action(
+            "toggle_tabbed",
+            Some("Ctrl+Alt+T"),
+            "Toggle tabbed column",
+            "Window",
+        ),
+        action(
+            "scratchpad_toggle",
+            Some("Ctrl+Alt+S"),
+            "Toggle scratchpad",
+            "Window",
+        ),
+        action(
+            "scratchpad_stash",
+            Some("Ctrl+Alt+Shift+S"),
+            "Stash to scratchpad",
+            "Window",
+        ),
+        action(
+            "toggle_sticky",
+            Some("Ctrl+Alt+Y"),
+            "Toggle sticky",
+            "Window",
+        ),
         action(
             "toggle_new_window_placement",
             None,
             "Toggle new-window placement (new column / in column)",
             "Window",
         ),
-        action("toggle_pause", Some("Ctrl+Alt+P"), "Toggle pause", "Session"),
+        action(
+            "toggle_pause",
+            Some("Ctrl+Alt+P"),
+            "Toggle pause",
+            "Session",
+        ),
         action("refresh", Some("Ctrl+Alt+R"), "Refresh", "Session"),
-        action("reload", Some("Ctrl+Alt+Shift+R"), "Reload config", "Session"),
-        action("panic_revert", Some("Win+Ctrl+Escape"), "Emergency restore", "Session"),
-        action("toggle_overview", Some("Ctrl+Alt+Space"), "Toggle overview", "Workspaces"),
-        action("workspace_prev", Some("Ctrl+Alt+Shift+Left"), "Previous workspace", "Workspaces"),
-        action("workspace_next", Some("Ctrl+Alt+Shift+Right"), "Next workspace", "Workspaces"),
+        action(
+            "reload",
+            Some("Ctrl+Alt+Shift+R"),
+            "Reload config",
+            "Session",
+        ),
+        action(
+            "panic_revert",
+            Some("Win+Ctrl+Escape"),
+            "Emergency restore",
+            "Session",
+        ),
+        action(
+            "toggle_overview",
+            Some("Ctrl+Alt+Space"),
+            "Toggle overview",
+            "Workspaces",
+        ),
+        action(
+            "workspace_prev",
+            Some("Ctrl+Alt+Shift+Left"),
+            "Previous workspace",
+            "Workspaces",
+        ),
+        action(
+            "workspace_next",
+            Some("Ctrl+Alt+Shift+Right"),
+            "Next workspace",
+            "Workspaces",
+        ),
         action(
             "move_to_workspace_prev",
             Some("Ctrl+Alt+Shift+PageUp"),
@@ -336,8 +476,14 @@ mod tests {
             .count();
         assert_eq!(map.len(), bound);
         assert_eq!(map.get("Ctrl+Alt+H"), Some(&"focus_left".to_string()));
-        assert_eq!(map.get("Ctrl+Alt+,"), Some(&"consume_from_left".to_string()));
-        assert_eq!(map.get("Ctrl+Alt+5"), Some(&"switch_workspace_5".to_string()));
+        assert_eq!(
+            map.get("Ctrl+Alt+,"),
+            Some(&"consume_from_left".to_string())
+        );
+        assert_eq!(
+            map.get("Ctrl+Alt+5"),
+            Some(&"switch_workspace_5".to_string())
+        );
     }
 
     #[test]

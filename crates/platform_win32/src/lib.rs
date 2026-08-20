@@ -29,10 +29,10 @@ pub use tab_strip::{TabAction, TabActionEvent, TabCloseAction};
 
 mod elevation;
 mod enumeration;
-#[doc(hidden)]
-pub mod inspect;
 mod event_hooks;
 mod focus;
+#[doc(hidden)]
+pub mod inspect;
 mod placement;
 mod system;
 mod types;
@@ -46,32 +46,31 @@ pub use keyboard_hook::*;
 pub use mouse_hook::*;
 
 // Re-export public API from submodules
+pub use elevation::{manage_block, window_manage_block, ManageBlock};
 pub use enumeration::{
     enumerate_monitors, enumerate_windows, find_monitor_by_id, find_monitor_for_rect,
     get_primary_monitor, get_process_executable, get_window_info, is_excluded_tool_window_hwnd,
     monitor_above, monitor_below, monitor_to_left, monitor_to_right, monitors_by_position,
 };
-pub use elevation::{manage_block, window_manage_block, ManageBlock};
 pub use event_hooks::{install_event_hooks, EventHookHandle, WindowEvent};
-pub use placement::{
-    apply_placements, clear_inset_cache, drain_ghost_cloaked, dwm_cloak_window, dwm_uncloak_all,
-    dwm_uncloak_window, get_window_frame_insets, get_window_invisible_insets,
-    is_placement_cloaked, is_placement_parked, mark_ghost_cloaked, park_window_for_placement,
-    set_dwm_transitions_disabled, unmark_ghost_cloaked,
-    visible_rect_to_frame_rect,
-    ApplyPlacementsResult, HeightViolation, PlacementCache, WidthViolation,
-};
-pub use placement::apply_cloak_state;
-pub use placement::clear_suspected_oversize;
-pub use types::{MonitorId, MonitorInfo, PlatformConfig, Win32Error, WindowInfo};
 pub use focus::{
     close_window, get_foreground_window, ms_since_last_user_input, set_foreground_window,
     warp_cursor_to_window,
+};
+pub use placement::apply_cloak_state;
+pub use placement::clear_suspected_oversize;
+pub use placement::{
+    apply_placements, clear_inset_cache, drain_ghost_cloaked, dwm_cloak_window, dwm_uncloak_all,
+    dwm_uncloak_window, get_window_frame_insets, get_window_invisible_insets, is_placement_cloaked,
+    is_placement_parked, mark_ghost_cloaked, park_window_for_placement,
+    set_dwm_transitions_disabled, unmark_ghost_cloaked, visible_rect_to_frame_rect,
+    ApplyPlacementsResult, HeightViolation, PlacementCache, WidthViolation,
 };
 pub use system::{
     are_animations_enabled, get_system_highlight_color_bgr, is_high_contrast_enabled,
     is_on_battery_or_power_saver, scale_px, set_dpi_awareness,
 };
+pub use types::{MonitorId, MonitorInfo, PlatformConfig, Win32Error, WindowInfo};
 pub use visibility::{
     cascade_windows, is_move_offscreen_sentinel_position, is_move_offscreen_sentinel_rect,
     move_window_offscreen, position_window, restore_all_windows_moved_offscreen_best_effort,
@@ -80,8 +79,7 @@ pub use visibility::{
 };
 pub use window_query::{
     cursor_is_over_window, get_cursor_pos, get_window_chrome_rect, get_window_corner_radius,
-    get_window_icon,
-    get_window_visible_rect, is_cursor_on_resize_border, is_dialog_like_window,
+    get_window_icon, get_window_visible_rect, is_cursor_on_resize_border, is_dialog_like_window,
     is_frameless_popup, is_shift_key_pressed, is_valid_window, is_window_alive_and_visible,
     is_window_maximized, is_window_shell_cloaked, is_window_valid, is_window_visible,
     window_minimized_state,
@@ -150,4 +148,3 @@ pub(crate) fn is_benign_side_effect_error(error: &Win32Error) -> bool {
 // Re-export pub(crate) items needed by sibling modules (mouse_hook, etc.)
 pub(crate) use enumeration::normalize_to_root_window;
 pub(crate) use enumeration::should_emit_window_event;
-

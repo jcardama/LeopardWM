@@ -308,9 +308,7 @@ impl OverlayWindow {
     /// Update the overlay opacity (0–255).
     pub fn set_opacity(&self, alpha: u8) {
         unsafe {
-            use windows::Win32::UI::WindowsAndMessaging::{
-                SetLayeredWindowAttributes, LWA_ALPHA,
-            };
+            use windows::Win32::UI::WindowsAndMessaging::{SetLayeredWindowAttributes, LWA_ALPHA};
             let _ = SetLayeredWindowAttributes(self.hwnd, Default::default(), alpha, LWA_ALPHA);
         }
     }

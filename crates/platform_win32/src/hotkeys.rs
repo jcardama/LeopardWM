@@ -357,14 +357,20 @@ pub fn register_system_events() -> Result<SystemEventHandle, Win32Error> {
                     &GUID_ACDC_POWER_SOURCE,
                     REGISTER_NOTIFICATION_FLAGS(0),
                 ) {
-                    tracing::warn!("Failed to register GUID_ACDC_POWER_SOURCE notification: {}", e);
+                    tracing::warn!(
+                        "Failed to register GUID_ACDC_POWER_SOURCE notification: {}",
+                        e
+                    );
                 }
                 if let Err(e) = RegisterPowerSettingNotification(
                     handle,
                     &GUID_POWER_SAVING_STATUS,
                     REGISTER_NOTIFICATION_FLAGS(0),
                 ) {
-                    tracing::warn!("Failed to register GUID_POWER_SAVING_STATUS notification: {}", e);
+                    tracing::warn!(
+                        "Failed to register GUID_POWER_SAVING_STATUS notification: {}",
+                        e
+                    );
                 }
                 tracing::debug!("Registered power setting notifications");
             }
@@ -494,7 +500,10 @@ fn sysevent_window_proc_inner(
         WM_POWERBROADCAST => {
             if wparam.0 == PBT_POWERSETTINGCHANGE {
                 let on_battery_or_saver = crate::system::is_on_battery_or_power_saver();
-                tracing::debug!("Power state changed: on_battery_or_saver={}", on_battery_or_saver);
+                tracing::debug!(
+                    "Power state changed: on_battery_or_saver={}",
+                    on_battery_or_saver
+                );
 
                 let sender_guard = POWER_STATE_SENDER
                     .lock()
@@ -758,7 +767,10 @@ mod tests {
             ..Default::default()
         };
         assert_ne!(Hotkey::stable_id(f13, 0x48), Hotkey::stable_id(f14, 0x48));
-        assert_ne!(Hotkey::stable_id(f13, 0x48), Hotkey::stable_id(ctrl_alt, 0x48));
+        assert_ne!(
+            Hotkey::stable_id(f13, 0x48),
+            Hotkey::stable_id(ctrl_alt, 0x48)
+        );
         // F13+H and a bare standard combo can't collide: same vk, different mods.
         assert_ne!(Hotkey::stable_id(f13, 0x48), Hotkey::stable_id(win, 0x48));
     }
@@ -1049,7 +1061,10 @@ mod tests {
 
         // Multiple F-key modifiers combine.
         let (mods, vk) = parse_hotkey_string("F13+F14+H").unwrap();
-        assert_eq!(mods.fn_mods, fn_mod_bit(0x7C).unwrap() | fn_mod_bit(0x7D).unwrap());
+        assert_eq!(
+            mods.fn_mods,
+            fn_mod_bit(0x7C).unwrap() | fn_mod_bit(0x7D).unwrap()
+        );
         assert_eq!(vk, super::vk::H);
 
         // F-key modifier mixes with standard modifiers.

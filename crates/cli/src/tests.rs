@@ -108,7 +108,10 @@ fn test_to_ipc_command_move_start() {
     let cmd = Commands::Move {
         direction: MoveDirection::Start,
     };
-    assert!(matches!(to_ipc_command(&cmd), IpcCommand::MoveColumnToStart));
+    assert!(matches!(
+        to_ipc_command(&cmd),
+        IpcCommand::MoveColumnToStart
+    ));
 }
 
 #[test]

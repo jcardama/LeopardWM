@@ -88,12 +88,9 @@ fn run_watch(secs: u64, include_titles: bool, show_all: bool) -> Result<()> {
     while Instant::now() < deadline {
         let windows = match inspect_windows() {
             Ok(w) => {
-                if let Some(msg) = watch_sample_status_message(
-                    consecutive_failing,
-                    true,
-                    None,
-                    failure_count,
-                ) {
+                if let Some(msg) =
+                    watch_sample_status_message(consecutive_failing, true, None, failure_count)
+                {
                     let _ = writeln!(io::stderr(), "{msg}");
                 }
                 consecutive_failing = false;
@@ -216,10 +213,7 @@ fn print_window(w: &WindowInspection, include_titles: bool, is_update: bool) {
     );
     println!("  exe      {exe}");
     match w.rect {
-        Some(r) => println!(
-            "  rect     ({}, {}) {}x{}",
-            r.x, r.y, r.width, r.height
-        ),
+        Some(r) => println!("  rect     ({}, {}) {}x{}", r.x, r.y, r.width, r.height),
         None => println!("  rect     (unreadable)"),
     }
     let dialog = is_dialog_like_window(w.hwnd);
@@ -254,9 +248,7 @@ fn reason_detail(reason: SkipReason, class_name: &str) -> String {
             format!("\"{class_name}\" is in the built-in skip list")
         }
         SkipReason::SkipTitle => "title is in the built-in skip list".to_string(),
-        SkipReason::ToolWindow => {
-            "WS_EX_TOOLWINDOW without resizable WS_EX_APPWINDOW".to_string()
-        }
+        SkipReason::ToolWindow => "WS_EX_TOOLWINDOW without resizable WS_EX_APPWINDOW".to_string(),
         SkipReason::NoActivate => "WS_EX_NOACTIVATE is set".to_string(),
         SkipReason::Owned => "window has a non-null GW_OWNER".to_string(),
         SkipReason::EmptyOrUnreadableTitle => {

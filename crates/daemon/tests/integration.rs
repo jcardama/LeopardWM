@@ -602,7 +602,9 @@ fn test_subscribe_handshake_wire_format() {
     events.insert(EventKind::FocusedWindow);
 
     // Subscribe command: tagged with `type`
-    let cmd = IpcCommand::Subscribe { events: events.clone() };
+    let cmd = IpcCommand::Subscribe {
+        events: events.clone(),
+    };
     let cmd_json = serde_json::to_string(&cmd).unwrap();
     assert!(cmd_json.starts_with(r#"{"type":"subscribe""#));
 
@@ -614,8 +616,13 @@ fn test_subscribe_handshake_wire_format() {
     // The two MUST use different tags — a client that tries to
     // deserialize a Subscribe command as an IpcResponse should fail,
     // and vice versa. This is the "mode-switch" the protocol relies on.
-    assert!(serde_json::from_str::<IpcResponse>(&cmd_json).is_err()
-        || matches!(serde_json::from_str::<IpcResponse>(&cmd_json), Ok(IpcResponse::Unknown)));
+    assert!(
+        serde_json::from_str::<IpcResponse>(&cmd_json).is_err()
+            || matches!(
+                serde_json::from_str::<IpcResponse>(&cmd_json),
+                Ok(IpcResponse::Unknown)
+            )
+    );
 }
 
 /// Event frames use `type` discriminator; mixing them with IpcResponse
@@ -627,7 +634,12 @@ fn test_subscribe_handshake_wire_format() {
 fn test_event_frame_distinct_from_response_frame() {
     use leopardwm_ipc::IpcEvent;
 
-    let event = IpcEvent::WorkspaceChanged { monitor: 1, old_index: 0, new_index: 1, name: None };
+    let event = IpcEvent::WorkspaceChanged {
+        monitor: 1,
+        old_index: 0,
+        new_index: 1,
+        name: None,
+    };
     let event_json = serde_json::to_string(&event).unwrap();
     assert!(event_json.contains(r#""type":"workspace_changed""#));
 
@@ -649,9 +661,15 @@ fn test_subscribe_filter_set_roundtrip() {
         BTreeSet::new(),
         EventKind::all(),
         BTreeSet::from([EventKind::Workspace]),
-        BTreeSet::from([EventKind::Workspace, EventKind::Layout, EventKind::Heartbeat]),
+        BTreeSet::from([
+            EventKind::Workspace,
+            EventKind::Layout,
+            EventKind::Heartbeat,
+        ]),
     ] {
-        let cmd = IpcCommand::Subscribe { events: set.clone() };
+        let cmd = IpcCommand::Subscribe {
+            events: set.clone(),
+        };
         let json = serde_json::to_string(&cmd).unwrap();
         let parsed: IpcCommand = serde_json::from_str(&json).unwrap();
         match parsed {
@@ -669,18 +687,29 @@ fn test_event_kind_classification() {
 
     let cases = [
         (
-            IpcEvent::WorkspaceChanged { monitor: 1, old_index: 0, new_index: 1, name: None },
+            IpcEvent::WorkspaceChanged {
+                monitor: 1,
+                old_index: 0,
+                new_index: 1,
+                name: None,
+            },
             EventKind::Workspace,
         ),
         (
             IpcEvent::FocusedWindowChanged {
-                monitor: 1, hwnd: None, title: None, class_name: None, executable: None,
+                monitor: 1,
+                hwnd: None,
+                title: None,
+                class_name: None,
+                executable: None,
             },
             EventKind::FocusedWindow,
         ),
         (
             IpcEvent::LayoutChanged {
-                monitor: 1, workspace_index: 0, focused_column: None,
+                monitor: 1,
+                workspace_index: 0,
+                focused_column: None,
                 columns: vec![ColumnSummary {
                     window_ids: vec![],
                     width_px: 100,
@@ -691,7 +720,10 @@ fn test_event_kind_classification() {
             EventKind::Layout,
         ),
         (IpcEvent::ConfigReloaded, EventKind::Config),
-        (IpcEvent::Heartbeat { uptime_seconds: 0 }, EventKind::Heartbeat),
+        (
+            IpcEvent::Heartbeat { uptime_seconds: 0 },
+            EventKind::Heartbeat,
+        ),
     ];
 
     for (event, expected_kind) in cases {

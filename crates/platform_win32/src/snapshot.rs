@@ -245,9 +245,15 @@ mod tests {
         }
         assert_eq!(cache.entries.len(), MAX_ENTRIES);
         for wid in 0..5 {
-            assert!(cache.get(wid).is_none(), "oldest entry {wid} must be evicted");
+            assert!(
+                cache.get(wid).is_none(),
+                "oldest entry {wid} must be evicted"
+            );
         }
-        assert!(cache.get(MAX_ENTRIES as u64 + 4).is_some(), "newest entry stays");
+        assert!(
+            cache.get(MAX_ENTRIES as u64 + 4).is_some(),
+            "newest entry stays"
+        );
     }
 
     #[test]
@@ -261,7 +267,11 @@ mod tests {
         cache.insert(999, dummy(4, 4));
         assert!(cache.get(0).is_some(), "refreshed entry survives");
         assert!(cache.get(1).is_none(), "stale entry evicted");
-        assert_eq!(cache.get(0).unwrap().width, 8, "refresh replaced the snapshot");
+        assert_eq!(
+            cache.get(0).unwrap().width,
+            8,
+            "refresh replaced the snapshot"
+        );
     }
 
     #[test]
@@ -276,8 +286,16 @@ mod tests {
     fn test_scaled_dims_caps_longest_side() {
         assert_eq!(scaled_dims(1920, 1080), (480, 270));
         assert_eq!(scaled_dims(1080, 1920), (270, 480));
-        assert_eq!(scaled_dims(400, 300), (400, 300), "small windows keep their size");
-        assert_eq!(scaled_dims(5000, 10), (480, 1), "extreme aspect clamps to 1px");
+        assert_eq!(
+            scaled_dims(400, 300),
+            (400, 300),
+            "small windows keep their size"
+        );
+        assert_eq!(
+            scaled_dims(5000, 10),
+            (480, 1),
+            "extreme aspect clamps to 1px"
+        );
     }
 
     #[test]

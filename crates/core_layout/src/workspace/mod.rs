@@ -412,13 +412,7 @@ impl Workspace {
 
     /// Set the gap at viewport edges in pixels.
     /// Values are clamped to >= 0.
-    pub fn set_outer_gaps(
-        &mut self,
-        left: i32,
-        right: i32,
-        top: i32,
-        bottom: i32,
-    ) {
+    pub fn set_outer_gaps(&mut self, left: i32, right: i32, top: i32, bottom: i32) {
         self.outer_gap_left = left.max(0);
         self.outer_gap_right = right.max(0);
         self.outer_gap_top = top.max(0);

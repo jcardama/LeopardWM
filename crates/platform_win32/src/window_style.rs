@@ -91,8 +91,8 @@ fn lock_snap_disabled() -> std::sync::MutexGuard<'static, Option<HashSet<WindowI
 /// maximize button and its click-to-maximize behavior.
 pub fn remove_maximizebox(window_id: WindowId) -> Result<bool, Win32Error> {
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetWindowLongW, SetWindowLongW, SetWindowPos,
-        GWL_STYLE, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_NOACTIVATE,
+        GetWindowLongW, SetWindowLongW, SetWindowPos, GWL_STYLE, SWP_FRAMECHANGED, SWP_NOACTIVATE,
+        SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
     };
 
     let hwnd = window_id_to_hwnd(window_id)?;
@@ -111,7 +111,12 @@ pub fn remove_maximizebox(window_id: WindowId) -> Result<bool, Win32Error> {
         SetWindowLongW(hwnd, GWL_STYLE, new_style);
 
         let _ = SetWindowPos(
-            hwnd, None, 0, 0, 0, 0,
+            hwnd,
+            None,
+            0,
+            0,
+            0,
+            0,
             SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
         );
 
@@ -127,8 +132,8 @@ pub fn remove_maximizebox(window_id: WindowId) -> Result<bool, Win32Error> {
 /// Removes the window from the global tracking set.
 pub fn restore_maximizebox(window_id: WindowId) -> Result<bool, Win32Error> {
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetWindowLongW, SetWindowLongW, SetWindowPos,
-        GWL_STYLE, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_NOACTIVATE,
+        GetWindowLongW, SetWindowLongW, SetWindowPos, GWL_STYLE, SWP_FRAMECHANGED, SWP_NOACTIVATE,
+        SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
     };
 
     // Always remove from tracking set, even if the Win32 call fails
@@ -155,7 +160,12 @@ pub fn restore_maximizebox(window_id: WindowId) -> Result<bool, Win32Error> {
         SetWindowLongW(hwnd, GWL_STYLE, new_style);
 
         let _ = SetWindowPos(
-            hwnd, None, 0, 0, 0, 0,
+            hwnd,
+            None,
+            0,
+            0,
+            0,
+            0,
             SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
         );
     }
@@ -202,10 +212,12 @@ pub fn restore_maximizebox_panic_recovery() {
     for wid in &window_ids {
         // Direct Win32 call — don't use restore_maximizebox since tracking set is already drained
         use windows::Win32::UI::WindowsAndMessaging::{
-            GetWindowLongW, SetWindowLongW, SetWindowPos,
-            GWL_STYLE, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_NOACTIVATE,
+            GetWindowLongW, SetWindowLongW, SetWindowPos, GWL_STYLE, SWP_FRAMECHANGED,
+            SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
         };
-        let Ok(hwnd) = window_id_to_hwnd(*wid) else { continue };
+        let Ok(hwnd) = window_id_to_hwnd(*wid) else {
+            continue;
+        };
         unsafe {
             if !IsWindow(Some(hwnd)).as_bool() {
                 continue;
@@ -216,7 +228,12 @@ pub fn restore_maximizebox_panic_recovery() {
                 let new_style = style | WS_MAXIMIZEBOX_VAL;
                 SetWindowLongW(hwnd, GWL_STYLE, new_style);
                 let _ = SetWindowPos(
-                    hwnd, None, 0, 0, 0, 0,
+                    hwnd,
+                    None,
+                    0,
+                    0,
+                    0,
+                    0,
                     SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
                 );
             }

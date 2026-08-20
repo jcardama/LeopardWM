@@ -242,11 +242,7 @@ pub fn dwm_uncloak_all() {
     // present in more than one set. dwm_set_cloak is idempotent.
     let mut seen: HashSet<WindowId> =
         HashSet::with_capacity(global_ids.len() + ghost_ids.len() + direct_ids.len());
-    for wid in global_ids
-        .into_iter()
-        .chain(ghost_ids)
-        .chain(direct_ids)
-    {
+    for wid in global_ids.into_iter().chain(ghost_ids).chain(direct_ids) {
         if seen.insert(wid) {
             if let Ok(hwnd) = window_id_to_hwnd(wid) {
                 unsafe { dwm_set_cloak(hwnd, false) };
@@ -637,9 +633,7 @@ where
     }
     let released = {
         let mut cloaked = lock_cloaked();
-        cloaked
-            .as_mut()
-            .is_some_and(|set| set.remove(&window_id))
+        cloaked.as_mut().is_some_and(|set| set.remove(&window_id))
     };
     if released {
         apply_cloak_state(window_id);
@@ -666,27 +660,14 @@ fn skip_visible_tiled_maximized(
         // the layout. Return a placement-parked maximized HWND before
         // releasing that cloak. SWP_NOSIZE deliberately preserves maximized
         // dimensions and does not restore ordinary visible maximized windows.
-        let _ = recover_placement_parked(
-            placement.window_id,
-            async_flag,
-            |flags| {
-                let Ok(hwnd) = window_id_to_hwnd(placement.window_id) else {
-                    return false;
-                };
-                unsafe {
-                    SetWindowPos(
-                        hwnd,
-                        None,
-                        placement.rect.x,
-                        placement.rect.y,
-                        0,
-                        0,
-                        flags,
-                    )
-                    .is_ok()
-                }
-            },
-        );
+        let _ = recover_placement_parked(placement.window_id, async_flag, |flags| {
+            let Ok(hwnd) = window_id_to_hwnd(placement.window_id) else {
+                return false;
+            };
+            unsafe {
+                SetWindowPos(hwnd, None, placement.rect.x, placement.rect.y, 0, 0, flags).is_ok()
+            }
+        });
     }
     skip
 }
@@ -704,7 +685,9 @@ fn build_defer_entries(
     let mut maximized_skipped_window_ids = Vec::new();
 
     for placement in placements {
-        let Ok(hwnd) = window_id_to_hwnd(placement.window_id) else { continue };
+        let Ok(hwnd) = window_id_to_hwnd(placement.window_id) else {
+            continue;
+        };
         let is_zoomed = unsafe {
             if !IsWindow(Some(hwnd)).as_bool() || IsIconic(hwnd).as_bool() {
                 continue;
@@ -823,66 +806,89 @@ fn position_entries(entries: &[DeferEntry]) -> (u32, HashSet<u64>) {
     if !entries.is_empty() {
         unsafe {
             match BeginDeferWindowPos(entries.len() as i32) {
-            Err(_) => {
-                // Fallback: apply individually if batching fails
-                for entry in entries {
-                    if SetWindowPos(
-                        entry.hwnd, None,
-                        entry.x, entry.y, entry.w, entry.h,
-                        entry.flags,
-                    ).is_err() {
-                        failed_window_ids.insert(entry.window_id);
-                    }
-                }
-                applied = (entries.len() - failed_window_ids.len()) as u32;
-            }
-            Ok(initial_hdwp) => {
-                let mut hdwp = initial_hdwp;
-                let mut batch_ok = true;
-                for entry in entries {
-                    match DeferWindowPos(
-                        hdwp, entry.hwnd, None,
-                        entry.x, entry.y, entry.w, entry.h,
-                        entry.flags,
-                    ) {
-                        Ok(new_hdwp) => hdwp = new_hdwp,
-                        Err(_) => {
-                            batch_ok = false;
-                            break;
-                        }
-                    }
-                }
-                if batch_ok {
-                    if EndDeferWindowPos(hdwp).is_err() {
-                        // EndDeferWindowPos failed — fall back to individual calls
-                        for entry in entries {
-                            if SetWindowPos(
-                                entry.hwnd, None,
-                                entry.x, entry.y, entry.w, entry.h,
-                                entry.flags,
-                            ).is_err() {
-                                failed_window_ids.insert(entry.window_id);
-                            }
-                        }
-                        applied = (entries.len() - failed_window_ids.len()) as u32;
-                    } else {
-                        applied = entries.len() as u32;
-                    }
-                } else {
-                    // DeferWindowPos failed — HDWP is already freed by Win32.
-                    // Fall back to individual SetWindowPos calls.
+                Err(_) => {
+                    // Fallback: apply individually if batching fails
                     for entry in entries {
                         if SetWindowPos(
-                            entry.hwnd, None,
-                            entry.x, entry.y, entry.w, entry.h,
+                            entry.hwnd,
+                            None,
+                            entry.x,
+                            entry.y,
+                            entry.w,
+                            entry.h,
                             entry.flags,
-                        ).is_err() {
+                        )
+                        .is_err()
+                        {
                             failed_window_ids.insert(entry.window_id);
                         }
                     }
                     applied = (entries.len() - failed_window_ids.len()) as u32;
                 }
-            }
+                Ok(initial_hdwp) => {
+                    let mut hdwp = initial_hdwp;
+                    let mut batch_ok = true;
+                    for entry in entries {
+                        match DeferWindowPos(
+                            hdwp,
+                            entry.hwnd,
+                            None,
+                            entry.x,
+                            entry.y,
+                            entry.w,
+                            entry.h,
+                            entry.flags,
+                        ) {
+                            Ok(new_hdwp) => hdwp = new_hdwp,
+                            Err(_) => {
+                                batch_ok = false;
+                                break;
+                            }
+                        }
+                    }
+                    if batch_ok {
+                        if EndDeferWindowPos(hdwp).is_err() {
+                            // EndDeferWindowPos failed — fall back to individual calls
+                            for entry in entries {
+                                if SetWindowPos(
+                                    entry.hwnd,
+                                    None,
+                                    entry.x,
+                                    entry.y,
+                                    entry.w,
+                                    entry.h,
+                                    entry.flags,
+                                )
+                                .is_err()
+                                {
+                                    failed_window_ids.insert(entry.window_id);
+                                }
+                            }
+                            applied = (entries.len() - failed_window_ids.len()) as u32;
+                        } else {
+                            applied = entries.len() as u32;
+                        }
+                    } else {
+                        // DeferWindowPos failed — HDWP is already freed by Win32.
+                        // Fall back to individual SetWindowPos calls.
+                        for entry in entries {
+                            if SetWindowPos(
+                                entry.hwnd,
+                                None,
+                                entry.x,
+                                entry.y,
+                                entry.w,
+                                entry.h,
+                                entry.flags,
+                            )
+                            .is_err()
+                            {
+                                failed_window_ids.insert(entry.window_id);
+                            }
+                        }
+                        applied = (entries.len() - failed_window_ids.len()) as u32;
+                    }
+                }
             }
         }
     }
@@ -1270,8 +1276,8 @@ fn sync_cloak_state(
 /// fails to rebuild after rapid async SetWindowPos during animation. A real
 /// size delta must reach the window for the render target to re-sync.
 const STICKY_COMPOSITOR_CLASSES: &[&str] = &[
-    "Chrome_WidgetWin_1",           // Electron / Chromium (Slack, Beeper, Spotify, TradingView)
-    "MozillaWindowClass",           // Firefox / Zen
+    "Chrome_WidgetWin_1", // Electron / Chromium (Slack, Beeper, Spotify, TradingView)
+    "MozillaWindowClass", // Firefox / Zen
     "CASCADIA_HOSTING_WINDOW_CLASS", // Windows Terminal
 ];
 
@@ -1525,8 +1531,14 @@ pub fn visible_rect_to_frame_rect(
     Rect::new(
         visible_rect.x.saturating_sub(left),
         visible_rect.y.saturating_sub(top),
-        visible_rect.width.saturating_add(left).saturating_add(right),
-        visible_rect.height.saturating_add(top).saturating_add(bottom),
+        visible_rect
+            .width
+            .saturating_add(left)
+            .saturating_add(right),
+        visible_rect
+            .height
+            .saturating_add(top)
+            .saturating_add(bottom),
     )
 }
 
@@ -1547,10 +1559,7 @@ fn frame_rect_to_visible_rect(
 
 const MAX_INVISIBLE_FRAME_INSET: i64 = 64;
 
-fn frame_insets_from_rects(
-    frame_rect: Rect,
-    visible_rect: Rect,
-) -> Option<(i32, i32, i32, i32)> {
+fn frame_insets_from_rects(frame_rect: Rect, visible_rect: Rect) -> Option<(i32, i32, i32, i32)> {
     if frame_rect.width <= 0
         || frame_rect.height <= 0
         || visible_rect.width <= 0
@@ -1610,7 +1619,9 @@ fn query_window_frame_insets(hwnd: HWND) -> Option<(i32, i32, i32, i32)> {
 }
 
 pub fn get_window_frame_insets(window_id: WindowId) -> Option<(i32, i32, i32, i32)> {
-    let Ok(hwnd) = window_id_to_hwnd(window_id) else { return None };
+    let Ok(hwnd) = window_id_to_hwnd(window_id) else {
+        return None;
+    };
     query_window_frame_insets(hwnd)
 }
 
@@ -1620,7 +1631,9 @@ pub fn get_window_frame_insets(window_id: WindowId) -> Option<(i32, i32, i32, i3
 /// translate between chrome (`GetWindowRect`) coordinates and visible-
 /// content (layout) coordinates without reaching into placement internals.
 pub fn get_window_invisible_insets(window_id: WindowId) -> (i32, i32, i32, i32) {
-    let Ok(hwnd) = window_id_to_hwnd(window_id) else { return (0, 0, 0, 0) };
+    let Ok(hwnd) = window_id_to_hwnd(window_id) else {
+        return (0, 0, 0, 0);
+    };
     invisible_border_insets(hwnd)
 }
 
@@ -1685,10 +1698,7 @@ mod tests {
     #[test]
     fn test_frame_insets_accept_aligned_normal_sample() {
         assert_eq!(
-            frame_insets_from_rects(
-                Rect::new(100, 100, 914, 709),
-                Rect::new(107, 101, 900, 700),
-            ),
+            frame_insets_from_rects(Rect::new(100, 100, 914, 709), Rect::new(107, 101, 900, 700),),
             Some((7, 1, 7, 8))
         );
     }
@@ -1696,10 +1706,7 @@ mod tests {
     #[test]
     fn test_frame_insets_reject_stale_or_misaligned_samples() {
         let frame = Rect::new(100, 100, 914, 709);
-        for visible in [
-            Rect::new(117, 101, 900, 700),
-            Rect::new(93, 101, 900, 700),
-        ] {
+        for visible in [Rect::new(117, 101, 900, 700), Rect::new(93, 101, 900, 700)] {
             assert_eq!(frame_insets_from_rects(frame, visible), None);
         }
     }
@@ -1879,7 +1886,8 @@ mod tests {
         );
 
         let mut suspects = HashMap::new();
-        let second = classify_measurements_and_update_suspects(&[measurement], false, &mut suspects);
+        let second =
+            classify_measurements_and_update_suspects(&[measurement], false, &mut suspects);
         assert_eq!(
             second[0].width,
             AxisSizeClassification::Violation {
@@ -2042,7 +2050,8 @@ mod tests {
             visible_w: 700,
             visible_h: 400,
         };
-        let classified = classify_measurements_and_update_suspects(&[measurement], true, &mut suspects);
+        let classified =
+            classify_measurements_and_update_suspects(&[measurement], true, &mut suspects);
         assert_eq!(
             classified[0].width,
             AxisSizeClassification::Violation {
@@ -2136,11 +2145,15 @@ mod tests {
         // Case 1: neither set → false.
         {
             let mut g = lock_cloaked();
-            if let Some(ref mut s) = *g { s.remove(&wid); }
+            if let Some(ref mut s) = *g {
+                s.remove(&wid);
+            }
         }
         {
             let mut g = lock_ghost_cloaked();
-            if let Some(ref mut s) = *g { s.remove(&wid); }
+            if let Some(ref mut s) = *g {
+                s.remove(&wid);
+            }
         }
         assert!(!is_placement_cloaked(wid), "neither set should give false");
 
@@ -2159,13 +2172,18 @@ mod tests {
         // Case 4: ghost only → true.
         {
             let mut g = lock_cloaked();
-            if let Some(ref mut s) = *g { s.remove(&wid); }
+            if let Some(ref mut s) = *g {
+                s.remove(&wid);
+            }
         }
         assert!(is_placement_cloaked(wid), "ghost only should give true");
 
         // Case 5: neither → false again.
         unmark_ghost_cloaked(wid);
-        assert!(!is_placement_cloaked(wid), "neither again should give false");
+        assert!(
+            !is_placement_cloaked(wid),
+            "neither again should give false"
+        );
 
         // Restore pre-existing state for whatever ran before this test.
         if had_global_before {
@@ -2196,7 +2214,9 @@ mod tests {
         let had_ghost_before = ghost_cloaked_contains(wid);
         {
             let mut g = lock_cloaked();
-            if let Some(ref mut s) = *g { s.remove(&wid); }
+            if let Some(ref mut s) = *g {
+                s.remove(&wid);
+            }
         }
         unmark_ghost_cloaked(wid);
 

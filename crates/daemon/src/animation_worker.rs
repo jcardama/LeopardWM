@@ -617,7 +617,9 @@ mod tests {
             runtime.block_on(async {
                 tokio::time::timeout(Duration::from_millis(500), event_rx.recv()).await
             }),
-            Ok(Some(super::super::DaemonEvent::CrossfadeComplete { epoch: 7 }))
+            Ok(Some(super::super::DaemonEvent::CrossfadeComplete {
+                epoch: 7
+            }))
         ));
         assert_eq!(
             drop_rx.recv_timeout(Duration::from_millis(500)).unwrap(),

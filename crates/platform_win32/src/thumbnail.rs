@@ -24,14 +24,14 @@ use windows::Win32::Graphics::Dwm::{
     DWM_TNP_RECTDESTINATION, DWM_TNP_VISIBLE,
 };
 use windows::Win32::Graphics::Gdi::{
-    CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, HBITMAP, BITMAPINFO,
-    BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HDC, SelectObject, GetDC, ReleaseDC, AC_SRC_ALPHA,
-    AC_SRC_OVER, BLENDFUNCTION,
+    CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDC, ReleaseDC, SelectObject,
+    AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS,
+    HBITMAP, HDC,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, GetSystemMetrics, RegisterClassW,
-    SetWindowPos, UpdateLayeredWindow, CW_USEDEFAULT, HWND_NOTOPMOST, HWND_TOPMOST, MSG,
-    SET_WINDOW_POS_FLAGS, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
+    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, GetSystemMetrics,
+    RegisterClassW, SetWindowPos, UpdateLayeredWindow, CW_USEDEFAULT, HWND_NOTOPMOST, HWND_TOPMOST,
+    MSG, SET_WINDOW_POS_FLAGS, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
     SM_YVIRTUALSCREEN, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, ULW_ALPHA, WNDCLASSW,
     WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_POPUP, WS_VISIBLE,
 };
@@ -199,7 +199,10 @@ fn register_to(dest: HWND, wid: WindowId, host_z: bool) -> Result<ThumbnailHandl
             }
         }
     }
-    Ok(ThumbnailHandle { handle: raw, host_z })
+    Ok(ThumbnailHandle {
+        handle: raw,
+        host_z,
+    })
 }
 
 /// Update the destination rect, opacity, and visibility of a registered
@@ -279,7 +282,10 @@ fn unregister_impl(handle: isize, host_z: bool) {
     // the rest of the session and make the health metric lie. Clamp at
     // zero so a double-unregister or failure run can't go negative.
     if let Err(e) = unsafe { DwmUnregisterThumbnail(handle) } {
-        warn!("DwmUnregisterThumbnail({}) failed (handle leaked): {}", handle, e);
+        warn!(
+            "DwmUnregisterThumbnail({}) failed (handle leaked): {}",
+            handle, e
+        );
     }
     // Serialize the balance update with the z-order side effect.
     let mut z = Z_ORDER_STATE
@@ -391,7 +397,10 @@ pub fn host() -> &'static ThumbnailHost {
             // Construct-failure path: panic in dev, but in production
             // surface a recoverable host with a null HWND so callers can
             // detect and fall back to legacy animation.
-            warn!("ThumbnailHost::new failed: {} — ghost animation disabled", e);
+            warn!(
+                "ThumbnailHost::new failed: {} — ghost animation disabled",
+                e
+            );
             ThumbnailHost {
                 hwnd_raw: 0,
                 origin: std::sync::Mutex::new(virtual_screen_origin()),
@@ -414,8 +423,9 @@ impl ThumbnailHost {
             let thread = std::thread::Builder::new()
                 .name("leopardwm-thumbnail-host".into())
                 .spawn(move || unsafe {
-                    let class_name: Vec<u16> =
-                        format!("{}\0", THUMBNAIL_HOST_CLASS).encode_utf16().collect();
+                    let class_name: Vec<u16> = format!("{}\0", THUMBNAIL_HOST_CLASS)
+                        .encode_utf16()
+                        .collect();
                     let wc = WNDCLASSW {
                         lpfnWndProc: Some(thumbnail_host_proc),
                         lpszClassName: windows::core::PCWSTR(class_name.as_ptr()),
@@ -423,10 +433,8 @@ impl ThumbnailHost {
                     };
                     RegisterClassW(&wc);
 
-                    let ex_style = WS_EX_LAYERED
-                        | WS_EX_TOOLWINDOW
-                        | WS_EX_NOACTIVATE
-                        | WS_EX_TRANSPARENT;
+                    let ex_style =
+                        WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT;
 
                     match CreateWindowExW(
                         ex_style,
@@ -508,7 +516,10 @@ impl ThumbnailHost {
     /// `resize_to_virtual_screen` call, or host creation if no resize
     /// has happened).
     pub fn origin(&self) -> (i32, i32) {
-        *self.origin.lock().unwrap_or_else(crate::recover_poisoned_mutex)
+        *self
+            .origin
+            .lock()
+            .unwrap_or_else(crate::recover_poisoned_mutex)
     }
 
     /// `true` if the host construction succeeded. Callers should check
@@ -560,7 +571,11 @@ impl ThumbnailHost {
             return;
         }
         let hwnd = self.hwnd();
-        let z = if topmost { HWND_TOPMOST } else { HWND_NOTOPMOST };
+        let z = if topmost {
+            HWND_TOPMOST
+        } else {
+            HWND_NOTOPMOST
+        };
         unsafe {
             let _ = SetWindowPos(
                 hwnd,
@@ -606,14 +621,7 @@ unsafe fn init_layered_transparent(hwnd: HWND) {
         ..Default::default()
     };
     let mut bits: *mut c_void = std::ptr::null_mut();
-    let bmp_result = CreateDIBSection(
-        Some(mem_dc),
-        &bmi,
-        DIB_RGB_COLORS,
-        &mut bits,
-        None,
-        0,
-    );
+    let bmp_result = CreateDIBSection(Some(mem_dc), &bmi, DIB_RGB_COLORS, &mut bits, None, 0);
     let bmp: HBITMAP = match bmp_result {
         Ok(h) => h,
         Err(_) => {
@@ -733,10 +741,16 @@ mod tests {
         assert!(is_ghost_animation_class_str("Chrome_WidgetWin_2"));
         assert!(is_ghost_animation_class_str("Chrome_WidgetWin_100"));
         assert!(is_ghost_animation_class_str("MozillaWindowClass"));
-        assert!(is_ghost_animation_class_str("CASCADIA_HOSTING_WINDOW_CLASS"));
+        assert!(is_ghost_animation_class_str(
+            "CASCADIA_HOSTING_WINDOW_CLASS"
+        ));
         // .NET Framework: WinForms and WPF top-level windows.
-        assert!(is_ghost_animation_class_str("WindowsForms10.Window.8.app.0.1a2b3c"));
-        assert!(is_ghost_animation_class_str("HwndWrapper[MyApp.exe;;abc-123]"));
+        assert!(is_ghost_animation_class_str(
+            "WindowsForms10.Window.8.app.0.1a2b3c"
+        ));
+        assert!(is_ghost_animation_class_str(
+            "HwndWrapper[MyApp.exe;;abc-123]"
+        ));
 
         assert!(!is_ghost_animation_class_str("Notepad"));
         assert!(!is_ghost_animation_class_str(""));

@@ -7,15 +7,15 @@
 //! - The monitor acts as a viewport/camera sliding over this strip
 //! - New windows append without resizing existing ones
 
-pub mod types;
 pub mod animation;
 pub mod column;
-pub mod workspace;
 #[cfg(test)]
 mod tests;
+pub mod types;
+pub mod workspace;
 
 // Re-export public API so downstream crates can `use leopardwm_core_layout::*`
-pub use types::*;
 pub use animation::*;
 pub use column::*;
+pub use types::*;
 pub use workspace::*;

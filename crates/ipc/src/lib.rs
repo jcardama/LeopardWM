@@ -159,9 +159,7 @@ pub struct WindowInfo {
 /// Kinds of events a subscriber can receive. Used as the `Subscribe`
 /// command's filter set and to dedup which event variants flow to which
 /// client.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventKind {
     /// Workspace switches (`WorkspaceChanged`).
@@ -208,7 +206,9 @@ impl EventKind {
 pub enum ColumnSummaryMode {
     #[default]
     Vertical,
-    Tabbed { active_idx: usize },
+    Tabbed {
+        active_idx: usize,
+    },
 }
 
 /// One column entry in a `LayoutChanged` event payload.
@@ -1034,7 +1034,9 @@ mod tests {
 
     #[test]
     fn test_subscribed_response_round_trip() {
-        let resp = IpcResponse::Subscribed { events: EventKind::all() };
+        let resp = IpcResponse::Subscribed {
+            events: EventKind::all(),
+        };
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains("subscribed"));
         let resp2: IpcResponse = serde_json::from_str(&json).unwrap();
@@ -1189,7 +1191,9 @@ mod tests {
 
     #[test]
     fn test_event_heartbeat_round_trip() {
-        let ev = IpcEvent::Heartbeat { uptime_seconds: 12345 };
+        let ev = IpcEvent::Heartbeat {
+            uptime_seconds: 12345,
+        };
         let json = serde_json::to_string(&ev).unwrap();
         let ev2: IpcEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(ev, ev2);
@@ -1207,11 +1211,20 @@ mod tests {
     #[test]
     fn test_event_kind_filtering() {
         assert_eq!(
-            IpcEvent::WorkspaceChanged { monitor: 1, old_index: 0, new_index: 1, name: None }.kind(),
+            IpcEvent::WorkspaceChanged {
+                monitor: 1,
+                old_index: 0,
+                new_index: 1,
+                name: None
+            }
+            .kind(),
             EventKind::Workspace
         );
         assert_eq!(IpcEvent::ConfigReloaded.kind(), EventKind::Config);
-        assert_eq!(IpcEvent::Heartbeat { uptime_seconds: 0 }.kind(), EventKind::Heartbeat);
+        assert_eq!(
+            IpcEvent::Heartbeat { uptime_seconds: 0 }.kind(),
+            EventKind::Heartbeat
+        );
     }
 
     #[test]

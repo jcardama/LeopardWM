@@ -28,7 +28,9 @@ impl Workspace {
     /// Get the effective minimum width for a column, considering all
     /// non-minimized windows in it that have known min-width constraints.
     pub(crate) fn column_effective_min_width(&self, column: &Column) -> i32 {
-        column.windows().iter()
+        column
+            .windows()
+            .iter()
             .filter(|wid| !self.minimized_windows.contains(wid))
             .filter_map(|wid| self.window_min_widths.get(wid))
             .copied()
@@ -194,7 +196,9 @@ impl Workspace {
         self.window_min_heights.clear();
 
         // Identify which columns are active (have at least one non-minimized window)
-        let active_flags: Vec<bool> = self.columns.iter()
+        let active_flags: Vec<bool> = self
+            .columns
+            .iter()
             .map(|c| self.is_column_active(c))
             .collect();
         let active_count = active_flags.iter().filter(|&&a| a).count() as i32;
@@ -206,7 +210,8 @@ impl Workspace {
         let outer_right = self.outer_gap_right.max(0);
         let gap = self.gap.max(0);
         let total_gaps = gap * (active_count - 1) + outer_left + outer_right;
-        let per_column = ((viewport_width - total_gaps).max(MIN_COLUMN_WIDTH * active_count)) / active_count;
+        let per_column =
+            ((viewport_width - total_gaps).max(MIN_COLUMN_WIDTH * active_count)) / active_count;
 
         for (col, &is_active) in self.columns.iter_mut().zip(active_flags.iter()) {
             if is_active {
@@ -421,8 +426,7 @@ impl Workspace {
         let outer_bottom = self.outer_gap_bottom.max(0);
         let gap = self.gap.max(0);
         let window_gaps = gap.saturating_mul(column.len() as i32 - 1);
-        let available_height =
-            (viewport_height - outer_top - outer_bottom - window_gaps).max(1);
+        let available_height = (viewport_height - outer_top - outer_bottom - window_gaps).max(1);
 
         // Weight corresponding to the user's resized height
         let current_weight = new_height as f64 / available_height as f64;
@@ -486,9 +490,16 @@ impl Workspace {
 
         const TOLERANCE: f64 = 0.005;
         let target = if up {
-            sorted.iter().find(|&&p| p > current_weight + TOLERANCE).copied()
+            sorted
+                .iter()
+                .find(|&&p| p > current_weight + TOLERANCE)
+                .copied()
         } else {
-            sorted.iter().rev().find(|&&p| p < current_weight - TOLERANCE).copied()
+            sorted
+                .iter()
+                .rev()
+                .find(|&&p| p < current_weight - TOLERANCE)
+                .copied()
         };
 
         if let Some(frac) = target {
@@ -592,8 +603,7 @@ impl Workspace {
         let outer_bottom = self.outer_gap_bottom.max(0);
         let gap = self.gap.max(0);
         let window_gaps = gap.saturating_mul(column.len() as i32 - 1);
-        let available_height =
-            (viewport_height - outer_top - outer_bottom - window_gaps).max(1);
+        let available_height = (viewport_height - outer_top - outer_bottom - window_gaps).max(1);
 
         let current_weight = current_height as f64 / available_height as f64;
 

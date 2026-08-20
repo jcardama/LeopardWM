@@ -19,9 +19,9 @@ use std::time::Duration;
 use tracing::{debug, warn};
 use windows::core::HSTRING;
 use windows::Data::Xml::Dom::XmlDocument;
-use windows::UI::Notifications::{ToastNotification, ToastNotificationManager};
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
 use windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID;
+use windows::UI::Notifications::{ToastNotification, ToastNotificationManager};
 use winreg::enums::HKEY_CURRENT_USER;
 use winreg::RegKey;
 

@@ -34,8 +34,8 @@ use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    SetFocus, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT, VK_DOWN, VK_ESCAPE, VK_LEFT,
-    VK_RETURN, VK_RIGHT, VK_UP,
+    SetFocus, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT, VK_DOWN, VK_ESCAPE, VK_LEFT, VK_RETURN,
+    VK_RIGHT, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -599,7 +599,13 @@ fn selection_from_model(model: &OverviewModel) -> Option<(usize, usize)> {
         .iter()
         .enumerate()
         .find(|(_, r)| r.is_active && !r.cards.is_empty())
-        .or_else(|| model.rows.iter().enumerate().find(|(_, r)| !r.cards.is_empty()))
+        .or_else(|| {
+            model
+                .rows
+                .iter()
+                .enumerate()
+                .find(|(_, r)| !r.cards.is_empty())
+        })
         .map(|(ri, _)| (ri, 0))
 }
 
@@ -635,7 +641,8 @@ unsafe fn enable_backdrop_blur(hwnd: HWND) -> BackdropMode {
     let Ok(user32) = GetModuleHandleW(windows::core::w!("user32.dll")) else {
         return BackdropMode::AlphaDim;
     };
-    let Some(proc_addr) = GetProcAddress(user32, windows::core::s!("SetWindowCompositionAttribute"))
+    let Some(proc_addr) =
+        GetProcAddress(user32, windows::core::s!("SetWindowCompositionAttribute"))
     else {
         return BackdropMode::AlphaDim;
     };
@@ -800,7 +807,11 @@ fn corner_caps(
 ) -> Vec<CornerCap> {
     let mut caps = Vec::new();
     for (ri, row) in model.rows.iter().enumerate() {
-        let color = if row.is_active { PANEL_ACTIVE_BG } else { PANEL_BG };
+        let color = if row.is_active {
+            PANEL_ACTIVE_BG
+        } else {
+            PANEL_BG
+        };
         for (ci, card) in row.cards.iter().enumerate() {
             if !thumb_wids.contains(&card.window_id) {
                 continue;
@@ -1110,10 +1121,8 @@ impl OverviewOverlay {
                                 let _ = DestroyWindow(HWND(mask as *mut c_void));
                             }
                             let _ = DestroyWindow(h);
-                            let _ = UnregisterClassW(
-                                windows::core::PCWSTR(class_name.as_ptr()),
-                                None,
-                            );
+                            let _ =
+                                UnregisterClassW(windows::core::PCWSTR(class_name.as_ptr()), None);
                             let _ = UnregisterClassW(
                                 windows::core::PCWSTR(mask_class_name().as_ptr()),
                                 None,
@@ -1168,7 +1177,10 @@ impl OverviewOverlay {
             // compact-only rows — the overlay just appears. The anim row
             // (kept at full opacity) is the active row.
             let anim_row = if s.backdrop == BackdropMode::AlphaDim
-                || !model.rows.iter().any(|r| r.cards.iter().any(card_can_glide))
+                || !model
+                    .rows
+                    .iter()
+                    .any(|r| r.cards.iter().any(card_can_glide))
             {
                 None
             } else {
@@ -1259,8 +1271,12 @@ impl OverviewOverlay {
         }
         if animate {
             unsafe {
-                let _ =
-                    PostMessageW(Some(self.hwnd), WM_OVERVIEW_START_ANIM, WPARAM(0), LPARAM(0));
+                let _ = PostMessageW(
+                    Some(self.hwnd),
+                    WM_OVERVIEW_START_ANIM,
+                    WPARAM(0),
+                    LPARAM(0),
+                );
             }
         }
         // Non-animated open is already settled: show the corner caps now
@@ -1440,11 +1456,7 @@ enum CloseStart {
 /// Install a Closing [`AnimState`] toward `target_workspace`'s row
 /// (`None` = the active row). `notify` makes the finished close send
 /// `Dismissed` (overlay-initiated closes). Caller holds the state lock.
-fn start_close(
-    s: &mut OverviewState,
-    target_workspace: Option<usize>,
-    notify: bool,
-) -> CloseStart {
+fn start_close(s: &mut OverviewState, target_workspace: Option<usize>, notify: bool) -> CloseStart {
     if matches!(s.anim, Some(a) if a.phase == AnimPhase::Closing) {
         return CloseStart::AlreadyClosing;
     }
@@ -1572,7 +1584,12 @@ impl Drop for OverviewOverlay {
         };
         if !posted_via_window {
             let _ = unsafe {
-                PostThreadMessageW(self.thread_id, WM_QUIT_OVERVIEW_THREAD, WPARAM(0), LPARAM(0))
+                PostThreadMessageW(
+                    self.thread_id,
+                    WM_QUIT_OVERVIEW_THREAD,
+                    WPARAM(0),
+                    LPARAM(0),
+                )
             };
         }
         if let Some(thread) = self._thread.take() {
@@ -1649,8 +1666,11 @@ fn sync_thumbnails(hwnd: HWND) {
                             Some(from) => lerp_rect(&from, &body, k),
                             None => body,
                         };
-                        let opacity =
-                            if a.row == ri { OPAQUE } else { inactive_row_opacity(k) };
+                        let opacity = if a.row == ri {
+                            OPAQUE
+                        } else {
+                            inactive_row_opacity(k)
+                        };
                         (dest, opacity)
                     }
                     _ => (body, OPAQUE),
@@ -1898,12 +1918,7 @@ impl OverviewState {
 
 /// Compute the next `(row, card)` for an arrow key, or `None` when the
 /// selection cannot move that way (edge of the map).
-fn next_selection(
-    model: &OverviewModel,
-    ri: usize,
-    ci: usize,
-    key: u16,
-) -> Option<(usize, usize)> {
+fn next_selection(model: &OverviewModel, ri: usize, ci: usize, key: u16) -> Option<(usize, usize)> {
     let rows = &model.rows;
     let cur = rows.get(ri)?.cards.get(ci)?;
     let cur_cx = cur.rect.x + cur.rect.width / 2;
@@ -2127,7 +2142,11 @@ unsafe extern "system" fn overview_wnd_proc(
             // deadlock if a SetWindowPos on this window fires while STATE is
             // held; SWP_NOMOVE/NOSIZE callers (the topmost re-assert) are
             // unaffected because the system ignores the coords then.
-            let rect = STATE.try_lock().ok().filter(|s| s.visible).map(|s| s.window_rect);
+            let rect = STATE
+                .try_lock()
+                .ok()
+                .filter(|s| s.visible)
+                .map(|s| s.window_rect);
             if let (Some(r), Some(wp)) = (rect, (lparam.0 as *mut WINDOWPOS).as_mut()) {
                 wp.x = r.x;
                 wp.y = r.y;
@@ -2204,11 +2223,7 @@ struct FrameInput<'a> {
 /// back to the card rounding (a square `StretchDIBits` would overflow
 /// it). Callers finish with [`finish_alpha`] and release with
 /// [`release_frame_dib`].
-unsafe fn render_frame_straight(
-    w: i32,
-    h: i32,
-    input: &FrameInput,
-) -> Option<(FrameDib, Vec<u8>)> {
+unsafe fn render_frame_straight(w: i32, h: i32, input: &FrameInput) -> Option<(FrameDib, Vec<u8>)> {
     let bmi = top_down_bmi(w, h);
     let mut bits: *mut c_void = std::ptr::null_mut();
     let hbitmap = CreateDIBSection(None, &bmi, DIB_RGB_COLORS, &mut bits, None, 0).ok()?;
@@ -2909,7 +2924,15 @@ unsafe fn repaint_card_in_cache(
         cache.work_alpha[a..b].copy_from_slice(&cache.base_alpha[a..b]);
     }
     let refill_body = !body_covered;
-    draw_card_chrome(pixels, &mut cache.work_alpha, w, h, card, hovered, refill_body);
+    draw_card_chrome(
+        pixels,
+        &mut cache.work_alpha,
+        w,
+        h,
+        card,
+        hovered,
+        refill_body,
+    );
     // GDI content for the repainted areas (fonts mirror draw_content).
     let hdc = HDC(cache.work_dc as *mut c_void);
     SetBkMode(hdc, TRANSPARENT);
@@ -3077,14 +3100,12 @@ fn blend_pixel(
         return;
     }
     let dst = pixels[i];
-    let lerp =
-        |s: u32, d: u32| ((s as f32) * cov + (d as f32) * (1.0 - cov)).round() as u32;
+    let lerp = |s: u32, d: u32| ((s as f32) * cov + (d as f32) * (1.0 - cov)).round() as u32;
     let r = lerp((color >> 16) & 0xFF, (dst >> 16) & 0xFF);
     let g = lerp((color >> 8) & 0xFF, (dst >> 8) & 0xFF);
     let b = lerp(color & 0xFF, dst & 0xFF);
     pixels[i] = r << 16 | g << 8 | b;
-    alpha[i] =
-        (f32::from(region_alpha) * cov + f32::from(alpha[i]) * (1.0 - cov)).round() as u8;
+    alpha[i] = (f32::from(region_alpha) * cov + f32::from(alpha[i]) * (1.0 - cov)).round() as u8;
 }
 
 /// Fill a rounded rect with anti-aliased corners. `round_top` /
@@ -3117,12 +3138,13 @@ fn sdf_fill_round(
     } else {
         rect.height as f32
     };
-    let rad = radius
-        .min(rect.width as f32 / 2.0)
-        .min(max_rad_y)
-        .max(0.0);
+    let rad = radius.min(rect.width as f32 / 2.0).min(max_rad_y).max(0.0);
     let ext = rad.ceil() + 1.0;
-    let ry = if round_top { rect.y as f32 } else { rect.y as f32 - ext };
+    let ry = if round_top {
+        rect.y as f32
+    } else {
+        rect.y as f32 - ext
+    };
     let rh = rect.height as f32
         + if round_top { 0.0 } else { ext }
         + if round_bottom { 0.0 } else { ext };
@@ -3142,8 +3164,15 @@ fn sdf_fill_round(
         }
         let pyf = y as f32 + 0.5;
         for x in x0..x1 {
-            let sdf =
-                rounded_rect_sdf(x as f32 + 0.5, pyf, rect.x as f32, ry, rect.width as f32, rh, rad);
+            let sdf = rounded_rect_sdf(
+                x as f32 + 0.5,
+                pyf,
+                rect.x as f32,
+                ry,
+                rect.width as f32,
+                rh,
+                rad,
+            );
             let cov = clamp(0.5 - sdf, 0.0, 1.0);
             if cov > 0.0 {
                 blend_pixel(pixels, alpha, row + x as usize, color, region_alpha, cov);
@@ -3256,9 +3285,7 @@ fn bottom_round_cov(px: i32, py: i32, rect: &Rect, radius: f32) -> f32 {
 
 /// Lerp two straight 0x00RRGGBB pixels: `b` at weight `t` over `a`.
 fn lerp_color(a: u32, b: u32, t: f32) -> u32 {
-    let lerp = |ac: u32, bc: u32| {
-        ((bc as f32) * t + (ac as f32) * (1.0 - t)).round() as u32
-    };
+    let lerp = |ac: u32, bc: u32| ((bc as f32) * t + (ac as f32) * (1.0 - t)).round() as u32;
     lerp((a >> 16) & 0xFF, (b >> 16) & 0xFF) << 16
         | lerp((a >> 8) & 0xFF, (b >> 8) & 0xFF) << 8
         | lerp(a & 0xFF, b & 0xFF)
@@ -3294,13 +3321,21 @@ fn draw_card_chrome(
     let body_bg = if hovered { CARD_HOVER_BG } else { CARD_BG };
     // The hover highlight must also lighten the title strip: a live
     // thumbnail composites over the body, hiding the body highlight.
-    let title_bg = if hovered { CARD_TITLE_HOVER_BG } else { CARD_TITLE_BG };
+    let title_bg = if hovered {
+        CARD_TITLE_HOVER_BG
+    } else {
+        CARD_TITLE_BG
+    };
     if card_is_titled(r) {
         let title = Rect::new(r.x, r.y, r.width, CARD_TITLE_H);
-        sdf_fill_round(pixels, alpha, w, h, &title, radius, true, false, title_bg, OPAQUE);
+        sdf_fill_round(
+            pixels, alpha, w, h, &title, radius, true, false, title_bg, OPAQUE,
+        );
         if refill_body {
             let body = Rect::new(r.x, r.y + CARD_TITLE_H, r.width, r.height - CARD_TITLE_H);
-            sdf_fill_round(pixels, alpha, w, h, &body, radius, false, true, body_bg, OPAQUE);
+            sdf_fill_round(
+                pixels, alpha, w, h, &body, radius, false, true, body_bg, OPAQUE,
+            );
         }
     } else {
         sdf_fill_round(pixels, alpha, w, h, r, radius, true, true, body_bg, OPAQUE);
@@ -3326,17 +3361,38 @@ fn draw_shapes(pixels: &mut [u32], alpha: &mut [u8], w: i32, h: i32, input: &Fra
         } else {
             (PANEL_BG, LABEL_STRIP_BG)
         };
-        sdf_fill_round(pixels, alpha, w, h, &row.panel, panel_rad, true, true, panel_bg, panel_a);
+        sdf_fill_round(
+            pixels, alpha, w, h, &row.panel, panel_rad, true, true, panel_bg, panel_a,
+        );
         // Label strip: darker band across the panel top, top corners
         // following the panel rounding, bottom edge square.
         sdf_fill_round(
-            pixels, alpha, w, h, &row.label_strip, panel_rad, true, false, strip_bg, panel_a,
+            pixels,
+            alpha,
+            w,
+            h,
+            &row.label_strip,
+            panel_rad,
+            true,
+            false,
+            strip_bg,
+            panel_a,
         );
         // Every panel gets the neutral 1px frame; the active panel is
         // marked by an accent ring SELECT_PAD px OUTSIDE it (below),
         // mirroring the selected-card ring, so the indicator gets the
         // same breathing room instead of stroking the panel's own edge.
-        sdf_stroke_round(pixels, alpha, w, h, &row.panel, panel_rad, 1.0, PANEL_BORDER, panel_a);
+        sdf_stroke_round(
+            pixels,
+            alpha,
+            w,
+            h,
+            &row.panel,
+            panel_rad,
+            1.0,
+            PANEL_BORDER,
+            panel_a,
+        );
         if row.is_active {
             let ring = Rect::new(
                 row.panel.x - SELECT_PAD,
@@ -3413,7 +3469,11 @@ fn finish_alpha(pixels: &mut [u32], alpha: &mut [u8], w: i32, h: i32, model: &Ov
     let strip_a = PANEL_ALPHA;
     let text_a = OPAQUE;
     for row in &model.rows {
-        let bg = if row.is_active { LABEL_STRIP_ACTIVE_BG } else { LABEL_STRIP_BG };
+        let bg = if row.is_active {
+            LABEL_STRIP_ACTIVE_BG
+        } else {
+            LABEL_STRIP_BG
+        };
         let (x0, x1, y0, y1) = clip_rect(&row.label_strip, w, h);
         for y in y0..y1 {
             for x in x0..x1 {
@@ -3528,7 +3588,11 @@ unsafe fn draw_content(hdc: HDC, model: &OverviewModel, thumb_wids: &HashSet<u64
 /// Label row: workspace number + name across the panel's top strip.
 unsafe fn draw_row_label(hdc: HDC, row: &OverviewRow, label_font: HFONT) {
     let old_font = SelectObject(hdc, label_font.into());
-    let text_color = if row.is_active { TEXT_PRIMARY } else { TEXT_SECONDARY };
+    let text_color = if row.is_active {
+        TEXT_PRIMARY
+    } else {
+        TEXT_SECONDARY
+    };
     let inset = Rect::new(
         row.label_strip.x + 12,
         row.label_strip.y,
@@ -3711,15 +3775,7 @@ unsafe fn draw_card_compact(
             let hicon = HICON(icon_raw as *mut c_void);
             let icon_top = r.y + (r.height - icon_size) / 2;
             let _ = DrawIconEx(
-                hdc,
-                text_left,
-                icon_top,
-                hicon,
-                icon_size,
-                icon_size,
-                0,
-                None,
-                DI_NORMAL,
+                hdc, text_left, icon_top, hicon, icon_size, icon_size, 0, None, DI_NORMAL,
             );
             text_left += icon_size + pad;
         }
@@ -3838,7 +3894,9 @@ mod tests {
     /// `CHROME_FADE_FACTORS.len()` fake steps (null GDI handles): fine
     /// for the pure bookkeeping under test, which never blits them.
     fn fake_chrome_steps() -> Vec<ChromeStep> {
-        (0..CHROME_FADE_FACTORS.len()).map(|_| fake_step()).collect()
+        (0..CHROME_FADE_FACTORS.len())
+            .map(|_| fake_step())
+            .collect()
     }
 
     /// Fake hover cache (null GDI handles, empty planes) for the pure
@@ -3860,7 +3918,10 @@ mod tests {
     #[test]
     fn test_card_can_glide_requires_live_from_rect_and_titled_size() {
         assert!(card_can_glide(&glide_card(true)));
-        assert!(!card_can_glide(&glide_card(false)), "placeholder cards never glide");
+        assert!(
+            !card_can_glide(&glide_card(false)),
+            "placeholder cards never glide"
+        );
         let mut no_from = glide_card(true);
         no_from.from_rect = None;
         assert!(!card_can_glide(&no_from));
@@ -3873,7 +3934,10 @@ mod tests {
     fn test_start_close_not_animatable_when_anim_ms_zero() {
         let mut s = overlay_state(glide_model(0));
         s.thumbnails.insert(7, ThumbnailHandle::fake());
-        assert!(matches!(start_close(&mut s, None, true), CloseStart::NotAnimatable));
+        assert!(matches!(
+            start_close(&mut s, None, true),
+            CloseStart::NotAnimatable
+        ));
         assert!(s.anim.is_none());
     }
 
@@ -3882,7 +3946,10 @@ mod tests {
         // anim_ms > 0 but no thumbnail registered (AlphaDim fallback,
         // placeholder/snapshot mode): nothing can glide.
         let mut s = overlay_state(glide_model(150));
-        assert!(matches!(start_close(&mut s, None, true), CloseStart::NotAnimatable));
+        assert!(matches!(
+            start_close(&mut s, None, true),
+            CloseStart::NotAnimatable
+        ));
         assert!(s.anim.is_none());
     }
 
@@ -3890,13 +3957,22 @@ mod tests {
     fn test_start_close_starts_and_guards_double_close() {
         let mut s = overlay_state(glide_model(150));
         s.thumbnails.insert(7, ThumbnailHandle::fake());
-        assert!(matches!(start_close(&mut s, None, true), CloseStart::Started));
+        assert!(matches!(
+            start_close(&mut s, None, true),
+            CloseStart::Started
+        ));
         let anim = s.anim.expect("closing anim installed");
         assert_eq!(anim.phase, AnimPhase::Closing);
         assert!(anim.notify, "overlay-initiated close must report Dismissed");
         // Second close while one is in flight: no-op, state untouched.
-        assert!(matches!(start_close(&mut s, None, false), CloseStart::AlreadyClosing));
-        assert!(s.anim.expect("anim kept").notify, "in-flight close must not be re-armed");
+        assert!(matches!(
+            start_close(&mut s, None, false),
+            CloseStart::AlreadyClosing
+        ));
+        assert!(
+            s.anim.expect("anim kept").notify,
+            "in-flight close must not be re-armed"
+        );
     }
 
     #[test]
@@ -3927,7 +4003,10 @@ mod tests {
             notify: true,
         };
         assert!((sync_k(&closing) - anim_k(&closing)).abs() < 0.05);
-        assert!(sync_k(&closing) < 0.6, "mid-flight close must not pin to an endpoint");
+        assert!(
+            sync_k(&closing) < 0.6,
+            "mid-flight close must not pin to an endpoint"
+        );
     }
 
     #[test]
@@ -3954,7 +4033,10 @@ mod tests {
     fn test_apply_model_update_noop_while_closing() {
         let mut s = overlay_state(glide_model(150));
         s.thumbnails.insert(7, ThumbnailHandle::fake());
-        assert!(matches!(start_close(&mut s, None, true), CloseStart::Started));
+        assert!(matches!(
+            start_close(&mut s, None, true),
+            CloseStart::Started
+        ));
         assert!(is_closing_state(&s));
         let mut refreshed = glide_model(150);
         refreshed.rows[0].label = "renamed".into();
@@ -4047,7 +4129,10 @@ mod tests {
         };
         let k_open = anim_k(&open);
         s.anim = Some(open);
-        assert!(matches!(start_close(&mut s, None, true), CloseStart::Started));
+        assert!(matches!(
+            start_close(&mut s, None, true),
+            CloseStart::Started
+        ));
         let k_close = anim_k(&s.anim.expect("closing anim"));
         assert!(
             (k_open - k_close).abs() < 0.05,
@@ -4084,7 +4169,10 @@ mod tests {
     fn test_chrome_fade_factors_ascend_to_full() {
         assert!(CHROME_FADE_FACTORS.windows(2).all(|w| w[0] < w[1]));
         let last = *CHROME_FADE_FACTORS.last().unwrap();
-        assert!((last - 1.0).abs() < f32::EPSILON, "settled frame must be full strength");
+        assert!(
+            (last - 1.0).abs() < f32::EPSILON,
+            "settled frame must be full strength"
+        );
         // Every k the picker can produce maps inside the step table.
         assert!(chrome_step_for_k(f32::MAX) < CHROME_FADE_FACTORS.len());
     }
@@ -4108,7 +4196,10 @@ mod tests {
         s.thumbnails.insert(7, ThumbnailHandle::fake());
         s.chrome_steps = fake_chrome_steps();
         s.chrome_last_step = None; // settled: the live full frame is on screen
-        assert!(matches!(start_close(&mut s, None, true), CloseStart::Started));
+        assert!(matches!(
+            start_close(&mut s, None, true),
+            CloseStart::Started
+        ));
         assert_eq!(
             s.chrome_last_step,
             Some(CHROME_FADE_FACTORS.len() - 1),
@@ -4131,7 +4222,10 @@ mod tests {
             ticks: 9,
             notify: false,
         });
-        assert!(matches!(start_close(&mut s, None, true), CloseStart::Started));
+        assert!(matches!(
+            start_close(&mut s, None, true),
+            CloseStart::Started
+        ));
         assert_eq!(
             s.chrome_last_step,
             Some(1),
@@ -4197,7 +4291,10 @@ mod tests {
         };
         let k_open = anim_k(&open);
         s.anim = Some(open);
-        assert!(matches!(start_close(&mut s, None, true), CloseStart::Started));
+        assert!(matches!(
+            start_close(&mut s, None, true),
+            CloseStart::Started
+        ));
         let close = s.anim.expect("closing anim");
         assert_eq!(close.easing, Easing::EaseInOut);
         let k_close = anim_k(&close);
@@ -4275,7 +4372,10 @@ mod tests {
             assert_eq!(cap.square, square);
             assert_eq!(cap.card, card);
             assert_eq!(cap.body, body);
-            assert_eq!(cap.color, PANEL_ACTIVE_BG, "active row uses the active panel bg");
+            assert_eq!(
+                cap.color, PANEL_ACTIVE_BG,
+                "active row uses the active panel bg"
+            );
             assert_eq!(cap.ring, None, "unselected card gets no ring");
         }
     }
@@ -4288,9 +4388,15 @@ mod tests {
         let wids: HashSet<u64> = [7].into_iter().collect();
         let plain = corner_caps(&model, &wids, None);
         let selected = corner_caps(&model, &wids, Some((0, 0)));
-        assert_ne!(selected, plain, "selection change must produce different caps");
+        assert_ne!(
+            selected, plain,
+            "selection change must produce different caps"
+        );
         for cap in &selected {
-            assert_eq!(cap.ring, Some((model.accent_bgr, model.accent_width.max(1))));
+            assert_eq!(
+                cap.ring,
+                Some((model.accent_bgr, model.accent_width.max(1)))
+            );
         }
         // Off-model selection index: no card matches, no ring.
         let stale = corner_caps(&model, &wids, Some((5, 5)));
@@ -4327,7 +4433,11 @@ mod tests {
         // opaque panel bg, channels in DIB (RGB) order.
         assert_eq!(pixels[98 * 100 + 1], 0xFF33_2211);
         // Deep inside the inner rounding: the preview keeps showing.
-        assert_eq!(pixels[92 * 100 + 7], 0, "cap must not cover the preview interior");
+        assert_eq!(
+            pixels[92 * 100 + 7],
+            0,
+            "cap must not cover the preview interior"
+        );
         // Outside the cap square: untouched.
         assert_eq!(pixels[98 * 100 + 20], 0);
         // Frame arc pixel (3, 97): distance ~7.1 from the corner center,
@@ -4336,7 +4446,10 @@ mod tests {
         // border color).
         let px = pixels[97 * 100 + 3];
         let a = px >> 24;
-        assert!(a > 0 && a < 255, "frame arc pixel must be anti-aliased, got alpha {a}");
+        assert!(
+            a > 0 && a < 255,
+            "frame arc pixel must be anti-aliased, got alpha {a}"
+        );
         let border = bgr_to_pixel(CARD_BORDER);
         for shift in [16, 8, 0] {
             assert_eq!(
@@ -4403,7 +4516,10 @@ mod tests {
         s.thumbnails.insert(7, ThumbnailHandle::fake());
         s.chrome_full = Some(fake_step());
         s.chrome_last_step = None;
-        assert!(matches!(start_close(&mut s, None, true), CloseStart::Started));
+        assert!(matches!(
+            start_close(&mut s, None, true),
+            CloseStart::Started
+        ));
         assert_eq!(
             s.chrome_last_step,
             Some(CHROME_FADE_FACTORS.len() - 1),
@@ -4527,7 +4643,8 @@ mod tests {
         let mut pixels = vec![0x00FF_FFFF_u32; (w * h) as usize];
         let alpha = vec![128_u8; (w * h) as usize];
         premultiply_rect(&mut pixels, &alpha, w, h, &Rect::new(1, 1, 2, 2));
-        let inside = 128 << 24 | (255 * 128 / 255) << 16 | (255 * 128 / 255) << 8 | (255 * 128 / 255);
+        let inside =
+            128 << 24 | (255 * 128 / 255) << 16 | (255 * 128 / 255) << 8 | (255 * 128 / 255);
         for y in 0..h {
             for x in 0..w {
                 let i = (y * w + x) as usize;

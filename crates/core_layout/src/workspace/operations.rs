@@ -8,11 +8,7 @@ impl Workspace {
     }
 
     /// Compute the X position of a column, optionally skipping minimized columns.
-    fn column_x_with_minimized_handling(
-        &self,
-        column_index: usize,
-        skip_minimized: bool,
-    ) -> i32 {
+    fn column_x_with_minimized_handling(&self, column_index: usize, skip_minimized: bool) -> i32 {
         // Defensively clamp gaps to >= 0
         let gap = self.gap.max(0);
 
@@ -207,7 +203,11 @@ impl Workspace {
             return;
         }
         // Reject if any window already exists in this workspace
-        if column.windows().iter().any(|wid| self.contains_window(*wid)) {
+        if column
+            .windows()
+            .iter()
+            .any(|wid| self.contains_window(*wid))
+        {
             return;
         }
         let clamped = index.min(self.columns.len());
@@ -233,8 +233,8 @@ impl Workspace {
             self.expel_to_left();
             return;
         }
-        let Some(wid) = self.columns[self.focused_column]
-            .remove_at_index(self.focused_window_in_column)
+        let Some(wid) =
+            self.columns[self.focused_column].remove_at_index(self.focused_window_in_column)
         else {
             return;
         };
@@ -260,8 +260,8 @@ impl Workspace {
             self.expel_to_right();
             return;
         }
-        let Some(wid) = self.columns[self.focused_column]
-            .remove_at_index(self.focused_window_in_column)
+        let Some(wid) =
+            self.columns[self.focused_column].remove_at_index(self.focused_window_in_column)
         else {
             return;
         };
@@ -286,8 +286,8 @@ impl Workspace {
         if self.columns.is_empty() || self.columns[self.focused_column].len() <= 1 {
             return;
         }
-        let Some(wid) = self.columns[self.focused_column]
-            .remove_at_index(self.focused_window_in_column)
+        let Some(wid) =
+            self.columns[self.focused_column].remove_at_index(self.focused_window_in_column)
         else {
             return;
         };
@@ -311,8 +311,8 @@ impl Workspace {
         if self.columns.is_empty() || self.columns[self.focused_column].len() <= 1 {
             return;
         }
-        let Some(wid) = self.columns[self.focused_column]
-            .remove_at_index(self.focused_window_in_column)
+        let Some(wid) =
+            self.columns[self.focused_column].remove_at_index(self.focused_window_in_column)
         else {
             return;
         };
@@ -380,8 +380,10 @@ impl Workspace {
         if self.focused_window_in_column == 0 {
             return;
         }
-        self.columns[self.focused_column]
-            .swap_windows(self.focused_window_in_column, self.focused_window_in_column - 1);
+        self.columns[self.focused_column].swap_windows(
+            self.focused_window_in_column,
+            self.focused_window_in_column - 1,
+        );
         self.focused_window_in_column -= 1;
         self.sync_active_tab_to_focus();
     }
@@ -391,8 +393,10 @@ impl Workspace {
         if self.focused_window_in_column + 1 >= self.columns[self.focused_column].len() {
             return;
         }
-        self.columns[self.focused_column]
-            .swap_windows(self.focused_window_in_column, self.focused_window_in_column + 1);
+        self.columns[self.focused_column].swap_windows(
+            self.focused_window_in_column,
+            self.focused_window_in_column + 1,
+        );
         self.focused_window_in_column += 1;
         self.sync_active_tab_to_focus();
     }

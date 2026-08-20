@@ -31,30 +31,25 @@ use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{
     DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUNDSMALL,
 };
+use windows::Win32::Graphics::Gdi::AlphaBlend;
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, CreateCompatibleDC, CreateDIBSection, CreateSolidBrush, DeleteDC, DeleteObject,
     EndPaint, FillRect, InvalidateRect, SelectObject, SetBkColor, SetTextColor, AC_SRC_ALPHA,
     AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS, HBITMAP,
     HBRUSH, PAINTSTRUCT,
 };
-use windows::Win32::Graphics::Gdi::AlphaBlend;
 use windows::Win32::UI::Controls::{EM_SETSEL, WM_MOUSELEAVE};
-use windows::Win32::UI::Input::KeyboardAndMouse::{
-    TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT,
-};
-use windows::Win32::UI::Input::KeyboardAndMouse::{
-    SetFocus, VIRTUAL_KEY, VK_ESCAPE, VK_RETURN,
-};
+use windows::Win32::UI::Input::KeyboardAndMouse::{SetFocus, VIRTUAL_KEY, VK_ESCAPE, VK_RETURN};
+use windows::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallWindowProcW, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-    GetMessageW, GetWindowLongPtrW, KillTimer, LoadCursorW, PostMessageW, PostQuitMessage,
-    RegisterClassW, SendMessageW, SetCursor, SetLayeredWindowAttributes, SetTimer,
-    SetWindowLongPtrW, SetWindowTextW, TranslateMessage, ES_AUTOHSCROLL,
-    GWLP_USERDATA, GWLP_WNDPROC, HMENU, IDC_ARROW, IDC_IBEAM, LWA_ALPHA, MSG,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WM_ACTIVATE, WM_CHAR, WM_CLOSE, WM_CREATE, WM_DESTROY,
-    WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_MOUSEMOVE, WM_PAINT, WM_SETCURSOR, WM_TIMER,
-    WM_USER, WNDCLASSW, WNDPROC, WS_CHILD, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
-    WS_POPUP, WS_VISIBLE,
+    CallWindowProcW, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
+    GetWindowLongPtrW, KillTimer, LoadCursorW, PostMessageW, PostQuitMessage, RegisterClassW,
+    SendMessageW, SetCursor, SetLayeredWindowAttributes, SetTimer, SetWindowLongPtrW,
+    SetWindowTextW, TranslateMessage, ES_AUTOHSCROLL, GWLP_USERDATA, GWLP_WNDPROC, HMENU,
+    IDC_ARROW, IDC_IBEAM, LWA_ALPHA, MSG, WINDOW_EX_STYLE, WINDOW_STYLE, WM_ACTIVATE, WM_CHAR,
+    WM_CLOSE, WM_CREATE, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_MOUSEMOVE,
+    WM_PAINT, WM_SETCURSOR, WM_TIMER, WM_USER, WNDCLASSW, WNDPROC, WS_CHILD, WS_EX_LAYERED,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
 };
 
 use crate::Win32Error;
@@ -553,11 +548,8 @@ unsafe fn on_create(hwnd: HWND, lparam: LPARAM) -> LRESULT {
         // Subclass the EDIT control so we can intercept Esc/Enter
         // (which the default proc would otherwise consume as a beep
         // and as a "no-op input" respectively).
-        let original = SetWindowLongPtrW(
-            edit,
-            GWLP_WNDPROC,
-            edit_subclass_proc as *const () as isize,
-        );
+        let original =
+            SetWindowLongPtrW(edit, GWLP_WNDPROC, edit_subclass_proc as *const () as isize);
         if original != 0 {
             ctx.original_edit_proc = Some(std::mem::transmute::<
                 isize,
@@ -657,9 +649,7 @@ unsafe fn on_paint(hwnd: HWND) -> LRESULT {
     let hdc = BeginPaint(hwnd, &mut ps);
     if let Some(ctx) = ctx_from_hwnd(hwnd) {
         let mut client = RECT::default();
-        let _ = windows::Win32::UI::WindowsAndMessaging::GetClientRect(
-            hwnd, &mut client,
-        );
+        let _ = windows::Win32::UI::WindowsAndMessaging::GetClientRect(hwnd, &mut client);
         // Fill the whole popup with the tab bg. DWM clips the
         // visible region to a rounded shape so the corners outside
         // the rounded area are never painted to screen.
@@ -670,8 +660,7 @@ unsafe fn on_paint(hwnd: HWND) -> LRESULT {
         if let Some(icon_handle) = ctx.icon {
             if icon_handle != 0 {
                 let client_h = (client.bottom - client.top).max(1);
-                let icon_size =
-                    ((ctx.strip_h as f32 * 0.57).round() as i32).max(10);
+                let icon_size = ((ctx.strip_h as f32 * 0.57).round() as i32).max(10);
                 let cell_h_local = {
                     let fc = ((ctx.strip_h as f32 * 0.43).round() as i32).max(8);
                     (fc * 14 / 10).max(fc + 2)
@@ -679,9 +668,8 @@ unsafe fn on_paint(hwnd: HWND) -> LRESULT {
                 let visual_pad_local = ((client_h - cell_h_local) / 2).max(3);
                 let icon_left = visual_pad_local;
                 let icon_top = (client_h - icon_size) / 2;
-                let hicon = windows::Win32::UI::WindowsAndMessaging::HICON(
-                    icon_handle as *mut c_void,
-                );
+                let hicon =
+                    windows::Win32::UI::WindowsAndMessaging::HICON(icon_handle as *mut c_void);
                 let _ = windows::Win32::UI::WindowsAndMessaging::DrawIconEx(
                     hdc,
                     icon_left,
@@ -786,12 +774,7 @@ unsafe fn on_lbutton_down(hwnd: HWND, lparam: LPARAM) -> LRESULT {
     if let Some(ctx) = ctx_from_hwnd(hwnd) {
         let cr = ctx.check_rect;
         if cx >= cr.left && cx < cr.right && cy >= cr.top && cy < cr.bottom {
-            let _ = PostMessageW(
-                Some(hwnd),
-                WM_INLINE_RENAME_COMMIT,
-                WPARAM(0),
-                LPARAM(0),
-            );
+            let _ = PostMessageW(Some(hwnd), WM_INLINE_RENAME_COMMIT, WPARAM(0), LPARAM(0));
             return LRESULT(0);
         }
     }
@@ -810,24 +793,14 @@ unsafe fn on_activate(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> L
             // the popup wasn't foreground at creation time.
             if !ctx.edit_hwnd.is_invalid() {
                 let _ = SetFocus(Some(ctx.edit_hwnd));
-                SendMessageW(
-                    ctx.edit_hwnd,
-                    EM_SETSEL,
-                    Some(WPARAM(0)),
-                    Some(LPARAM(-1)),
-                );
+                SendMessageW(ctx.edit_hwnd, EM_SETSEL, Some(WPARAM(0)), Some(LPARAM(-1)));
             }
         } else if ctx.activated && !ctx.finishing {
             // Lost activation after being active → user clicked
             // elsewhere. Discard. Guard against the initial
             // creation WA_INACTIVE that fires before WA_ACTIVE on
             // some Win32 paths.
-            let _ = PostMessageW(
-                Some(hwnd),
-                WM_INLINE_RENAME_CANCEL,
-                WPARAM(0),
-                LPARAM(0),
-            );
+            let _ = PostMessageW(Some(hwnd), WM_INLINE_RENAME_CANCEL, WPARAM(0), LPARAM(0));
         }
     }
     DefWindowProcW(hwnd, msg, wparam, lparam)
@@ -839,12 +812,7 @@ unsafe fn on_commit(hwnd: HWND) -> LRESULT {
         let text = read_edit_text(ctx.edit_hwnd);
         if text.len() > TAB_TITLE_MAX_BYTES {
             // Reject and re-select so the user can edit down.
-            SendMessageW(
-                ctx.edit_hwnd,
-                EM_SETSEL,
-                Some(WPARAM(0)),
-                Some(LPARAM(-1)),
-            );
+            SendMessageW(ctx.edit_hwnd, EM_SETSEL, Some(WPARAM(0)), Some(LPARAM(-1)));
             let _ = SetFocus(Some(ctx.edit_hwnd));
             return LRESULT(0);
         }
@@ -871,23 +839,13 @@ unsafe extern "system" fn edit_subclass_proc(
         let vk = VIRTUAL_KEY(wparam.0 as u16);
         if vk == VK_ESCAPE {
             if let Ok(parent) = GetParent(hwnd) {
-                let _ = PostMessageW(
-                    Some(parent),
-                    WM_INLINE_RENAME_CANCEL,
-                    WPARAM(0),
-                    LPARAM(0),
-                );
+                let _ = PostMessageW(Some(parent), WM_INLINE_RENAME_CANCEL, WPARAM(0), LPARAM(0));
             }
             return LRESULT(0);
         }
         if vk == VK_RETURN {
             if let Ok(parent) = GetParent(hwnd) {
-                let _ = PostMessageW(
-                    Some(parent),
-                    WM_INLINE_RENAME_COMMIT,
-                    WPARAM(0),
-                    LPARAM(0),
-                );
+                let _ = PostMessageW(Some(parent), WM_INLINE_RENAME_COMMIT, WPARAM(0), LPARAM(0));
             }
             return LRESULT(0);
         }
@@ -935,26 +893,13 @@ unsafe fn paint_check_glyph(hdc: windows::Win32::Graphics::Gdi::HDC, ctx: &Popup
             ..Default::default()
         };
         let mut bits: *mut c_void = std::ptr::null_mut();
-        if let Ok(pill_bmp) =
-            CreateDIBSection(None, &bmi, DIB_RGB_COLORS, &mut bits, None, 0)
-        {
+        if let Ok(pill_bmp) = CreateDIBSection(None, &bmi, DIB_RGB_COLORS, &mut bits, None, 0) {
             let pill_dc = CreateCompatibleDC(Some(hdc));
             let old_bm = SelectObject(pill_dc, pill_bmp.into());
-            let pixels =
-                std::slice::from_raw_parts_mut(bits as *mut u8, (w * h * 4) as usize);
+            let pixels = std::slice::from_raw_parts_mut(bits as *mut u8, (w * h * 4) as usize);
             pixels.fill(0);
             let radius = (w.min(h) / 3).clamp(3, w.min(h) / 2);
-            crate::tab_strip::aa_fill_rounded(
-                pixels,
-                w,
-                h,
-                0,
-                0,
-                w,
-                h,
-                radius,
-                ctx.hover_color,
-            );
+            crate::tab_strip::aa_fill_rounded(pixels, w, h, 0, 0, w, h, radius, ctx.hover_color);
             let mut i = 0usize;
             while i < pixels.len() {
                 let a = pixels[i + 3];
@@ -1060,8 +1005,7 @@ unsafe fn create_check_tooltip_popup() -> HWND {
     // bitmap bakes in its own AA shadow/corners. Same opt-outs the
     // strip's tooltip uses.
     use windows::Win32::Graphics::Dwm::{
-        DwmSetWindowAttribute as DwmSet, DWMNCRP_DISABLED,
-        DWMWA_NCRENDERING_POLICY as DwmNcRender,
+        DwmSetWindowAttribute as DwmSet, DWMNCRP_DISABLED, DWMWA_NCRENDERING_POLICY as DwmNcRender,
         DWMWA_WINDOW_CORNER_PREFERENCE as DwmCornerPref, DWMWCP_DONOTROUND,
     };
     let pref = DWMWCP_DONOTROUND;
@@ -1085,14 +1029,10 @@ unsafe fn create_check_tooltip_popup() -> HWND {
 /// horizontally under the check button, then render via the strip's
 /// shared tooltip pipeline and `ShowWindow` it. The render function
 /// drives `UpdateLayeredWindow` with the popup's screen coords.
-unsafe fn show_check_tooltip(
-    tt_hwnd: HWND,
-    parent_hwnd: HWND,
-    check_rect: RECT,
-    text: &str,
-) {
-    use windows::Win32::Graphics::Gdi::{DrawTextW, GetDC, ReleaseDC, DT_CALCRECT,
-        DT_NOPREFIX, DT_SINGLELINE};
+unsafe fn show_check_tooltip(tt_hwnd: HWND, parent_hwnd: HWND, check_rect: RECT, text: &str) {
+    use windows::Win32::Graphics::Gdi::{
+        DrawTextW, GetDC, ReleaseDC, DT_CALCRECT, DT_NOPREFIX, DT_SINGLELINE,
+    };
     use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_SHOWNOACTIVATE};
 
     // Compute the check button's screen-space anchor rect — popup +

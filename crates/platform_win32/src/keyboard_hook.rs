@@ -69,8 +69,17 @@ const VK_RMENU: i32 = 0xA5;
 fn is_modifier_vk(vk: i32) -> bool {
     matches!(
         vk,
-        VK_SHIFT | VK_CONTROL | VK_MENU | VK_LWIN | VK_RWIN | VK_LSHIFT | VK_RSHIFT | VK_LCONTROL
-            | VK_RCONTROL | VK_LMENU | VK_RMENU
+        VK_SHIFT
+            | VK_CONTROL
+            | VK_MENU
+            | VK_LWIN
+            | VK_RWIN
+            | VK_LSHIFT
+            | VK_RSHIFT
+            | VK_LCONTROL
+            | VK_RCONTROL
+            | VK_LMENU
+            | VK_RMENU
     )
 }
 
@@ -114,7 +123,9 @@ impl Drop for KeyboardHookHandle {
         let mut held = HOOK_HELD.lock().unwrap_or_else(recover_poisoned_mutex);
         held.clear();
         drop(held);
-        let mut mask = HOOK_FN_MOD_MASK.lock().unwrap_or_else(recover_poisoned_mutex);
+        let mut mask = HOOK_FN_MOD_MASK
+            .lock()
+            .unwrap_or_else(recover_poisoned_mutex);
         *mask = 0;
         drop(mask);
         let mut fn_held = HOOK_FN_HELD.lock().unwrap_or_else(recover_poisoned_mutex);
@@ -133,9 +144,9 @@ pub fn install_keyboard_hook(
     let (tx, rx) = mpsc::channel();
 
     {
-        let mut sender = HOOK_SENDER.lock().map_err(|_| {
-            Win32Error::HookInstallFailed("Hook sender mutex poisoned".to_string())
-        })?;
+        let mut sender = HOOK_SENDER
+            .lock()
+            .map_err(|_| Win32Error::HookInstallFailed("Hook sender mutex poisoned".to_string()))?;
         if sender.is_some() {
             return Err(Win32Error::HookInstallFailed(
                 "Keyboard hook already installed - drop existing handle first".to_string(),
@@ -292,7 +303,9 @@ unsafe fn keyboard_ll_hook_inner(ncode: i32, wparam: WPARAM, lparam: LPARAM) -> 
     // key-down (idempotent on auto-repeat). It never matches a bind on its own
     // and never reaches the foreground app.
     if let Some(bit) = fn_mod_bit(vk as u32) {
-        let mask = *HOOK_FN_MOD_MASK.lock().unwrap_or_else(recover_poisoned_mutex);
+        let mask = *HOOK_FN_MOD_MASK
+            .lock()
+            .unwrap_or_else(recover_poisoned_mutex);
         if mask & bit != 0 {
             let mut fn_held = HOOK_FN_HELD.lock().unwrap_or_else(recover_poisoned_mutex);
             *fn_held |= bit;
@@ -409,7 +422,10 @@ mod tests {
         let binds = vec![bind(win_ctrl(), 0x25)]; // Win+Ctrl+Left
         let found = find_bind(&binds, win_ctrl(), 0x25);
         assert!(found.is_some());
-        assert_eq!(found.unwrap().id, crate::Hotkey::stable_id(win_ctrl(), 0x25));
+        assert_eq!(
+            found.unwrap().id,
+            crate::Hotkey::stable_id(win_ctrl(), 0x25)
+        );
     }
 
     #[test]
@@ -428,7 +444,15 @@ mod tests {
     fn wrong_key_or_mods_does_not_match() {
         let binds = vec![bind(win_ctrl(), 0x25)];
         assert!(find_bind(&binds, win_ctrl(), 0x27).is_none()); // Right, not Left
-        assert!(find_bind(&binds, Modifiers { ctrl: true, ..Default::default() }, 0x25).is_none());
+        assert!(find_bind(
+            &binds,
+            Modifiers {
+                ctrl: true,
+                ..Default::default()
+            },
+            0x25
+        )
+        .is_none());
     }
 
     #[test]
@@ -447,7 +471,7 @@ mod tests {
             ..Default::default()
         };
         let binds = vec![bind(f13, 0x48)]; // F13+H
-        // Exact F-modifier held -> fires.
+                                           // Exact F-modifier held -> fires.
         assert!(find_bind(&binds, f13, 0x48).is_some());
         // No modifier held (bare H) -> no match.
         assert!(find_bind(&binds, Modifiers::default(), 0x48).is_none());
@@ -458,6 +482,14 @@ mod tests {
         };
         assert!(find_bind(&binds, f13_f14, 0x48).is_none());
         // A standard modifier held instead of the F-key does not fire.
-        assert!(find_bind(&binds, Modifiers { ctrl: true, ..Default::default() }, 0x48).is_none());
+        assert!(find_bind(
+            &binds,
+            Modifiers {
+                ctrl: true,
+                ..Default::default()
+            },
+            0x48
+        )
+        .is_none());
     }
 }
