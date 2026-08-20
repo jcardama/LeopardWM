@@ -1257,6 +1257,7 @@ fn seed_drag_session(state: &mut AppState, hwnd: u64) {
 fn safe_band_drag_fixture() -> AppState {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
     state.paused = false;
+    state.reduce_motion = false;
     let workspace = state.focused_workspace_mut().unwrap();
     workspace.insert_window(100, Some(800)).unwrap();
     workspace.insert_window(200, Some(800)).unwrap();
@@ -1417,6 +1418,7 @@ fn test_body_preview_shift_transition_restores_before_reorder() {
 fn test_body_preview_shift_restores_multi_window_source_before_same_monitor_reorder() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
     state.paused = false;
+    state.reduce_motion = false;
     {
         let workspace = state.focused_workspace_mut().unwrap();
         workspace.insert_window(100, Some(800)).unwrap();
@@ -1478,6 +1480,7 @@ fn test_body_preview_shift_restores_multi_window_source_before_same_monitor_reor
 fn test_body_preview_shift_restores_multi_window_source_without_reorder() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
     state.paused = false;
+    state.reduce_motion = false;
     {
         let workspace = state.focused_workspace_mut().unwrap();
         workspace.insert_window(100, Some(800)).unwrap();
@@ -1533,6 +1536,7 @@ fn test_body_preview_shift_restores_multi_window_source_without_reorder() {
 fn test_body_preview_shift_restores_multi_window_source_before_cross_monitor_drop() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
     state.paused = false;
+    state.reduce_motion = false;
     {
         let workspace = state.focused_workspace_mut().unwrap();
         workspace.insert_window(100, Some(800)).unwrap();
@@ -1633,6 +1637,7 @@ fn test_body_preview_shift_restores_multi_window_source_before_cross_monitor_dro
 fn test_body_to_safe_band_then_shift_restores_multi_window_source() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
     state.paused = false;
+    state.reduce_motion = false;
     {
         let workspace = state.focused_workspace_mut().unwrap();
         workspace.insert_window(100, Some(800)).unwrap();
@@ -1738,6 +1743,7 @@ fn test_body_to_safe_band_then_shift_restores_multi_window_source() {
 fn test_body_to_no_target_then_cross_monitor_shift_restores_multi_window_source() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
     state.paused = false;
+    state.reduce_motion = false;
     {
         let workspace = state.focused_workspace_mut().unwrap();
         workspace.insert_window(100, Some(800)).unwrap();
@@ -1857,6 +1863,7 @@ fn test_body_to_no_target_then_cross_monitor_shift_restores_multi_window_source(
 fn test_body_preview_shift_restores_same_column_reordered_slot() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
     state.paused = false;
+    state.reduce_motion = false;
     {
         let workspace = state.focused_workspace_mut().unwrap();
         workspace.insert_window(100, Some(800)).unwrap();
@@ -2308,6 +2315,7 @@ fn assert_resize_session_cleared(state: &AppState) {
 
 fn two_managed_windows() -> AppState {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.reduce_motion = false;
     for hwnd in [100, 200] {
         state
             .injected_window_info
