@@ -3099,8 +3099,7 @@ mod tests {
         ws.insert_window(1, Some(400)).unwrap(); // col 0: [A]
         ws.insert_window(2, Some(400)).unwrap(); // col 1: [B]
         ws.insert_window_in_column(3, 1).unwrap(); // col 1: [B, C]
-                                                   // Focus B (idx 0 in col 1)
-        ws.test_set_focus_unchecked(1, 0);
+        ws.test_set_focus_unchecked(1, 0); // Focus B (idx 0 in col 1)
 
         ws.move_window_left();
 
@@ -3145,8 +3144,7 @@ mod tests {
         ws.insert_window(1, Some(400)).unwrap(); // col 0: [A]
         ws.insert_window_in_column(2, 0).unwrap(); // col 0: [A, B]
         ws.insert_window(3, Some(400)).unwrap(); // col 1: [C]
-                                                 // Focus A (idx 0 in col 0)
-        ws.test_set_focus_unchecked(0, 0);
+        ws.test_set_focus_unchecked(0, 0); // Focus A (idx 0 in col 0)
 
         ws.move_window_right();
 
@@ -4032,8 +4030,7 @@ mod tests {
         ws.toggle_focused_column_tabbed_mode();
         ws.set_active_tab(0, 0).unwrap();
         ws.mark_minimized(2); // window at idx 1 minimized
-                              // focus_down from 0 should skip 1 and land on 2.
-        ws.focus_down();
+        ws.focus_down(); // focus_down from 0 should skip 1 and land on 2.
         assert_eq!(ws.focused_window_in_column, 2);
     }
 

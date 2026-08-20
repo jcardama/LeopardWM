@@ -307,9 +307,9 @@ pub fn is_placement_cloaked(window_id: WindowId) -> bool {
     global_cloaked_contains(window_id) || ghost_cloaked_contains(window_id)
 }
 
-/// Drain and uncloak all tracked windows. Called when the placement list
-/// becomes empty (e.g., switching to an empty workspace) so that windows
-/// from the previous call are not left permanently invisible.
+/// Release all placement-owned cloaks and recompute each window's effective
+/// cloak state. An empty animation frame can contain only ghost-managed windows,
+/// which must remain cloaked until their ghost transition finishes.
 fn uncloak_all_tracked() {
     let ids: Vec<WindowId> = {
         let mut guard = lock_cloaked();
@@ -319,9 +319,7 @@ fn uncloak_all_tracked() {
         }
     };
     for wid in ids {
-        if let Ok(hwnd) = window_id_to_hwnd(wid) {
-            unsafe { dwm_set_cloak(hwnd, false) };
-        }
+        apply_cloak_state(wid);
     }
 }
 
@@ -1646,32 +1644,7 @@ pub fn get_window_invisible_insets(window_id: WindowId) -> (i32, i32, i32, i32) 
 ///
 /// Returns (left, top, right, bottom) insets to subtract/add to the target rect.
 pub(crate) fn invisible_border_insets(hwnd: HWND) -> (i32, i32, i32, i32) {
-    unsafe {
-        let mut frame_rect = RECT::default();
-        if GetWindowRect(hwnd, &mut frame_rect).is_err() {
-            return (0, 0, 0, 0);
-        }
-
-        let mut extended_rect = RECT::default();
-        if DwmGetWindowAttribute(
-            hwnd,
-            DWMWA_EXTENDED_FRAME_BOUNDS,
-            &mut extended_rect as *mut RECT as *mut _,
-            std::mem::size_of::<RECT>() as u32,
-        )
-        .is_err()
-        {
-            return (0, 0, 0, 0);
-        }
-
-        // Insets = how much the frame rect extends beyond the visible area
-        let left = extended_rect.left - frame_rect.left;
-        let top = extended_rect.top - frame_rect.top;
-        let right = frame_rect.right - extended_rect.right;
-        let bottom = frame_rect.bottom - extended_rect.bottom;
-
-        (left.max(0), top.max(0), right.max(0), bottom.max(0))
-    }
+    query_window_frame_insets(hwnd).unwrap_or((0, 0, 0, 0))
 }
 
 #[cfg(test)]
@@ -1720,6 +1693,22 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn test_frame_insets_enforce_maximum_delta() {
+        let maximum = MAX_INVISIBLE_FRAME_INSET as i32;
+        let visible = Rect::new(100 + maximum, 100 + maximum, 800, 700);
+        let frame = Rect::new(100, 100, 800 + maximum * 2, 700 + maximum * 2);
+        assert_eq!(
+            frame_insets_from_rects(frame, visible),
+            Some((maximum, maximum, maximum, maximum))
+        );
+
+        let above_maximum = maximum + 1;
+        let visible = Rect::new(100 + above_maximum, 100 + above_maximum, 800, 700);
+        let frame = Rect::new(100, 100, 800 + above_maximum * 2, 700 + above_maximum * 2);
+        assert_eq!(frame_insets_from_rects(frame, visible), None);
     }
 
     #[test]
