@@ -2043,14 +2043,6 @@ function validateRuleColumnWidth(tr) {
   return valid;
 }
 
-function validateRuleColumnWidths() {
-  var valid = true;
-  document.querySelectorAll('#rules-body tr').forEach(function(tr) {
-    if (!validateRuleColumnWidth(tr)) valid = false;
-  });
-  return valid;
-}
-
 /* Build the compact "WS5 · Col1 · Sticky" summary on the Options button. */
 function updateRuleSummary(tr) {
   var parts = [];
@@ -2332,7 +2324,6 @@ wrapAllInputs();
 var _saveTimer = null;
 function autoSave(delay) {
   clearTimeout(_saveTimer);
-  if (!validateRuleColumnWidths()) return;
   _saveTimer = setTimeout(function() {
     window.ipc.postMessage(JSON.stringify({ action: 'save', config: readConfig() }));
   }, delay || 0);
@@ -2430,7 +2421,10 @@ mod tests {
         assert!(SETTINGS_HTML.contains("delete r.column_width;"));
         assert!(SETTINGS_HTML.contains("r.column_width = columnWidth;"));
         assert!(SETTINGS_HTML.contains("Number.isFinite(width) && width >= 0.05 && width <= 1.0"));
-        assert!(SETTINGS_HTML.contains("if (!validateRuleColumnWidths()) return;"));
+        assert!(SETTINGS_HTML.contains("Enter a finite fraction from 0.05 to 1.0"));
+        assert!(!SETTINGS_HTML.contains("validateRuleColumnWidths"));
+        assert!(SETTINGS_HTML
+            .contains("function autoSave(delay) {\n  clearTimeout(_saveTimer);\n  _saveTimer"));
         assert!(SETTINGS_HTML.contains("Object.assign({}, tr._rule || {})"));
     }
 }
