@@ -57,7 +57,20 @@ fn clamp_to_work_area(size: (i32, i32), work_area: RECT) -> (i32, i32) {
     )
 }
 
-unsafe fn window_size_for_monitor(hwnd: HWND, logical_size: (i32, i32)) -> (i32, i32) {
+fn fit_window_to_work_area(size: (i32, i32), work_area: RECT) -> (i32, i32, i32, i32) {
+    let (width, height) = clamp_to_work_area(size, work_area);
+    (
+        work_area.left + (work_area.right - work_area.left - width) / 2,
+        work_area.top + (work_area.bottom - work_area.top - height) / 2,
+        width,
+        height,
+    )
+}
+
+unsafe fn window_size_and_work_area(
+    hwnd: HWND,
+    logical_size: (i32, i32),
+) -> ((i32, i32), Option<RECT>) {
     let dpi = GetDpiForWindow(hwnd);
     let size = (
         scale_for_dpi(logical_size.0, dpi),
@@ -69,9 +82,10 @@ unsafe fn window_size_for_monitor(hwnd: HWND, logical_size: (i32, i32)) -> (i32,
         ..Default::default()
     };
     if GetMonitorInfoW(monitor, &mut monitor_info as *mut _).as_bool() {
-        clamp_to_work_area(size, monitor_info.rcWork)
+        let work_area = monitor_info.rcWork;
+        (clamp_to_work_area(size, work_area), Some(work_area))
     } else {
-        size
+        (size, None)
     }
 }
 
@@ -186,7 +200,7 @@ pub fn run_settings_window(
             WINDOW_EX_STYLE::default(),
             class_name,
             w!("LeopardWM Settings"),
-            WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+            WS_OVERLAPPEDWINDOW,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
             DEFAULT_WINDOW_WIDTH,
@@ -196,17 +210,22 @@ pub fn run_settings_window(
             Some(hinstance.into()),
             None,
         )?;
-        let (width, height) =
-            window_size_for_monitor(hwnd, (DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT));
-        let _ = SetWindowPos(
-            hwnd,
-            None,
-            0,
-            0,
-            width,
-            height,
-            SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
-        );
+        let (size, work_area) =
+            window_size_and_work_area(hwnd, (DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT));
+        let (x, y, width, height, flags) = match work_area {
+            Some(work_area) => {
+                let (x, y, width, height) = fit_window_to_work_area(size, work_area);
+                (x, y, width, height, SWP_NOZORDER | SWP_NOACTIVATE)
+            }
+            None => (
+                0,
+                0,
+                size.0,
+                size.1,
+                SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
+            ),
+        };
+        let _ = SetWindowPos(hwnd, None, x, y, width, height, flags);
 
         // Expose this thread's id so the daemon can push live updates to the
         // window's message queue (see push_failed_binds).
@@ -451,8 +470,8 @@ unsafe extern "system" fn wndproc(
     match message {
         WM_GETMINMAXINFO => {
             let minmax = &mut *(lparam.0 as *mut MINMAXINFO);
-            let (width, height) =
-                window_size_for_monitor(hwnd, (MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT));
+            let ((width, height), _) =
+                window_size_and_work_area(hwnd, (MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT));
             minmax.ptMinTrackSize.x = width;
             minmax.ptMinTrackSize.y = height;
             LRESULT(0)
@@ -563,6 +582,24 @@ mod tests {
         };
         assert_eq!(clamp_to_work_area((2000, 1200), work_area), (1280, 720));
         assert_eq!(clamp_to_work_area((1000, 600), work_area), (1000, 600));
+    }
+
+    #[test]
+    fn fitted_window_is_centered_within_work_area() {
+        let work_area = RECT {
+            left: -1920,
+            top: 0,
+            right: 0,
+            bottom: 1080,
+        };
+        assert_eq!(
+            fit_window_to_work_area((1600, 900), work_area),
+            (-1760, 90, 1600, 900)
+        );
+        assert_eq!(
+            fit_window_to_work_area((2400, 1200), work_area),
+            (-1920, 0, 1920, 1080)
+        );
     }
 
     #[test]
