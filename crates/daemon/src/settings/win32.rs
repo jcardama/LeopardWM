@@ -20,6 +20,7 @@ use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Controls::MARGINS;
+use windows::Win32::UI::HiDpi::{GetDpiForSystem, GetDpiForWindow};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use raw_window_handle::{
@@ -40,8 +41,14 @@ const DWMWA_SYSTEMBACKDROP_TYPE_VAL: i32 = 38;
 const DWMWCP_ROUND: u32 = 2;
 const DWMSBT_MAINWINDOW: u32 = 2; // Mica
 
-const WINDOW_WIDTH: i32 = 780;
-const WINDOW_HEIGHT: i32 = 560;
+const DEFAULT_WINDOW_WIDTH: i32 = 1000;
+const DEFAULT_WINDOW_HEIGHT: i32 = 720;
+const MIN_WINDOW_WIDTH: i32 = 800;
+const MIN_WINDOW_HEIGHT: i32 = 600;
+
+fn scale_for_dpi(logical_pixels: i32, dpi: u32) -> i32 {
+    logical_pixels * dpi as i32 / 96
+}
 
 // Dark mode background (COLORREF = 0x00BBGGRR)
 const DARK_BG: u32 = 0x00202020;
@@ -154,11 +161,11 @@ pub fn run_settings_window(
             WINDOW_EX_STYLE::default(),
             class_name,
             w!("LeopardWM Settings"),
-            WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
+            WS_OVERLAPPEDWINDOW,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
-            WINDOW_WIDTH,
-            WINDOW_HEIGHT,
+            scale_for_dpi(DEFAULT_WINDOW_WIDTH, GetDpiForSystem()),
+            scale_for_dpi(DEFAULT_WINDOW_HEIGHT, GetDpiForSystem()),
             None,
             None,
             Some(hinstance.into()),
@@ -406,6 +413,13 @@ unsafe extern "system" fn wndproc(
     lparam: LPARAM,
 ) -> LRESULT {
     match message {
+        WM_GETMINMAXINFO => {
+            let minmax = &mut *(lparam.0 as *mut MINMAXINFO);
+            let dpi = GetDpiForWindow(hwnd);
+            minmax.ptMinTrackSize.x = scale_for_dpi(MIN_WINDOW_WIDTH, dpi);
+            minmax.ptMinTrackSize.y = scale_for_dpi(MIN_WINDOW_HEIGHT, dpi);
+            LRESULT(0)
+        }
         WM_ERASEBKGND => {
             // Paint black — DWM treats black in the extended frame as transparent,
             // letting the Mica backdrop show through.
@@ -494,6 +508,13 @@ unsafe fn apply_win11_theming(hwnd: HWND, dark: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn window_sizes_scale_from_96_dpi_logical_pixels() {
+        assert_eq!(scale_for_dpi(DEFAULT_WINDOW_WIDTH, 96), 1000);
+        assert_eq!(scale_for_dpi(DEFAULT_WINDOW_WIDTH, 120), 1250);
+        assert_eq!(scale_for_dpi(MIN_WINDOW_HEIGHT, 144), 900);
+    }
 
     #[test]
     fn allowed_urls_include_settings_links_and_mixed_case_schemes() {
