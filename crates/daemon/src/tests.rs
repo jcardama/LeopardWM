@@ -6468,6 +6468,32 @@ fn test_created_event_with_injected_window_info() {
 }
 
 #[test]
+fn test_created_event_applies_rule_column_width_fraction() {
+    let mut config = test_config();
+    config.window_rules = vec![crate::config::WindowRule {
+        match_class: Some("TestWindowClass".to_string()),
+        column_width: Some(0.5),
+        ..crate::config::WindowRule::default()
+    }];
+    let mut state = AppState::new_with_config(config, test_monitors());
+    let monitor = state.focused_monitor;
+    let viewport_width = state.viewport_width_for(monitor);
+    state
+        .injected_window_info
+        .insert(100, make_test_window_info(100));
+
+    state.handle_window_event(WindowEvent::Created(100));
+
+    let ws = state.focused_workspace().unwrap();
+    assert_eq!(ws.window_count(), 1);
+    assert_eq!(
+        ws.columns()[0].width(),
+        ((0.5 * f64::from(viewport_width)).round() as i32).max(100),
+        "Created-event rule width uses the viewport fraction"
+    );
+}
+
+#[test]
 fn test_created_event_focus_new_windows_false_preserves_focus() {
     let mut config = test_config();
     config.behavior.focus_new_windows = false;

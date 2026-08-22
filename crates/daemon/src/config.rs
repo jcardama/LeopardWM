@@ -2298,6 +2298,40 @@ mod tests {
         assert_eq!(config.window_rules[1].height, Some(800));
     }
 
+    #[test]
+    fn test_window_rule_column_width_deserializes_settings_payload() {
+        let with_width: WindowRule = serde_json::from_value(serde_json::json!({
+            "match_executable": "editor.exe",
+            "column_width": 0.5,
+        }))
+        .unwrap();
+        assert_eq!(with_width.column_width, Some(0.5));
+
+        let cleared: WindowRule = serde_json::from_value(serde_json::json!({
+            "match_executable": "editor.exe",
+        }))
+        .unwrap();
+        assert_eq!(cleared.column_width, None);
+    }
+
+    #[test]
+    fn test_window_rule_column_width_compilation_rejects_invalid_values() {
+        fn compiled_width(width: f64) -> Option<f64> {
+            let mut config = Config::default();
+            config.window_rules = vec![WindowRule {
+                column_width: Some(width),
+                ..WindowRule::default()
+            }];
+            config.compile_window_rules()[0].column_width
+        }
+
+        assert_eq!(compiled_width(0.05), Some(0.05));
+        assert_eq!(compiled_width(1.0), Some(1.0));
+        for invalid in [0.049, 1.001, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(compiled_width(invalid), None);
+        }
+    }
+
     // =========================================================================
     // Config Validation Tests
     // =========================================================================

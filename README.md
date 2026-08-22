@@ -342,7 +342,7 @@ match_class = "MozillaDialogClass"
 corner_style = "square"  # also: "rounded" | "small_rounded"
 ```
 
-The `MozillaDialogClass` → `square` rule ships in the default config as a working example. Open **Settings → Window rules** and use the **Corners** column (`Auto` / `Square` / `Rounded` / `Small rounded`) to edit, remove, or add new rules for other apps.
+The `MozillaDialogClass` → `square` rule ships in the default config as a working example. Open **Settings → Window rules**, then use a rule’s **Options** menu to edit corners (`Auto` / `Square` / `Rounded` / `Small rounded`), placement, or its initial **Column width**. Column width is a viewport fraction from `0.05` to `1.0`; leave it blank for the default width.
 
 ## Support
 

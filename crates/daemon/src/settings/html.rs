@@ -587,6 +587,13 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 2px; }
   padding: 3px 8px;
   text-align: center;
 }
+.rule-column-width[aria-invalid="true"] { border-color: var(--danger); }
+.rule-column-width-error {
+  padding: 0 12px 6px;
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 16px;
+}
 .menu-sub {
   display: none;
   position: absolute;
@@ -1953,8 +1960,8 @@ function resetHotkeys() {
 function addRuleRow(r) {
   var tbody = document.getElementById('rules-body');
   var tr = document.createElement('tr');
-  /* Keep the original rule object so fields without a table column
-     (width, height, column_width, future keys) survive a settings save. */
+  /* Keep the original rule object so fields without a control
+     (width, height, future keys) survive a settings save. */
   tr._rule = r || {};
   var action = r.action || 'tile';
   var actionLabel = action.charAt(0).toUpperCase() + action.slice(1);
@@ -1974,6 +1981,7 @@ function addRuleRow(r) {
     return '<div class="menu-radio' + (w === ws ? ' selected' : '') + '" data-value="' + w + '">' + (w === '' ? 'None' : w) + '</div>';
   }).join('');
   var slot = (r.open_in_column >= 1) ? String(r.open_in_column) : '';
+  var columnWidth = r.column_width != null ? String(r.column_width) : '';
   tr.innerHTML =
     '<td><input type="text" class="rule-class" value="' + escAttr(r.match_class||'') + '" placeholder="regex"></td>' +
     '<td><input type="text" class="rule-title" value="' + escAttr(r.match_title||'') + '" placeholder="regex"></td>' +
@@ -1990,6 +1998,9 @@ function addRuleRow(r) {
           '<div class="menu-sub">' + wsRadios + '</div></div>' +
         '<div class="menu-item input-row"><span class="menu-label">Open in column</span>' +
           '<input type="number" min="1" class="rule-slot opt-num" placeholder="-" value="' + slot + '"></div>' +
+        '<div class="menu-item input-row"><span class="menu-label">Column width</span>' +
+          '<input type="number" min="0.05" max="1" step="any" class="rule-column-width opt-num" placeholder="Auto" value="' + escAttr(columnWidth) + '"></div>' +
+        '<div class="rule-column-width-error" role="alert" aria-live="polite" hidden></div>' +
         '<div class="menu-sep"></div>' +
         '<div class="menu-item menu-toggle rule-maximized' + (r.open_maximized ? ' checked' : '') + '"><span class="menu-label">Maximize on open</span></div>' +
         '<div class="menu-item menu-toggle rule-sticky' + (r.sticky ? ' checked' : '') + '"><span class="menu-label">Sticky (follows workspaces)</span></div>' +
@@ -2002,10 +2013,42 @@ function addRuleRow(r) {
     '<td><button class="row-delete" onclick="this.closest(\'tr\').remove();autoSave(0)">' + deleteIcon + '</button></td>';
   tbody.appendChild(tr);
   wrapAllInputs(tr);
-  tr.querySelectorAll('input').forEach(function(el) { el.addEventListener('input', function() { autoSave(500); }); });
+  tr.querySelectorAll('input').forEach(function(el) {
+    el.addEventListener('input', function() {
+      validateRuleColumnWidth(tr);
+      autoSave(500);
+    });
+  });
   tr.querySelectorAll('.combobox').forEach(function(cb) { initCombobox(cb); });
   initRuleOptions(tr);
+  validateRuleColumnWidth(tr);
   updateRuleSummary(tr);
+}
+
+function validateRuleColumnWidth(tr) {
+  var input = tr.querySelector('.rule-column-width');
+  if (!input) return true;
+  var error = tr.querySelector('.rule-column-width-error');
+  var raw = input.value.trim();
+  var width = Number(raw);
+  var valid = !input.validity.badInput &&
+    (raw === '' || (Number.isFinite(width) && width >= 0.05 && width <= 1.0));
+  var message = valid ? '' : 'Enter a finite fraction from 0.05 to 1.0, or leave this blank.';
+  input.setCustomValidity(message);
+  input.setAttribute('aria-invalid', String(!valid));
+  if (error) {
+    error.textContent = message;
+    error.hidden = valid;
+  }
+  return valid;
+}
+
+function validateRuleColumnWidths() {
+  var valid = true;
+  document.querySelectorAll('#rules-body tr').forEach(function(tr) {
+    if (!validateRuleColumnWidth(tr)) valid = false;
+  });
+  return valid;
 }
 
 /* Build the compact "WS5 · Col1 · Sticky" summary on the Options button. */
@@ -2237,13 +2280,13 @@ function readScrollModifier() {
 function readRules() {
   var rules = [];
   document.querySelectorAll('#rules-body tr').forEach(function(tr) {
-    /* Start from the stashed original so fields without a table column
-       (width, height, column_width, future keys) are preserved; the
-       displayed fields are then re-read from the inputs. */
+    /* Start from the stashed original so fields without a control
+       (width, height, future keys) are preserved; the displayed fields
+       are then re-read from the inputs. */
     var r = Object.assign({}, tr._rule || {});
     delete r.match_class; delete r.match_title; delete r.match_executable;
     delete r.corner_style; delete r.open_on_workspace; delete r.open_maximized;
-    delete r.open_in_column; delete r.sticky;
+    delete r.column_width; delete r.open_in_column; delete r.sticky;
     var cls = tr.querySelector('.rule-class').value.trim();
     var title = tr.querySelector('.rule-title').value.trim();
     var exe = tr.querySelector('.rule-exe').value.trim();
@@ -2262,6 +2305,10 @@ function readRules() {
     var slotEl = tr.querySelector('.rule-slot');
     var slotv = slotEl ? parseInt(slotEl.value, 10) : NaN;
     if (slotv >= 1) r.open_in_column = slotv;
+    var columnWidthEl = tr.querySelector('.rule-column-width');
+    var columnWidth = columnWidthEl ? Number(columnWidthEl.value.trim()) : NaN;
+    if (columnWidthEl && columnWidthEl.value.trim() && Number.isFinite(columnWidth) &&
+        columnWidth >= 0.05 && columnWidth <= 1.0) r.column_width = columnWidth;
     if (tr.querySelector('.rule-sticky').classList.contains('checked')) r.sticky = true;
     if (cls || title || exe) rules.push(r);
   });
@@ -2285,6 +2332,7 @@ wrapAllInputs();
 var _saveTimer = null;
 function autoSave(delay) {
   clearTimeout(_saveTimer);
+  if (!validateRuleColumnWidths()) return;
   _saveTimer = setTimeout(function() {
     window.ipc.postMessage(JSON.stringify({ action: 'save', config: readConfig() }));
   }, delay || 0);
@@ -2371,5 +2419,18 @@ mod tests {
         assert!(SETTINGS_HTML.contains("return el ? (el.dataset.value || '') : '';"));
         assert!(SETTINGS_HTML.contains("swipe_left: cbVal('cb-gestures-swipe_left')"));
         assert!(SETTINGS_HTML.contains("scroll_down: cbVal('cb-gestures-scroll_down')"));
+    }
+
+    #[test]
+    fn window_rule_column_width_roundtrip_is_validated() {
+        assert!(SETTINGS_HTML.contains("class=\"rule-column-width opt-num\" placeholder=\"Auto\""));
+        assert!(SETTINGS_HTML.contains("min=\"0.05\" max=\"1\" step=\"any\""));
+        assert!(SETTINGS_HTML
+            .contains("var columnWidth = r.column_width != null ? String(r.column_width) : '';"));
+        assert!(SETTINGS_HTML.contains("delete r.column_width;"));
+        assert!(SETTINGS_HTML.contains("r.column_width = columnWidth;"));
+        assert!(SETTINGS_HTML.contains("Number.isFinite(width) && width >= 0.05 && width <= 1.0"));
+        assert!(SETTINGS_HTML.contains("if (!validateRuleColumnWidths()) return;"));
+        assert!(SETTINGS_HTML.contains("Object.assign({}, tr._rule || {})"));
     }
 }
