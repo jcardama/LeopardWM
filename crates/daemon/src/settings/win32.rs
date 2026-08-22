@@ -20,7 +20,7 @@ use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Controls::MARGINS;
-use windows::Win32::UI::HiDpi::{GetDpiForSystem, GetDpiForWindow};
+use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use raw_window_handle::{
@@ -48,6 +48,31 @@ const MIN_WINDOW_HEIGHT: i32 = 600;
 
 fn scale_for_dpi(logical_pixels: i32, dpi: u32) -> i32 {
     logical_pixels * dpi as i32 / 96
+}
+
+fn clamp_to_work_area(size: (i32, i32), work_area: RECT) -> (i32, i32) {
+    (
+        size.0.min(work_area.right - work_area.left),
+        size.1.min(work_area.bottom - work_area.top),
+    )
+}
+
+unsafe fn window_size_for_monitor(hwnd: HWND, logical_size: (i32, i32)) -> (i32, i32) {
+    let dpi = GetDpiForWindow(hwnd);
+    let size = (
+        scale_for_dpi(logical_size.0, dpi),
+        scale_for_dpi(logical_size.1, dpi),
+    );
+    let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+    let mut monitor_info = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    if GetMonitorInfoW(monitor, &mut monitor_info as *mut _).as_bool() {
+        clamp_to_work_area(size, monitor_info.rcWork)
+    } else {
+        size
+    }
 }
 
 // Dark mode background (COLORREF = 0x00BBGGRR)
@@ -161,16 +186,27 @@ pub fn run_settings_window(
             WINDOW_EX_STYLE::default(),
             class_name,
             w!("LeopardWM Settings"),
-            WS_OVERLAPPEDWINDOW,
+            WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
-            scale_for_dpi(DEFAULT_WINDOW_WIDTH, GetDpiForSystem()),
-            scale_for_dpi(DEFAULT_WINDOW_HEIGHT, GetDpiForSystem()),
+            DEFAULT_WINDOW_WIDTH,
+            DEFAULT_WINDOW_HEIGHT,
             None,
             None,
             Some(hinstance.into()),
             None,
         )?;
+        let (width, height) =
+            window_size_for_monitor(hwnd, (DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT));
+        let _ = SetWindowPos(
+            hwnd,
+            None,
+            0,
+            0,
+            width,
+            height,
+            SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
+        );
 
         // Expose this thread's id so the daemon can push live updates to the
         // window's message queue (see push_failed_binds).
@@ -415,9 +451,10 @@ unsafe extern "system" fn wndproc(
     match message {
         WM_GETMINMAXINFO => {
             let minmax = &mut *(lparam.0 as *mut MINMAXINFO);
-            let dpi = GetDpiForWindow(hwnd);
-            minmax.ptMinTrackSize.x = scale_for_dpi(MIN_WINDOW_WIDTH, dpi);
-            minmax.ptMinTrackSize.y = scale_for_dpi(MIN_WINDOW_HEIGHT, dpi);
+            let (width, height) =
+                window_size_for_monitor(hwnd, (MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT));
+            minmax.ptMinTrackSize.x = width;
+            minmax.ptMinTrackSize.y = height;
             LRESULT(0)
         }
         WM_ERASEBKGND => {
@@ -514,6 +551,18 @@ mod tests {
         assert_eq!(scale_for_dpi(DEFAULT_WINDOW_WIDTH, 96), 1000);
         assert_eq!(scale_for_dpi(DEFAULT_WINDOW_WIDTH, 120), 1250);
         assert_eq!(scale_for_dpi(MIN_WINDOW_HEIGHT, 144), 900);
+    }
+
+    #[test]
+    fn window_sizes_do_not_exceed_monitor_work_area() {
+        let work_area = RECT {
+            left: 0,
+            top: 0,
+            right: 1280,
+            bottom: 720,
+        };
+        assert_eq!(clamp_to_work_area((2000, 1200), work_area), (1280, 720));
+        assert_eq!(clamp_to_work_area((1000, 600), work_area), (1000, 600));
     }
 
     #[test]
