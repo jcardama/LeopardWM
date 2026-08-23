@@ -7965,6 +7965,26 @@ fn test_scratchpad_direct_frame_rect_uses_only_recorded_insets() {
 }
 
 #[test]
+fn test_scratchpad_default_dimensions_follow_work_area() {
+    assert_eq!(
+        crate::scratchpad::scratchpad_default_dimensions(Rect::new(0, 0, 1920, 1040)),
+        (960, 624)
+    );
+    assert_eq!(
+        crate::scratchpad::scratchpad_default_dimensions(Rect::new(0, 0, 2880, 1710)),
+        (1440, 1026)
+    );
+    assert_eq!(
+        crate::scratchpad::scratchpad_default_dimensions(Rect::new(0, 0, 300, 200)),
+        (200, 150)
+    );
+    assert_eq!(
+        crate::scratchpad::scratchpad_default_dimensions(Rect::new(0, 0, 199, 149)),
+        (199, 149)
+    );
+}
+
+#[test]
 fn test_scratchpad_toggle_summons_then_hides() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
     state
@@ -7974,7 +7994,7 @@ fn test_scratchpad_toggle_summons_then_hides() {
         .unwrap();
     state.scratchpad_stash();
 
-    // First summon: floating + shown at the existing centered default.
+    // First summon: floating + shown at the centered work-area default.
     state.scratchpad_toggle();
     assert!(state.scratchpad.unwrap().shown);
     assert!(state.scratchpad.unwrap().saved_rect.is_none());
@@ -7985,7 +8005,7 @@ fn test_scratchpad_toggle_summons_then_hides() {
         .iter()
         .find(|floating| floating.id == 100)
         .expect("summoned scratchpad is floating");
-    assert_eq!(floating.rect, Rect::new(510, 220, 900, 600));
+    assert_eq!(floating.rect, Rect::new(480, 208, 960, 624));
 
     // Hide: removed + not shown.
     state.scratchpad_toggle();
@@ -8156,7 +8176,7 @@ fn test_scratchpad_nonpositive_saved_geometry_uses_safe_size() {
         .iter()
         .find(|floating| floating.id == 100)
         .expect("scratchpad with invalid saved size is summoned");
-    assert_eq!(floating.rect, Rect::new(120, 100, 900, 600));
+    assert_eq!(floating.rect, Rect::new(120, 100, 960, 624));
 }
 
 #[test]

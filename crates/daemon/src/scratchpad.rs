@@ -17,6 +17,15 @@ fn valid_scratchpad_rect(rect: Rect) -> bool {
     rect.width > 0 && rect.height > 0
 }
 
+pub(crate) fn scratchpad_default_dimensions(work_area: Rect) -> (i32, i32) {
+    let max_width = work_area.width.max(1);
+    let max_height = work_area.height.max(1);
+    (
+        (max_width / 2).max(200).min(max_width),
+        (max_height * 3 / 5).max(150).min(max_height),
+    )
+}
+
 pub(crate) fn scratchpad_direct_frame_rect(
     rect: Rect,
     frame_insets: Option<FrameInsets>,
@@ -120,17 +129,29 @@ impl AppState {
         Rect::new(wa.x + (wa.width - w) / 2, wa.y + (wa.height - h) / 2, w, h)
     }
 
+    fn centered_scratchpad_rect(&self) -> Rect {
+        let wa = self.focused_viewport();
+        let (width, height) = scratchpad_default_dimensions(wa);
+        Rect::new(
+            wa.x + (wa.width - width) / 2,
+            wa.y + (wa.height - height) / 2,
+            width,
+            height,
+        )
+    }
+
     fn clamp_scratchpad_rect(&self, rect: Rect) -> Rect {
         let wa = self.focused_viewport();
+        let (default_width, default_height) = scratchpad_default_dimensions(wa);
         let width = if rect.width > 0 {
             rect.width.min(wa.width.max(1))
         } else {
-            900.min(wa.width.max(1))
+            default_width
         };
         let height = if rect.height > 0 {
             rect.height.min(wa.height.max(1))
         } else {
-            600.min(wa.height.max(1))
+            default_height
         };
         let max_x = (wa.right() - width).max(wa.x);
         let max_y = (wa.bottom() - height).max(wa.y);
@@ -457,7 +478,7 @@ impl AppState {
             let rect = state
                 .saved_rect
                 .map(|rect| self.clamp_scratchpad_rect(rect))
-                .unwrap_or_else(|| self.centered_float_rect());
+                .unwrap_or_else(|| self.centered_scratchpad_rect());
             if self.scratchpad_show(state.window_id, rect, state.frame_insets) {
                 self.scratchpad = Some(ScratchpadState {
                     shown: true,
