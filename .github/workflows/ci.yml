@@ -10,5 +10,8 @@ jobs:
       - name: Verify GUI executable subsystems
         shell: pwsh
         run: ./.github/verify-gui-subsystems.ps1
+      - name: Verify Scoop manifest
+        shell: pwsh
+        run: ./.github/verify-scoop-manifest.ps1
       - run: cargo test --all
       - run: cargo clippy --all -- -D warnings
