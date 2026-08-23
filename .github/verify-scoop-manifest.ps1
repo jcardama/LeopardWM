@@ -57,6 +57,7 @@ $hash = [string]$manifest.architecture.'64bit'.hash
 if ($hash -notmatch '^[0-9a-fA-F]{64}$') {
     throw "architecture.64bit.hash must be a 64-character hexadecimal SHA256; found '$hash'."
 }
+Assert-Equal "checkver" "github" $manifest.checkver
 Assert-Equal "autoupdate.architecture.64bit.url" $expectedAutoupdateUrl $manifest.autoupdate.architecture.'64bit'.url
 Assert-Equal "autoupdate.architecture.64bit.extract_dir" $expectedAutoupdateExtractDir $manifest.autoupdate.architecture.'64bit'.extract_dir
 
