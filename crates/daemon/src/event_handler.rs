@@ -627,13 +627,13 @@ impl AppState {
                 return;
             }
 
-            // New windows open on the focused monitor — the active monitor
-            // follows the focused window (see on_window_focused), so a new
-            // window lands where the user is working rather than wherever
-            // the app happened to spawn it (which often defaults to another
-            // monitor). A per-app rule's open_on_workspace can still
-            // redirect it below.
-            let monitor_id = self.focused_monitor;
+            // New windows belong to the monitor where Windows opened them.
+            // A per-app rule's open_on_workspace can still redirect them
+            // within that monitor below.
+            let monitors: Vec<_> = self.monitors.values().cloned().collect();
+            let monitor_id = find_monitor_for_rect(&monitors, &win_info.rect)
+                .map(|m| m.id)
+                .unwrap_or(self.focused_monitor);
 
             // Get floating rect before borrowing workspace mutably
             let floating_rect = if action == config::WindowAction::Float {
@@ -825,7 +825,9 @@ impl AppState {
                     // is tiled-and-active only.)
                     let keep_fullscreen_on_top =
                         if matches!(action, config::WindowAction::Tile) && !opens_in_background {
-                            self.focused_workspace()
+                            self.workspaces
+                                .get(&monitor_id)
+                                .and_then(|workspaces| workspaces.get(active_idx))
                                 .filter(|ws| ws.is_fullscreen())
                                 .and_then(|ws| ws.fullscreen_window_id())
                                 .filter(|&fs| fs != hwnd)
@@ -842,7 +844,18 @@ impl AppState {
                         self.sync_foreground_window();
                     }
                     if let Some(fs_wid) = keep_fullscreen_on_top {
-                        self.reassert_fullscreen_focus(fs_wid);
+                        if self.config.behavior.focus_new_windows
+                            || monitor_id == self.focused_monitor
+                        {
+                            self.reassert_fullscreen_focus(fs_wid);
+                        } else if let Err(e) =
+                            leopardwm_platform_win32::raise_window_no_activate(fs_wid)
+                        {
+                            debug!(
+                                "Could not raise fullscreen window {} without activation: {:?}",
+                                fs_wid, e
+                            );
+                        }
                     }
                 } else {
                     debug!("Failed to add window {} to workspace", hwnd);

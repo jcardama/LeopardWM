@@ -7,7 +7,8 @@ use windows::Win32::Foundation::RECT;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::WindowsAndMessaging::{
     BringWindowToTop, GetForegroundWindow, GetWindowRect, GetWindowThreadProcessId, IsIconic,
-    IsWindow, PostMessageW, SetCursorPos, SetForegroundWindow, ShowWindow, SW_RESTORE,
+    IsWindow, PostMessageW, SetCursorPos, SetForegroundWindow, SetWindowPos, ShowWindow, HWND_TOP,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_RESTORE,
 };
 
 /// The current OS foreground window as a `WindowId`, if any. This is
@@ -186,6 +187,32 @@ pub fn set_foreground_window(hwnd: WindowId) -> Result<bool, Win32Error> {
     }
 }
 
+/// Raise a window within the normal z-order band without activating it.
+pub fn raise_window_no_activate(window_id: WindowId) -> Result<(), Win32Error> {
+    let hwnd = window_id_to_hwnd(window_id)?;
+    unsafe {
+        if !IsWindow(Some(hwnd)).as_bool() {
+            return Err(Win32Error::WindowNotFound(window_id));
+        }
+        SetWindowPos(
+            hwnd,
+            Some(HWND_TOP),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        )
+        .map_err(|e| {
+            Win32Error::SetPositionFailed(format!(
+                "Failed to raise window {} without activation: {}",
+                window_id, e
+            ))
+        })?;
+    }
+    Ok(())
+}
+
 /// Close a window by posting WM_CLOSE.
 ///
 /// This is a graceful close that allows the application to handle cleanup.
@@ -220,6 +247,23 @@ mod tests {
     #[test]
     fn test_set_foreground_window_invalid_hwnd_fails() {
         let result = set_foreground_window(u64::MAX);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            Win32Error::WindowNotFound(u64::MAX)
+        ));
+    }
+
+    #[test]
+    fn test_raise_window_no_activate_zero_fails() {
+        let result = raise_window_no_activate(0);
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), Win32Error::WindowNotFound(0)));
+    }
+
+    #[test]
+    fn test_raise_window_no_activate_invalid_hwnd_fails() {
+        let result = raise_window_no_activate(u64::MAX);
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),

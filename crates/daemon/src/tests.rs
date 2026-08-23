@@ -6468,6 +6468,33 @@ fn test_created_event_with_injected_window_info() {
 }
 
 #[test]
+fn test_created_event_uses_opening_monitor() {
+    let mut state = AppState::new_with_config(test_config(), two_monitors());
+    state.focused_monitor = 1;
+
+    let mut info = make_test_window_info(100);
+    info.rect = Rect::new(2200, 100, 800, 600);
+    state.injected_window_info.insert(100, info);
+
+    state.handle_window_event(WindowEvent::Created(100));
+
+    let opening_monitor = 2;
+    let opening_workspace = state.active_workspace_idx(opening_monitor);
+    assert!(
+        state.workspaces[&opening_monitor][opening_workspace].contains_window(100),
+        "window belongs to the active workspace on the monitor where it opened"
+    );
+    assert!(
+        !state.workspaces[&1][state.active_workspace_idx(1)].contains_window(100),
+        "window does not inherit the previously focused monitor"
+    );
+    assert_eq!(
+        state.focused_monitor, opening_monitor,
+        "focus_new_windows focuses the monitor where the window opened"
+    );
+}
+
+#[test]
 fn test_created_event_applies_rule_column_width_fraction() {
     let mut config = test_config();
     config.window_rules = vec![crate::config::WindowRule {
@@ -6910,6 +6937,98 @@ fn test_try_edit_config_pull_matches_editor_by_title() {
     assert!(state.workspaces[&mon][0].contains_window(200));
     assert!(!state.workspaces[&mon][1].contains_window(200));
     assert!(state.pending_edit_config_pull.is_none());
+}
+
+#[test]
+fn test_created_event_on_other_monitor_ignores_fullscreen_on_focused_monitor() {
+    let mut config = test_config();
+    config.behavior.focus_new_windows = false;
+    let mut state = AppState::new_with_config(config, two_monitors());
+
+    state.workspaces.get_mut(&1).unwrap()[0]
+        .insert_window(100, None)
+        .unwrap();
+    state.workspaces.get_mut(&1).unwrap()[0].toggle_fullscreen();
+    assert_eq!(
+        state.workspaces[&1][0].fullscreen_window_id(),
+        Some(100),
+        "precondition: the focused monitor has a fullscreen window"
+    );
+
+    let mut info = make_test_window_info(200);
+    info.rect = Rect::new(2200, 100, 800, 600);
+    state.injected_window_info.insert(200, info);
+
+    state.handle_window_event(WindowEvent::Created(200));
+
+    assert!(
+        state.workspaces[&2][state.active_workspace_idx(2)].contains_window(200),
+        "window opens on the other monitor"
+    );
+    assert_eq!(
+        state.focused_monitor, 1,
+        "focus_new_windows=false keeps the original monitor focused"
+    );
+    assert_eq!(
+        state.previous_focused_hwnd, None,
+        "fullscreen on the focused monitor is not reasserted for another monitor's window"
+    );
+    assert_eq!(
+        state.workspaces[&1][0].fullscreen_window_id(),
+        Some(100),
+        "the other monitor's fullscreen state remains unchanged"
+    );
+}
+
+#[test]
+fn test_created_event_preserves_fullscreen_on_opening_monitor_without_focus() {
+    let mut config = test_config();
+    config.behavior.focus_new_windows = false;
+    let mut state = AppState::new_with_config(config, two_monitors());
+
+    state.workspaces.get_mut(&1).unwrap()[0]
+        .insert_window(100, None)
+        .unwrap();
+    state.workspaces.get_mut(&2).unwrap()[0]
+        .insert_window(200, None)
+        .unwrap();
+    state.workspaces.get_mut(&2).unwrap()[0].toggle_fullscreen();
+    state.previous_focused_hwnd = Some(100);
+    state.last_broadcast_focused = Some((1, Some(100)));
+    let hides_before = state.border_hide_count.load(Ordering::Relaxed);
+    let mut rx = state.event_broadcaster.subscribe();
+
+    let mut info = make_test_window_info(300);
+    info.rect = Rect::new(2200, 100, 800, 600);
+    state.injected_window_info.insert(300, info);
+
+    state.handle_window_event(WindowEvent::Created(300));
+
+    assert!(
+        state.workspaces[&2][state.active_workspace_idx(2)].contains_window(300),
+        "window opens on the monitor whose workspace is fullscreen"
+    );
+    assert_eq!(
+        state.workspaces[&2][0].fullscreen_window_id(),
+        Some(200),
+        "the existing fullscreen window remains above the newcomer"
+    );
+    assert_eq!(state.workspaces[&2][0].focused_window(), Some(200));
+    assert_eq!(
+        state.focused_monitor, 1,
+        "focus_new_windows=false keeps the original monitor focused"
+    );
+    assert_eq!(state.previous_focused_hwnd, Some(100));
+    assert_eq!(state.last_broadcast_focused, Some((1, Some(100))));
+    assert_eq!(
+        state.border_hide_count.load(Ordering::Relaxed),
+        hides_before
+    );
+    assert!(
+        !std::iter::from_fn(|| rx.try_recv().ok())
+            .any(|event| { matches!(event, leopardwm_ipc::IpcEvent::FocusedWindowChanged { .. }) }),
+        "preserving fullscreen z-order does not broadcast a focus change"
+    );
 }
 
 #[test]
