@@ -33,6 +33,12 @@ All notable changes to LeopardWM will be documented in this file.
   extraction directory, while CI validation and release documentation prevent
   stale metadata and premature pre-release refreshes.
 
+### Internal
+
+- **Developer-only synthetic touchpad diagnostic.** The platform example records
+  observed low-level wheel message kind, delta, coordinates, timestamp, and
+  injection flags for controlled three-contact swipes.
+
 ## 0.2.7
 
 ### Fixes

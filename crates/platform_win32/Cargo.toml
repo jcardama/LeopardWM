@@ -18,6 +18,13 @@ anyhow = { workspace = true }
 winreg = "0.56"
 
 [dev-dependencies]
+# Only the developer diagnostic needs the pointer injection bindings.
+windows = { workspace = true, features = ["Win32_UI_Input_Pointer"] }
+
+[[example]]
+name = "touchpad_diagnostic"
+path = "examples/touchpad_diagnostic.rs"
+test = true
 
 [lints]
 workspace = true
