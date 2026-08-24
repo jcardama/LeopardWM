@@ -2,6 +2,37 @@
 
 All notable changes to LeopardWM will be documented in this file.
 
+## 0.2.8
+
+### Features
+
+- **Window rules can set their initial column width in Settings.** The rule
+  Options menu accepts a viewport fraction from `0.05` to `1.0`, or a blank
+  value for automatic sizing. Invalid values are highlighted without blocking
+  unrelated Settings changes from saving.
+
+### Improvements
+
+- **The Settings window is resizable and fits the monitor's usable work area.**
+  Its default and minimum dimensions scale with display DPI, and it opens
+  centered and clamped to the available work area so controls remain
+  accessible on smaller or scaled displays.
+- **New scratchpads use proportional, monitor-aware default sizing.** Initial
+  and fallback dimensions use half the active work area's width and
+  three-fifths of its height, with safe minimums and clamping for small
+  displays; first summons remain centered.
+
+### Fixes
+
+- **New windows stay on the monitor where Windows opens them.** Monitor
+  selection now uses the window's opening bounds instead of the focused
+  monitor, while preserving fullscreen stacking without stealing focus when
+  new-window focusing is disabled.
+- **Scoop release metadata and maintenance are corrected and guarded.** The
+  checked-in manifest matches the published `0.2.7` package URL, checksum, and
+  extraction directory, while CI validation and release documentation prevent
+  stale metadata and premature pre-release refreshes.
+
 ## 0.2.7
 
 ### Fixes
