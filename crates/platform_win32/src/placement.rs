@@ -464,7 +464,7 @@ fn apply_placements_inner(
     _config: &PlatformConfig,
     cache: &mut Option<&mut PlacementCache>,
     nudge_sticky_compositors: bool,
-    allow_inset_retry: bool,
+    allow_landing_measurement_retry: bool,
 ) -> Result<ApplyPlacementsResult, Win32Error> {
     let empty_result = ApplyPlacementsResult {
         width_violations: Vec::new(),
@@ -503,7 +503,7 @@ fn apply_placements_inner(
     // frame area. If we expand by the usual insets, adjacent windows' visible borders
     // overlap and the layout gaps disappear. Zero the insets to keep correct spacing.
     let high_contrast = crate::is_high_contrast_enabled();
-    let force_positioning = !allow_inset_retry;
+    let force_positioning = !allow_landing_measurement_retry;
     let (entries, skipped, maximized_skipped_window_ids) = build_defer_entries(
         placements,
         cache,
@@ -521,17 +521,23 @@ fn apply_placements_inner(
     // visible rect between them is a stale-inset artifact, not a window minimum:
     // Slack/Spotify can change their client frame at runtime, and Chromium can
     // briefly become frameless after app fullscreen. Retry the complete batch
-    // once after evicting the affected tuple; no first-pass cache, compositor
-    // nudge, or suspect-state finalization is allowed to escape.
+    // once after evicting affected inset tuples or confirming suspect oversize
+    // measurements; first-pass suspect marks may carry, but first-pass
+    // violation/cache/nudge finalization does not.
     let detection = if async_flag == SET_WINDOW_POS_FLAGS(0) {
-        detect_size_violations(&entries, &failed_window_ids, allow_inset_retry)
+        detect_size_violations(
+            &entries,
+            &failed_window_ids,
+            allow_landing_measurement_retry,
+        )
     } else {
         SizeViolationDetection::default()
     };
-    if should_retry_insets(allow_inset_retry, &detection.inset_artifact_windows) {
+    if should_retry_landing_measurement(allow_landing_measurement_retry, &detection) {
         tracing::debug!(
-            "Retrying placement batch after stale inset measurement for {} window(s)",
+            "Retrying placement batch after {} stale inset artifact(s) and {} suspect oversize measurement(s)",
             detection.inset_artifact_windows.len(),
+            detection.suspect_confirmation_windows.len(),
         );
         evict_cached_border_insets(&detection.inset_artifact_windows, cache);
         return apply_placements_inner(placements, _config, cache, nudge_sticky_compositors, false);
@@ -896,13 +902,14 @@ fn position_entries(entries: &[DeferEntry]) -> (u32, HashSet<u64>) {
 
 /// Per-window suspect state for the size-violation two-pass confirmation:
 /// `(width_suspect, height_suspect)` — whether that axis's oversize looked stale
-/// (beyond the stale-bounds ratio) on the window's previous landing pass. A
-/// genuine min-size reproduces and is promoted on the second sighting; a one-off
-/// stale DWM read does not reproduce and is dropped. Module-global because
-/// `detect_size_violations` is a free function called once per settle across all
-/// workspaces, so a window is only re-measured when its workspace next lands.
-/// Entries are evicted on window destroy (`clear_suspected_oversize`) so the map
-/// stays bounded and a recycled HWND never inherits a stale suspect bit.
+/// (beyond the stale-bounds ratio) on the window's prior measurement. A genuine
+/// min-size reproduces and is promoted on the second sighting; a one-off stale
+/// DWM read does not reproduce and is dropped. Module-global because the
+/// free-function detector must retain per-window, per-axis suspicion through the
+/// forced same-apply confirmation retry and later landing opportunities, until
+/// authoritative resolution or destroy cleanup. Entries are evicted on window
+/// destroy (`clear_suspected_oversize`) so the map stays bounded and a recycled
+/// HWND never inherits a stale suspect bit.
 static SUSPECTED_OVERSIZE: Mutex<Option<HashMap<u64, (bool, bool)>>> = Mutex::new(None);
 
 fn lock_suspected_oversize() -> std::sync::MutexGuard<'static, Option<HashMap<u64, (bool, bool)>>> {
@@ -963,6 +970,7 @@ struct SizeViolationDetection {
     width_violations: Vec<WidthViolation>,
     height_violations: Vec<HeightViolation>,
     inset_artifact_windows: HashSet<WindowId>,
+    suspect_confirmation_windows: HashSet<WindowId>,
     violating_windows: HashSet<WindowId>,
 }
 
@@ -974,13 +982,13 @@ fn classify_size_axis(
     layout_size: i32,
     frame_size: i32,
     visible_size: i32,
-    allow_inset_retry: bool,
+    allow_landing_measurement_retry: bool,
     was_suspected: bool,
 ) -> AxisSizeClassification {
     if visible_size <= layout_size + VISIBLE_SIZE_TOLERANCE {
         return AxisSizeClassification::Fits;
     }
-    if allow_inset_retry && visible_size <= frame_size + VISIBLE_SIZE_TOLERANCE {
+    if allow_landing_measurement_retry && visible_size <= frame_size + VISIBLE_SIZE_TOLERANCE {
         return AxisSizeClassification::InsetArtifact;
     }
 
@@ -1021,11 +1029,13 @@ fn classify_oversize(
     }
 }
 
-fn should_retry_insets(
-    allow_inset_retry: bool,
-    inset_artifact_windows: &HashSet<WindowId>,
+fn should_retry_landing_measurement(
+    allow_landing_measurement_retry: bool,
+    detection: &SizeViolationDetection,
 ) -> bool {
-    allow_inset_retry && !inset_artifact_windows.is_empty()
+    allow_landing_measurement_retry
+        && (!detection.inset_artifact_windows.is_empty()
+            || !detection.suspect_confirmation_windows.is_empty())
 }
 
 fn classification_outcome(classification: &AxisSizeClassification) -> (bool, bool) {
@@ -1037,7 +1047,7 @@ fn classification_outcome(classification: &AxisSizeClassification) -> (bool, boo
 
 fn classify_measurements_and_update_suspects(
     measurements: &[WindowSizeMeasurement],
-    allow_inset_retry: bool,
+    allow_landing_measurement_retry: bool,
     suspects: &mut HashMap<WindowId, (bool, bool)>,
 ) -> Vec<ClassifiedSizeMeasurement> {
     measurements
@@ -1051,14 +1061,14 @@ fn classify_measurements_and_update_suspects(
                 measurement.layout_w,
                 measurement.frame_w,
                 measurement.visible_w,
-                allow_inset_retry,
+                allow_landing_measurement_retry,
                 was_w,
             );
             let height = classify_size_axis(
                 measurement.layout_h,
                 measurement.frame_h,
                 measurement.visible_h,
-                allow_inset_retry,
+                allow_landing_measurement_retry,
                 was_h,
             );
             let (_, suspect_w) = classification_outcome(&width);
@@ -1081,7 +1091,7 @@ fn classify_measurements_and_update_suspects(
 fn detect_size_violations(
     entries: &[DeferEntry],
     failed_window_ids: &HashSet<u64>,
-    allow_inset_retry: bool,
+    allow_landing_measurement_retry: bool,
 ) -> SizeViolationDetection {
     // Wait for the compositor to composite a frame before reading DWM
     // bounds. Sync SetWindowPos only guarantees the target thread received
@@ -1135,40 +1145,44 @@ fn detect_size_violations(
         });
     }
 
-    let artifact_windows: HashSet<WindowId> = if allow_inset_retry {
-        measurements
-            .iter()
-            .filter(|measurement| {
-                is_inset_artifact(
-                    measurement.layout_w,
-                    measurement.frame_w,
-                    measurement.visible_w,
-                ) || is_inset_artifact(
-                    measurement.layout_h,
-                    measurement.frame_h,
-                    measurement.visible_h,
-                )
-            })
-            .map(|measurement| measurement.window_id)
-            .collect()
-    } else {
-        HashSet::new()
-    };
-    if should_retry_insets(allow_inset_retry, &artifact_windows) {
-        return SizeViolationDetection {
-            inset_artifact_windows: artifact_windows,
-            ..Default::default()
-        };
-    }
+    let mut guard = lock_suspected_oversize();
+    let suspects = guard.get_or_insert_with(HashMap::new);
+    detect_size_violations_from_measurements(
+        &measurements,
+        allow_landing_measurement_retry,
+        suspects,
+    )
+}
 
-    let classified = {
-        let mut guard = lock_suspected_oversize();
-        let suspects = guard.get_or_insert_with(HashMap::new);
-        classify_measurements_and_update_suspects(&measurements, allow_inset_retry, suspects)
-    };
+fn detect_size_violations_from_measurements(
+    measurements: &[WindowSizeMeasurement],
+    allow_landing_measurement_retry: bool,
+    suspects: &mut HashMap<WindowId, (bool, bool)>,
+) -> SizeViolationDetection {
+    let mut candidate_suspects = suspects.clone();
+    let classified = classify_measurements_and_update_suspects(
+        measurements,
+        allow_landing_measurement_retry,
+        &mut candidate_suspects,
+    );
 
     let mut detection = SizeViolationDetection::default();
     for classified in classified {
+        if allow_landing_measurement_retry
+            && (is_inset_artifact(
+                classified.measurement.layout_w,
+                classified.measurement.frame_w,
+                classified.measurement.visible_w,
+            ) || is_inset_artifact(
+                classified.measurement.layout_h,
+                classified.measurement.frame_h,
+                classified.measurement.visible_h,
+            ))
+        {
+            detection
+                .inset_artifact_windows
+                .insert(classified.measurement.window_id);
+        }
         let width = SizeMeasurement {
             hwnd: classified.measurement.hwnd,
             window_id: classified.measurement.window_id,
@@ -1185,6 +1199,17 @@ fn detect_size_violations(
         };
         report_axis_size_outcome(&mut detection, width, &classified.width, true);
         report_axis_size_outcome(&mut detection, height, &classified.height, false);
+    }
+    if should_retry_landing_measurement(allow_landing_measurement_retry, &detection) {
+        for (window_id, (width_suspect, height_suspect)) in candidate_suspects {
+            if width_suspect || height_suspect {
+                let existing = suspects.entry(window_id).or_insert((false, false));
+                existing.0 |= width_suspect;
+                existing.1 |= height_suspect;
+            }
+        }
+    } else {
+        *suspects = candidate_suspects;
     }
     detection
 }
@@ -1220,6 +1245,9 @@ fn report_axis_size_outcome(
         }
     } else if suspect {
         let axis = if is_width { "width" } else { "height" };
+        detection
+            .suspect_confirmation_windows
+            .insert(measurement.window_id);
         tracing::debug!(
             "Deferring suspect {} until next landing confirms: {:?} layout request {}px, frame request {}px, visible measurement {}px",
             axis,
@@ -1839,58 +1867,140 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_inset_retry_discards_whole_first_pass_and_records_stable_mixed_minimums() {
-        let measurement = WindowSizeMeasurement {
+    fn width_measurement(
+        window_id: WindowId,
+        layout_w: i32,
+        frame_w: i32,
+        visible_w: i32,
+    ) -> WindowSizeMeasurement {
+        WindowSizeMeasurement {
             hwnd: HWND::default(),
-            window_id: 7,
-            layout_w: 400,
+            window_id,
+            layout_w,
             layout_h: 400,
-            frame_w: 414,
+            frame_w,
             frame_h: 400,
-            visible_w: 403,
-            visible_h: 500,
-        };
-        assert!(is_inset_artifact(
-            measurement.layout_w,
-            measurement.frame_w,
-            measurement.visible_w,
-        ));
-        let artifact_windows = HashSet::from([measurement.window_id]);
-        assert!(should_retry_insets(true, &artifact_windows));
-        assert!(!should_retry_insets(false, &artifact_windows));
-        assert_eq!(
-            classify_size_axis(
-                measurement.layout_h,
-                measurement.frame_h,
-                measurement.visible_h,
-                true,
-                false,
-            ),
-            AxisSizeClassification::Violation {
-                record: true,
-                suspect: false,
-            },
-            "the first pass may see a genuine height minimum, but the window retry discards it"
-        );
+            visible_w,
+            visible_h: 400,
+        }
+    }
 
+    #[test]
+    fn test_suspect_oversize_retries_and_confirms_stable_native_minimum() {
+        let measurement = width_measurement(7, 1267, 1281, 3186);
         let mut suspects = HashMap::new();
+
+        let first = detect_size_violations_from_measurements(&[measurement], true, &mut suspects);
+        assert_eq!(first.suspect_confirmation_windows, HashSet::from([7]));
+        assert!(should_retry_landing_measurement(true, &first));
+        assert_eq!(suspects.get(&7), Some(&(true, false)));
+
+        let second = detect_size_violations_from_measurements(&[measurement], false, &mut suspects);
+        assert_eq!(second.width_violations.len(), 1);
+        assert_eq!(second.width_violations[0].min_width, 3186);
+        assert!(suspects.is_empty());
+    }
+
+    #[test]
+    fn test_suspect_oversize_drops_one_off_stale_second_measurement() {
+        let first_measurement = width_measurement(7, 1267, 1281, 3186);
+        let second_measurement = width_measurement(7, 1267, 1281, 1267);
+        let mut suspects = HashMap::new();
+
+        let first =
+            detect_size_violations_from_measurements(&[first_measurement], true, &mut suspects);
+        assert!(should_retry_landing_measurement(true, &first));
+
         let second =
-            classify_measurements_and_update_suspects(&[measurement], false, &mut suspects);
+            detect_size_violations_from_measurements(&[second_measurement], false, &mut suspects);
+        assert!(second.width_violations.is_empty());
+        assert!(suspects.is_empty());
+    }
+
+    #[test]
+    fn test_suspect_oversize_rejects_absurd_second_measurement() {
+        let first_measurement = width_measurement(7, 1267, 1281, 3186);
+        let second_measurement = width_measurement(7, 1267, 1281, 5069);
+        let mut suspects = HashMap::new();
+
+        detect_size_violations_from_measurements(&[first_measurement], true, &mut suspects);
+        let second =
+            detect_size_violations_from_measurements(&[second_measurement], false, &mut suspects);
+        assert!(second.width_violations.is_empty());
+        assert!(suspects.is_empty());
+    }
+
+    #[test]
+    fn test_mixed_measurements_share_one_retry_and_discard_first_pass_violations() {
+        let mut height_violation = width_measurement(4, 400, 400, 400);
+        height_violation.visible_h = 500;
+        let measurements = [
+            width_measurement(1, 400, 414, 403),
+            width_measurement(2, 1267, 1281, 3186),
+            width_measurement(3, 400, 400, 500),
+            height_violation,
+        ];
+        let mut suspects = HashMap::new();
+
+        let first = detect_size_violations_from_measurements(&measurements, true, &mut suspects);
+        assert_eq!(first.inset_artifact_windows, HashSet::from([1]));
+        assert_eq!(first.suspect_confirmation_windows, HashSet::from([2]));
+        assert_eq!(first.width_violations.len(), 1);
+        assert_eq!(first.width_violations[0].window_id, 3);
+        assert_eq!(first.height_violations.len(), 1);
+        assert_eq!(first.height_violations[0].window_id, 4);
+        assert_eq!(first.height_violations[0].min_height, 500);
+        assert!(should_retry_landing_measurement(true, &first));
+
+        let second = detect_size_violations_from_measurements(&measurements, false, &mut suspects);
+        assert_eq!(second.width_violations.len(), 3);
         assert_eq!(
-            second[0].width,
-            AxisSizeClassification::Violation {
-                record: true,
-                suspect: false,
-            }
+            second
+                .width_violations
+                .iter()
+                .map(|violation| violation.window_id)
+                .collect::<HashSet<_>>(),
+            HashSet::from([1, 2, 3])
         );
-        assert_eq!(
-            second[0].height,
-            AxisSizeClassification::Violation {
-                record: true,
-                suspect: false,
-            }
-        );
+        assert_eq!(second.height_violations.len(), 1);
+        assert_eq!(second.height_violations[0].window_id, 4);
+        assert_eq!(second.height_violations[0].min_height, 500);
+        assert!(suspects.is_empty());
+        assert!(!should_retry_landing_measurement(false, &second));
+    }
+
+    #[test]
+    fn test_discarded_retry_preserves_existing_suspect_for_authoritative_confirmation() {
+        let a = width_measurement(1, 1267, 1281, 3186);
+        let b = width_measurement(2, 400, 414, 403);
+        let mut suspects = HashMap::from([(1, (true, false))]);
+
+        let first = detect_size_violations_from_measurements(&[a, b], true, &mut suspects);
+        assert_eq!(first.inset_artifact_windows, HashSet::from([2]));
+        assert_eq!(first.width_violations.len(), 1);
+        assert_eq!(first.width_violations[0].window_id, 1);
+        assert!(should_retry_landing_measurement(true, &first));
+        assert_eq!(suspects.get(&1), Some(&(true, false)));
+
+        let second = detect_size_violations_from_measurements(&[a, b], false, &mut suspects);
+        assert!(second
+            .width_violations
+            .iter()
+            .any(|violation| violation.window_id == 1 && violation.min_width == 3186));
+        assert!(!should_retry_landing_measurement(false, &second));
+        assert!(suspects.is_empty());
+    }
+
+    #[test]
+    fn test_retry_disabled_suspect_is_saved_without_recursing() {
+        let measurement = width_measurement(7, 1267, 1281, 3186);
+        let mut suspects = HashMap::new();
+
+        let detection =
+            detect_size_violations_from_measurements(&[measurement], false, &mut suspects);
+        assert_eq!(detection.suspect_confirmation_windows, HashSet::from([7]));
+        assert_eq!(suspects.get(&7), Some(&(true, false)));
+        assert!(!should_retry_landing_measurement(false, &detection));
     }
 
     #[test]
