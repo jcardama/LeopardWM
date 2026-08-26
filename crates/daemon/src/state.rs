@@ -156,11 +156,15 @@ pub(crate) const RECENTLY_HIDDEN_TTL: Duration = Duration::from_secs(300);
 pub(crate) const EDIT_CONFIG_PULL_TTL: Duration = Duration::from_secs(10);
 
 #[cfg(test)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(crate) enum TestApplyPlacementsBehavior {
     SleepAndSucceed(Duration),
     SleepAndFail(Duration),
     SucceedWithMaximizedSkip(u64),
+    SucceedWithSizeViolations(
+        Vec<leopardwm_platform_win32::WidthViolation>,
+        Vec<leopardwm_platform_win32::HeightViolation>,
+    ),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

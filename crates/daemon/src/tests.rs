@@ -494,6 +494,255 @@ fn test_animation_maximized_skip_result_invalidates_daemon_bookkeeping() {
 }
 
 #[test]
+fn test_width_feedback_retargets_an_existing_scroll_animation() {
+    let mut config = test_config();
+    config.layout.outer_gap_left = 100;
+    config.layout.outer_gap_right = 100;
+    config.animation.scroll_duration_ms = 1_000;
+    let mut state = AppState::new_with_config(config, test_monitors());
+    let monitor = state.focused_monitor;
+    let viewport = state.layout_viewport(monitor);
+    let usable_width = state.workspaces.get(&monitor).unwrap()[0].visible_width(viewport.width);
+    {
+        let workspace = &mut state.workspaces.get_mut(&monitor).unwrap()[0];
+        workspace.insert_window(100, Some(800)).unwrap();
+        workspace.insert_window(200, Some(800)).unwrap();
+        workspace.insert_window(300, Some(300)).unwrap();
+        workspace.focus_window(300).unwrap();
+        workspace.set_reduce_motion(false);
+        workspace.start_scroll_animation(240.0, viewport.width, Some(1_000), None);
+    }
+    assert!(state.layout_transition.is_none());
+
+    let frame_result = animation_worker::FrameResult::from_platform(
+        leopardwm_platform_win32::ApplyPlacementsResult {
+            width_violations: vec![leopardwm_platform_win32::WidthViolation {
+                window_id: 300,
+                min_width: usable_width - 1,
+            }],
+            height_violations: Vec::new(),
+            maximized_skipped_window_ids: Vec::new(),
+        },
+        Duration::ZERO,
+    );
+    state.handle_animation_placement_result(&frame_result);
+
+    let workspace = &state.workspaces.get(&monitor).unwrap()[0];
+    assert_eq!(workspace.columns()[2].width(), usable_width - 1);
+    assert!(workspace.is_animating(), "the existing pump is retargeted");
+    assert_eq!(
+        workspace.scroll_offset(),
+        0.0,
+        "feedback must not snap the base scroll offset while a pump is active"
+    );
+
+    state.tick_animations(500);
+    let workspace = &state.workspaces.get(&monitor).unwrap()[0];
+    assert!(
+        workspace.is_animating(),
+        "the retargeted scroll is still pumping"
+    );
+    assert!(
+        workspace.effective_scroll_offset() > 0.0,
+        "the retargeted correction advances through animation rather than snapping"
+    );
+
+    state.tick_animations(10_000);
+    let workspace = &state.workspaces.get(&monitor).unwrap()[0];
+    assert!(!workspace.is_animating());
+    assert!(
+        workspace.scroll_offset() > 240.0,
+        "feedback replaces the original 240px target with the focused-visibility correction"
+    );
+    assert_eq!(
+        workspace
+            .compute_placements(viewport)
+            .into_iter()
+            .find(|placement| placement.window_id == 300)
+            .unwrap()
+            .visibility,
+        leopardwm_core_layout::Visibility::Visible,
+        "the completed retargeted pump lands the widened focused column in view"
+    );
+}
+
+#[test]
+fn test_width_feedback_widens_inactive_workspace_without_changing_scroll() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    let monitor = state.focused_monitor;
+    state.ensure_workspace_exists(monitor, 1);
+    {
+        let workspace = &mut state.workspaces.get_mut(&monitor).unwrap()[1];
+        workspace.insert_window(400, Some(800)).unwrap();
+        workspace.insert_window(401, Some(800)).unwrap();
+        workspace.insert_window(402, Some(300)).unwrap();
+        workspace.set_scroll_offset(137.0);
+    }
+
+    let frame_result = animation_worker::FrameResult::from_platform(
+        leopardwm_platform_win32::ApplyPlacementsResult {
+            width_violations: vec![leopardwm_platform_win32::WidthViolation {
+                window_id: 402,
+                min_width: 1_500,
+            }],
+            height_violations: Vec::new(),
+            maximized_skipped_window_ids: Vec::new(),
+        },
+        Duration::ZERO,
+    );
+    state.handle_animation_placement_result(&frame_result);
+
+    let workspace = &state.workspaces.get(&monitor).unwrap()[1];
+    assert_eq!(workspace.columns()[2].width(), 1_500);
+    assert_eq!(workspace.scroll_offset(), 137.0);
+    assert!(!workspace.is_animating());
+    assert_eq!(
+        state.active_workspace_idx(monitor),
+        0,
+        "feedback must not animate an inactive workspace"
+    );
+}
+
+#[test]
+fn test_sync_size_violation_reapplies_once_and_reveals_widened_focus() {
+    let mut config = test_config();
+    config.layout.outer_gap_left = 100;
+    config.layout.outer_gap_right = 100;
+    let mut state = AppState::new_with_config(config, test_monitors());
+    let monitor = state.focused_monitor;
+    state.paused = false;
+    let viewport = state.layout_viewport(monitor);
+    let usable_width = state.workspaces.get(&monitor).unwrap()[0].visible_width(viewport.width);
+    {
+        let workspace = &mut state.workspaces.get_mut(&monitor).unwrap()[0];
+        workspace.insert_window(100, Some(800)).unwrap();
+        workspace.insert_window(200, Some(800)).unwrap();
+        workspace.insert_window(300, Some(300)).unwrap();
+        workspace.focus_window(300).unwrap();
+    }
+    state.injected_apply_placements_behavior =
+        Some(TestApplyPlacementsBehavior::SucceedWithSizeViolations(
+            vec![leopardwm_platform_win32::WidthViolation {
+                window_id: 300,
+                min_width: usable_width - 1,
+            }],
+            Vec::new(),
+        ));
+
+    state.apply_layout().unwrap();
+
+    assert_eq!(
+        state
+            .injected_apply_placements_call_count
+            .load(Ordering::SeqCst),
+        2,
+        "synchronous feedback has one guarded corrective reapply"
+    );
+    let workspace = &state.workspaces.get(&monitor).unwrap()[0];
+    assert_eq!(workspace.columns()[2].width(), usable_width - 1);
+    assert!(
+        !workspace.is_animating(),
+        "no pump means immediate correction"
+    );
+    assert_eq!(
+        workspace
+            .compute_placements(viewport)
+            .into_iter()
+            .find(|placement| placement.window_id == 300)
+            .unwrap()
+            .visibility,
+        leopardwm_core_layout::Visibility::Visible,
+        "the widened focused column is re-derived into view before the reapply"
+    );
+}
+
+#[test]
+fn test_animation_size_violations_use_usable_width_and_retarget_transition() {
+    let mut config = test_config();
+    config.layout.outer_gap_left = 100;
+    config.layout.outer_gap_right = 140;
+    let mut state = AppState::new_with_config(config, test_monitors());
+    state.reduce_motion = false;
+    let monitor = state.focused_monitor;
+    let viewport = state.layout_viewport(monitor);
+    let usable_width = state.workspaces.get(&monitor).unwrap()[0].visible_width(viewport.width);
+    assert_eq!(usable_width, 1680);
+    {
+        let workspace = &mut state.workspaces.get_mut(&monitor).unwrap()[0];
+        workspace.insert_window(100, Some(800)).unwrap();
+        workspace.insert_window_in_column(101, 0).unwrap();
+        workspace.insert_window(200, Some(800)).unwrap();
+        workspace.insert_window(300, Some(300)).unwrap();
+        workspace.focus_window(300).unwrap();
+        workspace.set_reduce_motion(false);
+    }
+    state.start_layout_transition(state.snapshot_layout());
+
+    let ignored_width = animation_worker::FrameResult::from_platform(
+        leopardwm_platform_win32::ApplyPlacementsResult {
+            width_violations: vec![leopardwm_platform_win32::WidthViolation {
+                window_id: 300,
+                min_width: usable_width,
+            }],
+            height_violations: vec![leopardwm_platform_win32::HeightViolation {
+                window_id: 100,
+                min_height: 700,
+            }],
+            maximized_skipped_window_ids: Vec::new(),
+        },
+        Duration::ZERO,
+    );
+    state.handle_animation_placement_result(&ignored_width);
+    assert_eq!(
+        state.workspaces.get(&monitor).unwrap()[0].columns()[2].width(),
+        300,
+        "a usable-width violation is ignored"
+    );
+
+    let accepted_width = animation_worker::FrameResult::from_platform(
+        leopardwm_platform_win32::ApplyPlacementsResult {
+            width_violations: vec![leopardwm_platform_win32::WidthViolation {
+                window_id: 300,
+                min_width: usable_width - 1,
+            }],
+            height_violations: Vec::new(),
+            maximized_skipped_window_ids: Vec::new(),
+        },
+        Duration::ZERO,
+    );
+    state.handle_animation_placement_result(&accepted_width);
+    assert!(
+        state.workspaces.get(&monitor).unwrap()[0].is_animating(),
+        "a structural transition retargets the correction into its existing pump"
+    );
+
+    state.tick_animations(10_000);
+    let workspace = &state.workspaces.get(&monitor).unwrap()[0];
+    assert_eq!(workspace.columns()[2].width(), usable_width - 1);
+    assert!(
+        workspace
+            .compute_placements(viewport)
+            .iter()
+            .find(|placement| placement.window_id == 100)
+            .unwrap()
+            .rect
+            .height
+            >= 700,
+        "height feedback remains applied through the shared propagation method"
+    );
+    assert_eq!(
+        workspace
+            .compute_placements(viewport)
+            .into_iter()
+            .find(|placement| placement.window_id == 300)
+            .unwrap()
+            .visibility,
+        leopardwm_core_layout::Visibility::Visible,
+        "the transition-pumped correction settles with the widened focused column in view"
+    );
+}
+
+#[test]
 fn test_sync_established_maximized_skip_restored_before_receipt_forces_follow_up_dispatch() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
     state.paused = false;

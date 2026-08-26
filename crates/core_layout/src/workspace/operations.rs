@@ -37,7 +37,7 @@ impl Workspace {
     }
 
     /// The width of the visible strip area inside the viewport (viewport minus outer padding).
-    pub(crate) fn visible_width(&self, viewport_width: i32) -> i32 {
+    pub fn visible_width(&self, viewport_width: i32) -> i32 {
         viewport_width
             .saturating_sub(self.outer_gap_left.max(0))
             .saturating_sub(self.outer_gap_right.max(0))

@@ -3,7 +3,7 @@
 use crate::animation_worker;
 use crate::state::*;
 use anyhow::{anyhow, Result};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::Ordering;
 use tracing::{debug, warn};
 
@@ -170,6 +170,10 @@ impl AppState {
     ) {
         self.applying_layout = false;
         self.handle_maximized_placement_skips(&frame_result.maximized_skipped_window_ids);
+        self.propagate_size_violations(
+            &frame_result.width_violations,
+            &frame_result.height_violations,
+        );
     }
 
     fn observe_maximized_placements(
@@ -794,7 +798,7 @@ impl AppState {
         // drag, or window event.
         let post_animation_nudge = std::mem::take(&mut self.post_animation_nudge_pending);
         #[cfg(test)]
-        let injected_behavior = self.injected_apply_placements_behavior;
+        let injected_behavior = self.injected_apply_placements_behavior.clone();
         #[cfg(test)]
         let injected_apply_placements_call_count =
             self.injected_apply_placements_call_count.clone();
@@ -818,15 +822,22 @@ impl AppState {
                 if let Some(behavior) = injected_behavior {
                     let call_index =
                         injected_apply_placements_call_count.fetch_add(1, Ordering::SeqCst);
-                    let (result, maximized_skipped_window_ids) = match behavior {
+                    let (
+                        result,
+                        width_violations,
+                        height_violations,
+                        maximized_skipped_window_ids,
+                    ) = match behavior {
                         TestApplyPlacementsBehavior::SleepAndSucceed(delay) => {
                             std::thread::sleep(delay);
-                            (Ok(()), Vec::new())
+                            (Ok(()), Vec::new(), Vec::new(), Vec::new())
                         }
                         TestApplyPlacementsBehavior::SleepAndFail(delay) => {
                             std::thread::sleep(delay);
                             (
                                 Err(anyhow!("injected apply_placements failure")),
+                                Vec::new(),
+                                Vec::new(),
                                 Vec::new(),
                             )
                         }
@@ -836,8 +847,12 @@ impl AppState {
                             } else {
                                 Vec::new()
                             };
-                            (Ok(()), skipped)
+                            (Ok(()), Vec::new(), Vec::new(), skipped)
                         }
+                        TestApplyPlacementsBehavior::SucceedWithSizeViolations(
+                            width_violations,
+                            height_violations,
+                        ) => (Ok(()), width_violations, height_violations, Vec::new()),
                     };
                     if should_cancel() {
                         run_layout_apply_recovery_pass(
@@ -849,7 +864,12 @@ impl AppState {
                         let _ = tx.send((Ok(()), Vec::new(), Vec::new(), Vec::new()));
                         return;
                     }
-                    let _ = tx.send((result, Vec::new(), Vec::new(), maximized_skipped_window_ids));
+                    let _ = tx.send((
+                        result,
+                        width_violations,
+                        height_violations,
+                        maximized_skipped_window_ids,
+                    ));
                     return;
                 }
 
@@ -905,68 +925,95 @@ impl AppState {
     }
 
     /// Feed worker-reported size violations back to the layout engine; returns whether constraints changed.
-    fn propagate_size_violations(
+    pub(crate) fn propagate_size_violations(
         &mut self,
         width_violations: &[leopardwm_platform_win32::WidthViolation],
         height_violations: &[leopardwm_platform_win32::HeightViolation],
     ) -> bool {
-        // Skip violations where min_width/min_height >= viewport size —
-        // the window is temporarily fullscreen/maximized by the app
-        // itself, not genuinely enforcing a minimum that large.
         let mut constraints_changed = false;
-        if !width_violations.is_empty() {
-            for v in width_violations {
-                let vw = self
-                    .find_window_workspace(v.window_id)
-                    .map(|(mid, _)| self.viewport_width_for(mid))
-                    .unwrap_or(i32::MAX);
-                if v.min_width >= vw {
-                    debug!(
-                        "Ignoring viewport-sized width violation for window {} ({}px >= {}px viewport)",
-                        v.window_id, v.min_width, vw
-                    );
-                    continue;
-                }
-                for ws_vec in self.workspaces.values_mut() {
-                    for ws in ws_vec.iter_mut() {
-                        if ws.contains_window(v.window_id) {
-                            ws.set_window_min_width(v.window_id, v.min_width);
-                            constraints_changed = true;
-                        }
-                    }
-                }
+        let mut accepted_width_workspaces = HashSet::new();
+
+        for violation in width_violations {
+            let Some((monitor_id, workspace_idx)) = self.find_window_workspace(violation.window_id)
+            else {
+                continue;
+            };
+            let usable_width = self
+                .workspaces
+                .get(&monitor_id)
+                .and_then(|workspaces| workspaces.get(workspace_idx))
+                .map(|workspace| workspace.visible_width(self.viewport_width_for(monitor_id)))
+                .unwrap_or(i32::MAX);
+            if violation.min_width >= usable_width {
+                debug!(
+                    "Ignoring usable-tiled-width violation for window {} ({}px >= {}px usable width)",
+                    violation.window_id, violation.min_width, usable_width
+                );
+                continue;
             }
-            for ws_vec in self.workspaces.values_mut() {
-                for ws in ws_vec.iter_mut() {
-                    if ws.apply_min_width_constraints() {
-                        constraints_changed = true;
-                    }
-                }
-            }
-        }
-        if !height_violations.is_empty() {
-            for v in height_violations {
-                let vh = self
-                    .find_window_workspace(v.window_id)
-                    .and_then(|(mid, _)| self.monitors.get(&mid).map(|m| m.work_area.height))
-                    .unwrap_or(i32::MAX);
-                if v.min_height >= vh {
-                    debug!(
-                        "Ignoring viewport-sized height violation for window {} ({}px >= {}px viewport)",
-                        v.window_id, v.min_height, vh
-                    );
-                    continue;
-                }
-                for ws_vec in self.workspaces.values_mut() {
-                    for ws in ws_vec.iter_mut() {
-                        if ws.contains_window(v.window_id) {
-                            ws.set_window_min_height(v.window_id, v.min_height);
-                            constraints_changed = true;
-                        }
-                    }
-                }
+            if let Some(workspace) = self
+                .workspaces
+                .get_mut(&monitor_id)
+                .and_then(|workspaces| workspaces.get_mut(workspace_idx))
+            {
+                workspace.set_window_min_width(violation.window_id, violation.min_width);
+                accepted_width_workspaces.insert((monitor_id, workspace_idx));
+                constraints_changed = true;
             }
         }
+
+        let structural_transition_active = self.layout_transition.is_some();
+        for (monitor_id, workspace_idx) in accepted_width_workspaces {
+            let viewport_width = self.viewport_width_for(monitor_id);
+            let is_active_workspace = self.active_workspace_idx(monitor_id) == workspace_idx;
+            let Some(workspace) = self
+                .workspaces
+                .get_mut(&monitor_id)
+                .and_then(|workspaces| workspaces.get_mut(workspace_idx))
+            else {
+                continue;
+            };
+            if !workspace.apply_min_width_constraints() {
+                continue;
+            }
+            constraints_changed = true;
+            if !is_active_workspace {
+                continue;
+            }
+            if workspace.is_animating() || structural_transition_active {
+                workspace.ensure_focused_visible_animated(viewport_width);
+            } else {
+                workspace.ensure_focused_visible(viewport_width);
+            }
+        }
+
+        for violation in height_violations {
+            let Some((monitor_id, workspace_idx)) = self.find_window_workspace(violation.window_id)
+            else {
+                continue;
+            };
+            let viewport_height = self
+                .monitors
+                .get(&monitor_id)
+                .map(|monitor| monitor.work_area.height)
+                .unwrap_or(i32::MAX);
+            if violation.min_height >= viewport_height {
+                debug!(
+                    "Ignoring viewport-sized height violation for window {} ({}px >= {}px viewport)",
+                    violation.window_id, violation.min_height, viewport_height
+                );
+                continue;
+            }
+            if let Some(workspace) = self
+                .workspaces
+                .get_mut(&monitor_id)
+                .and_then(|workspaces| workspaces.get_mut(workspace_idx))
+            {
+                workspace.set_window_min_height(violation.window_id, violation.min_height);
+                constraints_changed = true;
+            }
+        }
+
         constraints_changed
     }
 

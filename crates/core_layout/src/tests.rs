@@ -623,6 +623,42 @@ mod tests {
     }
 
     #[test]
+    fn test_min_width_constraint_rederives_focused_visibility_for_centering_modes() {
+        let viewport = Rect::new(0, 0, 1000, 600);
+
+        for mode in [
+            CenteringMode::Center,
+            CenteringMode::JustInView,
+            CenteringMode::OnOverflow,
+        ] {
+            let mut ws = Workspace::with_gaps(0, 0);
+            ws.set_outer_gaps(100, 100, 0, 0);
+            ws.set_centering_mode(mode);
+            ws.insert_window(1, Some(400)).unwrap();
+            ws.insert_window(2, Some(400)).unwrap();
+            ws.insert_window(3, Some(300)).unwrap();
+            ws.test_set_focus_unchecked(2, 0);
+
+            assert_eq!(ws.visible_width(viewport.width), 800);
+            ws.set_window_min_width(3, 900);
+            assert!(ws.apply_min_width_constraints());
+            assert_eq!(ws.columns()[2].width(), 900);
+            assert_eq!(
+                ws.compute_placements(viewport)[2].visibility,
+                Visibility::OffScreenRight,
+                "{mode:?} begins with the widened focused column outside the visible strip"
+            );
+
+            ws.ensure_focused_visible(viewport.width);
+            assert_eq!(
+                ws.compute_placements(viewport)[2].visibility,
+                Visibility::Visible,
+                "{mode:?} re-derives the widened focused column into view"
+            );
+        }
+    }
+
+    #[test]
     fn test_compute_placements_tight_viewport() {
         let mut ws = Workspace::with_gaps(10, 50); // Large outer_gap
         ws.insert_window(1, Some(400)).unwrap();

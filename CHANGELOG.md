@@ -35,6 +35,8 @@ All notable changes to LeopardWM will be documented in this file.
 - **Workspace switches retain an explicitly empty destination.** Delayed focus
   notifications for the old managed window that were generated before switch
   completion no longer pull the view back to its source workspace (#103).
+- **Minimum-width feedback uses the usable tiled width and keeps widened focused
+  columns in view.**
 
 ### Internal
 
