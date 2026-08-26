@@ -73,6 +73,11 @@ pub(crate) fn fullscreen_focus_guard(
     fullscreen.filter(|&fs| fs != focused_hwnd)
 }
 
+/// Compare nearby timestamps in GetTickCount's wrapping u32 domain.
+pub(crate) fn event_time_is_no_later_than(event_time_ms: u32, armed_time_ms: u32) -> bool {
+    armed_time_ms.wrapping_sub(event_time_ms) < 0x8000_0000
+}
+
 pub(crate) fn detect_application_fullscreen<'a>(
     monitors: impl IntoIterator<Item = &'a MonitorInfo>,
     chrome_rect: Option<Rect>,
@@ -315,7 +320,7 @@ impl AppState {
             WindowEvent::Created(id)
             | WindowEvent::Destroyed(id)
             | WindowEvent::Hidden(id)
-            | WindowEvent::Focused(id)
+            | WindowEvent::Focused(id, _)
             | WindowEvent::Minimized(id)
             | WindowEvent::Restored(id)
             | WindowEvent::MovedOrResized(id)
@@ -347,7 +352,9 @@ impl AppState {
             WindowEvent::Created(hwnd) => self.on_window_created(hwnd),
             WindowEvent::Destroyed(hwnd) => self.on_window_destroyed_or_hidden(hwnd, false),
             WindowEvent::Hidden(hwnd) => self.on_window_destroyed_or_hidden(hwnd, true),
-            WindowEvent::Focused(hwnd) => self.on_window_focused(hwnd),
+            WindowEvent::Focused(hwnd, event_time_ms) => {
+                self.on_window_focused(hwnd, event_time_ms)
+            }
             WindowEvent::Minimized(hwnd) => self.on_window_minimized(hwnd),
             WindowEvent::Restored(hwnd) => self.on_window_restored(hwnd),
             WindowEvent::MoveSizeStart(hwnd) => self.on_move_size_start(hwnd),
@@ -942,6 +949,12 @@ impl AppState {
             );
             return;
         }
+        if self
+            .pending_workspace_switch_focus
+            .is_some_and(|intent| intent.source_hwnd == hwnd)
+        {
+            self.pending_workspace_switch_focus = None;
+        }
 
         let matching_drag = self.drag_state.as_ref().filter(|d| d.hwnd == hwnd);
         let drag_source = matching_drag.map(|d| (d.source_monitor, d.source_workspace_idx));
@@ -1437,7 +1450,36 @@ impl AppState {
         true
     }
 
-    fn on_window_focused(&mut self, hwnd: u64) {
+    fn should_suppress_workspace_switch_focus(&mut self, hwnd: u64, event_time_ms: u32) -> bool {
+        let Some(intent) = self.pending_workspace_switch_focus else {
+            return false;
+        };
+        if !intent.is_fresh()
+            || self.active_workspace_idx(intent.monitor) != intent.destination_workspace
+        {
+            self.pending_workspace_switch_focus = None;
+            return false;
+        }
+        if hwnd != intent.source_hwnd {
+            if self.find_window_workspace(hwnd).is_some()
+                && !event_time_is_no_later_than(event_time_ms, intent.armed_at_event_time_ms)
+            {
+                self.pending_workspace_switch_focus = None;
+            }
+            return false;
+        }
+        if self.find_window_workspace(hwnd) != Some((intent.monitor, intent.source_workspace)) {
+            self.pending_workspace_switch_focus = None;
+            return false;
+        }
+        if event_time_is_no_later_than(event_time_ms, intent.armed_at_event_time_ms) {
+            return true;
+        }
+        self.pending_workspace_switch_focus = None;
+        false
+    }
+
+    fn on_window_focused(&mut self, hwnd: u64, event_time_ms: u32) {
         // Skip if this window is already our tracked focus — avoids
         // feedback loops where sync_foreground_window triggers another
         // EVENT_SYSTEM_FOREGROUND for the same window.
@@ -1533,6 +1575,9 @@ impl AppState {
             // may have raised an existing window on another workspace; pull it
             // to the active workspace instead of following focus there.
             if self.try_edit_config_pull(hwnd, monitor_id, ws_idx) {
+                return;
+            }
+            if self.should_suppress_workspace_switch_focus(hwnd, event_time_ms) {
                 return;
             }
             self.follow_workspace_without_stealing_focus(monitor_id, ws_idx);

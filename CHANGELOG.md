@@ -32,6 +32,9 @@ All notable changes to LeopardWM will be documented in this file.
   checked-in manifest matches the published `0.2.7` package URL, checksum, and
   extraction directory, while CI validation and release documentation prevent
   stale metadata and premature pre-release refreshes.
+- **Workspace switches retain an explicitly empty destination.** Delayed focus
+  notifications for the old managed window that were generated before switch
+  completion no longer pull the view back to its source workspace (#103).
 
 ### Internal
 

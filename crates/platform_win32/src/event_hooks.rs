@@ -44,8 +44,8 @@ pub enum WindowEvent {
     Destroyed(WindowId),
     /// A window was hidden (e.g., close-to-tray apps using ShowWindow(SW_HIDE)).
     Hidden(WindowId),
-    /// A window received focus.
-    Focused(WindowId),
+    /// A window received focus, with the WinEvent timestamp in GetTickCount's domain.
+    Focused(WindowId, u32),
     /// A window was minimized.
     Minimized(WindowId),
     /// A window was restored from minimized state.
@@ -73,6 +73,10 @@ pub enum WindowEvent {
     /// window's title without waiting for the next layout-changing
     /// event.
     TitleChanged(WindowId),
+}
+
+fn focused_window_event(window_id: WindowId, event_time_ms: u32) -> WindowEvent {
+    WindowEvent::Focused(window_id, event_time_ms)
 }
 
 /// Global sender for window events from WinEvent callbacks.
@@ -300,7 +304,7 @@ fn win_event_callback_inner(
     id_object: i32,
     _id_child: i32,
     _id_event_thread: u32,
-    _dwms_event_time: u32,
+    dwms_event_time: u32,
 ) {
     // Only handle window-level events (not child objects like menus).
     // Exception: EVENT_OBJECT_FOCUS fires with OBJID_CLIENT, and
@@ -353,7 +357,7 @@ fn win_event_callback_inner(
         EVENT_OBJECT_CREATE | EVENT_OBJECT_SHOW => WindowEvent::Created(window_id),
         EVENT_OBJECT_DESTROY => WindowEvent::Destroyed(window_id),
         EVENT_OBJECT_HIDE => WindowEvent::Hidden(window_id),
-        EVENT_SYSTEM_FOREGROUND => WindowEvent::Focused(window_id),
+        EVENT_SYSTEM_FOREGROUND => focused_window_event(window_id, dwms_event_time),
         EVENT_OBJECT_FOCUS => {
             // Only emit Focused for EVENT_OBJECT_FOCUS if the window is actually
             // the foreground window. This filters out spurious focus events from
@@ -365,7 +369,7 @@ fn win_event_callback_inner(
             if fg != hwnd {
                 return;
             }
-            WindowEvent::Focused(window_id)
+            focused_window_event(window_id, dwms_event_time)
         }
         EVENT_SYSTEM_MINIMIZESTART => WindowEvent::Minimized(window_id),
         EVENT_SYSTEM_MINIMIZEEND => WindowEvent::Restored(window_id),
@@ -407,5 +411,13 @@ mod tests {
         let (third_tx, _third_rx) = mpsc::channel::<WindowEvent>();
         assert!(set_event_sender(third_tx).is_ok());
         clear_event_sender();
+    }
+
+    #[test]
+    fn focused_window_event_preserves_win_event_timestamp() {
+        assert!(matches!(
+            focused_window_event(42, 1234),
+            WindowEvent::Focused(42, 1234)
+        ));
     }
 }

@@ -3156,7 +3156,7 @@ fn test_managed_replacement_adopts_logical_focus_and_same_hwnd_focus_is_noop() {
     assert!(state.border_show_count.load(Ordering::Relaxed) > shows_after_destroy_baseline);
     let shows_after_adopt = state.border_show_count.load(Ordering::Relaxed);
 
-    state.handle_window_event(WindowEvent::Focused(200));
+    state.handle_window_event(WindowEvent::Focused(200, 0));
 
     assert_eq!(state.previous_focused_hwnd, Some(200));
     assert_eq!(
@@ -3208,7 +3208,7 @@ fn test_managed_replacement_adopts_other_workspace() {
     assert_eq!(state.last_broadcast_focused, Some((mon as i64, Some(200))));
     assert_eq!(state.last_border_show_hwnd.load(Ordering::Relaxed), 200);
 
-    state.handle_window_event(WindowEvent::Focused(200));
+    state.handle_window_event(WindowEvent::Focused(200, 0));
     assert_eq!(state.previous_focused_hwnd, Some(200));
     assert_eq!(state.active_workspace_idx(mon), 1);
 }
@@ -3298,7 +3298,7 @@ fn test_managed_replacement_adopts_other_monitor() {
     assert_eq!(state.last_broadcast_focused, Some((2, Some(200))));
     assert_eq!(state.last_border_show_hwnd.load(Ordering::Relaxed), 200);
 
-    state.handle_window_event(WindowEvent::Focused(200));
+    state.handle_window_event(WindowEvent::Focused(200, 0));
     assert_eq!(state.focused_monitor, 2);
     assert_eq!(state.previous_focused_hwnd, Some(200));
 }
@@ -3710,7 +3710,7 @@ fn test_tear_off_event_order_does_not_leave_stale_focus_or_ghost() {
         .injected_window_info
         .insert(300, make_test_window_info(300));
     state.handle_window_event(WindowEvent::Created(300));
-    state.handle_window_event(WindowEvent::Focused(300));
+    state.handle_window_event(WindowEvent::Focused(300, 0));
     assert_eq!(state.previous_focused_hwnd, Some(300));
     assert!(state.focused_workspace().unwrap().contains_window(100));
     assert!(state.focused_workspace().unwrap().contains_window(200));
@@ -4910,7 +4910,7 @@ fn test_toggle_floating_roundtrip() {
     // This is the real runtime path: user clicks on the floating window,
     // OS fires EVENT_SYSTEM_FOREGROUND, and the daemon processes it.
     // The Focused handler updates previous_focused_hwnd for managed windows.
-    state.handle_window_event(WindowEvent::Focused(100));
+    state.handle_window_event(WindowEvent::Focused(100, 0));
     assert_eq!(
         state.previous_focused_hwnd,
         Some(100),
@@ -5914,7 +5914,7 @@ fn test_focused_event_updates_previous_focused_hwnd_for_floating() {
     assert_eq!(state.previous_focused_hwnd, None);
 
     // Simulate OS focus event on the floating window
-    state.handle_window_event(WindowEvent::Focused(500));
+    state.handle_window_event(WindowEvent::Focused(500, 0));
 
     // previous_focused_hwnd should now reflect the floating window
     assert_eq!(
@@ -5932,10 +5932,10 @@ fn test_focused_event_updates_previous_focused_hwnd_for_tiled() {
     ws.insert_window(100, Some(800)).unwrap();
     ws.insert_window(200, Some(800)).unwrap();
 
-    state.handle_window_event(WindowEvent::Focused(100));
+    state.handle_window_event(WindowEvent::Focused(100, 0));
     assert_eq!(state.previous_focused_hwnd, Some(100));
 
-    state.handle_window_event(WindowEvent::Focused(200));
+    state.handle_window_event(WindowEvent::Focused(200, 0));
     assert_eq!(state.previous_focused_hwnd, Some(200));
 }
 
@@ -6678,6 +6678,264 @@ fn test_workspace_numeric_switch_retains_raw_index_animation_direction() {
     );
 }
 
+fn switch_to_empty_workspace_with_pending_focus() -> AppState {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state
+        .injected_window_info
+        .insert(100, make_test_window_info(100));
+    state.handle_window_event(WindowEvent::Created(100));
+    state.previous_focused_hwnd = Some(100);
+    assert!(matches!(
+        state.handle_command(IpcCommand::SwitchWorkspace { index: 2 }),
+        IpcResponse::Ok
+    ));
+    assert!(state.pending_workspace_switch_focus.is_some());
+    state
+}
+
+#[test]
+fn test_workspace_switch_suppresses_old_focus_events_without_mutation() {
+    let mut state = switch_to_empty_workspace_with_pending_focus();
+    let monitor = state.focused_monitor;
+    let intent = state.pending_workspace_switch_focus.unwrap();
+    let focused_before = state.workspaces[&monitor][intent.source_workspace].focused_window();
+    let border_shows_before = state.border_show_count.load(Ordering::Relaxed);
+    let broadcast_before = state.last_broadcast_focused;
+
+    for event_time in [intent.armed_at_event_time_ms, intent.armed_at_event_time_ms] {
+        state.handle_window_event(WindowEvent::Focused(intent.source_hwnd, event_time));
+    }
+
+    assert_eq!(
+        state.active_workspace_idx(monitor),
+        intent.destination_workspace
+    );
+    assert_eq!(state.previous_focused_hwnd, None);
+    assert_eq!(
+        state.workspaces[&monitor][intent.source_workspace].focused_window(),
+        focused_before
+    );
+    assert_eq!(
+        state.border_show_count.load(Ordering::Relaxed),
+        border_shows_before
+    );
+    assert_eq!(state.last_broadcast_focused, broadcast_before);
+    assert_eq!(state.pending_workspace_switch_focus, Some(intent));
+
+    state
+        .injected_window_info
+        .insert(200, make_test_window_info(200));
+    state.handle_window_event(WindowEvent::Created(200));
+    assert!(state.workspaces[&monitor][intent.destination_workspace].contains_window(200));
+}
+
+#[test]
+fn test_workspace_switch_post_arm_old_focus_follows_and_clears_intent() {
+    let mut state = switch_to_empty_workspace_with_pending_focus();
+    let intent = state.pending_workspace_switch_focus.unwrap();
+
+    state.handle_window_event(WindowEvent::Focused(
+        intent.source_hwnd,
+        intent.armed_at_event_time_ms.wrapping_add(1),
+    ));
+
+    assert_eq!(
+        state.active_workspace_idx(intent.monitor),
+        intent.source_workspace
+    );
+    assert_eq!(state.previous_focused_hwnd, Some(intent.source_hwnd));
+    assert_eq!(state.pending_workspace_switch_focus, None);
+}
+
+#[test]
+fn test_workspace_switch_focus_intent_expires_or_yields_to_conflicting_focus() {
+    let mut expired = switch_to_empty_workspace_with_pending_focus();
+    let intent = expired.pending_workspace_switch_focus.as_mut().unwrap();
+    intent.set_at = std::time::Instant::now() - PendingWorkspaceSwitchFocus::TTL;
+    let expired_intent = *intent;
+    expired.handle_window_event(WindowEvent::Focused(
+        expired_intent.source_hwnd,
+        expired_intent.armed_at_event_time_ms,
+    ));
+    assert_eq!(
+        expired.active_workspace_idx(expired_intent.monitor),
+        expired_intent.source_workspace
+    );
+    assert_eq!(expired.pending_workspace_switch_focus, None);
+
+    let mut conflicting = switch_to_empty_workspace_with_pending_focus();
+    let intent = conflicting.pending_workspace_switch_focus.unwrap();
+    conflicting.workspaces.get_mut(&intent.monitor).unwrap()[intent.source_workspace]
+        .insert_window(200, Some(800))
+        .unwrap();
+    conflicting.handle_window_event(WindowEvent::Focused(
+        200,
+        intent.armed_at_event_time_ms.wrapping_add(1),
+    ));
+    assert_eq!(conflicting.pending_workspace_switch_focus, None);
+    assert_eq!(
+        conflicting.active_workspace_idx(intent.monitor),
+        intent.source_workspace
+    );
+}
+
+#[test]
+fn test_workspace_switch_stale_different_focus_keeps_source_guard_live() {
+    let mut state = switch_to_empty_workspace_with_pending_focus();
+    let intent = state.pending_workspace_switch_focus.unwrap();
+    state.workspaces.get_mut(&intent.monitor).unwrap()[intent.destination_workspace]
+        .insert_window(200, Some(800))
+        .unwrap();
+
+    state.handle_window_event(WindowEvent::Focused(200, intent.armed_at_event_time_ms));
+
+    assert_eq!(state.pending_workspace_switch_focus, Some(intent));
+    assert_eq!(
+        state.active_workspace_idx(intent.monitor),
+        intent.destination_workspace
+    );
+    assert_eq!(state.previous_focused_hwnd, Some(200));
+
+    state.handle_window_event(WindowEvent::Focused(
+        intent.source_hwnd,
+        intent.armed_at_event_time_ms,
+    ));
+
+    assert_eq!(state.pending_workspace_switch_focus, Some(intent));
+    assert_eq!(
+        state.active_workspace_idx(intent.monitor),
+        intent.destination_workspace
+    );
+    assert_eq!(state.previous_focused_hwnd, Some(200));
+}
+
+#[test]
+fn test_workspace_switch_noop_preserves_and_new_destination_clears_intent() {
+    let mut state = switch_to_empty_workspace_with_pending_focus();
+    let intent = state.pending_workspace_switch_focus.unwrap();
+
+    assert!(matches!(
+        state.handle_command(IpcCommand::SwitchWorkspace { index: 2 }),
+        IpcResponse::Ok
+    ));
+    assert_eq!(state.pending_workspace_switch_focus, Some(intent));
+
+    state.paused = false;
+    state.injected_apply_placements_behavior = Some(TestApplyPlacementsBehavior::SleepAndFail(
+        std::time::Duration::from_millis(1),
+    ));
+    assert!(matches!(
+        state.handle_command(IpcCommand::SwitchWorkspace { index: 3 }),
+        IpcResponse::Error { .. }
+    ));
+    assert_eq!(state.pending_workspace_switch_focus, None);
+}
+
+#[test]
+fn test_successful_workspace_switch_rearms_only_without_visible_destination_focus() {
+    let mut state = switch_to_empty_workspace_with_pending_focus();
+    let monitor = state.focused_monitor;
+    state.workspaces.get_mut(&monitor).unwrap()[1]
+        .insert_window(200, Some(800))
+        .unwrap();
+    state.workspaces.get_mut(&monitor).unwrap()[1]
+        .focus_window(200)
+        .unwrap();
+    state.previous_focused_hwnd = Some(200);
+    assert!(matches!(
+        state.handle_command(IpcCommand::SwitchWorkspace { index: 3 }),
+        IpcResponse::Ok
+    ));
+    assert_eq!(
+        state.pending_workspace_switch_focus.map(|intent| (
+            intent.source_workspace,
+            intent.destination_workspace,
+            intent.source_hwnd
+        )),
+        Some((1, 2, 200))
+    );
+
+    let mut visible_destination = AppState::new_with_config(test_config(), test_monitors());
+    let monitor = visible_destination.focused_monitor;
+    visible_destination.ensure_workspace_exists(monitor, 1);
+    visible_destination.workspaces.get_mut(&monitor).unwrap()[0]
+        .insert_window(100, Some(800))
+        .unwrap();
+    visible_destination.workspaces.get_mut(&monitor).unwrap()[1]
+        .insert_window(200, Some(800))
+        .unwrap();
+    visible_destination.previous_focused_hwnd = Some(100);
+    visible_destination.handle_command(IpcCommand::SwitchWorkspace { index: 2 });
+    assert_eq!(visible_destination.previous_focused_hwnd, Some(200));
+    assert_eq!(visible_destination.pending_workspace_switch_focus, None);
+
+    let mut minimized_destination = AppState::new_with_config(test_config(), test_monitors());
+    let monitor = minimized_destination.focused_monitor;
+    minimized_destination.ensure_workspace_exists(monitor, 1);
+    minimized_destination.workspaces.get_mut(&monitor).unwrap()[0]
+        .insert_window(100, Some(800))
+        .unwrap();
+    minimized_destination.workspaces.get_mut(&monitor).unwrap()[1]
+        .insert_window(200, Some(800))
+        .unwrap();
+    minimized_destination.workspaces.get_mut(&monitor).unwrap()[1].mark_minimized(200);
+    minimized_destination.previous_focused_hwnd = Some(100);
+    minimized_destination.handle_command(IpcCommand::SwitchWorkspace { index: 2 });
+    assert!(minimized_destination
+        .pending_workspace_switch_focus
+        .is_some());
+}
+
+#[test]
+fn test_workspace_switch_does_not_arm_for_unmanaged_source_and_removal_clears_intent() {
+    let mut unmanaged = AppState::new_with_config(test_config(), test_monitors());
+    let monitor = unmanaged.focused_monitor;
+    unmanaged.workspaces.get_mut(&monitor).unwrap()[0]
+        .insert_window(100, Some(800))
+        .unwrap();
+    unmanaged.previous_focused_hwnd = Some(999);
+    unmanaged.handle_command(IpcCommand::SwitchWorkspace { index: 2 });
+    assert_eq!(unmanaged.pending_workspace_switch_focus, None);
+
+    let mut gone = AppState::new_with_config(test_config(), test_monitors());
+    let monitor = gone.focused_monitor;
+    gone.workspaces.get_mut(&monitor).unwrap()[0]
+        .insert_window(100, Some(800))
+        .unwrap();
+    gone.workspaces.get_mut(&monitor).unwrap()[0]
+        .remove_window(100)
+        .unwrap();
+    gone.previous_focused_hwnd = Some(100);
+    gone.handle_command(IpcCommand::SwitchWorkspace { index: 2 });
+    assert_eq!(gone.pending_workspace_switch_focus, None);
+
+    let mut destroyed = switch_to_empty_workspace_with_pending_focus();
+    destroyed.handle_window_event(WindowEvent::Destroyed(100));
+    assert_eq!(destroyed.pending_workspace_switch_focus, None);
+
+    let mut hidden = switch_to_empty_workspace_with_pending_focus();
+    hidden.handle_window_event(WindowEvent::Hidden(100));
+    assert_eq!(hidden.pending_workspace_switch_focus, None);
+
+    let mut spurious_hidden = switch_to_empty_workspace_with_pending_focus();
+    spurious_hidden.injected_visible_hwnds.insert(100);
+    spurious_hidden.handle_window_event(WindowEvent::Hidden(100));
+    assert!(spurious_hidden.pending_workspace_switch_focus.is_some());
+
+    let mut pruned = switch_to_empty_workspace_with_pending_focus();
+    pruned.prune_stale_windows_for_test(&[100]);
+    assert_eq!(pruned.pending_workspace_switch_focus, None);
+}
+
+#[test]
+fn test_workspace_switch_focus_event_time_comparison_handles_equal_and_wraparound() {
+    use crate::event_handler::event_time_is_no_later_than;
+
+    assert!(event_time_is_no_later_than(42, 42));
+    assert!(event_time_is_no_later_than(u32::MAX, 0));
+    assert!(!event_time_is_no_later_than(1, u32::MAX));
+}
+
 #[test]
 fn test_move_to_workspace_relative_wraps_around() {
     // Prev from the first workspace wraps to the last (index 8 = workspace 9).
@@ -7170,7 +7428,7 @@ fn test_destroyed_or_hidden_focused_window_clears_focus_and_recovers() {
         }
         assert!(saw_clear);
 
-        state.handle_window_event(WindowEvent::Focused(200));
+        state.handle_window_event(WindowEvent::Focused(200, 0));
 
         assert_eq!(state.border_hide_count.load(Ordering::Relaxed), 1);
         assert_eq!(state.previous_focused_hwnd, Some(200));
@@ -7661,7 +7919,7 @@ fn test_recovery_arm_preserves_recently_hidden_entry_on_lookup_failure() {
         .recently_hidden_hwnds
         .insert(hwnd, std::time::Instant::now());
     // No injected_window_info -> lookup_window_info returns None.
-    state.handle_window_event(WindowEvent::Focused(hwnd));
+    state.handle_window_event(WindowEvent::Focused(hwnd, 0));
     assert!(
         state.recently_hidden_hwnds.contains_key(&hwnd),
         "entry must survive failed recovery so subsequent retries can succeed"
@@ -8731,7 +8989,7 @@ fn test_sticky_refocus_reasserts_after_landing_clobber() {
     let mut state = switch_with_focused_sticky();
     // Mid-slide, the destination's tiled window fires a spurious
     // foreground event and clobbers the tracked focus.
-    state.handle_window_event(WindowEvent::Focused(200));
+    state.handle_window_event(WindowEvent::Focused(200, 0));
     assert_eq!(state.previous_focused_hwnd, Some(200));
 
     // Animation landing pass (mirrors handle_animation_frame_applied):

@@ -435,6 +435,12 @@ impl AppState {
         home: Option<(MonitorId, usize)>,
         wid: u64,
     ) -> StaleCleanupResult {
+        if self
+            .pending_workspace_switch_focus
+            .is_some_and(|intent| intent.source_hwnd == wid)
+        {
+            self.pending_workspace_switch_focus = None;
+        }
         let cancel = self.cancel_matching_unfinished_move_size_ui(wid);
         self.release_departing_hwnd_ghost(wid);
         let mut layout_changed = cancel.needs_layout();

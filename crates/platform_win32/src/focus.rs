@@ -21,6 +21,12 @@ pub fn get_foreground_window() -> Option<WindowId> {
     (!hwnd.0.is_null()).then_some(hwnd.0 as WindowId)
 }
 
+/// Current time in the same wrapping millisecond domain as WinEvent timestamps.
+pub fn current_event_time_ms() -> u32 {
+    use windows::Win32::System::SystemInformation::GetTickCount;
+    unsafe { GetTickCount() }
+}
+
 /// Milliseconds since the user last produced a real input event
 /// (keyboard or mouse). Used to distinguish user-initiated focus changes
 /// from spurious `EVENT_SYSTEM_FOREGROUND` events fired by background

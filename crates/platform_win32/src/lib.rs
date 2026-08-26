@@ -54,8 +54,8 @@ pub use enumeration::{
 };
 pub use event_hooks::{install_event_hooks, EventHookHandle, WindowEvent};
 pub use focus::{
-    close_window, get_foreground_window, ms_since_last_user_input, raise_window_no_activate,
-    set_foreground_window, warp_cursor_to_window,
+    close_window, current_event_time_ms, get_foreground_window, ms_since_last_user_input,
+    raise_window_no_activate, set_foreground_window, warp_cursor_to_window,
 };
 pub use placement::apply_cloak_state;
 pub use placement::clear_suspected_oversize;

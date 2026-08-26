@@ -362,6 +362,9 @@ pub(crate) struct AppState {
     pub(crate) pending_suppress_landing_focus_resync: bool,
     /// Previously focused window for border color tracking.
     pub(crate) previous_focused_hwnd: Option<u64>,
+    /// Suppresses delayed focus notifications for the exact window left by a
+    /// successful workspace switch whose destination has no visible focus.
+    pub(crate) pending_workspace_switch_focus: Option<PendingWorkspaceSwitchFocus>,
     /// `(monitor, hwnd)` of the most-recently-broadcast
     /// `FocusedWindowChanged` event. Independent from
     /// `previous_focused_hwnd`: command-driven focus paths
@@ -647,6 +650,27 @@ pub(crate) struct AppState {
     pub(crate) rename_result_tx: Option<std::sync::mpsc::Sender<crate::events::TabRenameResult>>,
 }
 
+/// Suppresses stale focus notifications from the exact HWND left behind by a
+/// successful workspace switch until either a newer focus event or the short
+/// session-only deadline resolves it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PendingWorkspaceSwitchFocus {
+    pub(crate) monitor: MonitorId,
+    pub(crate) source_workspace: usize,
+    pub(crate) destination_workspace: usize,
+    pub(crate) source_hwnd: u64,
+    pub(crate) set_at: std::time::Instant,
+    pub(crate) armed_at_event_time_ms: u32,
+}
+
+impl PendingWorkspaceSwitchFocus {
+    pub(crate) const TTL: std::time::Duration = std::time::Duration::from_millis(1500);
+
+    pub(crate) fn is_fresh(&self) -> bool {
+        self.set_at.elapsed() < Self::TTL
+    }
+}
+
 /// Tracks an in-flight tab focus change synthesized by the tab strip
 /// overlay's click handler or `Ctrl+Alt+J/K` cycle. Consumed by
 /// `event_handler.rs`'s same-column suppression bypass when the matching
@@ -776,6 +800,7 @@ impl AppState {
             pending_sticky_refocus: None,
             pending_suppress_landing_focus_resync: false,
             previous_focused_hwnd: None,
+            pending_workspace_switch_focus: None,
             last_broadcast_focused: None,
             last_focus_change_at: None,
             last_prune_at: None,

@@ -1,7 +1,7 @@
 //! IPC command handling for AppState.
 
 use crate::config::Config;
-use crate::state::{validate_set_width_fraction, AppState};
+use crate::state::{validate_set_width_fraction, AppState, PendingWorkspaceSwitchFocus};
 use leopardwm_core_layout::{Rect, Workspace};
 use leopardwm_ipc::{IpcCommand, IpcResponse};
 use leopardwm_platform_win32::{
@@ -1039,6 +1039,10 @@ impl AppState {
         // Ensure target workspace exists (lazy creation)
         self.ensure_workspace_exists(monitor, idx);
 
+        // A new explicit destination supersedes any earlier stale-focus guard
+        // before layout application can fail.
+        self.pending_workspace_switch_focus = None;
+
         // Switch active workspace
         self.active_workspace.insert(monitor, idx);
 
@@ -1142,6 +1146,23 @@ impl AppState {
         if let Some(hwnd) = sticky_focus {
             if self.refocus_sticky_window(hwnd) && self.layout_transition.is_some() {
                 self.pending_sticky_refocus = Some(hwnd);
+            }
+        }
+        if self.previous_focused_hwnd.is_none() {
+            if let Some(source_hwnd) = leaving_focus.filter(|hwnd| {
+                self.workspaces
+                    .get(&monitor)
+                    .and_then(|workspaces| workspaces.get(current_idx))
+                    .is_some_and(|workspace| workspace.contains_window(*hwnd))
+            }) {
+                self.pending_workspace_switch_focus = Some(PendingWorkspaceSwitchFocus {
+                    monitor,
+                    source_workspace: current_idx,
+                    destination_workspace: idx,
+                    source_hwnd,
+                    set_at: std::time::Instant::now(),
+                    armed_at_event_time_ms: leopardwm_platform_win32::current_event_time_ms(),
+                });
             }
         }
         self.broadcast_event(leopardwm_ipc::IpcEvent::WorkspaceChanged {
