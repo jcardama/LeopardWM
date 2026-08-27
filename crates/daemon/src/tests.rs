@@ -6744,6 +6744,28 @@ fn test_created_event_uses_opening_monitor() {
 }
 
 #[test]
+fn test_created_event_off_monitor_uses_focused_monitor() {
+    let mut state = AppState::new_with_config(test_config(), two_monitors());
+    state.focused_monitor = 2;
+
+    let mut info = make_test_window_info(100);
+    info.rect = Rect::new(5000, 4000, 800, 600);
+    state.injected_window_info.insert(100, info);
+
+    state.handle_window_event(WindowEvent::Created(100));
+
+    let focused_workspace = state.active_workspace_idx(2);
+    assert!(
+        state.workspaces[&2][focused_workspace].contains_window(100),
+        "an off-monitor opening rect retains the focused monitor"
+    );
+    assert!(
+        !state.workspaces[&1][state.active_workspace_idx(1)].contains_window(100),
+        "an off-monitor opening rect does not fall back to the primary monitor"
+    );
+}
+
+#[test]
 fn test_created_event_applies_rule_column_width_fraction() {
     let mut config = test_config();
     config.window_rules = vec![crate::config::WindowRule {

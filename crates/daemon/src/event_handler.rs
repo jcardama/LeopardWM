@@ -634,12 +634,15 @@ impl AppState {
                 return;
             }
 
-            // New windows belong to the monitor where Windows opened them.
+            // New windows belong to the monitor containing their opening center,
+            // or the focused monitor when they open outside attached displays.
             // A per-app rule's open_on_workspace can still redirect them
             // within that monitor below.
-            let monitors: Vec<_> = self.monitors.values().cloned().collect();
-            let monitor_id = find_monitor_for_rect(&monitors, &win_info.rect)
-                .map(|m| m.id)
+            let monitor_id = self
+                .monitors
+                .values()
+                .find(|monitor| monitor.contains_rect_center(&win_info.rect))
+                .map(|monitor| monitor.id)
                 .unwrap_or(self.focused_monitor);
 
             // Get floating rect before borrowing workspace mutably

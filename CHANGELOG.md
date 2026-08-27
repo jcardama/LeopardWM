@@ -25,9 +25,9 @@ All notable changes to LeopardWM will be documented in this file.
 ### Fixes
 
 - **New windows stay on the monitor where Windows opens them.** Monitor
-  selection now uses the window's opening bounds instead of the focused
-  monitor, while preserving fullscreen stacking without stealing focus when
-  new-window focusing is disabled.
+  selection uses opening bounds when they map to an attached monitor; otherwise
+  it retains the focused monitor, while preserving fullscreen stacking without
+  stealing focus when new-window focusing is disabled.
 - **Scoop release metadata and maintenance are corrected and guarded.** The
   checked-in manifest matches the published `0.2.7` package URL, checksum, and
   extraction directory, while CI validation and release documentation prevent
