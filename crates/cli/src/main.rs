@@ -11,6 +11,7 @@ mod daemon_cmds;
 mod doctor;
 mod ipc_client;
 mod output;
+mod shortcut_guide;
 #[cfg(test)]
 mod tests;
 mod window_inspect;
@@ -28,6 +29,7 @@ use daemon_cmds::{
 use doctor::{handle_collect_logs, handle_doctor};
 use ipc_client::{is_non_success_response, send_command};
 use output::print_response;
+use shortcut_guide::handle_export_shortcut_guide;
 use window_inspect::handle_doctor_windows;
 
 #[tokio::main]
@@ -59,6 +61,9 @@ async fn main() -> Result<()> {
         } => return handle_doctor_windows(watch, delay, include_titles, all),
         Commands::Autostart { action } => return handle_autostart(action),
         Commands::CollectLogs => return handle_collect_logs(),
+        Commands::ExportShortcutGuide { output, install } => {
+            return handle_export_shortcut_guide(output, install).await;
+        }
         Commands::Config { action } => return handle_config(action),
         _ => {}
     }

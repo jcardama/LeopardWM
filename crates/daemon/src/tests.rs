@@ -4514,6 +4514,167 @@ fn test_cmd_query_focused_empty() {
 }
 
 #[test]
+fn test_cmd_query_hotkeys_returns_catalog_order_and_defaults() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    let response = state.handle_command(IpcCommand::QueryHotkeys);
+
+    let IpcResponse::HotkeyList {
+        hotkeys,
+        scroll_modifier,
+        issues,
+    } = response
+    else {
+        panic!("Expected HotkeyList");
+    };
+
+    let catalog = leopardwm_ipc::hotkeys::hotkey_catalog();
+    assert_eq!(hotkeys.len(), catalog.len());
+    assert_eq!(hotkeys[0].action_id, catalog[0].id);
+    assert_eq!(hotkeys[0].label, catalog[0].label);
+    assert_eq!(hotkeys[0].group, catalog[0].group);
+    assert_eq!(hotkeys[0].bindings, vec!["Ctrl+Alt+H"]);
+    assert!(hotkeys[0].enabled);
+    assert_eq!(scroll_modifier, "Ctrl+Alt");
+    assert!(issues.is_empty());
+}
+
+#[test]
+fn test_cmd_query_hotkeys_preserves_diagnostics_and_unbound_actions() {
+    let mut config = test_config();
+    config.hotkeys.bindings.clear();
+    config
+        .hotkeys
+        .bindings
+        .insert("Ctrl+Alt+Z".to_string(), "focus_left".to_string());
+    config
+        .hotkeys
+        .bindings
+        .insert("Ctrl+Alt+A".to_string(), "focus-left".to_string());
+    config
+        .hotkeys
+        .bindings
+        .insert("Ctrl+Nope".to_string(), "focus_right".to_string());
+    config
+        .hotkeys
+        .bindings
+        .insert("Ctrl+Alt+Q".to_string(), "missing_action".to_string());
+
+    let mut state = AppState::new_with_config(config, test_monitors());
+    let response = state.handle_command(IpcCommand::QueryHotkeys);
+    let IpcResponse::HotkeyList {
+        hotkeys, issues, ..
+    } = response
+    else {
+        panic!("Expected HotkeyList");
+    };
+
+    let focus_left = hotkeys
+        .iter()
+        .find(|entry| entry.action_id == "focus_left")
+        .unwrap();
+    assert_eq!(focus_left.bindings, vec!["Ctrl+Alt+A", "Ctrl+Alt+Z"]);
+    assert!(focus_left.enabled);
+
+    let focus_right = hotkeys
+        .iter()
+        .find(|entry| entry.action_id == "focus_right")
+        .unwrap();
+    assert!(focus_right.bindings.is_empty());
+    assert!(!focus_right.enabled);
+
+    assert_eq!(issues.len(), 2);
+    assert_eq!(issues[0].binding, "Ctrl+Alt+Q");
+    assert_eq!(issues[0].message, "unknown action identifier");
+    assert_eq!(issues[1].binding, "Ctrl+Nope");
+    assert_eq!(issues[1].message, "invalid key chord");
+}
+
+#[test]
+fn test_cmd_query_hotkeys_appends_valid_non_catalog_actions() {
+    let mut config = test_config();
+    config.hotkeys.bindings.clear();
+    config
+        .hotkeys
+        .bindings
+        .insert("Ctrl+Alt+N".to_string(), "focus_next".to_string());
+
+    let mut state = AppState::new_with_config(config, test_monitors());
+    let IpcResponse::HotkeyList {
+        hotkeys, issues, ..
+    } = state.handle_command(IpcCommand::QueryHotkeys)
+    else {
+        panic!("Expected HotkeyList");
+    };
+
+    let extra = hotkeys.last().unwrap();
+    assert_eq!(extra.action_id, "focus_next");
+    assert_eq!(extra.label, "Focus next");
+    assert_eq!(extra.group, "Other");
+    assert_eq!(extra.bindings, vec!["Ctrl+Alt+N"]);
+    assert!(extra.enabled);
+    assert!(issues.is_empty());
+}
+
+#[test]
+fn test_cmd_query_hotkeys_reports_both_invalid_action_and_chord() {
+    let mut config = test_config();
+    config.hotkeys.bindings.clear();
+    config
+        .hotkeys
+        .bindings
+        .insert("Ctrl+Nope".to_string(), "missing_action".to_string());
+
+    let mut state = AppState::new_with_config(config, test_monitors());
+    let IpcResponse::HotkeyList { issues, .. } = state.handle_command(IpcCommand::QueryHotkeys)
+    else {
+        panic!("Expected HotkeyList");
+    };
+
+    assert_eq!(issues.len(), 2);
+    assert_eq!(issues[0].message, "invalid key chord");
+    assert_eq!(issues[1].message, "unknown action identifier");
+}
+
+#[test]
+fn test_cmd_query_hotkeys_excludes_f_key_trigger_used_as_modifier() {
+    let mut config = test_config();
+    config.hotkeys.bindings.clear();
+    config
+        .hotkeys
+        .bindings
+        .insert("F13+H".to_string(), "focus_left".to_string());
+    config
+        .hotkeys
+        .bindings
+        .insert("Ctrl+F13".to_string(), "focus_right".to_string());
+
+    let mut state = AppState::new_with_config(config, test_monitors());
+    let IpcResponse::HotkeyList {
+        hotkeys, issues, ..
+    } = state.handle_command(IpcCommand::QueryHotkeys)
+    else {
+        panic!("Expected HotkeyList");
+    };
+
+    let focus_left = hotkeys
+        .iter()
+        .find(|entry| entry.action_id == "focus_left")
+        .unwrap();
+    assert_eq!(focus_left.bindings, vec!["F13+H"]);
+    let focus_right = hotkeys
+        .iter()
+        .find(|entry| entry.action_id == "focus_right")
+        .unwrap();
+    assert!(!focus_right.enabled);
+    assert!(focus_right.bindings.is_empty());
+    assert_eq!(issues.len(), 1);
+    assert_eq!(
+        issues[0].message,
+        "trigger F-key is also configured as a modifier"
+    );
+}
+
+#[test]
 fn test_cmd_focus_up_empty() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
     let resp = state.handle_command(IpcCommand::FocusUp);

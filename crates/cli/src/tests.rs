@@ -302,6 +302,14 @@ fn test_to_ipc_command_query_all() {
 }
 
 #[test]
+fn test_to_ipc_command_query_hotkeys() {
+    let cmd = Commands::Query {
+        what: QueryType::Hotkeys,
+    };
+    assert!(matches!(to_ipc_command(&cmd), IpcCommand::QueryHotkeys));
+}
+
+#[test]
 fn test_to_ipc_command_refresh() {
     let cmd = Commands::Refresh;
     assert!(matches!(to_ipc_command(&cmd), IpcCommand::Refresh));
@@ -348,6 +356,31 @@ fn test_cli_alias_restore_windows_parses_to_emergency_uncloak() {
     let cli =
         Cli::try_parse_from(["leopardwm-cli", "restore-windows"]).expect("alias should parse");
     assert!(matches!(cli.command, Commands::EmergencyUncloak));
+}
+
+#[test]
+fn test_cli_export_shortcut_guide_install_parses() {
+    let cli = Cli::try_parse_from(["leopardwm-cli", "export-shortcut-guide", "--install"])
+        .expect("export command should parse");
+    assert!(matches!(
+        cli.command,
+        Commands::ExportShortcutGuide {
+            output: None,
+            install: true
+        }
+    ));
+}
+
+#[test]
+fn test_cli_export_shortcut_guide_rejects_output_with_install() {
+    let result = Cli::try_parse_from([
+        "leopardwm-cli",
+        "export-shortcut-guide",
+        "--output",
+        "guide.yml",
+        "--install",
+    ]);
+    assert!(result.is_err());
 }
 
 // =========================================================================

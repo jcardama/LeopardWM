@@ -23,7 +23,9 @@ const MAX_PIPE_SCOPE_SEGMENT_LEN: usize = 64;
 /// - v2: tabbed columns — `ColumnSummary.mode` extension on `LayoutChanged`,
 ///   new `ToggleTabbed` and `SetActiveTab` commands. Wire is additive;
 ///   subscribers using `serde(default)` parse v1 payloads cleanly.
-pub const IPC_PROTOCOL_VERSION: u32 = 2;
+/// - v3: effective hotkey query — `QueryHotkeys`, `HotkeyList`, and the
+///   associated binding/diagnostic records.
+pub const IPC_PROTOCOL_VERSION: u32 = 3;
 /// Minimum protocol version this crate supports.
 pub const IPC_MIN_SUPPORTED_PROTOCOL_VERSION: u32 = 1;
 
@@ -154,6 +156,35 @@ pub struct WindowInfo {
     pub is_floating: bool,
     /// Whether this window currently has focus.
     pub is_focused: bool,
+}
+
+/// One catalog action and its effective, executable keyboard bindings.
+///
+/// Records are returned in [`hotkeys::hotkey_catalog`] order. Bindings within
+/// a record are sorted for deterministic consumers such as manifest exporters.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HotkeyBindingInfo {
+    /// Stable action identifier used by LeopardWM configuration.
+    pub action_id: String,
+    /// Human-readable action label.
+    pub label: String,
+    /// Display section used by settings and shortcut guides.
+    pub group: String,
+    /// Valid configured chords that execute this action.
+    pub bindings: Vec<String>,
+    /// Whether at least one valid configured chord executes this action.
+    pub enabled: bool,
+}
+
+/// A hotkey configuration entry that could not become an executable binding.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HotkeyIssue {
+    /// Original configured chord.
+    pub binding: String,
+    /// Original configured action identifier.
+    pub action_id: String,
+    /// Human-readable validation failure.
+    pub message: String,
 }
 
 /// Kinds of events a subscriber can receive. Used as the `Subscribe`
@@ -396,6 +427,8 @@ pub enum IpcCommand {
     QueryWorkspace,
     /// Query the focused window.
     QueryFocused,
+    /// Query the effective hotkey catalog and configuration diagnostics.
+    QueryHotkeys,
 
     /// Re-enumerate windows and add new ones.
     Refresh,
@@ -574,6 +607,16 @@ pub enum IpcResponse {
     FocusedWindowInfo {
         /// The focused window's info, if any.
         window: Option<WindowInfo>,
+    },
+
+    /// Effective configured hotkeys plus non-executable config entries.
+    HotkeyList {
+        /// Every bindable action in catalog display order.
+        hotkeys: Vec<HotkeyBindingInfo>,
+        /// Modifier chord required for mouse-wheel workspace scrolling.
+        scroll_modifier: String,
+        /// Invalid chords and unknown action identifiers, sorted stably.
+        issues: Vec<HotkeyIssue>,
     },
 
     /// Daemon status information.
@@ -1171,13 +1214,45 @@ mod tests {
     }
 
     #[test]
-    fn test_protocol_version_bumped_to_v2() {
+    fn test_protocol_version_bumped_to_v3() {
         // Sanity guard: bumping the version forces a deliberate review of
         // wire-compat docs in agent_docs/ipc-events.md when this test breaks.
-        assert_eq!(IPC_PROTOCOL_VERSION, 2);
-        // Old v1 clients should still negotiate.
+        assert_eq!(IPC_PROTOCOL_VERSION, 3);
+        // Older additive-protocol clients should still negotiate.
         assert!(is_protocol_version_supported(1));
         assert!(is_protocol_version_supported(2));
+        assert!(is_protocol_version_supported(3));
+    }
+
+    #[test]
+    fn test_query_hotkeys_command_round_trip() {
+        let cmd = IpcCommand::QueryHotkeys;
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert_eq!(json, r#"{"type":"query_hotkeys"}"#);
+        let decoded: IpcCommand = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, cmd);
+    }
+
+    #[test]
+    fn test_hotkey_list_response_round_trip() {
+        let response = IpcResponse::HotkeyList {
+            hotkeys: vec![HotkeyBindingInfo {
+                action_id: "focus_left".to_string(),
+                label: "Focus left".to_string(),
+                group: "Focus".to_string(),
+                bindings: vec!["Ctrl+Alt+H".to_string()],
+                enabled: true,
+            }],
+            scroll_modifier: "Ctrl+Alt".to_string(),
+            issues: vec![HotkeyIssue {
+                binding: "Ctrl+Nope".to_string(),
+                action_id: "focus_left".to_string(),
+                message: "invalid key chord".to_string(),
+            }],
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        let decoded: IpcResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, response);
     }
 
     #[test]

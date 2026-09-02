@@ -211,6 +211,15 @@ pub(crate) enum Commands {
     },
     /// Collect diagnostic logs for bug reports
     CollectLogs,
+    /// Export effective hotkeys as a PowerToys Shortcut Guide manifest
+    ExportShortcutGuide {
+        /// Write the manifest to this path instead of stdout
+        #[arg(short, long, conflicts_with = "install")]
+        output: Option<PathBuf>,
+        /// Install into the PowerToys user-manifest directory
+        #[arg(long, conflicts_with = "output")]
+        install: bool,
+    },
     /// Manage configuration files
     Config {
         #[command(subcommand)]
@@ -310,6 +319,8 @@ pub(crate) enum QueryType {
     Focused,
     /// List all managed windows
     All,
+    /// List effective hotkeys and configuration diagnostics
+    Hotkeys,
 }
 
 #[derive(Subcommand)]
