@@ -59,6 +59,7 @@ pub(crate) fn to_ipc_command(cmd: &Commands) -> IpcCommand {
             QueryType::Workspace => IpcCommand::QueryWorkspace,
             QueryType::Focused => IpcCommand::QueryFocused,
             QueryType::All => IpcCommand::QueryAllWindows,
+            QueryType::Hotkeys => IpcCommand::QueryHotkeys,
         },
         Commands::Refresh => IpcCommand::Refresh,
         Commands::Reload => IpcCommand::Reload,
@@ -95,6 +96,9 @@ pub(crate) fn to_ipc_command(cmd: &Commands) -> IpcCommand {
         Commands::Doctor { .. } => unreachable!("Doctor handled separately"),
         Commands::Autostart { .. } => unreachable!("Autostart handled separately"),
         Commands::CollectLogs => unreachable!("CollectLogs handled separately"),
+        Commands::ExportShortcutGuide { .. } => {
+            unreachable!("ExportShortcutGuide handled separately")
+        }
         Commands::Config { .. } => unreachable!("Config handled separately"),
         Commands::EmergencyUncloak => unreachable!("EmergencyUncloak handled separately"),
         Commands::Stop => IpcCommand::Stop,

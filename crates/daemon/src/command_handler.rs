@@ -1,12 +1,13 @@
 //! IPC command handling for AppState.
 
-use crate::config::Config;
+use crate::config::{self, Config};
 use crate::state::{validate_set_width_fraction, AppState, PendingWorkspaceSwitchFocus};
 use leopardwm_core_layout::{Rect, Workspace};
-use leopardwm_ipc::{IpcCommand, IpcResponse};
+use leopardwm_ipc::{HotkeyBindingInfo, HotkeyIssue, IpcCommand, IpcResponse};
 use leopardwm_platform_win32::{
-    enumerate_windows, get_process_executable, monitor_above, monitor_below, monitor_to_left,
-    monitor_to_right, move_window_offscreen, MonitorId, MonitorInfo,
+    enumerate_windows, fn_mod_bit, get_process_executable, monitor_above, monitor_below,
+    monitor_to_left, monitor_to_right, move_window_offscreen, parse_hotkey_string, MonitorId,
+    MonitorInfo,
 };
 use std::collections::HashMap;
 use tracing::{debug, info};
@@ -36,6 +37,14 @@ enum FullscreenPolicy {
 /// excluded here; the caller only warps when the focused window actually
 /// changed, so an edge-wrap focus command that crosses into another workspace
 /// still warps onto the window it lands on.
+fn humanize_action_id(action_id: &str) -> String {
+    let mut label = action_id.replace('_', " ");
+    if let Some(first) = label.get_mut(0..1) {
+        first.make_ascii_uppercase();
+    }
+    label
+}
+
 fn is_focus_navigation(cmd: &IpcCommand) -> bool {
     use IpcCommand::*;
     matches!(
@@ -366,6 +375,7 @@ impl AppState {
             }
             IpcCommand::QueryWorkspace => self.handle_query_workspace(),
             IpcCommand::QueryFocused => self.handle_query_focused(),
+            IpcCommand::QueryHotkeys => self.handle_query_hotkeys(),
             IpcCommand::Refresh => self.handle_refresh(),
             IpcCommand::Apply => {
                 if let Err(e) = self.apply_layout() {
@@ -800,6 +810,110 @@ impl AppState {
     }
 
     /// Handle `IpcCommand::QueryAllWindows`.
+    fn handle_query_hotkeys(&self) -> IpcResponse {
+        let catalog = leopardwm_ipc::hotkeys::hotkey_catalog();
+        let mut bindings_by_action: HashMap<String, Vec<String>> = HashMap::new();
+        let mut issues = Vec::new();
+        let mut executable_candidates = Vec::new();
+
+        let mut configured: Vec<_> = self.config.hotkeys.bindings.iter().collect();
+        configured.sort_by(
+            |(left_binding, left_action), (right_binding, right_action)| {
+                left_binding
+                    .cmp(right_binding)
+                    .then_with(|| left_action.cmp(right_action))
+            },
+        );
+
+        for (binding, configured_action) in configured {
+            let normalized_action = configured_action.to_lowercase().replace('-', "_");
+            let action_id = match normalized_action.as_str() {
+                "resize_grow" => "cycle_width_up".to_string(),
+                "resize_shrink" => "cycle_width_down".to_string(),
+                _ => normalized_action,
+            };
+            let valid_action = config::parse_command(&action_id).is_some();
+            let parsed_binding = parse_hotkey_string(binding);
+
+            if !valid_action {
+                issues.push(HotkeyIssue {
+                    binding: binding.clone(),
+                    action_id: configured_action.clone(),
+                    message: "unknown action identifier".to_string(),
+                });
+            }
+            if parsed_binding.is_none() {
+                issues.push(HotkeyIssue {
+                    binding: binding.clone(),
+                    action_id: configured_action.clone(),
+                    message: "invalid key chord".to_string(),
+                });
+            }
+
+            if let (true, Some((modifiers, key))) = (valid_action, parsed_binding) {
+                executable_candidates.push((binding.clone(), action_id, modifiers, key));
+            }
+        }
+
+        let fn_modifier_mask = executable_candidates
+            .iter()
+            .fold(0u16, |mask, (_, _, modifiers, _)| mask | modifiers.fn_mods);
+        for (binding, action_id, _, key) in executable_candidates {
+            if fn_mod_bit(key).is_some_and(|bit| bit & fn_modifier_mask != 0) {
+                issues.push(HotkeyIssue {
+                    binding,
+                    action_id,
+                    message: "trigger F-key is also configured as a modifier".to_string(),
+                });
+                continue;
+            }
+            bindings_by_action
+                .entry(action_id)
+                .or_default()
+                .push(binding);
+        }
+
+        let mut hotkeys: Vec<_> = catalog
+            .into_iter()
+            .map(|action| {
+                let mut bindings = bindings_by_action.remove(&action.id).unwrap_or_default();
+                bindings.sort();
+                HotkeyBindingInfo {
+                    action_id: action.id,
+                    label: action.label,
+                    group: action.group.to_string(),
+                    enabled: !bindings.is_empty(),
+                    bindings,
+                }
+            })
+            .collect();
+
+        let mut extra_actions: Vec<_> = bindings_by_action.into_iter().collect();
+        extra_actions.sort_by(|(left, _), (right, _)| left.cmp(right));
+        hotkeys.extend(extra_actions.into_iter().map(|(action_id, mut bindings)| {
+            bindings.sort();
+            HotkeyBindingInfo {
+                label: humanize_action_id(&action_id),
+                group: "Other".to_string(),
+                action_id,
+                enabled: !bindings.is_empty(),
+                bindings,
+            }
+        }));
+        issues.sort_by(|left, right| {
+            left.binding
+                .cmp(&right.binding)
+                .then_with(|| left.action_id.cmp(&right.action_id))
+                .then_with(|| left.message.cmp(&right.message))
+        });
+
+        IpcResponse::HotkeyList {
+            hotkeys,
+            scroll_modifier: self.config.hotkeys.scroll_modifier.clone(),
+            issues,
+        }
+    }
+
     fn handle_query_all_windows(&mut self) -> IpcResponse {
         let mut windows = Vec::new();
 

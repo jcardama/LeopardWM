@@ -89,6 +89,31 @@ pub(crate) fn print_response(response: &IpcResponse) {
                 println!("No window is currently focused");
             }
         },
+        IpcResponse::HotkeyList {
+            hotkeys,
+            scroll_modifier,
+            issues,
+        } => {
+            println!("Hotkeys:");
+            println!("  Scroll modifier: {}", scroll_modifier);
+            for hotkey in hotkeys {
+                let binding = if hotkey.bindings.is_empty() {
+                    "(unbound)".to_string()
+                } else {
+                    hotkey.bindings.join(" / ")
+                };
+                println!("  [{}] {}: {}", hotkey.group, hotkey.label, binding);
+            }
+            if !issues.is_empty() {
+                println!("  Issues:");
+                for issue in issues {
+                    println!(
+                        "    {} -> {}: {}",
+                        issue.binding, issue.action_id, issue.message
+                    );
+                }
+            }
+        }
         IpcResponse::StatusInfo {
             version,
             monitors,

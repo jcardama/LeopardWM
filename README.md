@@ -219,7 +219,24 @@ lwm status             # show version, monitor count, window count, uptime
 lwm query workspace    # current workspace placements as JSON
 lwm query focused      # focused window info
 lwm query all-windows  # every managed window across all workspaces
+lwm query hotkeys      # effective bindings plus config diagnostics
 ```
+
+### PowerToys Shortcut Guide
+
+Export the daemon's effective hotkeys as a user manifest for the PowerToys
+Shortcut Guide:
+
+```bash
+lwm export-shortcut-guide --install
+```
+
+The command writes
+`%LOCALAPPDATA%\Microsoft\WinGet\KeyboardShortcuts\LeopardWM.LeopardWM.en-US.yml`.
+With PowerToys running and Shortcut Guide enabled, press `Win+Shift+?` to open
+the guide. Run the exporter again after changing hotkeys. Use
+`--output <path>` instead of `--install` to inspect or version the generated
+YAML, or omit both options to print it to stdout.
 
 ### Layout commands
 
