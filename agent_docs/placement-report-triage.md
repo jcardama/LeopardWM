@@ -10,6 +10,15 @@ This is an evidence intake record for local ticket LWM-210-01. It was reviewed o
 | Verified | Confirmed from attached logs, attached config, or current code |
 | Inference | A hypothesis or interpretation, not a conclusion |
 
+### Evidence sources
+
+Log-derived rows in this record come from these GitHub issue attachments. They are not checked into the repository.
+
+- First #104 daemon log (v0.2.8 resolution cycling, 2026-09-02): https://github.com/user-attachments/files/31746799/leopardwm-daemon_test.log
+- Reporter config: https://github.com/user-attachments/files/31747005/leopardwm-config.txt
+- Second #104 daemon log (Notion, 2026-09-04): https://github.com/user-attachments/files/31821712/leopardwm-daemon_test.log
+- #112 has no attached log yet.
+
 ## #104 Windows Settings tiled off-screen at low resolution
 
 **Status:** Reproduced by reporter on v0.2.7 and v0.2.8; awaiting v0.2.9 retest evidence. A retest request was posted 2026-09-15 by jcardama. No reporter reply as of 2026-09-16. Not reproduced locally in earlier sessions. A v0.2.8-era comment says the exact Settings 1280x720 case could not be reliably confirmed.
@@ -53,7 +62,7 @@ Verified from the daemon log: the reporter cycled exactly those resolutions betw
 
 Reporter-stated trigger: lower the resolution, open Windows Settings (class `ApplicationFrameWindow`, verified in log). The window lands mostly off the right edge and stays there. Focusing it later leaves part obscured.
 
-Reporter-stated workaround: minimizing and restoring, or grabbing a resize edge, re-tiles it correctly.
+Reporter-stated workaround: by minimizing and maximizing, or by clicking at an edge of the window (when mouse cursor indicates a resize action). That re-tiles it correctly.
 
 ### Other applications
 
@@ -73,7 +82,7 @@ The second log also shows a daemon restart at 05:38 where a new instance briefly
 
 ### Code facts and coverage gaps
 
-Verified: native minimum sizes are runtime-only. `window_min_widths` / `window_min_heights` are `#[serde(skip)]` in `core_layout/src/workspace/mod.rs:99-108`. Requested column widths plus scroll offset are persisted and restored (`daemon/src/persistence.rs:190-203`, `269-299`).
+Verified: native minimum sizes are runtime-only. `window_min_widths` / `window_min_heights` are `#[serde(skip)]` in `crates/core_layout/src/workspace/mod.rs:99-108`. Requested column widths plus scroll offset are persisted and restored (`crates/daemon/src/persistence.rs:190-203`, `269-299`).
 
 Inference to test, not a conclusion: a placement failure that survives a daemon restart cannot be carried by a persisted native minimum. It must come from persisted requested width or scroll state, from Windows' own remembered window placement for that app, or from re-detection on every launch.
 
@@ -88,11 +97,11 @@ Deterministic coverage gaps (verified by code mapping): no test combines a viewp
 
 | Location | What it covers |
 |---|---|
-| `core_layout/src/tests.rs:2783-2792` | rescale 1920 to 1280 |
-| `daemon/src/tests.rs:6351-6371` | shrink keeps focused column visible |
-| `daemon/src/tests.rs:721-770` | width feedback on existing windows |
-| `core_layout/src/tests.rs:626-658` | minimum on focused column re-derives visibility |
-| `platform_win32/src/placement.rs:2075-2118` | oversize confirmation retry |
+| `crates/core_layout/src/tests.rs:2783-2792` | rescale 1920 to 1280 |
+| `crates/daemon/src/tests.rs:6351-6371` | shrink keeps focused column visible |
+| `crates/daemon/src/tests.rs:721-770` | width feedback on existing windows |
+| `crates/core_layout/src/tests.rs:626-658` | minimum on focused column re-derives visibility |
+| `crates/platform_win32/src/placement.rs:2075-2118` | oversize confirmation retry |
 
 No test covers daemon restart persistence of a bad placement.
 
@@ -104,7 +113,7 @@ The reporter's statement that changing scaling made no difference contradicts a 
 
 ### Bounded next step (LWM-211-01)
 
-1. Wait for the v0.2.9 retest. If it still fails, ask for one run with `behavior.log_level = "debug"` in the config and the full `%TEMP%\leopardwm-daemon.log` file (not `lwm collect-logs`, which only includes the last 100 lines), covering: set 1280x720, open Settings, then use the minimize/restore workaround. That log will show the confirmed native-minimum record and the placement summary.
+1. Wait for the v0.2.9 retest. If it still fails, ask for one run with `behavior.log_level = "debug"` in the config and the full `%TEMP%\leopardwm-daemon.log` file (not `lwm collect-logs`, which only includes the last 100 lines), covering: set 1280x720, open Settings, then by minimizing and maximizing, or by clicking at an edge of the window (when mouse cursor indicates a resize action). That log will show the confirmed native-minimum record and the placement summary.
 2. In parallel, write a red/green daemon test for shrink to 1280 then insert a new window whose native minimum exceeds its requested width and assert it is fully visible, using existing seams.
 3. Only then choose a repair. Do not pull a repair into v0.2.10 without that test.
 
@@ -138,20 +147,20 @@ Inference: frequency dropping with animation disabled points at the animated pat
 
 ### Diagnosability
 
-Verified by code mapping. Default log level is info (`daemon/src/config.rs:497-499`).
+Verified by code mapping. Default log level is info (`crates/daemon/src/config.rs:497-499`).
 
-Synchronous `SetWindowPos` failures are collected but not logged at the platform call site (`platform_win32/src/placement.rs:904-925`, `949-988`). The daemon logs a warn only for a missing or unreadable readback (`daemon/src/physical_placement.rs:647-666`). Its confirmation check only tests that an actual visible rect exists, not that it equals the requested rect (`physical_placement.rs:654-661`). A landing at the wrong rect produces no log line.
+Synchronous `SetWindowPos` failures are collected but not logged at the platform call site (`crates/platform_win32/src/placement.rs:904-925`, `949-988`). The daemon logs a warn for failed, unreadable, missing, or unconfirmed-parked landings (`crates/daemon/src/physical_placement.rs:647-666`), but its confirmation check for an ordinary placement only tests that an actual visible rect exists, not that it equals the requested rect (`654-661`), so a readable landing at the wrong rect produces no log line.
 
-A stale animation result that arrives late is logged at debug only (`daemon/src/layout_apply.rs:104-113`). The `InvalidatedCurrent` branch logs nothing (`layout_apply.rs:115-125`). Confirmed native-minimum records are debug only (`platform_win32/src/placement.rs:1284-1319`).
+A stale animation result that arrives late is logged at debug only (`crates/daemon/src/layout_apply.rs:104-113`). The `InvalidatedCurrent` branch logs nothing (`crates/daemon/src/layout_apply.rs:115-125`). Confirmed native-minimum records are debug only (`crates/platform_win32/src/placement.rs:1284-1319`).
 
-`lwm collect-logs` includes only the last 100 daemon log lines (`cli/src/doctor.rs:327-341`).
+`lwm collect-logs` includes only the last 100 daemon log lines (`crates/cli/src/doctor.rs:327-341`).
 
-Conclusion: a default-level log plus `lwm collect-logs` cannot show the drift event. A useful reporter capture needs `behavior.log_level = "debug"`, the full daemon log file, and the last action before the displacement.
+Conclusion: a default-level log plus `lwm collect-logs` may expose failed or unreadable landings but cannot show or quantify readable wrong-rect drift; a useful capture still needs `behavior.log_level = "debug"`, the full daemon log file, and the last action before the displacement.
 
 ### Bounded next step (LWM-211-02)
 
 1. Ask the reporter for that debug capture before restarting the app.
-2. A small diagnostics-only candidate for v0.2.10, separately scoped, would be to log at warn when a confirmed landing rect differs from the requested rect in `physical_placement.rs`, so drift becomes visible at the default level. Record this as a recommended follow-up, not implemented here.
+2. A small diagnostics-only candidate for v0.2.10, separately scoped, would be to log at warn when a confirmed landing rect differs from the requested rect in `crates/daemon/src/physical_placement.rs`, so drift becomes visible at the default level. Record this as a recommended follow-up, not implemented here.
 3. No animation or placement behavior change until a capture or deterministic reproduction exists.
 
 ## Findings for other tickets
