@@ -165,11 +165,16 @@ Conclusion: a default-level log plus `lwm collect-logs` may expose failed or unr
 
 ## Findings for other tickets
 
+### Other reporter observations
+
+- **Task Scheduler UI stretching when focus alternates while the daemon runs elevated.** Reporter observation. Unverified and out of scope for LWM-211-01. In the attached log the daemon was not elevated at that time: Task Scheduler (`MMCMainFrame`) and SQL Server Installation Center were refused with "HigherIntegrity, leaving it floating" (verified).
+- **File Explorer showing half height during expel.** Reporter observation. Unverified and out of scope for LWM-211-01.
+
 ### LWM-210-02 candidate: Notion Command Search popup
 
-Verified from the second #104 log: a window titled "Notion - Command Search" with class `Chrome_WidgetWin_1` was admitted as a tiled window twice (2026-09-04 05:34:41 and 05:34:46), each time removed again within seconds. It is Notion's quick-search palette, not an application window.
+Verified from the second #104 log: a window titled "Notion - Command Search" with class `Chrome_WidgetWin_1` was admitted as a tiled window twice (2026-09-04 05:34:41 and 05:34:46), each time removed again within seconds. Inference: it is Notion's quick-search palette rather than an application window; the log records only title and class.
 
-Verified admission facts: the create/show admission path rejects any window with a non-null `GW_OWNER` (`crates/platform_win32/src/enumeration.rs:518-530` and `576-582`), so this popup must be unowned. `WS_POPUP` alone is not an exclusion (`crates/platform_win32/src/enumeration.rs:76-115`). The daemon's built-in dialog check treats a window as dialog-like only when it has `WS_CAPTION` but neither `WS_MINIMIZEBOX` nor `WS_MAXIMIZEBOX` (`crates/platform_win32/src/window_query.rs:161-182`), and an unruled dialog-like window is left unmanaged (`crates/daemon/src/event_handler.rs:599-637`). The built-in class skip list (`crates/platform_win32/src/enumeration.rs:675-705`) excludes `Chrome_RenderWidgetHostHWND` but not `Chrome_WidgetWin_1`, which is also the class of every Chromium and Electron main window, so a class exclusion is not an option.
+Verified admission facts: the create/show admission path rejects any window with a non-null `GW_OWNER` (`crates/platform_win32/src/enumeration.rs:518-530` and `576-582`), so this popup must be unowned. `WS_POPUP` alone is not an exclusion (`crates/platform_win32/src/enumeration.rs:76-115`). The daemon's built-in dialog check treats a window as dialog-like only when it has `WS_CAPTION` but neither `WS_MINIMIZEBOX` nor `WS_MAXIMIZEBOX` (`crates/platform_win32/src/window_query.rs:161-182`), and an unruled dialog-like window is left unmanaged (`crates/daemon/src/event_handler.rs:599-637`). The built-in class skip list (`crates/platform_win32/src/enumeration.rs:675-705`) excludes `Chrome_RenderWidgetHostHWND` but not `Chrome_WidgetWin_1`. Notion's own main window uses that same class (verified in the same log), so excluding the class would also exclude the application window.
 
 Inference: for the popup to be admitted it is unowned and either carries minimize or maximize box styles or has no caption at all. Which of those holds is not known from the log; the "Window created" info line records only title and class.
 
@@ -183,9 +188,6 @@ match_class = "Chrome_WidgetWin_1"
 match_title = "^Notion - Command Search$"
 action = "ignore"
 ```
-
-- **Task Scheduler UI stretching when focus alternates while the daemon runs elevated.** Reporter observation. Unverified and out of scope for LWM-211-01. In the attached log the daemon was not elevated at that time: Task Scheduler (`MMCMainFrame`) and SQL Server Installation Center were refused with "HigherIntegrity, leaving it floating" (verified).
-- **File Explorer showing half height during expel.** Reporter observation. Unverified and out of scope for LWM-211-01.
 
 ## What this record does not establish
 
