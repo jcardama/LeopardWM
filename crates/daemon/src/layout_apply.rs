@@ -155,6 +155,7 @@ impl AppState {
                 frame_result.physical_request_id,
                 frame_result.physical_invalidation_id,
                 &frame_result.landings,
+                &frame_result.maximized_skipped_window_ids,
             );
         }
         if frame_result.apply_result.is_ok() {
@@ -646,6 +647,7 @@ impl AppState {
                         physical_request_id,
                         physical_invalidation_id,
                         &landings,
+                        &maximized_skipped_window_ids,
                     );
                     Ok(())
                 };

@@ -1328,6 +1328,7 @@ fn test_outer_animation_pump_preserves_newer_frame_and_resumes_after_sync_supers
             failed: false,
             unreadable: false,
         }],
+        &[],
     );
     assert_eq!(state.inflight_request_id, None);
     state.animation_inflight_request_id = None;
@@ -1578,6 +1579,7 @@ fn test_failed_landing_retries_before_releasing_pending_ghost() {
             failed: false,
             unreadable: false,
         }],
+        &[],
     );
     state.last_placed_layout_rects.insert(WID, placement.rect);
     assert!(state.physical_fast_path_ok());
@@ -1629,7 +1631,7 @@ fn test_failed_landing_retries_before_releasing_pending_ghost() {
 
 #[test]
 fn test_landing_origin_drift() {
-    use crate::physical_placement::landing_origin_drift;
+    use crate::physical_placement::{drift_warning, landing_origin_drift, PhysicalKind};
 
     let requested = Rect::new(100, 200, 400, 600);
     let landing = |actual_visible_rect: Option<Rect>,
@@ -1701,6 +1703,28 @@ fn test_landing_origin_drift() {
             false
         )),
         None
+    );
+
+    let drifted = landing(
+        Some(Rect::new(103, 200, 400, 600)),
+        leopardwm_core_layout::Visibility::Visible,
+        false,
+    );
+    assert_eq!(
+        drift_warning(PhysicalKind::Parked, true, false, &drifted),
+        None
+    );
+    assert_eq!(
+        drift_warning(PhysicalKind::Unchanged, false, false, &drifted),
+        None
+    );
+    assert_eq!(
+        drift_warning(PhysicalKind::Unchanged, true, true, &drifted),
+        None
+    );
+    assert_eq!(
+        drift_warning(PhysicalKind::Unchanged, true, false, &drifted),
+        Some((3, 0, Rect::new(103, 200, 400, 600)))
     );
 }
 

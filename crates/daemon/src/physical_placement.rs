@@ -372,6 +372,19 @@ pub(crate) fn landing_origin_drift(landing: &PlacementLanding) -> Option<(i32, i
     }
 }
 
+pub(crate) fn drift_warning(
+    kind: PhysicalKind,
+    confirmed: bool,
+    skipped: bool,
+    landing: &PlacementLanding,
+) -> Option<(i32, i32, Rect)> {
+    if !matches!(kind, PhysicalKind::Unchanged) || !confirmed || skipped {
+        return None;
+    }
+    let (dx, dy) = landing_origin_drift(landing)?;
+    Some((dx, dy, landing.actual_visible_rect?))
+}
+
 impl AppState {
     pub(crate) fn bump_physical_invalidation(&self) -> u64 {
         self.physical_invalidation_id.fetch_add(1, Ordering::SeqCst) + 1
@@ -630,6 +643,7 @@ impl AppState {
         request_id: u64,
         invalidation_id: u64,
         landings: &[PlacementLanding],
+        skipped_window_ids: &[u64],
     ) {
         if !self.physical_result_is_current(request_id, invalidation_id) {
             debug!(
@@ -681,13 +695,16 @@ impl AppState {
                     "Physical placement of window {} was blocked (failed={} unreadable={})",
                     window_id, landing.failed, landing.unreadable
                 );
-            } else if matches!(presentation.kind, PhysicalKind::Unchanged) {
-                if let Some((dx, dy)) = landing_origin_drift(landing) {
-                    warn!(
-                        "Window {} landed {}px,{}px away from its requested origin: requested {:?}, actual visible {:?}",
-                        window_id, dx, dy, landing.requested_rect, landing.actual_visible_rect
-                    );
-                }
+            } else if let Some((dx, dy, actual)) = drift_warning(
+                presentation.kind,
+                entry.confirmed,
+                skipped_window_ids.contains(window_id),
+                landing,
+            ) {
+                warn!(
+                    "Window {} landed {}px,{}px away from its requested origin: requested {:?}, actual visible {:?}",
+                    window_id, dx, dy, landing.requested_rect, actual
+                );
             }
         }
 
@@ -826,6 +843,7 @@ mod tests {
                 failed: false,
                 unreadable: false,
             }],
+            &[],
         );
         assert_eq!(
             state.last_physical_presentations[&100].kind,
@@ -1029,6 +1047,7 @@ mod tests {
                 failed: true,
                 unreadable: false,
             }],
+            &[],
         );
         assert!(!state.last_physical_presentations[&100].confirmed);
         assert!(
@@ -1064,6 +1083,7 @@ mod tests {
                 failed: false,
                 unreadable: false,
             }],
+            &[],
         );
         assert!(state.pending_physical_presentations.is_empty());
         assert_eq!(state.expected_physical_rect(100), Some(dispatched[0].rect));
@@ -1105,6 +1125,7 @@ mod tests {
                 failed: false,
                 unreadable: false,
             }],
+            &[],
         );
 
         assert!(!state.last_physical_presentations[&100].confirmed);
@@ -1139,6 +1160,7 @@ mod tests {
                 failed: false,
                 unreadable: false,
             }],
+            &[],
         );
         state.ghost_sources_pending_safe_landing.insert(100);
 
@@ -1427,6 +1449,7 @@ mod tests {
                 failed: false,
                 unreadable: false,
             }],
+            &[],
         );
         assert!(state.pending_physical_presentations.is_empty());
         assert_eq!(state.expected_physical_rect(100), Some(dispatched[0].rect));
@@ -1453,7 +1476,7 @@ mod tests {
             Rect::new(200, 0, 400, 600),
             Visibility::Visible,
         )]);
-        state.consume_physical_landings(old_request, old_invalidation, &[]);
+        state.consume_physical_landings(old_request, old_invalidation, &[], &[]);
         assert_eq!(state.expected_physical_rect(100), Some(newer[0].rect));
         assert_eq!(
             state.pending_physical_request_id,
