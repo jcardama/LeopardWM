@@ -82,7 +82,7 @@ The second log also shows a daemon restart at 05:38 where a new instance briefly
 
 ### Code facts and coverage gaps
 
-Verified: native minimum sizes are runtime-only. `window_min_widths` / `window_min_heights` are `#[serde(skip)]` in `crates/core_layout/src/workspace/mod.rs:99-108`. Requested column widths plus scroll offset are persisted and restored (`crates/daemon/src/persistence.rs:190-203`, `269-299`).
+Verified: native minimum sizes are runtime-only. `window_min_widths` / `window_min_heights` are `#[serde(skip)]` in `crates/core_layout/src/workspace/mod.rs:99-108`. Requested column widths plus scroll offset are persisted and restored (`crates/daemon/src/persistence.rs:190-203`, `crates/daemon/src/persistence.rs:269-299`).
 
 Inference to test, not a conclusion: a placement failure that survives a daemon restart cannot be carried by a persisted native minimum. It must come from persisted requested width or scroll state, from Windows' own remembered window placement for that app, or from re-detection on every launch.
 
@@ -149,7 +149,7 @@ Inference: frequency dropping with animation disabled points at the animated pat
 
 Verified by code mapping. Default log level is info (`crates/daemon/src/config.rs:497-499`).
 
-Synchronous `SetWindowPos` failures are collected but not logged at the platform call site (`crates/platform_win32/src/placement.rs:904-925`, `949-988`). The daemon logs a warn for failed, unreadable, missing, or unconfirmed-parked landings (`crates/daemon/src/physical_placement.rs:647-666`), but its confirmation check for an ordinary placement only tests that an actual visible rect exists, not that it equals the requested rect (`654-661`), so a readable landing at the wrong rect produces no log line.
+Synchronous `SetWindowPos` failures are collected but not logged at the platform call site (`crates/platform_win32/src/placement.rs:904-925`, `crates/platform_win32/src/placement.rs:949-988`). The daemon logs a warn for failed, unreadable, missing, or unconfirmed-parked landings (`crates/daemon/src/physical_placement.rs:647-666`), but its confirmation check for an ordinary placement only tests that an actual visible rect exists, not that it equals the requested rect (`crates/daemon/src/physical_placement.rs:654-661`), so a readable landing at the wrong rect produces no log line.
 
 A stale animation result that arrives late is logged at debug only (`crates/daemon/src/layout_apply.rs:104-113`). The `InvalidatedCurrent` branch logs nothing (`crates/daemon/src/layout_apply.rs:115-125`). Confirmed native-minimum records are debug only (`crates/platform_win32/src/placement.rs:1284-1319`).
 
