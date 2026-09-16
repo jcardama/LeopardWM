@@ -4,6 +4,11 @@ All notable changes to LeopardWM will be documented in this file.
 
 ## 0.2.10
 
+### Improvements
+
+- **Landings whose visible origin differs from the requested origin by more than 2 px are now logged at warn level with both rectangles.**
+  Window drift reports can be diagnosed from a default-level daemon log; placement behavior is unchanged.
+
 ### Internal
 
 - **The repository now carries a placement-report triage record for #104 and #112.**

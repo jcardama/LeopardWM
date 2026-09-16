@@ -355,6 +355,23 @@ fn native_insets(window_id: u64) -> (i32, i32, i32, i32) {
     }
 }
 
+pub(crate) fn landing_origin_drift(landing: &PlacementLanding) -> Option<(i32, i32)> {
+    if landing.failed || landing.unreadable {
+        return None;
+    }
+    if landing.requested_visibility != Visibility::Visible {
+        return None;
+    }
+    let actual = landing.actual_visible_rect?;
+    let dx = actual.x - landing.requested_rect.x;
+    let dy = actual.y - landing.requested_rect.y;
+    if dx.abs() > 2 || dy.abs() > 2 {
+        Some((dx, dy))
+    } else {
+        None
+    }
+}
+
 impl AppState {
     pub(crate) fn bump_physical_invalidation(&self) -> u64 {
         self.physical_invalidation_id.fetch_add(1, Ordering::SeqCst) + 1
@@ -664,6 +681,13 @@ impl AppState {
                     "Physical placement of window {} was blocked (failed={} unreadable={})",
                     window_id, landing.failed, landing.unreadable
                 );
+            } else if matches!(presentation.kind, PhysicalKind::Unchanged) {
+                if let Some((dx, dy)) = landing_origin_drift(landing) {
+                    warn!(
+                        "Window {} landed {}px,{}px away from its requested origin: requested {:?}, actual visible {:?}",
+                        window_id, dx, dy, landing.requested_rect, landing.actual_visible_rect
+                    );
+                }
             }
         }
 

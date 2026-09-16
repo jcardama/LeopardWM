@@ -1628,6 +1628,83 @@ fn test_failed_landing_retries_before_releasing_pending_ghost() {
 }
 
 #[test]
+fn test_landing_origin_drift() {
+    use crate::physical_placement::landing_origin_drift;
+
+    let requested = Rect::new(100, 200, 400, 600);
+    let landing = |actual_visible_rect: Option<Rect>,
+                   requested_visibility: leopardwm_core_layout::Visibility,
+                   failed: bool| {
+        leopardwm_platform_win32::PlacementLanding {
+            window_id: 1,
+            requested_rect: requested,
+            requested_visibility,
+            actual_visible_rect,
+            actual_outer_rect: actual_visible_rect,
+            failed,
+            unreadable: false,
+        }
+    };
+
+    assert_eq!(
+        landing_origin_drift(&landing(
+            Some(requested),
+            leopardwm_core_layout::Visibility::Visible,
+            false
+        )),
+        None
+    );
+    assert_eq!(
+        landing_origin_drift(&landing(
+            Some(Rect::new(102, 200, 400, 600)),
+            leopardwm_core_layout::Visibility::Visible,
+            false
+        )),
+        None
+    );
+    assert_eq!(
+        landing_origin_drift(&landing(
+            Some(Rect::new(103, 200, 400, 600)),
+            leopardwm_core_layout::Visibility::Visible,
+            false
+        )),
+        Some((3, 0))
+    );
+    assert_eq!(
+        landing_origin_drift(&landing(
+            Some(Rect::new(103, 200, 400, 600)),
+            leopardwm_core_layout::Visibility::OffScreenRight,
+            false
+        )),
+        None
+    );
+    assert_eq!(
+        landing_origin_drift(&landing(
+            Some(Rect::new(103, 200, 400, 600)),
+            leopardwm_core_layout::Visibility::Visible,
+            true
+        )),
+        None
+    );
+    assert_eq!(
+        landing_origin_drift(&landing(
+            None,
+            leopardwm_core_layout::Visibility::Visible,
+            false
+        )),
+        None
+    );
+    assert_eq!(
+        landing_origin_drift(&landing(
+            Some(Rect::new(100, 200, 480, 700)),
+            leopardwm_core_layout::Visibility::Visible,
+            false
+        )),
+        None
+    );
+}
+
+#[test]
 fn test_animation_projection_runs_once_and_preserves_full_partial_geometry() {
     let mut monitors = two_monitors();
     monitors[0].rect = Rect::new(0, 0, 5120, 1440);
