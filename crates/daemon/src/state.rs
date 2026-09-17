@@ -768,13 +768,15 @@ impl PendingWorkspaceSwitchFocus {
 /// occurred before the handler ran may compare as no-later and stay
 /// suppressed. If the departing window still appears live or stale-window
 /// pruning is throttled, follow-focus cannot attribute the sequence.
+/// Eventless disappearance can arm this guard while handling the first
+/// cross-workspace Focused event, so that activation may be consumed and
+/// need to be repeated.
 ///
 /// Distinct from `PendingWorkspaceSwitchFocus`; the two guards are not shared.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PendingLastWindowDeparture {
     pub(crate) monitor: MonitorId,
     pub(crate) workspace: usize,
-    pub(crate) departing_hwnd: u64,
     pub(crate) replacement_hwnd: Option<u64>,
     pub(crate) set_at: std::time::Instant,
     pub(crate) armed_at_event_time_ms: u32,

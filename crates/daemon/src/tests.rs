@@ -4943,6 +4943,66 @@ fn test_last_window_focus_first_pruned_removal_is_attributable() {
 }
 
 #[test]
+fn test_last_window_clears_stale_logical_focus_on_direct_and_prune() {
+    enum Departure {
+        Destroyed,
+        Hidden,
+        Prune,
+    }
+    for stale_focus in [200_u64, 999] {
+        for departure in [Departure::Destroyed, Departure::Hidden, Departure::Prune] {
+            let mut state = last_window_cross_workspace_state();
+            let mon = state.focused_monitor;
+            state.previous_focused_hwnd = Some(stale_focus);
+            state.last_broadcast_focused = Some((mon as i64, Some(stale_focus)));
+            let hides_before = state.border_hide_count.load(Ordering::Relaxed);
+
+            match departure {
+                Departure::Destroyed => {
+                    state.handle_window_event(WindowEvent::Destroyed(100));
+                }
+                Departure::Hidden => {
+                    state.handle_window_event(WindowEvent::Hidden(100));
+                }
+                Departure::Prune => {
+                    state.prune_stale_windows_for_test(&[100]);
+                }
+            }
+
+            assert_eq!(state.active_workspace_idx(mon), 0);
+            assert_eq!(state.previous_focused_hwnd, None);
+            assert_eq!(state.last_broadcast_focused, Some((mon as i64, None)));
+            assert!(state.border_hide_count.load(Ordering::Relaxed) > hides_before);
+            assert_eq!(
+                state
+                    .pending_last_window_departure
+                    .unwrap()
+                    .replacement_hwnd,
+                Some(200)
+            );
+
+            state.handle_window_event(WindowEvent::Focused(200, 1_000));
+            assert_eq!(state.active_workspace_idx(mon), 0);
+            assert_eq!(state.previous_focused_hwnd, None);
+        }
+    }
+}
+
+#[test]
+fn test_last_window_stale_tracking_still_allows_newer_activation() {
+    let mut state = last_window_cross_workspace_state();
+    let mon = state.focused_monitor;
+    state.previous_focused_hwnd = Some(200);
+    state.handle_window_event(WindowEvent::Destroyed(100));
+    assert_eq!(state.previous_focused_hwnd, None);
+
+    state.handle_window_event(WindowEvent::Focused(200, 1_001));
+    assert_eq!(state.active_workspace_idx(mon), 1);
+    assert_eq!(state.previous_focused_hwnd, Some(200));
+    assert_eq!(state.pending_last_window_departure, None);
+}
+
+#[test]
 fn test_last_window_throttled_or_still_live_focus_follows() {
     let mut state = last_window_cross_workspace_state();
     let mon = state.focused_monitor;

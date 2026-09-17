@@ -402,13 +402,7 @@ impl AppState {
             return StalePruneLayout::Unchanged;
         }
 
-        let selected_monitor = self.focused_monitor;
-        let selected_ws = self.active_workspace_idx(selected_monitor);
         let selected_was_occupied = !self.selected_workspace_is_genuinely_empty();
-        let departing_on_selected = stale
-            .iter()
-            .copied()
-            .find(|&wid| self.find_window_workspace(wid) == Some((selected_monitor, selected_ws)));
 
         let snapshot = self.snapshot_layout();
         let mut layout_changed = false;
@@ -434,22 +428,17 @@ impl AppState {
         } else {
             StalePruneLayout::Unchanged
         };
-        if layout_changed || focus_changed {
-            self.reconcile_border_without_stealing_focus();
-        }
         if selected_was_occupied && self.selected_workspace_is_genuinely_empty() {
-            let departing_hwnd = departing_on_selected.unwrap_or(0);
-            let replacement = self.departing_foreground_evidence(departing_hwnd).and_then(
+            self.sync_foreground_window();
+            let replacement = self.departing_foreground_evidence().and_then(
                 |(foreground, valid)| match foreground {
                     Some(id) if id != 0 && valid && !stale.contains(&id) => Some(id),
                     _ => None,
                 },
             );
-            self.arm_pending_last_window_departure(
-                departing_hwnd,
-                replacement,
-                self.event_time_now_ms(),
-            );
+            self.arm_pending_last_window_departure(replacement, self.event_time_now_ms());
+        } else if layout_changed || focus_changed {
+            self.reconcile_border_without_stealing_focus();
         }
         apply
     }

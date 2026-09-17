@@ -1113,8 +1113,11 @@ impl AppState {
                     .is_some_and(workspace_is_genuinely_empty)
         });
         if emptied_selected {
+            // Empty selection: clear logical focus/border even when tracking
+            // already names the replacement or another HWND. The same-HWND
+            // Focused early-return would otherwise bypass the guard.
+            self.sync_foreground_window();
             self.arm_pending_last_window_departure(
-                hwnd,
                 decision.replacement_hwnd,
                 self.event_time_now_ms(),
             );
@@ -1144,8 +1147,7 @@ impl AppState {
         hwnd: u64,
         was_tracked_focus: bool,
     ) -> crate::ui_sync::DepartingFocusDecision {
-        let Some((foreground, foreground_is_valid)) = self.departing_foreground_evidence(hwnd)
-        else {
+        let Some((foreground, foreground_is_valid)) = self.departing_foreground_evidence() else {
             return crate::ui_sync::DepartingFocusDecision {
                 recover: false,
                 suppress_landing_resync: false,
@@ -1160,13 +1162,9 @@ impl AppState {
         )
     }
 
-    pub(crate) fn departing_foreground_evidence(
-        &mut self,
-        departing_hwnd: u64,
-    ) -> Option<(Option<u64>, bool)> {
+    pub(crate) fn departing_foreground_evidence(&mut self) -> Option<(Option<u64>, bool)> {
         #[cfg(test)]
         {
-            let _ = departing_hwnd;
             self.departing_foreground_evidence_reads =
                 self.departing_foreground_evidence_reads.saturating_add(1);
             let foreground = self.injected_foreground_hwnd;
@@ -1186,7 +1184,6 @@ impl AppState {
             let foreground = leopardwm_platform_win32::get_foreground_window();
             let foreground_is_valid =
                 foreground.is_some_and(leopardwm_platform_win32::is_valid_window);
-            let _ = departing_hwnd;
             Some((foreground, foreground_is_valid))
         }
     }
@@ -1526,14 +1523,12 @@ impl AppState {
 
     pub(crate) fn arm_pending_last_window_departure(
         &mut self,
-        departing_hwnd: u64,
         replacement_hwnd: Option<u64>,
         armed_at_event_time_ms: u32,
     ) {
         self.pending_last_window_departure = Some(PendingLastWindowDeparture {
             monitor: self.focused_monitor,
             workspace: self.active_workspace_idx(self.focused_monitor),
-            departing_hwnd,
             replacement_hwnd,
             set_at: std::time::Instant::now(),
             armed_at_event_time_ms,

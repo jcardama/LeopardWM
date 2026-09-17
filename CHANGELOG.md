@@ -10,8 +10,10 @@ All notable changes to LeopardWM will be documented in this file.
   An attributable Windows replacement activation on another workspace or
   monitor no longer follows away from a genuinely empty selection (no tiled
   or floating windows, including minimized). Logical focus is cleared rather
-  than pointed at a fake target. A strictly newer activation still wins, and
-  the next new window opens on the preserved selection.
+  than pointed at a fake target, including when tracking already names the
+  replacement or another window; the border and tab strip hide with that
+  clear. A strictly newer activation still wins, and the next new window
+  opens on the preserved selection.
 
 ### Improvements
 
@@ -25,7 +27,10 @@ All notable changes to LeopardWM will be documented in this file.
   appears live or stale-window pruning is throttled, that activation is
   followed. Handler execution time is not a true departure timestamp, so a
   user activation that occurred before the destroy or hide handler ran may
-  be treated as the replacement auto-activation.
+  be treated as the replacement auto-activation. Eventless disappearance
+  can arm the same guard while handling the first cross-workspace
+  activation, so that first activation may be consumed and need to be
+  repeated.
 
 ### Internal
 
