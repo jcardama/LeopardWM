@@ -5003,6 +5003,71 @@ fn test_last_window_stale_tracking_still_allows_newer_activation() {
 }
 
 #[test]
+fn test_last_window_empty_clear_keeps_other_monitor_tabbed_column() {
+    // Model coverage: other-monitor tabbed layout, logical focus, and newer
+    // activation. Overlay visibility is not observable under cfg(test).
+    for prune in [false, true] {
+        let mut state = AppState::new_with_config(test_config(), two_monitors());
+        state.reduce_motion = false;
+        state.last_prune_at = Some(std::time::Instant::now());
+        state.injected_event_time_ms = Some(1_000);
+        for hwnd in [100, 200, 201] {
+            state
+                .injected_window_info
+                .insert(hwnd, make_test_window_info(hwnd));
+        }
+        state.handle_window_event(WindowEvent::Created(100));
+        {
+            let ws = &mut state.workspaces.get_mut(&2).unwrap()[0];
+            ws.insert_window(200, Some(800)).unwrap();
+            ws.insert_window_in_column(201, 0).unwrap();
+            ws.focus_window(200).unwrap();
+            ws.toggle_focused_column_tabbed_mode();
+            assert!(ws.column(0).is_some_and(|column| column.is_tabbed()));
+        }
+        state
+            .window_managed_at
+            .insert(200, std::time::Instant::now());
+        state
+            .window_managed_at
+            .insert(201, std::time::Instant::now());
+        state.previous_focused_hwnd = Some(200);
+        state.last_broadcast_focused = Some((1, Some(200)));
+        state.injected_foreground_hwnd = Some(Some(200));
+        let hides_before = state.border_hide_count.load(Ordering::Relaxed);
+
+        if prune {
+            state.prune_stale_windows_for_test(&[100]);
+        } else {
+            state.handle_window_event(WindowEvent::Destroyed(100));
+        }
+
+        assert_eq!(state.focused_monitor, 1);
+        assert_eq!(state.active_workspace_idx(1), 0);
+        assert_eq!(state.active_workspace_idx(2), 0);
+        assert_eq!(state.previous_focused_hwnd, None);
+        assert_eq!(state.last_broadcast_focused, Some((1, None)));
+        assert!(state.border_hide_count.load(Ordering::Relaxed) > hides_before);
+        let other = &state.workspaces[&2][0];
+        assert!(other.column(0).is_some_and(|column| column.is_tabbed()));
+        assert!(other.contains_window(200));
+        assert!(other.contains_window(201));
+
+        state.handle_window_event(WindowEvent::Focused(200, 1_000));
+        assert_eq!(state.focused_monitor, 1);
+        assert_eq!(state.previous_focused_hwnd, None);
+
+        state.handle_window_event(WindowEvent::Focused(200, 1_001));
+        assert_eq!(state.focused_monitor, 2);
+        assert_eq!(state.previous_focused_hwnd, Some(200));
+        assert_eq!(state.pending_last_window_departure, None);
+        assert!(state.workspaces[&2][0]
+            .column(0)
+            .is_some_and(|column| column.is_tabbed()));
+    }
+}
+
+#[test]
 fn test_last_window_throttled_or_still_live_focus_follows() {
     let mut state = last_window_cross_workspace_state();
     let mon = state.focused_monitor;

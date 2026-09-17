@@ -1116,7 +1116,7 @@ impl AppState {
             // Empty selection: clear logical focus/border even when tracking
             // already names the replacement or another HWND. The same-HWND
             // Focused early-return would otherwise bypass the guard.
-            self.sync_foreground_window();
+            self.clear_logical_focus_for_empty_selection();
             self.arm_pending_last_window_departure(
                 decision.replacement_hwnd,
                 self.event_time_now_ms(),
@@ -1519,6 +1519,18 @@ impl AppState {
             .get(&self.focused_monitor)
             .and_then(|workspaces| workspaces.get(self.active_workspace_idx(self.focused_monitor)))
             .is_none_or(workspace_is_genuinely_empty)
+    }
+
+    /// Clear logical focus after the selected workspace becomes empty.
+    ///
+    /// Does not call `sync_foreground_window` or `hide_tab_strip`: the empty
+    /// sync path hides every monitor's tab overlays, and `apply_layout` has
+    /// already reconciled strips. Does not steal native focus.
+    pub(crate) fn clear_logical_focus_for_empty_selection(&mut self) {
+        self.previous_focused_hwnd = None;
+        self.hide_border();
+        let monitor = self.focused_monitor as i64;
+        self.broadcast_focused_window_if_changed(monitor, None);
     }
 
     pub(crate) fn arm_pending_last_window_departure(

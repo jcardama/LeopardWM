@@ -11,9 +11,10 @@ All notable changes to LeopardWM will be documented in this file.
   monitor no longer follows away from a genuinely empty selection (no tiled
   or floating windows, including minimized). Logical focus is cleared rather
   than pointed at a fake target, including when tracking already names the
-  replacement or another window; the border and tab strip hide with that
-  clear. A strictly newer activation still wins, and the next new window
-  opens on the preserved selection.
+  replacement or another window; the active border hides with that clear.
+  Other monitors keep their tab strips (layout already reconciled them);
+  the empty workspace has none to show. A strictly newer activation still
+  wins, and the next new window opens on the preserved selection.
 
 ### Improvements
 

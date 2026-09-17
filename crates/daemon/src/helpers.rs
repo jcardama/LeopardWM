@@ -429,7 +429,7 @@ impl AppState {
             StalePruneLayout::Unchanged
         };
         if selected_was_occupied && self.selected_workspace_is_genuinely_empty() {
-            self.sync_foreground_window();
+            self.clear_logical_focus_for_empty_selection();
             let replacement = self.departing_foreground_evidence().and_then(
                 |(foreground, valid)| match foreground {
                     Some(id) if id != 0 && valid && !stale.contains(&id) => Some(id),
