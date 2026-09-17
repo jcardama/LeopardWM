@@ -318,9 +318,7 @@ impl AppState {
         self.hide_border();
     }
 
-    /// Hide every tab strip overlay if installed. Used by paths that
-    /// know strips must not be visible (e.g., before re-applying layout
-    /// during a configuration reload, prior to fullscreen entry).
+    /// Hide every tab strip overlay when tiling is paused.
     /// Doesn't drop the overlays — `update_tab_strip` will reuse them.
     pub(crate) fn hide_tab_strip(&self) {
         #[cfg(test)]
