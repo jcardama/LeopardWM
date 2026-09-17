@@ -4,10 +4,28 @@ All notable changes to LeopardWM will be documented in this file.
 
 ## 0.2.10
 
+### Fixes
+
+- **Closing the last window on a workspace keeps that workspace selected.**
+  An attributable Windows replacement activation on another workspace or
+  monitor no longer follows away from a genuinely empty selection (no tiled
+  or floating windows, including minimized). Logical focus is cleared rather
+  than pointed at a fake target. A strictly newer activation still wins, and
+  the next new window opens on the preserved selection.
+
 ### Improvements
 
 - **Landings whose visible origin differs from the requested origin by more than 2 px are now logged at warn level with both rectangles.**
   Window drift reports can be diagnosed from a default-level daemon log; placement behavior is unchanged.
+
+### Known limitations
+
+- **Last-window empty preservation cannot attribute every event order.**
+  If a replacement Focused event arrives while the departing window still
+  appears live or stale-window pruning is throttled, that activation is
+  followed. Handler execution time is not a true departure timestamp, so a
+  user activation that occurred before the destroy or hide handler ran may
+  be treated as the replacement auto-activation.
 
 ### Internal
 

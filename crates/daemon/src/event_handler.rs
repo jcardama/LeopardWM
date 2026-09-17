@@ -3,10 +3,10 @@
 use crate::config;
 use crate::state::{
     AppState, ApplicationFullscreenState, DragHintAction, DragState, ElevationBlockedRecord,
-    EDIT_CONFIG_PULL_TTL, FALLBACK_VIEWPORT_HEIGHT, FALLBACK_VIEWPORT_WIDTH, RECENTLY_HIDDEN_TTL,
-    TRANSIENT_WINDOW_THRESHOLD,
+    PendingLastWindowDeparture, EDIT_CONFIG_PULL_TTL, FALLBACK_VIEWPORT_HEIGHT,
+    FALLBACK_VIEWPORT_WIDTH, RECENTLY_HIDDEN_TTL, TRANSIENT_WINDOW_THRESHOLD,
 };
-use leopardwm_core_layout::Rect;
+use leopardwm_core_layout::{Rect, Workspace};
 #[cfg(not(test))]
 use leopardwm_platform_win32::enumerate_monitors;
 use leopardwm_platform_win32::{
@@ -77,6 +77,12 @@ pub(crate) fn fullscreen_focus_guard(
 /// Compare nearby timestamps in GetTickCount's wrapping u32 domain.
 pub(crate) fn event_time_is_no_later_than(event_time_ms: u32, armed_time_ms: u32) -> bool {
     armed_time_ms.wrapping_sub(event_time_ms) < 0x8000_0000
+}
+
+/// A workspace is empty only when it has no tiled windows (including
+/// minimized) and no floating windows.
+pub(crate) fn workspace_is_genuinely_empty(workspace: &Workspace) -> bool {
+    workspace.window_count() == 0 && workspace.floating_windows().is_empty()
 }
 
 pub(crate) fn detect_application_fullscreen<'a>(
@@ -1097,7 +1103,22 @@ impl AppState {
             }
         }
 
-        if decision.recover {
+        let emptied_selected = layout_home.is_some_and(|(monitor_id, ws_idx)| {
+            monitor_id == self.focused_monitor
+                && ws_idx == self.active_workspace_idx(monitor_id)
+                && self
+                    .workspaces
+                    .get(&monitor_id)
+                    .and_then(|workspaces| workspaces.get(ws_idx))
+                    .is_some_and(workspace_is_genuinely_empty)
+        });
+        if emptied_selected {
+            self.arm_pending_last_window_departure(
+                hwnd,
+                decision.replacement_hwnd,
+                self.event_time_now_ms(),
+            );
+        } else if decision.recover {
             self.sync_foreground_window();
         } else if was_tracked_focus {
             if let Some(replacement) = decision.replacement_hwnd {
@@ -1139,7 +1160,7 @@ impl AppState {
         )
     }
 
-    fn departing_foreground_evidence(
+    pub(crate) fn departing_foreground_evidence(
         &mut self,
         departing_hwnd: u64,
     ) -> Option<(Option<u64>, bool)> {
@@ -1496,6 +1517,56 @@ impl AppState {
         false
     }
 
+    pub(crate) fn selected_workspace_is_genuinely_empty(&self) -> bool {
+        self.workspaces
+            .get(&self.focused_monitor)
+            .and_then(|workspaces| workspaces.get(self.active_workspace_idx(self.focused_monitor)))
+            .is_none_or(workspace_is_genuinely_empty)
+    }
+
+    pub(crate) fn arm_pending_last_window_departure(
+        &mut self,
+        departing_hwnd: u64,
+        replacement_hwnd: Option<u64>,
+        armed_at_event_time_ms: u32,
+    ) {
+        self.pending_last_window_departure = Some(PendingLastWindowDeparture {
+            monitor: self.focused_monitor,
+            workspace: self.active_workspace_idx(self.focused_monitor),
+            departing_hwnd,
+            replacement_hwnd,
+            set_at: std::time::Instant::now(),
+            armed_at_event_time_ms,
+        });
+    }
+
+    fn should_suppress_last_window_departure_focus(
+        &mut self,
+        hwnd: u64,
+        event_time_ms: u32,
+    ) -> bool {
+        let Some(intent) = self.pending_last_window_departure else {
+            return false;
+        };
+        if !intent.is_fresh()
+            || self.focused_monitor != intent.monitor
+            || self.active_workspace_idx(intent.monitor) != intent.workspace
+        {
+            self.pending_last_window_departure = None;
+            return false;
+        }
+        // Favor activation: a different HWND, or the same replacement with a
+        // strictly later WinEvent time, wins. Equality and wrap use the same
+        // compare as workspace-switch guards.
+        if Some(hwnd) != intent.replacement_hwnd
+            || !event_time_is_no_later_than(event_time_ms, intent.armed_at_event_time_ms)
+        {
+            self.pending_last_window_departure = None;
+            return false;
+        }
+        true
+    }
+
     fn on_window_focused(&mut self, hwnd: u64, event_time_ms: u32) {
         // Skip if this window is already our tracked focus — avoids
         // feedback loops where sync_foreground_window triggers another
@@ -1595,6 +1666,9 @@ impl AppState {
                 return;
             }
             if self.should_suppress_workspace_switch_focus(hwnd, event_time_ms) {
+                return;
+            }
+            if self.should_suppress_last_window_departure_focus(hwnd, event_time_ms) {
                 return;
             }
             self.follow_workspace_without_stealing_focus(monitor_id, ws_idx);

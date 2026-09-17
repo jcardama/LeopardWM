@@ -412,6 +412,10 @@ pub(crate) struct AppState {
     /// Suppresses delayed focus notifications for the exact window left by a
     /// successful workspace switch whose destination has no visible focus.
     pub(crate) pending_workspace_switch_focus: Option<PendingWorkspaceSwitchFocus>,
+    /// Suppresses an attributable replacement activation after the focused
+    /// monitor's selected workspace becomes genuinely empty. Distinct from
+    /// `pending_workspace_switch_focus`.
+    pub(crate) pending_last_window_departure: Option<PendingLastWindowDeparture>,
     /// `(monitor, hwnd)` of the most-recently-broadcast
     /// `FocusedWindowChanged` event. Independent from
     /// `previous_focused_hwnd`: command-driven focus paths
@@ -672,6 +676,9 @@ pub(crate) struct AppState {
     pub(crate) injected_window_maximized: HashMap<u64, bool>,
     #[cfg(test)]
     pub(crate) departing_foreground_evidence_reads: usize,
+    /// Test-only GetTickCount stand-in for last-window departure arming.
+    #[cfg(test)]
+    pub(crate) injected_event_time_ms: Option<u32>,
     /// Optional test-only behavior override for placement application.
     #[cfg(test)]
     pub(crate) injected_apply_placements_behavior: Option<TestApplyPlacementsBehavior>,
@@ -743,6 +750,37 @@ pub(crate) struct PendingWorkspaceSwitchFocus {
 }
 
 impl PendingWorkspaceSwitchFocus {
+    pub(crate) const TTL: std::time::Duration = std::time::Duration::from_millis(1500);
+
+    pub(crate) fn is_fresh(&self) -> bool {
+        self.set_at.elapsed() < Self::TTL
+    }
+}
+
+/// Evidence that the focused monitor's selected workspace became empty
+/// because its last tiled and floating window departed.
+///
+/// An exact replacement HWND sampled at handler execution is treated as
+/// attributable auto-activation while this guard is fresh. A strictly newer
+/// activation (a different HWND, or the same HWND with a later WinEvent time)
+/// wins. `armed_at_event_time_ms` is handler execution time in GetTickCount's
+/// wrapping domain, not a true departure timestamp: a user activation that
+/// occurred before the handler ran may compare as no-later and stay
+/// suppressed. If the departing window still appears live or stale-window
+/// pruning is throttled, follow-focus cannot attribute the sequence.
+///
+/// Distinct from `PendingWorkspaceSwitchFocus`; the two guards are not shared.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PendingLastWindowDeparture {
+    pub(crate) monitor: MonitorId,
+    pub(crate) workspace: usize,
+    pub(crate) departing_hwnd: u64,
+    pub(crate) replacement_hwnd: Option<u64>,
+    pub(crate) set_at: std::time::Instant,
+    pub(crate) armed_at_event_time_ms: u32,
+}
+
+impl PendingLastWindowDeparture {
     pub(crate) const TTL: std::time::Duration = std::time::Duration::from_millis(1500);
 
     pub(crate) fn is_fresh(&self) -> bool {
@@ -880,6 +918,7 @@ impl AppState {
             pending_suppress_landing_focus_resync: false,
             previous_focused_hwnd: None,
             pending_workspace_switch_focus: None,
+            pending_last_window_departure: None,
             last_broadcast_focused: None,
             last_focus_change_at: None,
             last_prune_at: None,
@@ -979,6 +1018,8 @@ impl AppState {
             #[cfg(test)]
             departing_foreground_evidence_reads: 0,
             #[cfg(test)]
+            injected_event_time_ms: None,
+            #[cfg(test)]
             injected_apply_placements_behavior: None,
             #[cfg(test)]
             injected_apply_placements_call_count: Arc::new(AtomicUsize::new(0)),
@@ -1037,6 +1078,16 @@ impl AppState {
     /// Get the active workspace index (0-based) for a given monitor.
     pub(crate) fn active_workspace_idx(&self, monitor_id: MonitorId) -> usize {
         self.active_workspace.get(&monitor_id).copied().unwrap_or(0)
+    }
+
+    /// Current time in the WinEvent GetTickCount domain. Tests may inject it.
+    /// This is handler-execution time, not a window-departure timestamp.
+    pub(crate) fn event_time_now_ms(&self) -> u32 {
+        #[cfg(test)]
+        if let Some(event_time_ms) = self.injected_event_time_ms {
+            return event_time_ms;
+        }
+        leopardwm_platform_win32::current_event_time_ms()
     }
 
     /// Send an event to all IPC subscribers. `broadcast::Sender::send` is

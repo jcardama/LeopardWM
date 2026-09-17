@@ -1131,9 +1131,10 @@ impl AppState {
         // Ensure target workspace exists (lazy creation)
         self.ensure_workspace_exists(monitor, idx);
 
-        // A new explicit destination supersedes any earlier stale-focus guard
-        // before layout application can fail.
+        // A new explicit destination supersedes earlier switch-focus and
+        // last-window departure guards before layout application can fail.
         self.pending_workspace_switch_focus = None;
+        self.pending_last_window_departure = None;
 
         // Switch active workspace
         self.active_workspace.insert(monitor, idx);
