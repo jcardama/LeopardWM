@@ -4,6 +4,11 @@ All notable changes to LeopardWM will be documented in this file.
 
 ## 0.2.10
 
+### Improvements
+
+- **Landings whose visible origin differs from the requested origin by more than 2 px are now logged at warn level with both rectangles.**
+  Window drift reports can be diagnosed from a default-level daemon log; placement behavior is unchanged.
+
 ### Fixes
 
 - **Closing the last window on a workspace keeps that workspace selected.**
@@ -12,14 +17,10 @@ All notable changes to LeopardWM will be documented in this file.
   or floating windows, including minimized). Logical focus is cleared rather
   than pointed at a fake target, including when tracking already names the
   replacement or another window; the active border hides with that clear.
-  Other monitors keep their tab strips (layout already reconciled them);
-  the empty workspace has none to show. A strictly newer activation still
-  wins, and the next new window opens on the preserved selection.
-
-### Improvements
-
-- **Landings whose visible origin differs from the requested origin by more than 2 px are now logged at warn level with both rectangles.**
-  Window drift reports can be diagnosed from a default-level daemon log; placement behavior is unchanged.
+  Tab-strip reconciliation removes the emptied workspace's strip while
+  retaining other monitors' strips on both the immediate and final-landing
+  paths. A strictly newer activation still wins, and the next new window
+  opens on the preserved selection.
 
 ### Known limitations
 

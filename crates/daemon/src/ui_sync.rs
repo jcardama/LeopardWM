@@ -323,6 +323,9 @@ impl AppState {
     /// during a configuration reload, prior to fullscreen entry).
     /// Doesn't drop the overlays — `update_tab_strip` will reuse them.
     pub(crate) fn hide_tab_strip(&self) {
+        #[cfg(test)]
+        self.tab_strip_hide_count
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         for strip in self.tab_strip_overlays.values() {
             strip.hide();
         }
@@ -342,6 +345,9 @@ impl AppState {
     pub(crate) fn update_tab_strip(&mut self) {
         use leopardwm_platform_win32::tab_strip::{TabLabel, TabStripColors};
 
+        #[cfg(test)]
+        self.tab_strip_update_count
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         // No-op when the action sender wasn't installed (tests / headless).
         if self.tab_strip_action_tx.is_none() {
             return;
@@ -562,7 +568,7 @@ impl AppState {
             // so border/focus don't target a window that's no longer here.
             self.previous_focused_hwnd = None;
             self.hide_border();
-            self.hide_tab_strip();
+            self.update_tab_strip();
             debug!("sync_foreground_window: no focused visible window");
             let monitor = self.focused_monitor as i64;
             self.broadcast_focused_window_if_changed(monitor, None);

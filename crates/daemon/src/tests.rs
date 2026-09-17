@@ -5003,11 +5003,21 @@ fn test_last_window_stale_tracking_still_allows_newer_activation() {
 }
 
 #[test]
-fn test_last_window_empty_clear_keeps_other_monitor_tabbed_column() {
-    // Model coverage: other-monitor tabbed layout, logical focus, and newer
-    // activation. Overlay visibility is not observable under cfg(test).
-    for prune in [false, true] {
+fn test_last_window_empty_reconciles_tab_strips_without_global_hide() {
+    #[derive(Clone, Copy)]
+    enum Departure {
+        DirectWithoutReplacement,
+        DirectWithReplacement,
+        Prune,
+    }
+
+    for departure in [
+        Departure::DirectWithoutReplacement,
+        Departure::DirectWithReplacement,
+        Departure::Prune,
+    ] {
         let mut state = AppState::new_with_config(test_config(), two_monitors());
+        state.paused = false;
         state.reduce_motion = false;
         state.last_prune_at = Some(std::time::Instant::now());
         state.injected_event_time_ms = Some(1_000);
@@ -5033,13 +5043,20 @@ fn test_last_window_empty_clear_keeps_other_monitor_tabbed_column() {
             .insert(201, std::time::Instant::now());
         state.previous_focused_hwnd = Some(200);
         state.last_broadcast_focused = Some((1, Some(200)));
-        state.injected_foreground_hwnd = Some(Some(200));
-        let hides_before = state.border_hide_count.load(Ordering::Relaxed);
+        state.injected_foreground_hwnd = Some(match departure {
+            Departure::DirectWithoutReplacement => None,
+            Departure::DirectWithReplacement | Departure::Prune => Some(200),
+        });
+        let hides_before = state.tab_strip_hide_count.load(Ordering::Relaxed);
+        let updates_before = state.tab_strip_update_count.load(Ordering::Relaxed);
 
-        if prune {
-            state.prune_stale_windows_for_test(&[100]);
-        } else {
-            state.handle_window_event(WindowEvent::Destroyed(100));
+        match departure {
+            Departure::DirectWithoutReplacement | Departure::DirectWithReplacement => {
+                state.handle_window_event(WindowEvent::Destroyed(100));
+            }
+            Departure::Prune => {
+                state.prune_stale_windows_for_test(&[100]);
+            }
         }
 
         assert_eq!(state.focused_monitor, 1);
@@ -5047,23 +5064,50 @@ fn test_last_window_empty_clear_keeps_other_monitor_tabbed_column() {
         assert_eq!(state.active_workspace_idx(2), 0);
         assert_eq!(state.previous_focused_hwnd, None);
         assert_eq!(state.last_broadcast_focused, Some((1, None)));
-        assert!(state.border_hide_count.load(Ordering::Relaxed) > hides_before);
+        assert!(
+            state.tab_strip_update_count.load(Ordering::Relaxed) > updates_before,
+            "the empty departure must reconcile strips before its transition lands"
+        );
+        assert_eq!(
+            state.tab_strip_hide_count.load(Ordering::Relaxed),
+            hides_before,
+            "an empty departure must not globally hide other monitors' strips"
+        );
         let other = &state.workspaces[&2][0];
         assert!(other.column(0).is_some_and(|column| column.is_tabbed()));
         assert!(other.contains_window(200));
         assert!(other.contains_window(201));
 
-        state.handle_window_event(WindowEvent::Focused(200, 1_000));
-        assert_eq!(state.focused_monitor, 1);
-        assert_eq!(state.previous_focused_hwnd, None);
+        let duration = state
+            .layout_transition
+            .as_ref()
+            .expect("departure transition")
+            .duration_ms;
+        assert!(state.tick_animations(duration));
+        assert!(state.layout_transition.is_none());
+        state.post_animation_nudge_pending = true;
+        state.apply_layout().unwrap();
+        let updates_before_landing_sync = state.tab_strip_update_count.load(Ordering::Relaxed);
+        state.sync_foreground_after_animation_landing();
 
-        state.handle_window_event(WindowEvent::Focused(200, 1_001));
-        assert_eq!(state.focused_monitor, 2);
-        assert_eq!(state.previous_focused_hwnd, Some(200));
-        assert_eq!(state.pending_last_window_departure, None);
-        assert!(state.workspaces[&2][0]
-            .column(0)
-            .is_some_and(|column| column.is_tabbed()));
+        let landing_should_sync = !matches!(departure, Departure::DirectWithReplacement);
+        assert_eq!(
+            state.tab_strip_update_count.load(Ordering::Relaxed),
+            updates_before_landing_sync + usize::from(landing_should_sync),
+            "only an unsuppressed landing should reconcile the empty selection"
+        );
+        assert_eq!(
+            state.tab_strip_hide_count.load(Ordering::Relaxed),
+            hides_before,
+            "neither the immediate path nor final landing may globally hide strips"
+        );
+
+        if matches!(departure, Departure::DirectWithReplacement) {
+            state.handle_window_event(WindowEvent::Focused(200, 1_001));
+            assert_eq!(state.focused_monitor, 2);
+            assert_eq!(state.previous_focused_hwnd, Some(200));
+            assert_eq!(state.pending_last_window_departure, None);
+        }
     }
 }
 

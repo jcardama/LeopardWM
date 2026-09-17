@@ -1523,12 +1523,12 @@ impl AppState {
 
     /// Clear logical focus after the selected workspace becomes empty.
     ///
-    /// Does not call `sync_foreground_window` or `hide_tab_strip`: the empty
-    /// sync path hides every monitor's tab overlays, and `apply_layout` has
-    /// already reconciled strips. Does not steal native focus.
+    /// Does not call `sync_foreground_window` or steal native focus. Reconciles
+    /// tab strips directly because a layout transition defers `apply_layout`.
     pub(crate) fn clear_logical_focus_for_empty_selection(&mut self) {
         self.previous_focused_hwnd = None;
         self.hide_border();
+        self.update_tab_strip();
         let monitor = self.focused_monitor as i64;
         self.broadcast_focused_window_if_changed(monitor, None);
     }
