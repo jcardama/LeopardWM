@@ -13,6 +13,8 @@ All notable changes to LeopardWM will be documented in this file.
 
 ### Fixes
 
+- **Gesture capture now preserves an existing report when duplicate daemon startup is rejected.**
+  Closed captures no longer evaluate diagnostic trace fields, and deadline-boundary uncertainty prevents a false `no_input=true` result.
 - **Closing the last window on a workspace keeps that workspace selected.**
   An attributable Windows replacement activation on another workspace or
   monitor no longer follows away from a genuinely empty selection (no tiled

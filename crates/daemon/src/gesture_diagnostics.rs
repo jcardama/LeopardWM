@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 use tracing::field::{Field, Visit};
 use tracing::{Event, Subscriber};
 use tracing_subscriber::filter::LevelFilter;
-use tracing_subscriber::layer::Context;
+use tracing_subscriber::layer::{Context, Filter};
 use tracing_subscriber::Layer;
 
 const MAX_FIELD_CHARS: usize = 64;
@@ -103,12 +103,32 @@ struct CaptureState {
     active: Arc<AtomicBool>,
     in_flight: Arc<AtomicU64>,
     after_close: Arc<AtomicU64>,
+    gate_open: Arc<AtomicBool>,
+}
+
+impl CaptureState {
+    fn open_gate(&self) {
+        if !self.gate_open.swap(true, Ordering::AcqRel) {
+            leopardwm_platform_win32::begin_gesture_diagnostic_capture();
+        }
+    }
+
+    fn close_gate(&self) {
+        if self.gate_open.swap(false, Ordering::AcqRel) {
+            leopardwm_platform_win32::end_gesture_diagnostic_capture();
+        }
+    }
 }
 
 /// Tracing layer that handoffs allowlisted diagnostic records without blocking.
 #[derive(Clone)]
 pub struct GestureCaptureLayer {
     tx: SyncSender<CaptureRecord>,
+    state: CaptureState,
+}
+
+#[derive(Clone)]
+pub struct GestureCaptureFilter {
     state: CaptureState,
 }
 
@@ -125,6 +145,10 @@ impl GestureCaptureHandle {
         self.layer.clone()
     }
 
+    pub fn filter(&self) -> GestureCaptureFilter {
+        self.layer.filter()
+    }
+
     #[cfg(test)]
     fn wait_for_deadline(mut self) {
         if let Some(thread) = self.thread.take() {
@@ -135,9 +159,27 @@ impl GestureCaptureHandle {
 
 impl Drop for GestureCaptureHandle {
     fn drop(&mut self) {
+        self.state.close_gate();
         self.state.active.store(false, Ordering::Release);
         self.state.shutdown.store(true, Ordering::SeqCst);
         join_short(&mut self.thread, SHUTDOWN_JOIN);
+    }
+}
+
+impl GestureCaptureLayer {
+    pub fn filter(&self) -> GestureCaptureFilter {
+        GestureCaptureFilter {
+            state: self.state.clone(),
+        }
+    }
+}
+
+impl<S> Filter<S> for GestureCaptureFilter
+where
+    S: Subscriber,
+{
+    fn enabled(&self, metadata: &tracing::Metadata<'_>, _ctx: &Context<'_, S>) -> bool {
+        metadata.target() == GESTURE_DIAG_TARGET && self.state.active.load(Ordering::Acquire)
     }
 }
 
@@ -176,6 +218,7 @@ pub fn start_capture(
         active: Arc::new(AtomicBool::new(true)),
         in_flight: Arc::new(AtomicU64::new(0)),
         after_close: Arc::new(AtomicU64::new(0)),
+        gate_open: Arc::new(AtomicBool::new(false)),
     };
     let worker_state = state.clone();
     let thread = thread::Builder::new()
@@ -206,11 +249,14 @@ pub fn start_capture(
         .ok()?;
 
     match ready_rx.recv_timeout(STARTUP_READY_TIMEOUT) {
-        Ok(Ok(())) => Some(GestureCaptureHandle {
-            state: state.clone(),
-            thread: Some(thread),
-            layer: GestureCaptureLayer { tx, state },
-        }),
+        Ok(Ok(())) => {
+            state.open_gate();
+            Some(GestureCaptureHandle {
+                state: state.clone(),
+                thread: Some(thread),
+                layer: GestureCaptureLayer { tx, state },
+            })
+        }
         Ok(Err(e)) => {
             eprintln!("[leopardwm] Warning: gesture diagnostic capture could not start: {e}");
             let _ = thread.join();
@@ -228,6 +274,9 @@ pub fn start_capture(
 
 /// Emit a dispatch-stage record using the shared diagnostic target.
 pub fn emit_dispatch(event: GestureEvent, binding: &'static str, command: Option<&str>) {
+    if !leopardwm_platform_win32::gesture_diagnostic_capture_active() {
+        return;
+    }
     if let Some(command) = command {
         tracing::trace!(
             target: GESTURE_DIAG_TARGET,
@@ -255,9 +304,8 @@ where
     }
 
     fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
-        // Target matching belongs here and on a per-layer filter at the
-        // subscriber. Layer::enabled returning false globally disables the
-        // event, including INFO fmt records.
+        // Target matching is also checked here because tests may install this
+        // layer without the production per-layer filter.
         if event.metadata().target() != GESTURE_DIAG_TARGET {
             return;
         }
@@ -458,6 +506,7 @@ fn run_worker(
 
     // Closing admission before draining prevents post-deadline work from
     // extending the capture. The channel capacity bounds this final drain.
+    state.close_gate();
     state.active.store(false, Ordering::Release);
     let records_in_flight_at_close = state.in_flight.load(Ordering::Acquire);
     for _ in 0..limits.channel_capacity.clamp(1, FINAL_DRAIN_MAX_RECORDS) {
@@ -546,10 +595,12 @@ fn write_header(file: &mut File, header: &CaptureHeader) -> io::Result<()> {
     Ok(())
 }
 
-fn write_summary(file: &mut File, summary: CaptureSummary<'_>) -> io::Result<()> {
+fn write_summary(file: &mut impl Write, summary: CaptureSummary<'_>) -> io::Result<()> {
     let no_input = summary.counts.hook_delivery == 0
         && summary.records_dropped == 0
-        && summary.records_capped == 0;
+        && summary.records_capped == 0
+        && summary.records_in_flight_at_close == 0
+        && summary.records_after_close == 0;
     writeln!(file)?;
     writeln!(file, "# summary")?;
     writeln!(file, "end_reason={}", summary.end_reason)?;
@@ -637,6 +688,35 @@ mod tests {
         tracing::subscriber::with_default(subscriber, emit);
     }
 
+    fn emit_diagnostic_probe(visits: &AtomicU64) {
+        if !leopardwm_platform_win32::gesture_diagnostic_capture_active() {
+            return;
+        }
+        tracing::trace!(
+            target: GESTURE_DIAG_TARGET,
+            stage = GESTURE_DIAG_STAGE_HOOK_DELIVERY,
+            axis = "vertical",
+            delta = {
+                visits.fetch_add(1, Ordering::Relaxed);
+                120
+            },
+            flags = 0u32,
+            mods_held = false,
+            swipe_candidate = false,
+        );
+    }
+
+    fn emit_general_trace_probe(visits: &AtomicU64) {
+        tracing::trace!(
+            target: "leopardwm::test_general",
+            visits = {
+                visits.fetch_add(1, Ordering::Relaxed);
+                1
+            },
+            "general trace after capture"
+        );
+    }
+
     #[test]
     fn default_off_does_not_mutate_existing_file() {
         let dir = test_dir();
@@ -662,6 +742,60 @@ mod tests {
         assert!(body.contains("records_dropped=0"), "{body}");
         assert!(body.contains("gestures_enabled_config=true"), "{body}");
         assert!(body.contains("daemon_integrity=Medium"), "{body}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn boundary_uncertainty_prevents_no_input_claim() {
+        let counts = StageCounts::default();
+        let mut body = Vec::new();
+        write_summary(
+            &mut body,
+            CaptureSummary {
+                end_reason: "deadline",
+                records_written: 0,
+                records_dropped: 0,
+                records_capped: 0,
+                records_in_flight_at_close: 1,
+                records_after_close: 1,
+                counts: &counts,
+            },
+        )
+        .unwrap();
+        let body = String::from_utf8(body).unwrap();
+        assert!(body.contains("no_input=false"), "{body}");
+    }
+
+    #[test]
+    fn production_filter_stops_inactive_diagnostics_without_vetoing_general_trace() {
+        let dir = test_dir();
+        let mut limits = CaptureLimits::from_secs(1);
+        limits.duration = Duration::from_millis(100);
+        let handle = start_capture(&dir, test_header(1), limits).unwrap();
+        let diagnostic_visits = Arc::new(AtomicU64::new(0));
+        let general_visits = Arc::new(AtomicU64::new(0));
+        let general = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let writer_buf = Arc::clone(&general);
+        let subscriber = tracing_subscriber::registry()
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_ansi(false)
+                    .with_writer(move || VecWriter(Arc::clone(&writer_buf)))
+                    .with_filter(LevelFilter::TRACE),
+            )
+            .with(handle.layer().with_filter(handle.filter()));
+
+        tracing::subscriber::with_default(subscriber, || {
+            emit_diagnostic_probe(&diagnostic_visits);
+            handle.wait_for_deadline();
+            emit_diagnostic_probe(&diagnostic_visits);
+            emit_general_trace_probe(&general_visits);
+        });
+
+        assert_eq!(diagnostic_visits.load(Ordering::Relaxed), 1);
+        assert_eq!(general_visits.load(Ordering::Relaxed), 1);
+        let general = String::from_utf8(general.lock().unwrap().clone()).unwrap();
+        assert!(general.contains("general trace after capture"), "{general}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -787,13 +921,18 @@ mod tests {
                 active: Arc::new(AtomicBool::new(true)),
                 in_flight: Arc::new(AtomicU64::new(0)),
                 after_close: Arc::new(AtomicU64::new(0)),
+                gate_open: Arc::new(AtomicBool::new(false)),
             },
         };
         let subscriber = tracing_subscriber::registry().with(layer);
         tracing::subscriber::with_default(subscriber, || {
-            emit_gesture_registration("registered");
-            emit_gesture_registration("disabled");
-            emit_gesture_registration("failed");
+            for state in ["registered", "disabled", "failed"] {
+                tracing::trace!(
+                    target: GESTURE_DIAG_TARGET,
+                    stage = GESTURE_DIAG_STAGE_REGISTRATION,
+                    state,
+                );
+            }
         });
         assert!(dropped.load(Ordering::Relaxed) >= 1);
         drop(rx);
@@ -881,13 +1020,7 @@ mod tests {
                     .with_writer(move || VecWriter(Arc::clone(&writer_buf)))
                     .with_filter(LevelFilter::INFO),
             )
-            .with(
-                handle
-                    .layer()
-                    .with_filter(tracing_subscriber::filter::filter_fn(
-                        |meta: &tracing::Metadata<'_>| meta.target() == GESTURE_DIAG_TARGET,
-                    )),
-            );
+            .with(handle.layer().with_filter(handle.filter()));
         tracing::subscriber::with_default(subscriber, || {
             tracing::info!("ordinary info line");
             tracing::trace!("trace should not reach info layer");

@@ -872,15 +872,11 @@ fn init_logging(
                     log_level,
                 )),
         )
-        .with(capture_handle.as_ref().map(|handle| {
-            handle
-                .layer()
-                .with_filter(tracing_subscriber::filter::filter_fn(
-                    |meta: &tracing::Metadata<'_>| {
-                        meta.target() == leopardwm_platform_win32::GESTURE_DIAG_TARGET
-                    },
-                ))
-        }))
+        .with(
+            capture_handle
+                .as_ref()
+                .map(|handle| handle.layer().with_filter(handle.filter())),
+        )
         .try_init()
         .map_err(|e| anyhow::anyhow!("Failed to set tracing subscriber: {}", e))?;
 
@@ -2054,6 +2050,42 @@ mod gesture_dispatch_tests {
             classify_gesture_command("not a real command"),
             GestureCommand::Unknown("not a real command")
         ));
+    }
+}
+
+#[cfg(test)]
+mod startup_tests {
+    use super::*;
+
+    #[test]
+    fn duplicate_rejection_preserves_existing_capture_artifact() {
+        let dir =
+            std::env::temp_dir().join(format!("lwm-duplicate-capture-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = gesture_diagnostics::capture_log_path(&dir);
+        std::fs::write(&path, "prior-report\n").unwrap();
+
+        let duplicate_detected = true;
+        let mut capture_started = false;
+        let capture = (!duplicate_detected).then(|| {
+            capture_started = true;
+            gesture_diagnostics::start_capture(
+                &dir,
+                gesture_diagnostics::CaptureHeader {
+                    version: "test".to_string(),
+                    gestures_enabled_config: true,
+                    capture_limit_secs: 1,
+                    daemon_integrity: "Medium".to_string(),
+                },
+                gesture_diagnostics::CaptureLimits::from_secs(1),
+            )
+        });
+
+        assert!(capture.is_none());
+        assert!(!capture_started);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "prior-report\n");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 
@@ -3308,6 +3340,18 @@ async fn handle_display_change_settled(ctx: &mut EventLoopCtx<'_>) {
 async fn main() -> Result<()> {
     let args = Args::parse();
 
+    // Reject a duplicate before bootstrap opens the opt-in capture artifact.
+    let ipc_pipe_names = pipe_name_candidates();
+    if check_already_running().await {
+        eprintln!("Error: Another leopardwm-daemon instance is already running.");
+        eprintln!("Use 'leopardwm-cli status' to check the running instance.");
+        eprintln!(
+            "[leopardwm] Another instance is already running (active pipe candidates: {})",
+            ipc_pipe_names.join(", ")
+        );
+        std::process::exit(1);
+    }
+
     let (config, config_warnings, _gesture_capture) = bootstrap_config()?;
 
     // Install panic hook to uncloak all windows and write a crash report
@@ -3320,18 +3364,6 @@ async fn main() -> Result<()> {
     // user-facing notices (e.g. "can't tile this elevated window"). Non-fatal.
     if let Err(e) = notify::init() {
         warn!("Toast notification setup failed (notifications disabled): {e:#}");
-    }
-
-    // Check if another instance is already running
-    let ipc_pipe_names = pipe_name_candidates();
-    if check_already_running().await {
-        eprintln!("Error: Another leopardwm-daemon instance is already running.");
-        eprintln!("Use 'leopardwm-cli status' to check the running instance.");
-        error!(
-            "Another leopardwm-daemon instance is already running (active pipe candidates: {})",
-            ipc_pipe_names.join(", ")
-        );
-        std::process::exit(1);
     }
 
     info!(

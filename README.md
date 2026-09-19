@@ -346,7 +346,7 @@ Failed physical gestures are diagnosed with an opt-in, short capture — not by 
    | `recognized` | Engine emitted `swipe_*` or `scroll_*` |
    | `dispatch` | Daemon binding: `known` plus a canonical command name, `no_action` (empty binding), or `unknown` (command text omitted) |
 
-   `no_input=true` means the capture observed zero `hook_delivery` records and dropped/capped none; registration alone still counts as no hook input. It is not proof that the touchpad is dead. If `records_dropped` or `records_capped` is non-zero, input may have been lost — repeat with a shorter interval or fewer gestures. `records_in_flight_at_close` and `records_after_close` describe bounded deadline-boundary work that was not admitted as further capture evidence.
+   `no_input=true` means the capture observed zero `hook_delivery` records and had no dropped, capped, or deadline-boundary in-flight records; registration alone still counts as no hook input. It is not proof that the touchpad is dead. If `records_dropped`, `records_capped`, `records_in_flight_at_close`, or `records_after_close` is non-zero, input may have been lost or crossed the bounded deadline — repeat with a shorter interval or fewer gestures.
 
 7. Set `diagnostic_capture_secs = 0` afterward so the next restart does not rearm capture and overwrite the report. Default-off does not truncate an existing file; a new capture replaces it.
 

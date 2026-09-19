@@ -1,7 +1,10 @@
 //! Touchpad gesture detection via low-level mouse hook.
 
 use crate::{recover_poisoned_mutex, Win32Error, WM_QUIT_LLHOOK_THREAD};
-use std::sync::mpsc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    mpsc,
+};
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -50,6 +53,23 @@ pub const GESTURE_DIAG_STAGE_COOLDOWN: &str = "cooldown";
 pub const GESTURE_DIAG_STAGE_RECOGNIZED: &str = "recognized";
 pub const GESTURE_DIAG_STAGE_DISPATCH: &str = "dispatch";
 pub const GESTURE_DIAG_STAGE_REGISTRATION: &str = "registration";
+
+static GESTURE_DIAGNOSTIC_CAPTURE_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// Enables trace construction for the bounded daemon diagnostic capture.
+pub fn begin_gesture_diagnostic_capture() {
+    GESTURE_DIAGNOSTIC_CAPTURE_ACTIVE.store(true, Ordering::Release);
+}
+
+/// Stops trace construction after the bounded daemon diagnostic capture ends.
+pub fn end_gesture_diagnostic_capture() {
+    GESTURE_DIAGNOSTIC_CAPTURE_ACTIVE.store(false, Ordering::Release);
+}
+
+/// Whether the daemon's bounded diagnostic capture currently accepts records.
+pub fn gesture_diagnostic_capture_active() -> bool {
+    GESTURE_DIAGNOSTIC_CAPTURE_ACTIVE.load(Ordering::Acquire)
+}
 
 /// Wheel message constants (not all exposed by windows-rs).
 const WM_MOUSEWHEEL: u32 = 0x020A;
@@ -538,6 +558,12 @@ fn send_gesture_event(event: GestureEvent) {
 
 /// Emit a registration-stage record on the dedicated diagnostic target.
 pub fn emit_gesture_registration(state: &'static str) {
+    if gesture_diagnostic_capture_active() {
+        emit_gesture_registration_active(state);
+    }
+}
+
+fn emit_gesture_registration_active(state: &'static str) {
     tracing::trace!(
         target: GESTURE_DIAG_TARGET,
         stage = GESTURE_DIAG_STAGE_REGISTRATION,
@@ -546,6 +572,20 @@ pub fn emit_gesture_registration(state: &'static str) {
 }
 
 fn emit_wheel_diagnostics(
+    axis: WheelAxis,
+    delta: i32,
+    flags: u32,
+    mods_held: bool,
+    swipe_candidate: bool,
+    result: &WheelGestureResult,
+) {
+    if !gesture_diagnostic_capture_active() {
+        return;
+    }
+    emit_wheel_diagnostics_active(axis, delta, flags, mods_held, swipe_candidate, result);
+}
+
+fn emit_wheel_diagnostics_active(
     axis: WheelAxis,
     delta: i32,
     flags: u32,
@@ -930,7 +970,7 @@ mod tests {
     ) -> (WheelGestureResult, Vec<String>) {
         let result = engine.process(sample);
         let lines = capture_diag(|| {
-            emit_wheel_diagnostics(
+            emit_wheel_diagnostics_active(
                 sample.axis,
                 sample.delta,
                 sample.flags,
@@ -1117,10 +1157,10 @@ mod tests {
     #[test]
     fn registration_emit_uses_fixed_vocabulary() {
         let lines = capture_diag(|| {
-            emit_gesture_registration("disabled");
-            emit_gesture_registration("failed");
-            emit_gesture_registration("registered");
-            emit_gesture_registration("stopped");
+            emit_gesture_registration_active("disabled");
+            emit_gesture_registration_active("failed");
+            emit_gesture_registration_active("registered");
+            emit_gesture_registration_active("stopped");
         });
         assert_eq!(
             lines,
