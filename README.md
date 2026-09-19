@@ -299,6 +299,57 @@ lwm panic-revert       # emergency: uncloak everything, drop daemon out of manag
 
 Run `lwm help` (or `lwm <subcommand> --help`) for the full surface — there are ~40 subcommands.
 
+### Touchpad gesture diagnostics
+
+Failed physical gestures are diagnosed with an opt-in, short capture — not by leaving general logging at TRACE. Capture is **default off**; turning it on does not change gesture behavior.
+
+1. In `%APPDATA%\leopardwm\config\config.toml`, set a short interval under `[gestures]`:
+
+   ```toml
+   diagnostic_capture_secs = 15
+   ```
+
+   The value is startup-only and clamped to 120 seconds. Settings saves preserve the knob; there is no live start command.
+
+2. Restart the daemon with the documented workflow. **`lwm reload` is not enough.**
+
+   ```bash
+   lwm stop
+   lwm run
+   ```
+
+   Stopping and starting can disturb off-screen client-area or DWM frame geometry. That is a known restart limitation, not a gesture-compatibility claim.
+
+3. During the capture window:
+   - Two-finger scroll **without** the configured navigation modifier (`hotkeys.scroll_modifier`, default `Ctrl+Alt`). Pass-through is expected (`stage=classifier outcome=reject`).
+   - The same scroll **with** the modifier. Navigation should classify as a pass and may `recognized`/`dispatch`.
+   - All four three-finger directions, with a pause between each.
+
+4. Record the Windows touchpad setting as observed; do not treat it as a required mapping, and do not assume it guarantees wheel delivery to LeopardWM:
+   - Windows 10: Settings → Devices → Touchpad
+   - Windows 11: Settings → Bluetooth & devices → Touchpad
+
+5. Use `lwm doctor` to inspect the daemon and CLI process-integrity lines. They do not measure the arbitrary foreground app; separately reported elevated-window blocks are different evidence. The capture header records `daemon_integrity` only. This report cannot prove elevated hook visibility, finger count, or device origin.
+
+6. When the interval ends, the daemon writes a summary even with zero input. Inspect `%LOCALAPPDATA%\leopardwm\logs\leopardwm-gesture-capture.log`, or the **Gesture Capture** section of `lwm collect-logs` (full file, not the last-100 daemon tail). For a gesture bug report, share that artifact.
+
+   Interpretation:
+
+   | Stage | Meaning |
+   |---|---|
+   | `registration` | `disabled` / `failed` / `registered` / `stopped` — config and hook setup evidence, not a claim that a capture is running now |
+   | `hook_delivery` | A wheel message reached the production hook (axis, delta, flags, modifier held, swipe candidate) |
+   | `classifier` | `pass` entered navigation or swipe handling; `reject` is pass-through |
+   | `accumulation` | Running total after this event |
+   | `timeout` | Partial swipe accumulator reset after the gesture timeout |
+   | `cooldown` | Navigation event suppressed during cooldown |
+   | `recognized` | Engine emitted `swipe_*` or `scroll_*` |
+   | `dispatch` | Daemon binding: `known` plus a canonical command name, `no_action` (empty binding), or `unknown` (command text omitted) |
+
+   `no_input=true` means the capture observed zero `hook_delivery` records and dropped/capped none; registration alone still counts as no hook input. It is not proof that the touchpad is dead. If `records_dropped` or `records_capped` is non-zero, input may have been lost — repeat with a shorter interval or fewer gestures. `records_in_flight_at_close` and `records_after_close` describe bounded deadline-boundary work that was not admitted as further capture evidence.
+
+7. Set `diagnostic_capture_secs = 0` afterward so the next restart does not rearm capture and overwrite the report. Default-off does not truncate an existing file; a new capture replaces it.
+
 ## Config & Runtime Paths
 
 > **Note:** Crate names and on-disk paths still use `leopardwm` internally. A full crate rename is future work.
@@ -309,6 +360,7 @@ Run `lwm help` (or `lwm <subcommand> --help`) for the full surface — there are
 | State | `%APPDATA%\leopardwm\data\workspace-state.json` |
 | Log (stdout) | `%TEMP%\leopardwm-daemon.log` |
 | Log (stderr) | `%TEMP%\leopardwm-daemon.err.log` |
+| Gesture capture | `%LOCALAPPDATA%\leopardwm\logs\leopardwm-gesture-capture.log` |
 
 ## Architecture
 

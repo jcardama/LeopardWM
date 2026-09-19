@@ -760,6 +760,12 @@ pub struct GestureConfig {
     /// Command for modifier+scroll down (physical mouse wheel).
     #[serde(default = "default_scroll_down")]
     pub scroll_down: String,
+
+    /// Startup-only bounded diagnostic capture duration in seconds.
+    /// `0` disables capture (default). Clamped to [`MAX_DIAGNOSTIC_CAPTURE_SECS`].
+    /// Reload does not start or stop a capture; restart with `lwm stop` then `lwm run`.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub diagnostic_capture_secs: u64,
 }
 
 fn default_false() -> bool {
@@ -794,6 +800,19 @@ fn default_scroll_modifier() -> String {
     "Ctrl+Alt".to_string()
 }
 
+fn is_zero_u64(value: &u64) -> bool {
+    *value == 0
+}
+
+/// Hard maximum for `[gestures] diagnostic_capture_secs`.
+pub const MAX_DIAGNOSTIC_CAPTURE_SECS: u64 = 120;
+
+/// Clamp a requested capture duration. Used at logging init (before validate)
+/// and again in [`Config::validate`] so the bound cannot be bypassed.
+pub fn clamp_diagnostic_capture_secs(secs: u64) -> u64 {
+    secs.min(MAX_DIAGNOSTIC_CAPTURE_SECS)
+}
+
 impl Default for GestureConfig {
     fn default() -> Self {
         Self {
@@ -804,6 +823,7 @@ impl Default for GestureConfig {
             swipe_down: default_swipe_down(),
             scroll_up: default_scroll_up(),
             scroll_down: default_scroll_down(),
+            diagnostic_capture_secs: 0,
         }
     }
 }
@@ -1263,6 +1283,20 @@ impl Config {
                     ),
                 });
                 self.behavior.log_level = default_log_level();
+            }
+        }
+
+        {
+            let requested = self.gestures.diagnostic_capture_secs;
+            let clamped = clamp_diagnostic_capture_secs(requested);
+            if clamped != requested {
+                warnings.push(ConfigWarning {
+                    field: "gestures.diagnostic_capture_secs".to_string(),
+                    message: format!(
+                        "gestures.diagnostic_capture_secs ({requested}) exceeds max, clamped to {clamped}"
+                    ),
+                });
+                self.gestures.diagnostic_capture_secs = clamped;
             }
         }
 
@@ -2433,6 +2467,58 @@ mod tests {
                 .expect("deserialize");
 
         assert!(!saved.animation.reduce_motion_on_battery);
+    }
+
+    #[test]
+    fn test_diagnostic_capture_secs_defaults_off_and_clamps() {
+        assert_eq!(Config::default().gestures.diagnostic_capture_secs, 0);
+        assert_eq!(clamp_diagnostic_capture_secs(0), 0);
+        assert_eq!(clamp_diagnostic_capture_secs(15), 15);
+        assert_eq!(clamp_diagnostic_capture_secs(120), 120);
+        assert_eq!(
+            clamp_diagnostic_capture_secs(121),
+            MAX_DIAGNOSTIC_CAPTURE_SECS
+        );
+        assert_eq!(
+            clamp_diagnostic_capture_secs(9_999),
+            MAX_DIAGNOSTIC_CAPTURE_SECS
+        );
+
+        let config: Config = toml::from_str("[gestures]\nenabled = true\n").expect("parse");
+        assert_eq!(config.gestures.diagnostic_capture_secs, 0);
+
+        let config: Config =
+            toml::from_str("[gestures]\ndiagnostic_capture_secs = 15\n").expect("parse");
+        assert_eq!(config.gestures.diagnostic_capture_secs, 15);
+        assert!(config.gestures.enabled);
+
+        let mut config = Config::default();
+        config.gestures.diagnostic_capture_secs = 500;
+        let warnings = config.validate();
+        assert_eq!(
+            config.gestures.diagnostic_capture_secs,
+            MAX_DIAGNOSTIC_CAPTURE_SECS
+        );
+        assert!(warnings
+            .iter()
+            .any(|w| w.field == "gestures.diagnostic_capture_secs"));
+    }
+
+    #[test]
+    fn test_diagnostic_capture_secs_json_round_trip_preserves_nonzero() {
+        let mut config = Config::default();
+        config.gestures.diagnostic_capture_secs = 15;
+        let saved: Config =
+            serde_json::from_value(serde_json::to_value(config).expect("serialize"))
+                .expect("deserialize");
+        assert_eq!(saved.gestures.diagnostic_capture_secs, 15);
+
+        let default_saved: Config =
+            serde_json::from_value(serde_json::to_value(Config::default()).expect("serialize"))
+                .expect("deserialize");
+        assert_eq!(default_saved.gestures.diagnostic_capture_secs, 0);
+        let json = serde_json::to_value(Config::default()).expect("serialize");
+        assert!(json["gestures"].get("diagnostic_capture_secs").is_none());
     }
 
     #[test]

@@ -1136,6 +1136,55 @@ fn test_handle_collect_logs_does_not_panic() {
 }
 
 #[test]
+fn collect_logs_includes_full_gesture_capture_not_last_100() {
+    let dir = std::env::temp_dir().join(format!(
+        "lwm-collect-logs-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&dir).unwrap();
+    let daemon = dir.join("leopardwm-daemon.log");
+    let capture = dir.join(leopardwm_ipc::GESTURE_CAPTURE_LOG_FILE);
+    let daemon_body: String = (0..150).map(|i| format!("daemon-line-{i}\n")).collect();
+    let capture_body: String = (0..150).map(|i| format!("capture-line-{i}\n")).collect();
+    fs::write(&daemon, &daemon_body).unwrap();
+    fs::write(&capture, &capture_body).unwrap();
+
+    let daemon_section = format_file_section("Daemon Log", &daemon, Some(100));
+    let capture_section = format_file_section("Gesture Capture", &capture, None);
+
+    assert!(
+        daemon_section.contains("daemon-line-149"),
+        "{daemon_section}"
+    );
+    assert!(
+        !daemon_section.contains("daemon-line-0"),
+        "{daemon_section}"
+    );
+    assert!(
+        daemon_section.contains("earlier lines omitted"),
+        "{daemon_section}"
+    );
+    assert!(
+        capture_section.contains("capture-line-0"),
+        "{capture_section}"
+    );
+    assert!(
+        capture_section.contains("capture-line-149"),
+        "{capture_section}"
+    );
+    assert!(
+        !capture_section.contains("earlier lines omitted"),
+        "{capture_section}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_config_action_variants_parse() {
     let _init = ConfigAction::Init {
         output: None,

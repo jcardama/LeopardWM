@@ -19,6 +19,7 @@ mod diagnostics_validation;
 mod drag;
 mod event_handler;
 mod events;
+mod gesture_diagnostics;
 mod helpers;
 mod hotkey_resolution;
 mod ipc_server;
@@ -776,7 +777,11 @@ async fn apply_initial_layout(
 }
 
 /// Set DPI awareness, ensure a config file exists, load and validate config, and init logging.
-fn bootstrap_config() -> Result<(Config, Vec<config::ConfigWarning>)> {
+fn bootstrap_config() -> Result<(
+    Config,
+    Vec<config::ConfigWarning>,
+    Option<gesture_diagnostics::GestureCaptureHandle>,
+)> {
     // Set DPI awareness before any window/GDI operations
     if set_dpi_awareness() {
         eprintln!("[leopardwm] DPI awareness set to Per-Monitor Aware V2");
@@ -807,26 +812,11 @@ fn bootstrap_config() -> Result<(Config, Vec<config::ConfigWarning>)> {
         "error" => Level::ERROR,
         _ => Level::INFO, // default fallback for invalid values
     };
-    // Write logs to both stdout (captured by the watchdog when launched that
-    // way) and a file in the shared log dir, so the log the banner advertises
-    // and `lwm collect-logs`/"View Logs" point at actually exists regardless of
-    // how the daemon was launched.
-    use tracing_subscriber::prelude::*;
-    let log_dir = leopardwm_ipc::log_dir();
-    let _ = std::fs::create_dir_all(&log_dir);
-    let file_appender = tracing_appender::rolling::never(&log_dir, "leopardwm-daemon.log");
-    tracing_subscriber::registry()
-        .with(tracing_subscriber::filter::LevelFilter::from_level(
-            log_level,
-        ))
-        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stdout))
-        .with(
-            tracing_subscriber::fmt::layer()
-                .with_ansi(false)
-                .with_writer(file_appender),
-        )
-        .try_init()
-        .map_err(|e| anyhow::anyhow!("Failed to set tracing subscriber: {}", e))?;
+    // Clamp capture duration before logging init; validate() repeats the same
+    // bound for the in-memory config. Zero does not open or truncate a file.
+    let capture_secs =
+        config::clamp_diagnostic_capture_secs(config.gestures.diagnostic_capture_secs);
+    let capture_handle = init_logging(log_level, &config, capture_secs)?;
 
     // Validate and clamp config values
     let config_warnings = config.validate();
@@ -834,7 +824,82 @@ fn bootstrap_config() -> Result<(Config, Vec<config::ConfigWarning>)> {
         warn!("Config: {} - {}", w.field, w.message);
     }
 
-    Ok((config, config_warnings))
+    Ok((config, config_warnings, capture_handle))
+}
+
+/// Install stdout + daemon-log layers at the configured level, and optionally a
+/// dedicated gesture-capture layer that can record TRACE on
+/// `leopardwm::gesture_diag` while general logging stays at INFO.
+fn init_logging(
+    log_level: Level,
+    config: &Config,
+    capture_secs: u64,
+) -> Result<Option<gesture_diagnostics::GestureCaptureHandle>> {
+    use tracing_subscriber::prelude::*;
+    let log_dir = leopardwm_ipc::log_dir();
+    let _ = std::fs::create_dir_all(&log_dir);
+    let file_appender = tracing_appender::rolling::never(&log_dir, "leopardwm-daemon.log");
+    let capture_handle = if capture_secs > 0 {
+        gesture_diagnostics::start_capture(
+            &log_dir,
+            gesture_diagnostics::CaptureHeader {
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                gestures_enabled_config: config.gestures.enabled,
+                capture_limit_secs: capture_secs,
+                daemon_integrity: gesture_diagnostics::format_integrity(
+                    leopardwm_platform_win32::current_process_integrity(),
+                ),
+            },
+            gesture_diagnostics::CaptureLimits::from_secs(capture_secs),
+        )
+    } else {
+        None
+    };
+
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(std::io::stdout)
+                .with_filter(tracing_subscriber::filter::LevelFilter::from_level(
+                    log_level,
+                )),
+        )
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .with_writer(file_appender)
+                .with_filter(tracing_subscriber::filter::LevelFilter::from_level(
+                    log_level,
+                )),
+        )
+        .with(capture_handle.as_ref().map(|handle| {
+            handle
+                .layer()
+                .with_filter(tracing_subscriber::filter::filter_fn(
+                    |meta: &tracing::Metadata<'_>| {
+                        meta.target() == leopardwm_platform_win32::GESTURE_DIAG_TARGET
+                    },
+                ))
+        }))
+        .try_init()
+        .map_err(|e| anyhow::anyhow!("Failed to set tracing subscriber: {}", e))?;
+
+    if capture_secs > 0 {
+        if capture_handle.is_some() {
+            info!(
+                capture_secs,
+                path = %gesture_diagnostics::capture_log_path(&log_dir).display(),
+                "Gesture diagnostic capture started for this process (startup-only; reload does not start a new capture)"
+            );
+        } else {
+            warn!(
+                capture_secs,
+                "Gesture diagnostic capture was requested but did not start"
+            );
+        }
+    }
+
+    Ok(capture_handle)
 }
 
 /// Install a panic hook that uncloaks all windows and writes a crash report.
@@ -1320,6 +1385,7 @@ fn setup_gestures(
         match register_gestures() {
             Ok((handle, gesture_receiver)) => {
                 info!("Gesture detection enabled");
+                leopardwm_platform_win32::emit_gesture_registration("registered");
 
                 // Spawn thread to forward gesture events
                 match spawn_forwarding_thread(
@@ -1339,11 +1405,13 @@ fn setup_gestures(
                     "Failed to register gestures: {}. Gesture support disabled.",
                     e
                 );
+                leopardwm_platform_win32::emit_gesture_registration("failed");
                 None
             }
         }
     } else {
         info!("Gesture detection disabled by config (gestures.enabled = false)");
+        leopardwm_platform_win32::emit_gesture_registration("disabled");
         None
     }
 }
@@ -1902,6 +1970,19 @@ fn classify_gesture_command(cmd: &str) -> GestureCommand<'_> {
     }
 }
 
+fn diagnose_gesture_dispatch(event: GestureEvent, command: &str) -> GestureCommand<'_> {
+    let classified = classify_gesture_command(command);
+    match &classified {
+        GestureCommand::NoAction => gesture_diagnostics::emit_dispatch(event, "no_action", None),
+        GestureCommand::Known(_) => {
+            let canonical = config::canonical_action_id(command);
+            gesture_diagnostics::emit_dispatch(event, "known", Some(&canonical));
+        }
+        GestureCommand::Unknown(_) => gesture_diagnostics::emit_dispatch(event, "unknown", None),
+    }
+    classified
+}
+
 /// Handle a touchpad/scroll gesture; returns true when the daemon should shut down.
 async fn handle_gesture_event(ctx: &mut EventLoopCtx<'_>, gesture_event: GestureEvent) -> bool {
     // Map gesture to command from config
@@ -1919,7 +2000,7 @@ async fn handle_gesture_event(ctx: &mut EventLoopCtx<'_>, gesture_event: Gesture
         GestureEvent::ScrollDown => &gesture_config.scroll_down,
     };
 
-    match classify_gesture_command(cmd_str) {
+    match diagnose_gesture_dispatch(gesture_event, cmd_str) {
         GestureCommand::NoAction => {}
         GestureCommand::Known(cmd) => {
             debug!("Gesture {:?} triggered, executing {:?}", gesture_event, cmd);
@@ -1947,10 +2028,33 @@ async fn handle_gesture_event(ctx: &mut EventLoopCtx<'_>, gesture_event: Gesture
                 }
             }
         }
-        GestureCommand::Unknown(cmd) => warn!("Unknown command for gesture: {}", cmd),
+        GestureCommand::Unknown(cmd) => {
+            warn!("Unknown command for gesture: {}", cmd);
+        }
     }
 
     false
+}
+
+#[cfg(test)]
+mod gesture_dispatch_tests {
+    use super::*;
+
+    #[test]
+    fn classify_empty_known_and_unknown_commands() {
+        assert!(matches!(
+            classify_gesture_command(""),
+            GestureCommand::NoAction
+        ));
+        assert!(matches!(
+            classify_gesture_command("focus_left"),
+            GestureCommand::Known(IpcCommand::FocusLeft)
+        ));
+        assert!(matches!(
+            classify_gesture_command("not a real command"),
+            GestureCommand::Unknown("not a real command")
+        ));
+    }
 }
 
 /// Open the config file in the user's editor and arm the "Edit Config" pull, so
@@ -3204,7 +3308,7 @@ async fn handle_display_change_settled(ctx: &mut EventLoopCtx<'_>) {
 async fn main() -> Result<()> {
     let args = Args::parse();
 
-    let (config, config_warnings) = bootstrap_config()?;
+    let (config, config_warnings, _gesture_capture) = bootstrap_config()?;
 
     // Install panic hook to uncloak all windows and write a crash report
     install_panic_hook();

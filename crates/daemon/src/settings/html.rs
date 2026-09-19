@@ -1418,6 +1418,7 @@ function num(id) { return parseInt(document.getElementById(id).value, 10) || 0; 
 var selectedWidthPresetRow = null;
 var lastValidWidthPresets = [0.333, 0.5, 0.667];
 var lastValidDefaultWidthPreset = 1;
+var gestureCaptureSecs = 0;
 function addPresetRow(kind, value) {
   var tbody = document.getElementById(kind + '-presets-body');
   var tr = document.createElement('tr');
@@ -1602,6 +1603,7 @@ function init(cfg) {
   setCb('cb-gestures-swipe_down', cfg.gestures.swipe_down, true);
   setCb('cb-gestures-scroll_up', cfg.gestures.scroll_up, true);
   setCb('cb-gestures-scroll_down', cfg.gestures.scroll_down, true);
+  gestureCaptureSecs = (cfg.gestures && cfg.gestures.diagnostic_capture_secs) || 0;
   updateScrollLabels();
 
   setChecked('snaphints-enabled', cfg.snap_hints.enabled);
@@ -2229,7 +2231,8 @@ function readConfig() {
       enabled: checked('gestures-enabled'),
       swipe_left: cbVal('cb-gestures-swipe_left'), swipe_right: cbVal('cb-gestures-swipe_right'),
       swipe_up: cbVal('cb-gestures-swipe_up'), swipe_down: cbVal('cb-gestures-swipe_down'),
-      scroll_up: cbVal('cb-gestures-scroll_up'), scroll_down: cbVal('cb-gestures-scroll_down')
+      scroll_up: cbVal('cb-gestures-scroll_up'), scroll_down: cbVal('cb-gestures-scroll_down'),
+      diagnostic_capture_secs: gestureCaptureSecs
     },
     snap_hints: {
       enabled: checked('snaphints-enabled'),
@@ -2438,6 +2441,11 @@ mod tests {
         assert!(SETTINGS_HTML.contains("return el ? (el.dataset.value || '') : '';"));
         assert!(SETTINGS_HTML.contains("swipe_left: cbVal('cb-gestures-swipe_left')"));
         assert!(SETTINGS_HTML.contains("scroll_down: cbVal('cb-gestures-scroll_down')"));
+        assert!(SETTINGS_HTML.contains("var gestureCaptureSecs = 0;"));
+        assert!(SETTINGS_HTML.contains(
+            "gestureCaptureSecs = (cfg.gestures && cfg.gestures.diagnostic_capture_secs) || 0;"
+        ));
+        assert!(SETTINGS_HTML.contains("diagnostic_capture_secs: gestureCaptureSecs"));
     }
 
     #[test]

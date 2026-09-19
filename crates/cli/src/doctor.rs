@@ -6,7 +6,7 @@ use anyhow::Result;
 use directories::ProjectDirs;
 use leopardwm_ipc::{ElevationBlockReason, ElevationBlockedWindow, IpcCommand, IpcResponse};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Result of a single diagnostic check.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -325,21 +325,14 @@ pub(crate) fn handle_collect_logs() -> Result<()> {
     println!();
 
     let log_dir = leopardwm_ipc::log_dir();
-    let log_path = log_dir.join("leopardwm-daemon.log");
-    println!("## Daemon Log ({}):", log_path.display());
-    match fs::read_to_string(&log_path) {
-        Ok(content) => {
-            let lines: Vec<&str> = content.lines().collect();
-            let start = lines.len().saturating_sub(100);
-            for line in &lines[start..] {
-                println!("{}", line);
-            }
-            if start > 0 {
-                println!("  ... ({} earlier lines omitted)", start);
-            }
-        }
-        Err(e) => println!("  (not found or unreadable: {})", e),
-    }
+    print!(
+        "{}",
+        format_file_section(
+            "Daemon Log",
+            &log_dir.join("leopardwm-daemon.log"),
+            Some(100),
+        )
+    );
     println!();
 
     let err_log_path = log_dir.join("leopardwm-daemon.err.log");
@@ -354,20 +347,10 @@ pub(crate) fn handle_collect_logs() -> Result<()> {
     // Watchdog tracing log. Daemon bootstrap stderr and early panics are kept
     // separately in the daemon error log above.
     let watchdog_log_path = log_dir.join("leopardwm-watchdog.log");
-    println!("## Watchdog Log ({}):", watchdog_log_path.display());
-    match fs::read_to_string(&watchdog_log_path) {
-        Ok(content) => {
-            let lines: Vec<&str> = content.lines().collect();
-            let start = lines.len().saturating_sub(100);
-            for line in &lines[start..] {
-                println!("{}", line);
-            }
-            if start > 0 {
-                println!("  ... ({} earlier lines omitted)", start);
-            }
-        }
-        Err(e) => println!("  (not found or unreadable: {})", e),
-    }
+    print!(
+        "{}",
+        format_file_section("Watchdog Log", &watchdog_log_path, Some(100))
+    );
     println!();
 
     let watchdog_err_log_path = log_dir.join("leopardwm-watchdog.err.log");
@@ -382,6 +365,20 @@ pub(crate) fn handle_collect_logs() -> Result<()> {
     }
     println!();
 
+    let capture_path = log_dir.join(leopardwm_ipc::GESTURE_CAPTURE_LOG_FILE);
+    print!(
+        "{}",
+        format_file_section("Gesture Capture", &capture_path, None)
+    );
+    println!("  Note: this is the full capture file, not a last-100 tail.");
+    println!(
+        "  Presence of this file does not mean a capture is running now. Capture is startup-only and default off."
+    );
+    println!(
+        "  For touchpad gesture reports, share this section or the capture file itself rather than the tailed daemon log."
+    );
+    println!();
+
     println!("## Daemon Binary:");
     match find_daemon_binary() {
         Some(path) => println!("  Found: {}", path.display()),
@@ -391,4 +388,34 @@ pub(crate) fn handle_collect_logs() -> Result<()> {
     println!("\n---");
     println!("Copy the above output and attach it to your bug report.");
     Ok(())
+}
+
+/// Format a log file as a collect-logs section. `tail_lines = None` dumps the
+/// whole file so dedicated capture reports are not truncated to last-100.
+pub(crate) fn format_file_section(heading: &str, path: &Path, tail_lines: Option<usize>) -> String {
+    let mut out = format!("## {heading} ({}):\n", path.display());
+    match fs::read_to_string(path) {
+        Ok(content) => {
+            if let Some(n) = tail_lines {
+                let lines: Vec<&str> = content.lines().collect();
+                let start = lines.len().saturating_sub(n);
+                for line in &lines[start..] {
+                    out.push_str(line);
+                    out.push('\n');
+                }
+                if start > 0 {
+                    out.push_str(&format!("  ... ({} earlier lines omitted)\n", start));
+                }
+            } else if content.is_empty() {
+                out.push_str("  (empty)\n");
+            } else {
+                out.push_str(&content);
+                if !content.ends_with('\n') {
+                    out.push('\n');
+                }
+            }
+        }
+        Err(e) => out.push_str(&format!("  (not found or unreadable: {e})\n")),
+    }
+    out
 }

@@ -57,6 +57,11 @@ pub fn log_dir() -> std::path::PathBuf {
         .unwrap_or_else(|| std::env::temp_dir().join("leopardwm").join("logs"))
 }
 
+/// Dedicated opt-in gesture diagnostic capture file inside [`log_dir`].
+/// Written only when `[gestures] diagnostic_capture_secs` is non-zero at
+/// daemon startup. Default-off does not create or truncate this file.
+pub const GESTURE_CAPTURE_LOG_FILE: &str = "leopardwm-gesture-capture.log";
+
 /// Build a user-scoped pipe name from an arbitrary user/domain scope string.
 pub fn scoped_pipe_name_for_user(scope: &str) -> String {
     let segment = sanitize_pipe_scope_segment(scope);

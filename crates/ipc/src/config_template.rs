@@ -119,6 +119,10 @@ swipe_left = "focus_left"
 swipe_right = "focus_right"
 swipe_up = "focus_up"
 swipe_down = "focus_down"
+# Startup-only bounded diagnostic capture, in seconds. 0 = off (default).
+# Max 120. Requires `lwm stop` then `lwm run`; `lwm reload` does not start a capture.
+# Writes %LOCALAPPDATA%\leopardwm\logs\leopardwm-gesture-capture.log and replaces any prior report.
+# diagnostic_capture_secs = 0
 
 [snap_hints]
 # Visual snap hint overlays during resize
@@ -211,6 +215,7 @@ mod tests {
         assert!(config.contains("gap = 10"));
         assert!(config.contains("centering_mode = \"center\""));
         assert!(config.contains("\"Win+Ctrl+Escape\" = \"panic_revert\""));
+        assert!(config.contains("diagnostic_capture_secs = 0"));
     }
 
     #[test]

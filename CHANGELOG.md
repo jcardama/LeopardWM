@@ -8,6 +8,8 @@ All notable changes to LeopardWM will be documented in this file.
 
 - **Landings whose visible origin differs from the requested origin by more than 2 px are now logged at warn level with both rectangles.**
   Window drift reports can be diagnosed from a default-level daemon log; placement behavior is unchanged.
+- **Opt-in touchpad gesture diagnostic capture writes a bounded dedicated report.**
+  `[gestures] diagnostic_capture_secs` (default 0, max 120) is startup-only; `lwm reload` does not start a capture. Restart with `lwm stop` then `lwm run`. The report distinguishes hook delivery, classifier pass/reject, accumulation, timeout, cooldown, recognized events, and daemon binding dispatch, including no-action. Capture is independent of whether gestures themselves are enabled. `lwm collect-logs` includes the full capture file. Default-off does not truncate a previous report; a new capture replaces it.
 
 ### Fixes
 
@@ -33,6 +35,8 @@ All notable changes to LeopardWM will be documented in this file.
   can arm the same guard while handling the first cross-workspace
   activation, so that first activation may be consumed and need to be
   repeated.
+- **Gesture capture cannot prove finger count, device origin, or Windows touchpad-setting compatibility.**
+  A zero-event interval is not proof that the hook is dead. Dropped or capped records mean input may have been lost; do not treat `no_input=true` as absent hardware when drops are reported. Elevated versus unelevated hook visibility is not guaranteed from this report.
 
 ### Internal
 
