@@ -57,6 +57,7 @@ pub(crate) fn to_ipc_command(cmd: &Commands) -> IpcCommand {
         },
         Commands::Query { what } => match what {
             QueryType::Workspace => IpcCommand::QueryWorkspace,
+            QueryType::Workspaces => IpcCommand::QueryWorkspaceState,
             QueryType::Focused => IpcCommand::QueryFocused,
             QueryType::All => IpcCommand::QueryAllWindows,
             QueryType::Hotkeys => IpcCommand::QueryHotkeys,
@@ -82,7 +83,13 @@ pub(crate) fn to_ipc_command(cmd: &Commands) -> IpcCommand {
         Commands::CycleHeightUp => IpcCommand::CycleHeightUp,
         Commands::CycleHeightDown => IpcCommand::CycleHeightDown,
         Commands::EqualizeHeights => IpcCommand::EqualizeColumnHeights,
-        Commands::Workspace { number } => IpcCommand::SwitchWorkspace { index: *number },
+        Commands::Workspace { number, monitor } => match monitor {
+            Some(monitor_device_name) => IpcCommand::SwitchWorkspaceOnMonitor {
+                monitor_device_name: monitor_device_name.clone(),
+                index: *number,
+            },
+            None => IpcCommand::SwitchWorkspace { index: *number },
+        },
         Commands::MoveToWorkspace { number } => IpcCommand::MoveToWorkspace { index: *number },
         Commands::WorkspaceNext => IpcCommand::WorkspaceNext,
         Commands::WorkspacePrev => IpcCommand::WorkspacePrev,

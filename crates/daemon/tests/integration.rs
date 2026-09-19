@@ -652,8 +652,8 @@ fn test_event_frame_distinct_from_response_frame() {
     assert!(as_response.unwrap_err().to_string().contains("status"));
 }
 
-/// Filter set roundtrips losslessly, including the empty set (which the
-/// daemon treats as "all kinds") and full-set shortcuts.
+/// Filter sets roundtrip losslessly. The daemon expands an empty set to the
+/// legacy kinds; `workspace_state` requires explicit opt-in.
 #[test]
 fn test_subscribe_filter_set_roundtrip() {
     use leopardwm_ipc::EventKind;

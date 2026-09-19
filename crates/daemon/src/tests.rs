@@ -7238,11 +7238,17 @@ fn test_cmd_refresh() {
 
 #[test]
 fn test_cmd_reload() {
+    let expected_gap = Config::load()
+        .expect("configuration should load")
+        .layout
+        .gap;
     let mut state = AppState::new_with_config(test_config(), test_monitors());
+    // Developer machines may have a real config. Start with a different value
+    // so this proves reload applied the effective config, even if it is default.
+    state.config.layout.gap = if expected_gap == 10 { 11 } else { 10 };
     let resp = state.handle_command(IpcCommand::Reload);
     assert_eq!(resp, IpcResponse::Ok);
-    // Config was reloaded (default since no config file in test env)
-    assert_eq!(state.config.layout.gap, Config::default().layout.gap);
+    assert_eq!(state.config.layout.gap, expected_gap);
 }
 
 #[test]

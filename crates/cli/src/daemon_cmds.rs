@@ -6,17 +6,21 @@ use crate::ipc_client::{
     error_chain_has_disconnected_before_response, error_chain_has_pipe_not_found,
     error_chain_indicates_pipe_not_found_timeout, is_non_success_response, open_pipe_with_retry,
     probe_daemon_running, send_command, wait_for_daemon, wait_for_daemon_shutdown,
-    IPC_CONNECT_TIMEOUT, IPC_NOT_FOUND_FAST_FAIL_AFTER, SHUTDOWN_CONFIRM_TIMEOUT,
+    IPC_CONNECT_TIMEOUT, IPC_DEFAULT_RESPONSE_TIMEOUT, IPC_NOT_FOUND_FAST_FAIL_AFTER,
+    SHUTDOWN_CONFIRM_TIMEOUT,
 };
 use crate::output::print_response;
 use anyhow::{Context, Result};
-use leopardwm_ipc::{IpcCommand, IpcResponse};
+use leopardwm_ipc::{
+    is_protocol_version_supported, EventKind, IpcCommand, IpcEvent, IpcResponse,
+    MAX_IPC_MESSAGE_SIZE,
+};
 use leopardwm_platform_win32::uncloak_all_visible_windows;
 use std::fs::File;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 fn watchdog_binary_name() -> &'static str {
     if cfg!(windows) {
@@ -540,115 +544,321 @@ pub(crate) fn handle_emergency_uncloak() -> Result<()> {
         .context("Failed to execute local emergency visibility restore")
 }
 
-/// Subscribe to daemon events and stream them as newline-delimited JSON
-/// to stdout. After the daemon answers `Subscribed`, the connection
-/// stays open and every subsequent line is an `IpcEvent` frame. This is
-/// the documented client-state-machine mode-switch — the response parser
-/// is `IpcResponse` for the first frame, `IpcEvent` for all subsequent
-/// frames.
-pub(crate) async fn handle_subscribe(events: Option<Vec<String>>) -> Result<()> {
-    use leopardwm_ipc::EventKind;
-    use std::collections::BTreeSet;
-
-    // Parse the requested kinds. Empty/missing means "all".
-    let requested: BTreeSet<EventKind> = match events {
-        None => BTreeSet::new(), // server interprets empty as all
-        Some(list) => {
-            let mut out = BTreeSet::new();
-            for raw in list {
-                let trimmed = raw.trim();
-                if trimmed.is_empty() {
-                    continue;
-                }
-                let kind = match trimmed {
-                    "workspace" => EventKind::Workspace,
-                    "focused_window" => EventKind::FocusedWindow,
-                    "layout" => EventKind::Layout,
-                    "config" => EventKind::Config,
-                    "heartbeat" => EventKind::Heartbeat,
-                    other => anyhow::bail!(
-                        "Unknown event kind '{}'. Valid: workspace, focused_window, \
-                         layout, config, heartbeat",
-                        other
-                    ),
-                };
-                out.insert(kind);
-            }
-            out
-        }
+/// Parse user-facing event filter names into the shared IPC filter set.
+pub(crate) fn parse_event_kinds(
+    events: Option<Vec<String>>,
+) -> Result<std::collections::BTreeSet<EventKind>> {
+    let Some(list) = events else {
+        return Ok(std::collections::BTreeSet::new());
     };
 
+    let mut requested = std::collections::BTreeSet::new();
+    for raw in list {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let kind = match trimmed {
+            "workspace" => EventKind::Workspace,
+            "focused_window" => EventKind::FocusedWindow,
+            "layout" => EventKind::Layout,
+            "config" => EventKind::Config,
+            "heartbeat" => EventKind::Heartbeat,
+            "workspace_state" => EventKind::WorkspaceState,
+            other => anyhow::bail!(
+                "Unknown event kind '{}'. Valid: workspace, focused_window, layout, config, heartbeat, workspace_state",
+                other
+            ),
+        };
+        requested.insert(kind);
+    }
+    Ok(requested)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StreamAckKind {
+    Subscribe,
+    WorkspaceState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EventReadMode {
+    Subscribe { workspace_state: bool },
+    WorkspaceQuery,
+}
+
+async fn read_bounded_frame<R>(reader: &mut R, description: &str) -> Result<Option<Vec<u8>>>
+where
+    R: AsyncBufRead + Unpin,
+{
+    let mut frame = Vec::new();
+    let bytes = reader
+        .take((MAX_IPC_MESSAGE_SIZE + 1) as u64)
+        .read_until(b'\n', &mut frame)
+        .await
+        .with_context(|| format!("Failed to read {description}"))?;
+    if bytes == 0 {
+        return Ok(None);
+    }
+    if frame.len() > MAX_IPC_MESSAGE_SIZE {
+        anyhow::bail!(
+            "Daemon {description} exceeded {} bytes; refusing oversized frame",
+            MAX_IPC_MESSAGE_SIZE
+        );
+    }
+    if !frame.ends_with(b"\n") {
+        anyhow::bail!("Daemon {description} was not newline-terminated");
+    }
+    Ok(Some(frame))
+}
+
+pub(crate) async fn read_stream_ack<R>(
+    reader: &mut R,
+    expected: StreamAckKind,
+    required_events: Option<&std::collections::BTreeSet<EventKind>>,
+) -> Result<()>
+where
+    R: AsyncBufRead + Unpin,
+{
+    let read = read_bounded_frame(reader, "stream acknowledgment");
+    let frame = if expected == StreamAckKind::WorkspaceState {
+        tokio::time::timeout(IPC_DEFAULT_RESPONSE_TIMEOUT, read)
+            .await
+            .context("Timed out waiting for workspace-state query acknowledgment")??
+    } else {
+        read.await?
+    }
+    .context("Daemon disconnected before sending stream acknowledgment")?;
+    let ack: IpcResponse = serde_json::from_slice(&frame).with_context(|| {
+        format!(
+            "Failed to parse stream acknowledgment: {}",
+            String::from_utf8_lossy(&frame).trim()
+        )
+    })?;
+
+    match (expected, ack) {
+        (StreamAckKind::Subscribe, IpcResponse::Subscribed { events }) => {
+            if let Some(required) = required_events {
+                let missing: Vec<_> = required.difference(&events).copied().collect();
+                if !missing.is_empty() {
+                    anyhow::bail!(
+                        "Daemon subscription acknowledgment omitted requested event kinds: {missing:?}"
+                    );
+                }
+            }
+            Ok(())
+        }
+        (StreamAckKind::WorkspaceState, IpcResponse::WorkspaceStateReady { protocol_version })
+            if is_protocol_version_supported(protocol_version) =>
+        {
+            Ok(())
+        }
+        (StreamAckKind::WorkspaceState, IpcResponse::WorkspaceStateReady { protocol_version }) => {
+            anyhow::bail!(
+                "Daemon selected unsupported workspace-state protocol version {}",
+                protocol_version
+            )
+        }
+        (StreamAckKind::Subscribe, IpcResponse::Error { message }) => {
+            anyhow::bail!("Subscribe rejected: {message}")
+        }
+        (StreamAckKind::WorkspaceState, IpcResponse::Error { message }) => {
+            anyhow::bail!("Workspace-state query rejected: {message}")
+        }
+        (expected, other) => anyhow::bail!("Unexpected response to {expected:?}: {other:?}"),
+    }
+}
+
+/// Read validated event frames and forward their original NDJSON bytes.
+pub(crate) async fn forward_event_frames<R, W>(
+    reader: &mut R,
+    output: &mut W,
+    mode: EventReadMode,
+) -> Result<()>
+where
+    R: AsyncBufRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let mut snapshot_revision = None;
+
+    loop {
+        let read = read_bounded_frame(reader, "event frame");
+        let frame = if mode == EventReadMode::WorkspaceQuery {
+            tokio::time::timeout(IPC_DEFAULT_RESPONSE_TIMEOUT, read)
+                .await
+                .context("Timed out waiting for workspace-state query frame")??
+        } else {
+            read.await?
+        };
+        let Some(frame) = frame else {
+            return match mode {
+                EventReadMode::WorkspaceQuery => anyhow::bail!(
+                    "Daemon disconnected before completing the workspace-state snapshot"
+                ),
+                EventReadMode::Subscribe {
+                    workspace_state: true,
+                } if snapshot_revision.is_some() => {
+                    anyhow::bail!("Daemon disconnected during a workspace-state snapshot")
+                }
+                EventReadMode::Subscribe { .. } => Ok(()),
+            };
+        };
+
+        let event = match serde_json::from_slice::<IpcEvent>(&frame) {
+            Ok(event) => event,
+            Err(error)
+                if matches!(
+                    mode,
+                    EventReadMode::Subscribe {
+                        workspace_state: false
+                    }
+                ) =>
+            {
+                eprintln!(
+                    "Warning: failed to parse event frame ({}): {}",
+                    error,
+                    String::from_utf8_lossy(&frame).trim_end()
+                );
+                continue;
+            }
+            Err(error) => return Err(error).context("Failed to parse workspace-state event frame"),
+        };
+
+        let transaction_result = match mode {
+            EventReadMode::WorkspaceQuery => match &event {
+                IpcEvent::WorkspaceSnapshotBegin { revision, .. }
+                    if snapshot_revision.is_none() =>
+                {
+                    snapshot_revision = Some(*revision);
+                    None
+                }
+                IpcEvent::WorkspaceSnapshotChunk { revision, .. }
+                    if snapshot_revision == Some(*revision) =>
+                {
+                    None
+                }
+                IpcEvent::WorkspaceSnapshotEnd { revision }
+                    if snapshot_revision == Some(*revision) =>
+                {
+                    Some(Ok(()))
+                }
+                IpcEvent::WorkspaceSnapshotError { message } => Some(Err(anyhow::anyhow!(
+                    "Workspace-state snapshot failed: {message}"
+                ))),
+                other => {
+                    return Err(anyhow::anyhow!(
+                        "Unexpected or mismatched workspace-state event: {other:?}"
+                    ));
+                }
+            },
+            EventReadMode::Subscribe {
+                workspace_state: true,
+            } => match &event {
+                IpcEvent::WorkspaceSnapshotBegin { revision, .. }
+                    if snapshot_revision.is_none() =>
+                {
+                    snapshot_revision = Some(*revision);
+                    None
+                }
+                IpcEvent::WorkspaceSnapshotChunk { revision, .. }
+                    if snapshot_revision == Some(*revision) =>
+                {
+                    None
+                }
+                IpcEvent::WorkspaceSnapshotEnd { revision }
+                    if snapshot_revision == Some(*revision) =>
+                {
+                    snapshot_revision = None;
+                    None
+                }
+                IpcEvent::WorkspaceSnapshotBegin { .. }
+                | IpcEvent::WorkspaceSnapshotChunk { .. }
+                | IpcEvent::WorkspaceSnapshotEnd { .. } => {
+                    return Err(anyhow::anyhow!(
+                        "Unexpected or mismatched workspace-state snapshot frame: {event:?}"
+                    ));
+                }
+                IpcEvent::WorkspaceSnapshotError { message } => Some(Err(anyhow::anyhow!(
+                    "Workspace-state snapshot failed: {message}"
+                ))),
+                IpcEvent::Lagged { skipped } => Some(Err(anyhow::anyhow!(
+                    "Workspace-state subscription lagged by {skipped} events; reconnect for a fresh snapshot"
+                ))),
+                other if snapshot_revision.is_some() => {
+                    return Err(anyhow::anyhow!(
+                        "Event interleaved within workspace-state snapshot: {other:?}"
+                    ));
+                }
+                _ => None,
+            },
+            EventReadMode::Subscribe {
+                workspace_state: false,
+            } => None,
+        };
+
+        output
+            .write_all(&frame)
+            .await
+            .context("Failed to write event to stdout")?;
+        output
+            .flush()
+            .await
+            .context("Failed to flush event output")?;
+
+        if let Some(result) = transaction_result {
+            return result;
+        }
+    }
+}
+
+async fn open_stream_command(
+    command: IpcCommand,
+) -> Result<tokio::net::windows::named_pipe::NamedPipeClient> {
     if !probe_daemon_running()? {
         anyhow::bail!("Daemon is not running. Start it with `leopardwm-cli run`.");
     }
 
-    let client =
+    let mut client =
         open_pipe_with_retry(IPC_CONNECT_TIMEOUT, Some(IPC_NOT_FOUND_FAST_FAIL_AFTER)).await?;
-    let (reader, mut writer) = tokio::io::split(client);
-    let cmd = IpcCommand::Subscribe { events: requested };
-    let cmd_json = serde_json::to_string(&cmd)? + "\n";
-    writer
-        .write_all(cmd_json.as_bytes())
+    let command_json = serde_json::to_string(&command)? + "\n";
+    client
+        .write_all(command_json.as_bytes())
         .await
-        .context("Failed to send Subscribe command")?;
-
-    // Read the Subscribed ack as IpcResponse — last frame parsed via
-    // that type. After this, the parser switches to IpcEvent. We
-    // intentionally do NOT use `reader.take(MAX_IPC_MESSAGE_SIZE)` here
-    // (that would cap *total* bytes, killing long-lived subscribers
-    // after ~64 KiB of events). Per-frame size guarding is the daemon's
-    // responsibility (write_event_frame caps each frame at 64 KiB).
-    let mut buf = tokio::io::BufReader::new(reader);
-    let mut line = String::new();
-    let bytes = buf
-        .read_line(&mut line)
-        .await
-        .context("Failed to read Subscribed ack")?;
-    if bytes == 0 {
-        anyhow::bail!("Daemon disconnected before sending Subscribed ack");
-    }
-    let ack: IpcResponse = serde_json::from_str(line.trim())
-        .with_context(|| format!("Failed to parse Subscribed ack: {}", line.trim()))?;
-    match ack {
-        IpcResponse::Subscribed { .. } => {}
-        IpcResponse::Error { message } => anyhow::bail!("Subscribe rejected: {}", message),
-        other => anyhow::bail!("Unexpected response to Subscribe: {:?}", other),
-    }
-
-    // Each frame is a single line of JSON; raw passthrough to stdout so
-    // users can pipe into `jq` etc.
-    let mut stdout = tokio::io::stdout();
-    let mut event_line = Vec::new();
-    loop {
-        event_line.clear();
-        let bytes = buf
-            .read_until(b'\n', &mut event_line)
-            .await
-            .context("Failed to read event frame")?;
-        if bytes == 0 {
-            // Daemon closed the pipe (shutdown, restart, etc.)
-            break;
-        }
-        // Validate as IpcEvent so we surface daemon-side bugs noisily,
-        // but pass the raw bytes through to stdout to preserve any
-        // formatting subtleties for jq consumers.
-        if let Err(e) = serde_json::from_slice::<leopardwm_ipc::IpcEvent>(&event_line) {
-            eprintln!(
-                "Warning: failed to parse event frame ({}): {}",
-                e,
-                String::from_utf8_lossy(&event_line).trim_end()
-            );
-            continue;
-        }
-        stdout
-            .write_all(&event_line)
-            .await
-            .context("Failed to write event to stdout")?;
-        stdout.flush().await.ok();
-    }
-    Ok(())
+        .context("Failed to send stream command")?;
+    Ok(client)
 }
 
+/// Subscribe to daemon events and stream them as newline-delimited JSON.
+pub(crate) async fn handle_subscribe(events: Option<Vec<String>>) -> Result<()> {
+    let requested = parse_event_kinds(events)?;
+    let workspace_state = requested.contains(&EventKind::WorkspaceState);
+    let client = open_stream_command(IpcCommand::Subscribe {
+        events: requested.clone(),
+    })
+    .await?;
+    let (reader, _writer) = tokio::io::split(client);
+    let mut reader = tokio::io::BufReader::new(reader);
+
+    read_stream_ack(&mut reader, StreamAckKind::Subscribe, Some(&requested)).await?;
+    let mut stdout = tokio::io::stdout();
+    forward_event_frames(
+        &mut reader,
+        &mut stdout,
+        EventReadMode::Subscribe { workspace_state },
+    )
+    .await
+}
+
+/// Query and print one complete workspace-state snapshot as NDJSON.
+pub(crate) async fn handle_query_workspaces() -> Result<()> {
+    let client = open_stream_command(IpcCommand::QueryWorkspaceState).await?;
+    let (reader, _writer) = tokio::io::split(client);
+    let mut reader = tokio::io::BufReader::new(reader);
+
+    read_stream_ack(&mut reader, StreamAckKind::WorkspaceState, None).await?;
+    let mut stdout = tokio::io::stdout();
+    forward_event_frames(&mut reader, &mut stdout, EventReadMode::WorkspaceQuery).await
+}
 /// Handle the autostart command (enable/disable Registry run key).
 pub(crate) fn handle_autostart(action: AutostartAction) -> Result<()> {
     use leopardwm_platform_win32::autostart;

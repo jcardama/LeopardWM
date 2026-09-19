@@ -5,11 +5,15 @@ Bars and other external tools can subscribe to LeopardWM state changes over the 
 ## Quick start
 
 ```powershell
-# All events as newline-delimited JSON
+# Legacy event kinds as newline-delimited JSON
 lwm subscribe
 
 # Only what you care about
 lwm subscribe --events workspace,focused_window | jq
+
+# Complete workspace membership on all monitors
+lwm subscribe --events workspace_state
+lwm query workspaces
 ```
 
 Press Ctrl+C to disconnect. The daemon does not need to know who is listening; reconnect any time.
@@ -22,21 +26,24 @@ Press Ctrl+C to disconnect. The daemon does not need to know who is listening; r
 - **Framing**: newline-delimited JSON (`\n`), one logical message per line. UTF-8.
 - **Per-frame size cap**: 64 KiB (`MAX_IPC_MESSAGE_SIZE` in `crates/ipc/src/lib.rs`).
 
-## Protocol versions and the hotkey query
+## Protocol versions and capability checks
 
-The current IPC protocol is v3; the minimum supported version remains v1.
+The current IPC protocol is v4; the minimum supported version remains v1.
 Version 2 added tabbed-column data and commands. Version 3 adds the one-shot
 `QueryHotkeys` command (`{"type":"query_hotkeys"}`) and `HotkeyList` response
 (`status: "hotkey_list"`) with binding records, scroll modifier, and issues.
+Version 4 adds opt-in complete workspace-state snapshots and monitor-targeted
+workspace switching.
 See [the hotkey query contract](shortcut-guide.md#ipc-contract) for ordering,
 collision resolution, and the distinction between configuration and runtime
 registration health.
 
-The additions do not change the subscription framing or event schemas below.
-Existing v1/v2 subscription clients remain supported. An older daemon does not
-implement the new query simply because an older protocol is still supported;
-use matching CLI and daemon builds for `lwm query hotkeys` and
-`lwm export-shortcut-guide`. Queries need a separate pipe while subscribed.
+These additions preserve older clients because the wire changes are additive and
+an empty subscription filter retains the legacy event set. A protocol number alone
+does not prove workspace-state support: a subscriber must also confirm that the
+`subscribed` response acknowledges `workspace_state`. One-shot consumers require a
+successful `workspace_state_ready` response. Queries need a separate pipe while
+subscribed.
 
 ## Connection lifecycle
 
@@ -71,6 +78,7 @@ If a subscriber falls more than 256 events behind (the broadcast capacity), the 
 
 | Kind | Filter name | Meaning |
 |---|---|---|
+| `WorkspaceSnapshotBegin/Chunk/End/Error` | `workspace_state` | Complete replacement state for every monitor and workspace |
 | `WorkspaceChanged` | `workspace` | Active workspace on a monitor changed |
 | `FocusedWindowChanged` | `focused_window` | Focused window changed (or was cleared) |
 | `LayoutChanged` | `layout` | Column structure on the focused workspace settled |
@@ -78,7 +86,110 @@ If a subscriber falls more than 256 events behind (the broadcast capacity), the 
 | `Heartbeat` | `heartbeat` | Liveness signal every 30s of silence |
 | `Lagged` | (always delivered) | Broadcast buffer overflow; reconnect for fresh snapshot |
 
-The `events` field of `Subscribe` accepts any subset of filter names (comma-separated on the CLI). An empty set means "all kinds".
+The `events` field of `Subscribe` accepts any subset of filter names (comma-separated on the CLI). An empty set preserves the legacy kinds (`workspace`, `focused_window`, `layout`, `config`, `heartbeat`). Complete workspace state requires explicitly including `workspace_state`; it can be combined with legacy filters.
+
+## Complete workspace state
+
+This opt-in extension reuses `Subscribe`, `IpcEvent`, and the existing transport.
+It provides initial membership and replacement snapshots, including changes on
+inactive workspaces. It is intended for bars and other state consumers.
+
+```powershell
+lwm subscribe --events workspace_state
+lwm subscribe --events workspace_state,focused_window
+lwm query workspaces
+lwm workspace 2 --monitor '\\.\DISPLAY2'
+```
+
+`query workspaces` opens a separate pipe and prints one complete snapshot using
+the same event frames as a subscription, then exits. The CLI consumes its initial
+`workspace_state_ready` response. On the wire, send
+`{"type":"query_workspace_state"}`; the first response is
+`{"status":"workspace_state_ready","protocol_version":4}`.
+The CLI gives the acknowledgment and each complete newline-terminated query frame
+a five-second read deadline. A timeout fails the query, including a stalled partial
+frame. The deadline resets for each frame; long-lived subscriptions have no query
+read deadline or total lifetime limit.
+
+A workspace subscription retains the existing `subscribed` response and echoes
+`workspace_state` in `events`. After either response, switch to the event parser:
+
+```json
+{"type":"workspace_snapshot_begin","protocol_version":4,"session_id":"opaque-daemon-session","revision":42,"focused_monitor_device_name":"\\\\.\\DISPLAY2"}
+{"type":"workspace_snapshot_chunk","revision":42,"records":[{"kind":"monitor","monitor_device_name":"\\\\.\\DISPLAY2","monitor_id":65537,"active_workspace_index":1},{"kind":"workspace","monitor_device_name":"\\\\.\\DISPLAY2","workspace_index":1,"name":"code"},{"kind":"window","monitor_device_name":"\\\\.\\DISPLAY2","workspace_index":1,"hwnd":123456,"is_floating":true,"is_sticky":false}]}
+{"type":"workspace_snapshot_end","revision":42}
+```
+
+The example abbreviates the records. A real snapshot includes:
+
+- One `monitor` record per connected display. `monitor_device_name` is the exact
+  Windows display device name accepted by targeted commands. `monitor_id` is its
+  transient Win32 HMONITOR value, retained for correlation with older events.
+- Nine `workspace` records per monitor, including empty, lazily unallocated slots.
+  Workspace indices are **zero-based**. Names use the existing global
+  `[workspaces].names` configuration; unnamed slots contain `null`.
+- One `window` record per managed window in its owning workspace, including
+  inactive workspaces, floating windows, minimized windows, and inactive tabs.
+  Sticky windows report their actual current ownership with `is_sticky: true`;
+  consumers must not count them once on every workspace. Hidden scratchpads and
+  drag placeholders are excluded; shown scratchpads are ordinary floating members.
+  A dragged window temporarily detached for a preview retains source ownership
+  until the drop commits its new workspace.
+- Deterministic order: monitors by device name, workspaces by index, and windows
+  within each workspace by HWND. HWNDs are transient and can be reused; consumers
+  must invalidate cached metadata appropriately. Icons, titles, geometry and
+  executable lookup are consumer concerns and are absent from this state model.
+
+A snapshot starts with `workspace_snapshot_begin`, contains zero or more
+`workspace_snapshot_chunk` frames, and ends with `workspace_snapshot_end`. Every
+chunk/end has the begin's revision. Each UTF-8 JSON frame, **including its newline**,
+is at most 64 KiB; there is no single-frame limit on the whole snapshot. The daemon
+preflights the entire transaction before emitting its begin. An unencodable record
+produces `{"type":"workspace_snapshot_error","message":"..."}` and closes the pipe.
+
+Consumers must accumulate a replacement model and install it **only after the
+matching end**. A new session invalidates all previous revision assumptions.
+Revisions start at zero and advance only when membership, names, monitor topology,
+active workspace or focused monitor changes. Geometry/animation and focus changes
+within the same monitor do not advance this revision. These are complete
+replacements, so a consumer does not need intervening revisions to reconstruct state.
+
+Initial capture and receiver creation happen under the same AppState lock. Live
+transactions are broadcast contiguously under that lock; heartbeat and legacy
+frames do not interleave a transaction. Pipe writes happen outside the lock and
+have a ten-second deadline. Each broadcaster retains 256 **frames**, not snapshots.
+Workspace-enabled subscriptions (including mixed filters) use a separate broadcaster
+that also carries legacy events. Workspace snapshots never consume legacy-only
+subscribers' buffer capacity. Ordinary event processing projects workspace state
+only while a workspace-enabled receiver exists; query/subscribe capture always
+refreshes it under the lock.
+For workspace subscribers, any overflow emits `lagged` and closes the pipe. Discard
+partial state and reconnect for a fresh initial snapshot; also discard partial
+state on EOF, error, timeout or an unexpected transaction boundary. Initial snapshots
+are written directly and can exceed the live broadcast capacity. Very large live
+transactions can therefore require reconnecting to obtain a complete initial view.
+Legacy-only streams retain their prior lag behavior.
+
+### Targeted switching and compatibility
+
+The wire command is
+`{"type":"switch_workspace_on_monitor","monitor_device_name":"\\\\.\\DISPLAY2","index":2}`.
+Unlike snapshot indices, the command index is **one-based (1–9)**, matching existing
+`switch_workspace`. The daemon validates both fields before changing state. A
+successful command selects that monitor/workspace and restores eligible window
+focus, including when the workspace is already active. Empty destinations select
+the monitor/workspace without inventing a window to focus. Supplying `--monitor`
+therefore transfers global monitor focus to that target; omitting it preserves the
+existing focused-monitor behavior. Other monitors retain
+their active workspace indices. Device names are topology identifiers, not durable
+hardware serial numbers; use the latest snapshot after display reconfiguration.
+
+The legacy `query_workspace`, `switch_workspace`, and default subscription wire
+contracts remain unchanged. Old daemons reject the new filter/commands; clients
+must report unsupported capability rather than silently use incomplete legacy data.
+Workspace IPC is protocol **v4**; v3 remains the hotkey-query addition. Do not infer
+workspace-state support from the numeric version alone; require the acknowledged
+`workspace_state` filter (or successful one-shot handshake).
 
 ## Event schemas
 
@@ -183,7 +294,8 @@ async fn main() -> anyhow::Result<()> {
     let (reader, mut writer) = tokio::io::split(pipe);
     let mut buf = BufReader::new(reader);
 
-    let cmd = IpcCommand::Subscribe { events: BTreeSet::new() };  // all kinds
+    // Empty preserves legacy kinds. Include WorkspaceState explicitly for snapshots.
+    let cmd = IpcCommand::Subscribe { events: BTreeSet::new() };
     writer.write_all((serde_json::to_string(&cmd)? + "\n").as_bytes()).await?;
 
     let mut line = String::new();
@@ -213,7 +325,7 @@ handle = win32file.CreateFile(
     0, None, win32file.OPEN_EXISTING, 0, None,
 )
 
-# Subscribe (empty events = all kinds)
+# Empty events preserve legacy kinds; include "workspace_state" for snapshots.
 win32file.WriteFile(handle, b'{"type":"subscribe","events":[]}\n')
 
 # Read frames line by line
@@ -291,12 +403,19 @@ The pub/sub surface is part of the public LeopardWM contract. When adding daemon
 4. **Update this document**: add a row to the [Event kinds table](#event-kinds), write the schema under [Event schemas](#event-schemas), bump the `crates/ipc/src/lib.rs` round-trip test to cover the new variant.
 5. **Watch the broadcast capacity** (256). Events that fire at animation-frame rates need sender-side dedup (see how `LayoutChanged` collapses mid-transition frames).
 
+The workspace-state extension centralizes its broadcast gate in
+`AppState::publish_workspace_state_if_changed` after each completed main-loop
+event, including OS window events, hotkeys/commands, settings, drag finalization
+and topology changes. Subscription/query capture also synchronizes this gate
+before attaching the receiver. Future mutation paths that bypass the main event
+loop must explicitly invoke the gate under the same state lock.
+
 Check `MEMORY.md` → "IPC bar-integration validation deferred" before building reference consumers. Real bar work is deferred until first user demand; bug-fix work uncovered by inspection still lands.
 
-## Limitations (v1)
+## Limitations
 
-- **Per-monitor filter not supported** — `--events` filters by kind only. Filter by `monitor` field client-side.
-- **`WindowCreated` / `Destroyed` events not emitted** — focus + layout cover most bar UX needs. Add via the issue tracker if you need fine-grained window lifecycle.
+- **Per-monitor filter not supported** — `--events` filters by kind only. Filter legacy events by `monitor`, or workspace-state records by `monitor_device_name`, client-side.
+- **No individual `WindowCreated` / `Destroyed` events** — opt-in workspace-state snapshots report complete membership after lifecycle changes. Consumers compare replacements if they need their own deltas.
 - **No WebSocket bridge** — the daemon serves only the named pipe. Browser-based bars need a thin bridge component.
 - **Stream mode is uni-directional** — after Subscribe, the pipe only flows daemon→client. Open a second pipe for command queries.
 - **Daemon shutdown** delivers EOF (`BrokenPipe` on next read). Reconnect with backoff if your bar should survive daemon restarts.

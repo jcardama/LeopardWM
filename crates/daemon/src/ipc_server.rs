@@ -18,6 +18,8 @@ use tracing::{debug, error, warn};
 pub(crate) const IPC_READ_TIMEOUT: Duration = Duration::from_secs(5);
 /// IPC responder timeout - daemon must answer within this period.
 pub(crate) const IPC_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Bound stalled clients so disconnected consumers cannot retain stream tasks.
+const IPC_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 /// Heartbeat interval for stream-mode subscribers. Subscribers receive a
 /// `IpcEvent::Heartbeat` after this much silence so they can detect a
 /// dead daemon pipe by missing keepalives.
@@ -141,7 +143,11 @@ where
         response_json.push('\n');
     }
 
-    writer.write_all(response_json.as_bytes()).await?;
+    tokio::time::timeout(
+        IPC_WRITE_TIMEOUT,
+        writer.write_all(response_json.as_bytes()),
+    )
+    .await??;
     Ok(())
 }
 
@@ -152,12 +158,20 @@ where
 {
     let mut json = serde_json::to_string(event)? + "\n";
     if json.len() > MAX_IPC_MESSAGE_SIZE {
+        if event.kind() == EventKind::WorkspaceState {
+            let error = IpcEvent::WorkspaceSnapshotError {
+                message: "Workspace snapshot frame exceeded maximum size".into(),
+            };
+            let frame = serde_json::to_string(&error)? + "\n";
+            tokio::time::timeout(IPC_WRITE_TIMEOUT, writer.write_all(frame.as_bytes())).await??;
+            anyhow::bail!("oversize workspace snapshot frame");
+        }
         // Oversize events shouldn't happen given the small variant
         // payloads, but if a future LayoutChanged ever blows the cap,
         // surface a Lagged-style hint instead of a corrupt frame.
         json = serde_json::to_string(&IpcEvent::Lagged { skipped: 0 })? + "\n";
     }
-    writer.write_all(json.as_bytes()).await?;
+    tokio::time::timeout(IPC_WRITE_TIMEOUT, writer.write_all(json.as_bytes())).await??;
     Ok(())
 }
 
@@ -215,7 +229,18 @@ async fn handle_client(
     // creation + snapshot read happen in one atomic critical section —
     // no event between handoff and receiver-creation can be lost.
     if let IpcCommand::Subscribe { events } = cmd {
-        return handle_subscribe(writer, event_tx, events, permit).await;
+        return handle_subscribe(writer, event_tx, events, permit, false).await;
+    }
+
+    if matches!(cmd, IpcCommand::QueryWorkspaceState) {
+        return handle_subscribe(
+            writer,
+            event_tx,
+            [EventKind::WorkspaceState].into_iter().collect(),
+            permit,
+            true,
+        )
+        .await;
     }
 
     // Everything else: existing oneshot path through the daemon main loop.
@@ -269,14 +294,15 @@ async fn handle_subscribe<W>(
     event_tx: mpsc::Sender<DaemonEvent>,
     requested_raw: BTreeSet<EventKind>,
     permit: OwnedSemaphorePermit,
+    one_shot: bool,
 ) -> Result<()>
 where
     W: tokio::io::AsyncWrite + Unpin,
 {
-    // Empty-set means "all kinds" so users can do `Subscribe { events: {} }`
-    // as a "give me everything" shortcut.
+    // Preserve the legacy default for clients whose event enum is closed.
+    // New snapshot events require an explicit workspace_state filter.
     let requested = if requested_raw.is_empty() {
-        EventKind::all()
+        EventKind::legacy_default()
     } else {
         requested_raw
     };
@@ -326,7 +352,20 @@ where
     // Stream-mode connections release the connection-limiter permit
     // before entering the long-lived loop. Otherwise 32 long-lived
     // subscribers would starve all other IPC commands.
-    drop(permit);
+    let _query_permit = if one_shot {
+        Some(permit)
+    } else {
+        drop(permit);
+        None
+    };
+
+    let ack = if one_shot {
+        IpcResponse::WorkspaceStateReady {
+            protocol_version: leopardwm_ipc::IPC_PROTOCOL_VERSION,
+        }
+    } else {
+        ack
+    };
 
     // Write ack
     if write_response_frame(&mut writer, &ack).await.is_err() {
@@ -335,10 +374,18 @@ where
 
     // Write snapshot frames
     for ev in &snapshot {
-        if write_event_frame(&mut writer, ev).await.is_err() {
+        if write_event_frame(&mut writer, ev).await.is_err()
+            || matches!(ev, IpcEvent::WorkspaceSnapshotError { .. })
+        {
             return Ok(());
         }
     }
+
+    if one_shot {
+        return Ok(());
+    }
+
+    let mut in_snapshot = false;
 
     // Stream loop: events + heartbeat. The heartbeat's uptime field is
     // per-subscriber connection time (since we entered stream mode),
@@ -359,19 +406,26 @@ where
                     if !requested.contains(&ev.kind()) {
                         continue;
                     }
-                    if write_event_frame(&mut writer, &ev).await.is_err() {
+                    match &ev {
+                        IpcEvent::WorkspaceSnapshotBegin { .. } => in_snapshot = true,
+                        IpcEvent::WorkspaceSnapshotEnd { .. } => in_snapshot = false,
+                        _ => {}
+                    }
+                    if write_event_frame(&mut writer, &ev).await.is_err()
+                        || matches!(ev, IpcEvent::WorkspaceSnapshotError { .. }) {
                         return Ok(());
                     }
                 }
                 Err(broadcast::error::RecvError::Lagged(skipped)) => {
                     let lagged = IpcEvent::Lagged { skipped };
-                    if write_event_frame(&mut writer, &lagged).await.is_err() {
+                    if write_event_frame(&mut writer, &lagged).await.is_err()
+                        || requested.contains(&EventKind::WorkspaceState) {
                         return Ok(());
                     }
                 }
                 Err(broadcast::error::RecvError::Closed) => return Ok(()),
             },
-            _ = heartbeat.tick() => {
+            _ = heartbeat.tick(), if !in_snapshot => {
                 let uptime = stream_started.elapsed().as_secs();
                 let hb = IpcEvent::Heartbeat { uptime_seconds: uptime };
                 if write_event_frame(&mut writer, &hb).await.is_err() {
@@ -427,5 +481,285 @@ pub(crate) fn join_with_timeout(
             return false;
         }
         std::thread::sleep(JOIN_WITH_TIMEOUT_POLL_INTERVAL);
+    }
+}
+
+#[cfg(test)]
+mod workspace_stream_tests {
+    use super::*;
+    use leopardwm_ipc::WorkspaceStateSnapshot;
+
+    async fn start_stream(
+        requested: BTreeSet<EventKind>,
+        one_shot: bool,
+        backlog: usize,
+    ) -> (
+        tokio::io::DuplexStream,
+        tokio::task::JoinHandle<Result<()>>,
+        broadcast::Sender<IpcEvent>,
+    ) {
+        let (server, client) = tokio::io::duplex(512 * 1024);
+        let (tx, mut rx) = mpsc::channel(1);
+        let permit = Arc::new(Semaphore::new(1)).acquire_owned().await.unwrap();
+        let task = tokio::spawn(handle_subscribe(server, tx, requested, permit, one_shot));
+        let DaemonEvent::IpcSubscribe { events, responder } = rx.recv().await.unwrap() else {
+            panic!("wrong dispatch")
+        };
+        let broadcaster = broadcast::channel(256).0;
+        let receiver = broadcaster.subscribe();
+        for _ in 0..backlog {
+            broadcaster
+                .send(IpcEvent::Heartbeat { uptime_seconds: 1 })
+                .unwrap();
+        }
+        let snapshot = WorkspaceStateSnapshot {
+            session_id: "test".into(),
+            revision: 42,
+            focused_monitor_device_name: None,
+            records: Vec::new(),
+        }
+        .events()
+        .unwrap();
+        responder
+            .send(SubscribeStartup {
+                ack: IpcResponse::Subscribed {
+                    events: events.clone(),
+                },
+                snapshot: if events.contains(&EventKind::WorkspaceState) {
+                    snapshot
+                } else {
+                    Vec::new()
+                },
+                receiver,
+            })
+            .unwrap_or_else(|_| panic!("startup dropped"));
+        (client, task, broadcaster)
+    }
+
+    async fn read_frames(client: tokio::io::DuplexStream) -> Vec<serde_json::Value> {
+        let mut text = String::new();
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            BufReader::new(client).read_to_string(&mut text),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        text.lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn one_shot_ends_after_complete_snapshot() {
+        let (client, task, _sender) =
+            start_stream([EventKind::WorkspaceState].into_iter().collect(), true, 0).await;
+        let frames = read_frames(client).await;
+        task.await.unwrap().unwrap();
+        assert_eq!(frames[0]["status"], "workspace_state_ready");
+        assert_eq!(frames[1]["type"], "workspace_snapshot_begin");
+        assert_eq!(frames.last().unwrap()["type"], "workspace_snapshot_end");
+    }
+
+    #[tokio::test]
+    async fn lag_closes_workspace_stream_after_initial_snapshot() {
+        let (client, task, _sender) = start_stream(
+            [EventKind::WorkspaceState].into_iter().collect(),
+            false,
+            300,
+        )
+        .await;
+        let frames = read_frames(client).await;
+        task.await.unwrap().unwrap();
+        assert_eq!(frames[0]["events"], serde_json::json!(["workspace_state"]));
+        assert_eq!(frames[frames.len() - 2]["type"], "workspace_snapshot_end");
+        assert_eq!(frames.last().unwrap()["type"], "lagged");
+    }
+
+    #[tokio::test]
+    async fn empty_filter_preserves_legacy_defaults() {
+        let (client, task, sender) = start_stream(BTreeSet::new(), false, 0).await;
+        sender
+            .send(IpcEvent::WorkspaceSnapshotEnd { revision: 43 })
+            .unwrap();
+        sender.send(IpcEvent::ConfigReloaded).unwrap();
+        drop(sender);
+        let frames = read_frames(client).await;
+        task.await.unwrap().unwrap();
+        let kinds: BTreeSet<EventKind> =
+            serde_json::from_value(frames[0]["events"].clone()).unwrap();
+        assert_eq!(kinds, EventKind::legacy_default());
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[1]["type"], "config_reloaded");
+    }
+
+    #[tokio::test]
+    async fn mixed_filters_keep_legacy_and_workspace_events() {
+        let (client, task, sender) = start_stream(
+            [EventKind::WorkspaceState, EventKind::Config]
+                .into_iter()
+                .collect(),
+            false,
+            0,
+        )
+        .await;
+        sender.send(IpcEvent::ConfigReloaded).unwrap();
+        drop(sender);
+        let frames = read_frames(client).await;
+        task.await.unwrap().unwrap();
+        assert_eq!(frames[1]["type"], "workspace_snapshot_begin");
+        assert_eq!(frames.last().unwrap()["type"], "config_reloaded");
+    }
+
+    #[tokio::test]
+    async fn disconnected_writer_returns_promptly() {
+        let (mut server, client) = tokio::io::duplex(16);
+        drop(client);
+        assert!(
+            write_event_frame(&mut server, &IpcEvent::Heartbeat { uptime_seconds: 0 })
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn stalled_writer_is_bounded() {
+        let (mut server, _client) = tokio::io::duplex(1);
+        let result = tokio::time::timeout(
+            IPC_WRITE_TIMEOUT + Duration::from_secs(2),
+            write_event_frame(&mut server, &IpcEvent::Heartbeat { uptime_seconds: 0 }),
+        )
+        .await;
+        assert!(result
+            .expect("transport must enforce its own write deadline")
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn lag_during_transaction_never_writes_a_successful_end() {
+        let (client, task, sender) =
+            start_stream([EventKind::WorkspaceState].into_iter().collect(), false, 0).await;
+        let mut reader = BufReader::new(client);
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).await.unwrap();
+            if serde_json::from_str::<serde_json::Value>(&line).unwrap()["type"]
+                == "workspace_snapshot_end"
+            {
+                break;
+            }
+        }
+        sender
+            .send(IpcEvent::WorkspaceSnapshotBegin {
+                protocol_version: 4,
+                session_id: "test".into(),
+                revision: 43,
+                focused_monitor_device_name: None,
+            })
+            .unwrap();
+        let mut line = String::new();
+        reader.read_line(&mut line).await.unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&line).unwrap()["type"],
+            "workspace_snapshot_begin"
+        );
+        // No await in this burst: the receiver deterministically overruns.
+        for _ in 0..300 {
+            sender
+                .send(IpcEvent::WorkspaceSnapshotChunk {
+                    revision: 43,
+                    records: Vec::new(),
+                })
+                .unwrap();
+        }
+        sender
+            .send(IpcEvent::WorkspaceSnapshotEnd { revision: 43 })
+            .unwrap();
+        let mut tail = String::new();
+        tokio::time::timeout(Duration::from_secs(2), reader.read_to_string(&mut tail))
+            .await
+            .unwrap()
+            .unwrap();
+        task.await.unwrap().unwrap();
+        assert_eq!(tail.lines().count(), 1);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(tail.trim()).unwrap()["type"],
+            "lagged"
+        );
+    }
+
+    #[tokio::test]
+    async fn snapshot_error_closes_stream() {
+        let (client, task, sender) =
+            start_stream([EventKind::WorkspaceState].into_iter().collect(), false, 0).await;
+        sender
+            .send(IpcEvent::WorkspaceSnapshotError {
+                message: "unencodable record".into(),
+            })
+            .unwrap();
+        let frames = read_frames(client).await;
+        task.await.unwrap().unwrap();
+        assert_eq!(frames.last().unwrap()["type"], "workspace_snapshot_error");
+    }
+
+    #[tokio::test]
+    async fn initial_snapshot_can_exceed_broadcast_capacity() {
+        let (server, client) = tokio::io::duplex(4096);
+        let (tx, mut rx) = mpsc::channel(1);
+        let limiter = Arc::new(Semaphore::new(1));
+        let permit = limiter.clone().acquire_owned().await.unwrap();
+        let task = tokio::spawn(handle_subscribe(
+            server,
+            tx,
+            [EventKind::WorkspaceState].into_iter().collect(),
+            permit,
+            true,
+        ));
+        let DaemonEvent::IpcSubscribe { events, responder } = rx.recv().await.unwrap() else {
+            panic!("wrong dispatch")
+        };
+        let broadcaster = broadcast::channel(256).0;
+        let receiver = broadcaster.subscribe();
+        let mut snapshot = vec![IpcEvent::WorkspaceSnapshotBegin {
+            protocol_version: 4,
+            session_id: "test".into(),
+            revision: 7,
+            focused_monitor_device_name: None,
+        }];
+        snapshot.extend((0..300).map(|_| IpcEvent::WorkspaceSnapshotChunk {
+            revision: 7,
+            records: Vec::new(),
+        }));
+        snapshot.push(IpcEvent::WorkspaceSnapshotEnd { revision: 7 });
+        responder
+            .send(SubscribeStartup {
+                ack: IpcResponse::Subscribed { events },
+                snapshot,
+                receiver,
+            })
+            .unwrap_or_else(|_| panic!("startup dropped"));
+        let mut reader = BufReader::new(client);
+        let mut ack = String::new();
+        reader.read_line(&mut ack).await.unwrap();
+        assert_eq!(
+            limiter.available_permits(),
+            0,
+            "finite queries retain their permit while writing"
+        );
+        let mut rest = String::new();
+        tokio::time::timeout(Duration::from_secs(2), reader.read_to_string(&mut rest))
+            .await
+            .unwrap()
+            .unwrap();
+        let text = ack + &rest;
+        let frames: Vec<serde_json::Value> = text
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        task.await.unwrap().unwrap();
+        assert_eq!(limiter.available_permits(), 1);
+        assert_eq!(frames.len(), 303);
+        assert_eq!(frames.last().unwrap()["type"], "workspace_snapshot_end");
+        assert!(!frames.iter().any(|f| f["type"] == "lagged"));
     }
 }
