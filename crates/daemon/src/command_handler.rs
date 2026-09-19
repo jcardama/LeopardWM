@@ -520,6 +520,10 @@ impl AppState {
             IpcCommand::MoveToWorkspacePrev => self.handle_move_to_workspace_relative(false),
             IpcCommand::MoveToWorkspaceNext => self.handle_move_to_workspace_relative(true),
             IpcCommand::SwitchWorkspace { index } => self.handle_switch_workspace(index),
+            IpcCommand::SwitchWorkspaceOnMonitor {
+                monitor_device_name,
+                index,
+            } => self.handle_switch_workspace_on_monitor(&monitor_device_name, index),
             IpcCommand::MoveToWorkspace { index } => self.handle_move_to_workspace(index),
             IpcCommand::HealthCheck => self.handle_health_check(),
             IpcCommand::GetAutoStart => {
@@ -529,6 +533,10 @@ impl AppState {
                 }
             }
             IpcCommand::SetAutoStart { enabled } => self.handle_set_auto_start(enabled),
+            IpcCommand::QueryWorkspaceState => IpcResponse::error(
+                "QueryWorkspaceState must be handled by the IPC server, not the main command \
+                 loop — this is an internal routing bug.",
+            ),
             IpcCommand::Subscribe { .. } => {
                 // Subscribe is handled out-of-band by ipc_server.rs
                 // (per-client task acquires AppState directly so subscribe
@@ -1019,6 +1027,26 @@ impl AppState {
         self.handle_switch_workspace_with_direction(index, None)
     }
 
+    fn handle_switch_workspace_on_monitor(
+        &mut self,
+        monitor_device_name: &str,
+        index: u8,
+    ) -> IpcResponse {
+        if !(1..=9).contains(&index) {
+            return IpcResponse::error("Workspace index must be 1-9");
+        }
+        let Some(monitor) = self
+            .monitors
+            .values()
+            .find(|monitor| monitor.device_name == monitor_device_name)
+            .map(|monitor| monitor.id)
+        else {
+            return IpcResponse::error(format!("Monitor not found: {}", monitor_device_name));
+        };
+
+        self.switch_workspace_on_monitor(monitor, index, None, true)
+    }
+
     fn handle_switch_workspace_with_direction(
         &mut self,
         index: u8,
@@ -1027,15 +1055,40 @@ impl AppState {
         if !(1..=9).contains(&index) {
             return IpcResponse::error("Workspace index must be 1-9");
         }
-        // A switch initiated outside the overlay (hotkey, CLI) dismisses
-        // an open overview; overlay-initiated switches hid it already.
-        if self.overview_open {
-            self.hide_overview_animated(Some((index - 1) as usize));
-        }
+        self.switch_workspace_on_monitor(self.focused_monitor, index, relative_forward, false)
+    }
+
+    fn switch_workspace_on_monitor(
+        &mut self,
+        monitor: MonitorId,
+        index: u8,
+        relative_forward: Option<bool>,
+        focus_target_monitor: bool,
+    ) -> IpcResponse {
         let idx = (index - 1) as usize;
-        let monitor = self.focused_monitor;
+        let target_was_focused = monitor == self.focused_monitor;
+        // A switch initiated outside the overlay (hotkey, CLI) dismisses
+        // an open overview; overlay-initiated switches hid it already. An
+        // explicit switch to another monitor closes toward the overview's
+        // current workspace, not a workspace slot on the destination monitor.
+        if self.overview_open {
+            let overview_target = (monitor == self.focused_monitor).then_some(idx);
+            self.hide_overview_animated(overview_target);
+        }
+        if focus_target_monitor {
+            self.focused_monitor = monitor;
+        }
         let current_idx = self.active_workspace_idx(monitor);
         if idx == current_idx {
+            if focus_target_monitor {
+                if let Err(e) = self.apply_layout() {
+                    return IpcResponse::error(format!("Failed to apply layout: {}", e));
+                }
+                if !target_was_focused {
+                    self.restore_workspace_floating_focus(monitor, idx);
+                }
+                self.sync_foreground_window();
+            }
             return IpcResponse::Ok;
         }
 
@@ -1056,14 +1109,16 @@ impl AppState {
         // refocus from a previous (aborted) switch is dropped here.
         self.pending_sticky_refocus = None;
         let sticky_focus = leaving_focus.filter(|hwnd| self.sticky_windows.contains(hwnd));
-        if let Some(hwnd) = leaving_focus {
-            if self
-                .focused_workspace()
-                .is_some_and(|ws| ws.is_floating(hwnd))
-            {
-                self.floating_focus.insert((monitor, current_idx), hwnd);
-            } else {
-                self.floating_focus.remove(&(monitor, current_idx));
+        if target_was_focused {
+            if let Some(hwnd) = leaving_focus {
+                if self
+                    .focused_workspace()
+                    .is_some_and(|ws| ws.is_floating(hwnd))
+                {
+                    self.floating_focus.insert((monitor, current_idx), hwnd);
+                } else {
+                    self.floating_focus.remove(&(monitor, current_idx));
+                }
             }
         }
 
@@ -1220,16 +1275,7 @@ impl AppState {
         // Restore the floating window that was focused on this
         // workspace (if it still floats here) so it regains focus on
         // return, before syncing the OS foreground.
-        if let Some(&hwnd) = self.floating_focus.get(&(monitor, idx)) {
-            let still_floating = self
-                .workspaces
-                .get(&monitor)
-                .and_then(|v| v.get(idx))
-                .is_some_and(|ws| ws.is_floating(hwnd));
-            if still_floating {
-                self.previous_focused_hwnd = Some(hwnd);
-            }
-        }
+        self.restore_workspace_floating_focus(monitor, idx);
         self.sync_foreground_window();
         // If a summoned scratchpad lives on this workspace, restore
         // its focus (it would otherwise stay visible but lose focus
@@ -1271,6 +1317,19 @@ impl AppState {
         });
         info!("Switched to workspace {}", index);
         IpcResponse::Ok
+    }
+
+    fn restore_workspace_floating_focus(&mut self, monitor: MonitorId, idx: usize) {
+        if let Some(&hwnd) = self.floating_focus.get(&(monitor, idx)) {
+            let still_floating = self
+                .workspaces
+                .get(&monitor)
+                .and_then(|v| v.get(idx))
+                .is_some_and(|ws| ws.is_floating(hwnd));
+            if still_floating {
+                self.previous_focused_hwnd = Some(hwnd);
+            }
+        }
     }
 
     /// Handle `IpcCommand::MoveToWorkspace`.
@@ -1903,3 +1962,7 @@ mod set_active_tab_tests {
         assert!(state.pending_tab_focus.is_none());
     }
 }
+
+#[cfg(test)]
+#[path = "workspace_switch_tests.rs"]
+mod workspace_switch_tests;

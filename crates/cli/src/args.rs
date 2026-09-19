@@ -114,11 +114,11 @@ pub(crate) enum Commands {
     /// Subscribe to LeopardWM state changes (newline-delimited JSON to stdout)
     ///
     /// Pipe into `jq` for pretty output, or wire into a status bar to
-    /// re-render on each event. Default is to receive every event kind;
+    /// re-render on each event. Default preserves the legacy event set;
     /// `--events workspace,focused_window` filters at the daemon level.
     /// Press Ctrl+C to disconnect.
     Subscribe {
-        /// Comma-separated event kinds: workspace, focused_window, layout, config, heartbeat
+        /// Comma-separated event kinds: workspace, focused_window, layout, config, heartbeat, workspace_state
         #[arg(long, value_delimiter = ',')]
         events: Option<Vec<String>>,
     },
@@ -180,6 +180,9 @@ pub(crate) enum Commands {
         /// Workspace number (1-9)
         #[arg(value_parser = clap::value_parser!(u8).range(1..=9))]
         number: u8,
+        /// Target monitor device name; defaults to the focused monitor
+        #[arg(long)]
+        monitor: Option<String>,
     },
     /// Move the focused window to workspace N (1-9)
     MoveToWorkspace {
@@ -313,8 +316,10 @@ pub(crate) enum MonitorDirection {
 
 #[derive(Subcommand)]
 pub(crate) enum QueryType {
-    /// Get current workspace state
+    /// Get current focused workspace layout
     Workspace,
+    /// Stream one complete multi-monitor workspace-state snapshot
+    Workspaces,
     /// Get focused window info
     Focused,
     /// List all managed windows

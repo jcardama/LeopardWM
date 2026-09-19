@@ -18,8 +18,8 @@ pub(crate) struct SubscribeStartup {
     pub(crate) ack: IpcResponse,
     /// Initial snapshot frames to write after the ack.
     pub(crate) snapshot: Vec<IpcEvent>,
-    /// Receiver attached to the daemon's event broadcaster — guaranteed
-    /// to deliver every event sent after the snapshot was taken.
+    /// Receiver attached to the matching legacy-only or workspace-enabled
+    /// broadcaster; delivers requested events sent after the snapshot was taken.
     pub(crate) receiver: broadcast::Receiver<IpcEvent>,
 }
 

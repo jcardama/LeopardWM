@@ -280,12 +280,21 @@ This is also exposed as a Settings UI toggle and a tray menu item.
 ### Subscribe to events (status bars, custom integrations)
 
 ```bash
-lwm subscribe                                       # all events, newline-delimited JSON
+lwm subscribe                                       # legacy event kinds, newline-delimited JSON
 lwm subscribe --events workspace,focused_window     # filtered subset
+lwm subscribe --events workspace_state              # complete all-monitor workspace state
+lwm query workspaces                                 # one complete workspace snapshot
+lwm workspace 2 --monitor '\\.\DISPLAY2'            # select a workspace on that display
 lwm subscribe | jq                                   # pretty-printed in another terminal
 ```
 
-After the daemon answers `Subscribed`, the connection stays open and streams `IpcEvent` frames (`workspace_changed`, `focused_window_changed`, `layout_changed`, `config_reloaded`, `heartbeat`) as state changes occur. Pipe into a status bar (Yasb, eww, custom Tauri/Electron widgets) to re-render on each event without polling. Full schemas + sample clients in `agent_docs/ipc-events.md`.
+After the daemon answers `Subscribed`, the connection stays open and streams
+`IpcEvent` frames as state changes occur. An empty filter preserves only the
+legacy event set (`workspace_changed`, `focused_window_changed`, `layout_changed`,
+`config_reloaded`, `heartbeat`); complete workspace snapshots require explicit
+`--events workspace_state` opt-in and acknowledgement. Targeted workspace commands
+use 1-based indices and transfer focus to the named monitor; snapshot indices are
+0-based. Full schemas and sample clients are in `agent_docs/ipc-events.md`.
 
 ### Troubleshooting
 

@@ -9,7 +9,8 @@ use crate::ipc_client::*;
 use anyhow::Context;
 use clap::Parser;
 use leopardwm_ipc::{
-    ElevationBlockReason, ElevationBlockedWindow, IpcCommand, IpcResponse, MAX_IPC_MESSAGE_SIZE,
+    ElevationBlockReason, ElevationBlockedWindow, EventKind, IpcCommand, IpcResponse,
+    MAX_IPC_MESSAGE_SIZE,
 };
 use std::fs;
 use std::path::PathBuf;
@@ -341,6 +342,279 @@ fn test_to_ipc_command_panic_revert() {
     assert!(matches!(to_ipc_command(&cmd), IpcCommand::PanicRevert));
 }
 
+#[test]
+fn test_cli_query_workspaces_parses() {
+    let cli = Cli::try_parse_from(["leopardwm-cli", "query", "workspaces"])
+        .expect("query workspaces must parse");
+    assert!(matches!(
+        cli.command,
+        Commands::Query {
+            what: QueryType::Workspaces
+        }
+    ));
+}
+
+#[test]
+fn test_cli_workspace_monitor_target_parses() {
+    let cli = Cli::try_parse_from([
+        "leopardwm-cli",
+        "workspace",
+        "2",
+        "--monitor",
+        r"\\.\DISPLAY2",
+    ])
+    .expect("workspace --monitor must parse");
+    match cli.command {
+        Commands::Workspace { number, monitor } => {
+            assert_eq!(number, 2);
+            assert_eq!(monitor.as_deref(), Some(r"\\.\DISPLAY2"));
+        }
+        _ => panic!("expected workspace command"),
+    }
+}
+
+#[test]
+fn test_workspace_cli_dispatch_preserves_legacy_and_targets_named_monitor() {
+    assert!(matches!(
+        to_ipc_command(&Commands::Workspace {
+            number: 4,
+            monitor: None,
+        }),
+        IpcCommand::SwitchWorkspace { index: 4 }
+    ));
+
+    assert_eq!(
+        to_ipc_command(&Commands::Workspace {
+            number: 4,
+            monitor: Some(r"\\.\DISPLAY2".to_string()),
+        }),
+        IpcCommand::SwitchWorkspaceOnMonitor {
+            monitor_device_name: r"\\.\DISPLAY2".to_string(),
+            index: 4,
+        }
+    );
+}
+
+#[test]
+fn test_query_workspaces_dispatches_to_streaming_query_command() {
+    assert!(matches!(
+        to_ipc_command(&Commands::Query {
+            what: QueryType::Workspaces,
+        }),
+        IpcCommand::QueryWorkspaceState
+    ));
+}
+
+#[test]
+fn test_subscribe_workspace_state_filter_parses() {
+    let kinds = parse_event_kinds(Some(vec!["workspace_state".to_string()])).unwrap();
+    assert_eq!(kinds.len(), 1);
+    assert!(kinds.contains(&EventKind::WorkspaceState));
+    assert!(parse_event_kinds(None).unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn test_workspace_query_consumes_ack_and_forwards_complete_snapshot() {
+    let ack = "{\"status\":\"workspace_state_ready\",\"protocol_version\":4}\n";
+    let events = concat!(
+        "{\"type\":\"workspace_snapshot_begin\",\"protocol_version\":4,\"session_id\":\"session\",\"revision\":8,\"focused_monitor_device_name\":null}\n",
+        "{\"type\":\"workspace_snapshot_chunk\",\"revision\":8,\"records\":[]}\n",
+        "{\"type\":\"workspace_snapshot_end\",\"revision\":8}\n"
+    );
+    let input = format!("{ack}{events}");
+    let mut reader = tokio::io::BufReader::new(input.as_bytes());
+    let mut output = Vec::new();
+
+    read_stream_ack(&mut reader, StreamAckKind::WorkspaceState, None)
+        .await
+        .unwrap();
+    forward_event_frames(&mut reader, &mut output, EventReadMode::WorkspaceQuery)
+        .await
+        .unwrap();
+
+    assert_eq!(output, events.as_bytes());
+}
+
+#[tokio::test]
+async fn test_workspace_query_fails_on_incomplete_snapshot() {
+    let events = "{\"type\":\"workspace_snapshot_begin\",\"protocol_version\":4,\"session_id\":\"session\",\"revision\":8,\"focused_monitor_device_name\":null}\n";
+    let mut reader = tokio::io::BufReader::new(events.as_bytes());
+    let mut output = Vec::new();
+
+    let error = forward_event_frames(&mut reader, &mut output, EventReadMode::WorkspaceQuery)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("before completing"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn test_workspace_query_times_out_waiting_for_ack() {
+    let (_writer, reader) = tokio::io::duplex(1024);
+    let mut reader = tokio::io::BufReader::new(reader);
+    let result = tokio::time::timeout(
+        IPC_DEFAULT_RESPONSE_TIMEOUT * 2,
+        read_stream_ack(&mut reader, StreamAckKind::WorkspaceState, None),
+    )
+    .await
+    .expect("query acknowledgment must have its own deadline");
+    assert!(result.unwrap_err().to_string().contains("Timed out"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn test_workspace_query_times_out_on_stalled_or_partial_frame() {
+    use tokio::io::AsyncWriteExt;
+    for prefix in ["", "{\"type\":\"workspace_snapshot_begin\""] {
+        let (mut writer, reader) = tokio::io::duplex(1024);
+        writer.write_all(prefix.as_bytes()).await.unwrap();
+        let mut reader = tokio::io::BufReader::new(reader);
+        let mut output = Vec::new();
+        let result = tokio::time::timeout(
+            IPC_DEFAULT_RESPONSE_TIMEOUT * 2,
+            forward_event_frames(&mut reader, &mut output, EventReadMode::WorkspaceQuery),
+        )
+        .await
+        .expect("query frames must have their own deadline");
+        assert!(result.unwrap_err().to_string().contains("Timed out"));
+        assert!(output.is_empty());
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn test_workspace_query_read_deadline_resets_for_each_frame() {
+    use tokio::io::AsyncWriteExt;
+    let frames = [
+        "{\"type\":\"workspace_snapshot_begin\",\"protocol_version\":4,\"session_id\":\"session\",\"revision\":8,\"focused_monitor_device_name\":null}\n",
+        "{\"type\":\"workspace_snapshot_chunk\",\"revision\":8,\"records\":[]}\n",
+        "{\"type\":\"workspace_snapshot_end\",\"revision\":8}\n",
+    ];
+    let (mut writer, reader) = tokio::io::duplex(1024);
+    let producer = tokio::spawn(async move {
+        for frame in frames {
+            tokio::time::sleep(IPC_DEFAULT_RESPONSE_TIMEOUT * 3 / 4).await;
+            writer.write_all(frame.as_bytes()).await.unwrap();
+        }
+    });
+    let mut reader = tokio::io::BufReader::new(reader);
+    let mut output = Vec::new();
+    forward_event_frames(&mut reader, &mut output, EventReadMode::WorkspaceQuery)
+        .await
+        .unwrap();
+    producer.await.unwrap();
+    assert_eq!(output, frames.concat().as_bytes());
+}
+
+#[tokio::test(start_paused = true)]
+async fn test_subscription_allows_idle_longer_than_query_read_timeout() {
+    use tokio::io::AsyncWriteExt;
+    for workspace_state in [false, true] {
+        let (mut writer, reader) = tokio::io::duplex(1024);
+        let producer = tokio::spawn(async move {
+            tokio::time::sleep(IPC_DEFAULT_RESPONSE_TIMEOUT * 2).await;
+            writer
+                .write_all(b"{\"type\":\"heartbeat\",\"uptime_seconds\":10}\n")
+                .await
+                .unwrap();
+        });
+        let mut reader = tokio::io::BufReader::new(reader);
+        let mut output = Vec::new();
+        forward_event_frames(
+            &mut reader,
+            &mut output,
+            EventReadMode::Subscribe { workspace_state },
+        )
+        .await
+        .unwrap();
+        producer.await.unwrap();
+        assert_eq!(output, b"{\"type\":\"heartbeat\",\"uptime_seconds\":10}\n");
+    }
+}
+
+#[tokio::test]
+async fn test_workspace_subscription_rejects_orphan_chunk_and_end() {
+    for event in [
+        "{\"type\":\"workspace_snapshot_chunk\",\"revision\":8,\"records\":[]}\n",
+        "{\"type\":\"workspace_snapshot_end\",\"revision\":8}\n",
+    ] {
+        let mut reader = tokio::io::BufReader::new(event.as_bytes());
+        let mut output = Vec::new();
+        let error = forward_event_frames(
+            &mut reader,
+            &mut output,
+            EventReadMode::Subscribe {
+                workspace_state: true,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("Unexpected or mismatched"));
+        assert!(output.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn test_workspace_query_forwards_error_frame_then_fails() {
+    let event = "{\"type\":\"workspace_snapshot_error\",\"message\":\"record too large\"}\n";
+    let mut reader = tokio::io::BufReader::new(event.as_bytes());
+    let mut output = Vec::new();
+
+    let error = forward_event_frames(&mut reader, &mut output, EventReadMode::WorkspaceQuery)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("record too large"));
+    assert_eq!(output, event.as_bytes());
+}
+
+#[tokio::test]
+async fn test_subscribe_ack_rejects_missing_workspace_state_capability() {
+    let ack = "{\"status\":\"subscribed\",\"events\":[\"workspace\"]}\n";
+    let mut reader = tokio::io::BufReader::new(ack.as_bytes());
+    let required = [EventKind::WorkspaceState].into_iter().collect();
+
+    let error = read_stream_ack(&mut reader, StreamAckKind::Subscribe, Some(&required))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("WorkspaceState"));
+}
+
+#[tokio::test]
+async fn test_workspace_subscription_fails_on_partial_snapshot_eof() {
+    let event = "{\"type\":\"workspace_snapshot_begin\",\"protocol_version\":4,\"session_id\":\"session\",\"revision\":8,\"focused_monitor_device_name\":null}\n";
+    let mut reader = tokio::io::BufReader::new(event.as_bytes());
+    let mut output = Vec::new();
+
+    let error = forward_event_frames(
+        &mut reader,
+        &mut output,
+        EventReadMode::Subscribe {
+            workspace_state: true,
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("during a workspace-state snapshot"));
+}
+
+#[tokio::test]
+async fn test_stream_reader_rejects_frame_over_ipc_limit() {
+    let mut event = vec![b'x'; MAX_IPC_MESSAGE_SIZE + 1];
+    event.push(b'\n');
+    let mut reader = tokio::io::BufReader::new(event.as_slice());
+    let mut output = Vec::new();
+
+    let error = forward_event_frames(
+        &mut reader,
+        &mut output,
+        EventReadMode::Subscribe {
+            workspace_state: false,
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("exceeded"));
+    assert!(output.is_empty());
+}
 #[test]
 fn test_cli_alias_recover_parses_to_panic_revert() {
     let cli = Cli::try_parse_from(["leopardwm-cli", "recover"]).expect("alias should parse");

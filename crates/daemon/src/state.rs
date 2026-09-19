@@ -691,13 +691,18 @@ pub(crate) struct AppState {
     /// taskbar thread.
     #[cfg(test)]
     pub(crate) recorded_taskbar_commands: std::sync::Mutex<Vec<(u64, bool)>>,
-    /// Fanout for IPC pub/sub. The IPC server's per-client task calls
-    /// `subscribe()` on this to receive an `IpcEvent` stream.
+    /// Fanout for legacy-only IPC subscriptions. Workspace snapshot traffic
+    /// must never consume this buffer's capacity.
     pub(crate) event_broadcaster: tokio::sync::broadcast::Sender<leopardwm_ipc::IpcEvent>,
+    /// Fanout for workspace-enabled subscriptions, including mixed filters.
+    /// Carries legacy events too so snapshot transactions remain contiguous.
+    pub(crate) workspace_event_broadcaster: tokio::sync::broadcast::Sender<leopardwm_ipc::IpcEvent>,
     /// Hash of the last `IpcEvent::LayoutChanged` payload we emitted —
     /// used to dedup repeat emissions when the layout signature is
     /// unchanged (e.g. animation frames between settled positions).
     pub(crate) last_emitted_layout_sig: Option<u64>,
+    /// Last complete workspace model and its daemon-session identity.
+    pub(crate) workspace_ipc_state: crate::workspace_ipc::WorkspaceIpcState,
     /// Sender for debounced workspace-state saves. Installed at startup
     /// via `install_save_channel`; left `None` under cfg(test) and before
     /// wiring so `request_save_if_changed` is a no-op then.
@@ -994,7 +999,9 @@ impl AppState {
             // subscriber that lags >256 events behind receives `Lagged`
             // and is expected to reconnect with a fresh Subscribe.
             event_broadcaster: tokio::sync::broadcast::channel(256).0,
+            workspace_event_broadcaster: tokio::sync::broadcast::channel(256).0,
             last_emitted_layout_sig: None,
+            workspace_ipc_state: Default::default(),
             save_request_tx: None,
             last_persisted_sig: None,
             pending_tab_focus: None,
@@ -1044,7 +1051,10 @@ impl AppState {
     /// mutex. Err on zero-receivers is ignored — that just means nobody
     /// is subscribed yet.
     pub(crate) fn broadcast_event(&self, event: leopardwm_ipc::IpcEvent) {
-        let _ = self.event_broadcaster.send(event);
+        if event.kind() != leopardwm_ipc::EventKind::WorkspaceState {
+            let _ = self.event_broadcaster.send(event.clone());
+        }
+        let _ = self.workspace_event_broadcaster.send(event);
     }
 
     /// Broadcast `FocusedWindowChanged` if `hwnd` differs from the last
@@ -1067,15 +1077,13 @@ impl AppState {
             ),
             None => (None, None, None),
         };
-        let _ = self
-            .event_broadcaster
-            .send(leopardwm_ipc::IpcEvent::FocusedWindowChanged {
-                monitor,
-                hwnd,
-                title,
-                class_name,
-                executable,
-            });
+        self.broadcast_event(leopardwm_ipc::IpcEvent::FocusedWindowChanged {
+            monitor,
+            hwnd,
+            title,
+            class_name,
+            executable,
+        });
         self.last_broadcast_focused = Some((monitor, hwnd));
     }
 

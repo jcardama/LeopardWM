@@ -6,6 +6,14 @@ All notable changes to LeopardWM will be documented in this file.
 
 ### Features
 
+- **Complete workspace state over the existing IPC subscription.** Opt in with
+  `lwm subscribe --events workspace_state` for coherent, byte-bounded snapshots
+  covering every connected monitor, all nine workspace slots, and tiled/floating
+  membership. Legacy default subscriptions remain unchanged. `lwm query workspaces`
+  returns one snapshot; `lwm workspace N --monitor DEVICE` selects a workspace on
+  an explicit monitor. IPC v4 adds this capability after v3 hotkey queries. See
+  `agent_docs/ipc-events.md` for schemas and recovery.
+
 - **Query effective hotkeys and export a PowerToys Shortcut Guide manifest.**
   `lwm query hotkeys` lists resolved bindings and configuration diagnostics.
   `lwm export-shortcut-guide` writes YAML to stdout, `--output PATH` writes a
@@ -84,6 +92,9 @@ All notable changes to LeopardWM will be documented in this file.
 - **IPC protocol v3 adds `QueryHotkeys` and `HotkeyList`.** Existing v1/v2
   subscription clients remain supported; the new query/export commands require
   a daemon implementing v3.
+- **IPC protocol v4 adds opt-in workspace-state snapshots and monitor-targeted
+  switching.** Legacy empty-filter subscriptions remain unchanged; consumers
+  must also verify that `workspace_state` appears in the acknowledged filter.
 - **Snap Layout remove and restore can emit numeric style-geometry diagnostics.** With debug logging enabled, maximize-box remove and restore log HWND, process/thread ids, style bits, and outer/client/DWM-frame/NC-rendering measurements at before-style, after-style, and after-frame boundaries. Failed geometry or style reads log numeric HRESULT codes instead of zeros. These queries are synchronous operation-boundary measurements, not proof of delayed application layout. Placement, style-change, and no-op behavior are unchanged.
 - **Opt-in framed-window clipping proofs record bounded native feasibility evidence.** The framed probe measured non-client rendering/frame changes while clipped despite unchanged native dimensions, so that presentation limitation remains separate from mechanical viability. A second ignored, hidden-fixture matrix covers known absent, empty, simple, and complex regions; LTR and right-origin RTL slices; retained-controller cancellation, restore-order, replacement, stale-identity, and native restore retry/terminal-repair boundaries. Both are test-only: no scrolling fix or compatibility acceptance is claimed.
 - **Diagnostics validation hosts are opt-in and isolated from ordinary tests.** A unique-pipe test host and exact-pipe CLI consumer can record Medium/High integrity evidence without starting the full daemon or falling back to the daily-driver pipe.
@@ -100,7 +111,6 @@ All notable changes to LeopardWM will be documented in this file.
   while the GitHub Release archive contract used by Scoop Extras remains
   unchanged.
 - **Lockfile dependency updates:** serde 1.0.229, toml 1.1.5, and tokio 1.53.1.
-
 ## 0.2.8
 
 ### Features

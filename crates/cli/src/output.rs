@@ -149,6 +149,12 @@ pub(crate) fn print_response(response: &IpcResponse) {
             // dedicated `lwm subscribe` subcommand handles that flow.
             println!("Subscribed (events: {:?}); stream mode active", events);
         }
+        IpcResponse::WorkspaceStateReady { protocol_version } => {
+            println!(
+                "Workspace-state snapshot stream ready (protocol {})",
+                protocol_version
+            );
+        }
         IpcResponse::Unknown => {
             println!("Daemon returned an unknown response status (client/daemon version mismatch)");
         }

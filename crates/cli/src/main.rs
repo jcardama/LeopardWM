@@ -21,12 +21,12 @@ mod window_inspect;
 use anyhow::Result;
 use clap::Parser;
 
-use args::{validate_set_width_fraction, Cli, Commands, DoctorAction};
+use args::{validate_set_width_fraction, Cli, Commands, DoctorAction, QueryType};
 use command_map::to_ipc_command;
 use config_cmds::handle_config;
 use daemon_cmds::{
-    handle_autostart, handle_emergency_uncloak, handle_panic_revert, handle_run, handle_status,
-    handle_stop, handle_subscribe,
+    handle_autostart, handle_emergency_uncloak, handle_panic_revert, handle_query_workspaces,
+    handle_run, handle_status, handle_stop, handle_subscribe,
 };
 use doctor::{handle_collect_logs, handle_doctor};
 use ipc_client::{is_non_success_response, send_command};
@@ -47,6 +47,9 @@ async fn main() -> Result<()> {
             no_watchdog,
         } => return handle_run(no_apply, wait_ms, safe_mode, no_watchdog).await,
         Commands::Subscribe { events } => return handle_subscribe(events).await,
+        Commands::Query {
+            what: QueryType::Workspaces,
+        } => return handle_query_workspaces().await,
         Commands::Stop => return handle_stop().await,
         Commands::PanicRevert => return handle_panic_revert().await,
         Commands::EmergencyUncloak => return handle_emergency_uncloak(),
