@@ -335,6 +335,18 @@ impl AppState {
         if self.paused {
             return IdleLayoutReapply::Paused;
         }
+        if !self
+            .apply_worker_cancelled
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            if let Some(remaining) = self
+                .layout_transition
+                .as_ref()
+                .map(|transition| transition.duration_ms.saturating_sub(transition.elapsed_ms))
+            {
+                self.tick_animations(remaining);
+            }
+        }
         match self.apply_layout() {
             Ok(LayoutApplyOutcome::Completed) => {}
             Ok(LayoutApplyOutcome::DeferredByRecoveryBarrier) => return IdleLayoutReapply::Waiting,

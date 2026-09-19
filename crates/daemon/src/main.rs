@@ -3012,6 +3012,34 @@ pub(crate) fn interrupted_animation_frame_action(
     }
 }
 
+fn resume_after_interrupted_animation_frame(
+    state: &mut AppState,
+    animation_worker: &animation_worker::AnimationWorkerHandle,
+    action: InterruptedAnimationFrameAction,
+) -> bool {
+    let can_resume = if action == InterruptedAnimationFrameAction::ReapplyThenResume {
+        match state.apply_layout() {
+            Ok(crate::layout_apply::LayoutApplyOutcome::Completed) => true,
+            Ok(crate::layout_apply::LayoutApplyOutcome::DeferredByRecoveryBarrier) => false,
+            Err(error) => {
+                warn!(
+                    "Current layout landing after invalidated animation frame failed: {}",
+                    error
+                );
+                false
+            }
+        }
+    } else {
+        true
+    };
+    if can_resume && state.is_animating() {
+        state.tick_animations(0);
+        matches!(state.send_animation_frame(animation_worker), Ok(true))
+    } else {
+        false
+    }
+}
+
 /// Process an applied animation frame: feed back violations, tick, and land the final layout.
 async fn handle_animation_frame_applied(
     ctx: &mut EventLoopCtx<'_>,
@@ -3030,27 +3058,7 @@ async fn handle_animation_frame_applied(
         }
         let resumed = {
             let mut state = ctx.state.lock().await;
-            let can_resume = if action == InterruptedAnimationFrameAction::ReapplyThenResume {
-                match state.apply_layout() {
-                    Ok(crate::layout_apply::LayoutApplyOutcome::Completed) => true,
-                    Ok(crate::layout_apply::LayoutApplyOutcome::DeferredByRecoveryBarrier) => false,
-                    Err(error) => {
-                        warn!(
-                            "Current layout landing after invalidated animation frame failed: {}",
-                            error
-                        );
-                        false
-                    }
-                }
-            } else {
-                true
-            };
-            if can_resume && state.is_animating() {
-                state.tick_animations(0);
-                matches!(state.send_animation_frame(ctx.animation_worker), Ok(true))
-            } else {
-                false
-            }
+            resume_after_interrupted_animation_frame(&mut state, ctx.animation_worker, action)
         };
         *ctx.animation_active = resumed;
         *ctx.last_frame_instant = resumed.then(std::time::Instant::now);

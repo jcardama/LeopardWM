@@ -2,6 +2,7 @@
 
 use crate::config::Config;
 use crate::hotkey_resolution::resolve_hotkeys;
+use crate::layout_apply::LayoutApplyOutcome;
 use crate::state::{
     validate_set_width_fraction, AppState, ElevationBlockedRecord, PendingWorkspaceSwitchFocus,
 };
@@ -411,13 +412,16 @@ impl AppState {
             IpcCommand::QueryFocused => self.handle_query_focused(),
             IpcCommand::QueryHotkeys => self.handle_query_hotkeys(),
             IpcCommand::Refresh => self.handle_refresh(),
-            IpcCommand::Apply => {
-                if let Err(e) = self.apply_layout() {
-                    return IpcResponse::error(format!("Failed to apply layout: {}", e));
+            IpcCommand::Apply => match self.apply_layout() {
+                Ok(LayoutApplyOutcome::Completed) => {
+                    info!("Applied layout");
+                    IpcResponse::Ok
                 }
-                info!("Applied layout");
-                IpcResponse::Ok
-            }
+                Ok(LayoutApplyOutcome::DeferredByRecoveryBarrier) => IpcResponse::error(
+                    "Layout application remains pending while recovery animation placement finishes",
+                ),
+                Err(error) => IpcResponse::error(format!("Failed to apply layout: {}", error)),
+            },
             IpcCommand::Reload => self.handle_reload(),
             IpcCommand::TogglePause => {
                 if let Err(e) = self.toggle_pause("IPC toggle") {

@@ -1397,6 +1397,60 @@ fn test_stale_animation_result_resumes_after_unconsumed_sync_supersession() {
 }
 
 #[test]
+fn test_interrupted_animation_recovery_lands_after_barrier_release() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = false;
+    state.workspaces.get_mut(&1).unwrap()[0]
+        .insert_window(100, Some(800))
+        .unwrap();
+    let snapshot = state.snapshot_layout();
+    state.start_layout_transition_with_duration(snapshot, 150);
+    state.pending_idle_layout_reapply = true;
+    state.injected_apply_placements_behavior =
+        Some(TestApplyPlacementsBehavior::SleepAndSucceed(Duration::ZERO));
+    let (event_tx, _event_rx) = tokio::sync::mpsc::channel(4);
+    let worker = animation_worker::AnimationWorkerHandle::spawn(
+        event_tx,
+        state.apply_worker_cancelled.clone(),
+    )
+    .unwrap();
+    let unblock = worker.block_for_test();
+    state.animation_worker_control = Some(worker.control());
+
+    assert!(!resume_after_interrupted_animation_frame(
+        &mut state,
+        &worker,
+        InterruptedAnimationFrameAction::ReapplyThenResume,
+    ));
+    assert!(state.layout_transition.is_some());
+    assert!(state.pending_idle_layout_reapply);
+    assert_eq!(
+        state
+            .injected_apply_placements_call_count
+            .load(Ordering::SeqCst),
+        0,
+        "an invalidated frame must not dispatch while its recovery barrier is busy"
+    );
+
+    unblock.send(()).unwrap();
+    assert!(worker.control().wait_for_barrier(Duration::from_secs(2)));
+    assert_eq!(
+        state.try_consume_idle_layout_reapply(),
+        crate::temporary_ignore::IdleLayoutReapply::Applied
+    );
+    assert!(!state.pending_idle_layout_reapply);
+    assert!(state.layout_transition.is_none());
+    assert_eq!(state.find_window_workspace(100), Some((1, 0)));
+    assert!(
+        state
+            .injected_apply_placements_call_count
+            .load(Ordering::SeqCst)
+            > 0,
+        "recovery must perform a physical landing after the interrupted transition settles"
+    );
+}
+
+#[test]
 fn test_invalidated_animation_result_releases_only_matching_latch() {
     let mut state = AppState::new_with_config(test_config(), two_monitors());
     state.workspaces.get_mut(&1).unwrap()[0]
@@ -4332,6 +4386,47 @@ fn test_empty_prune_reports_unchanged_layout() {
 }
 
 #[test]
+fn test_stale_prune_reports_recovery_barrier_deferral() {
+    let mut state = two_managed_windows();
+    state.paused = false;
+    state.pending_idle_layout_reapply = true;
+    state.injected_apply_placements_behavior =
+        Some(TestApplyPlacementsBehavior::SleepAndSucceed(Duration::ZERO));
+    let (event_tx, _event_rx) = tokio::sync::mpsc::channel(4);
+    let worker = animation_worker::AnimationWorkerHandle::spawn(
+        event_tx,
+        state.apply_worker_cancelled.clone(),
+    )
+    .unwrap();
+    let unblock = worker.block_for_test();
+    state.animation_worker_control = Some(worker.control());
+
+    match state.prune_stale_windows_for_test(&[100]) {
+        crate::helpers::StalePruneLayout::Failed(error) => {
+            assert!(error.to_string().contains("deferred"));
+        }
+        other => panic!("expected deferred stale prune, got {other:?}"),
+    }
+    assert_eq!(
+        state
+            .injected_apply_placements_call_count
+            .load(Ordering::SeqCst),
+        0,
+        "deferred stale prune must not claim a physical placement"
+    );
+
+    unblock.send(()).unwrap();
+    assert!(worker.control().wait_for_barrier(Duration::from_secs(2)));
+    assert_eq!(
+        state.try_consume_idle_layout_reapply(),
+        crate::temporary_ignore::IdleLayoutReapply::Applied
+    );
+    assert!(!state.pending_idle_layout_reapply);
+    assert!(state.find_window_workspace(100).is_none());
+    assert!(state.find_window_workspace(200).is_some());
+}
+
+#[test]
 fn test_prune_apply_failure_is_reported_not_success() {
     let mut state = two_managed_windows();
     state.reduce_motion = true;
@@ -6735,6 +6830,100 @@ fn test_cmd_apply() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
     let resp = state.handle_command(IpcCommand::Apply);
     assert_eq!(resp, IpcResponse::Ok);
+}
+
+#[test]
+fn test_cmd_apply_reports_recovery_barrier_deferral_until_landing_succeeds() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = false;
+    state.pending_idle_layout_reapply = true;
+    state.injected_apply_placements_behavior =
+        Some(TestApplyPlacementsBehavior::SleepAndSucceed(Duration::ZERO));
+    let (event_tx, _event_rx) = tokio::sync::mpsc::channel(4);
+    let worker = animation_worker::AnimationWorkerHandle::spawn(
+        event_tx,
+        state.apply_worker_cancelled.clone(),
+    )
+    .unwrap();
+    let unblock = worker.block_for_test();
+    state.animation_worker_control = Some(worker.control());
+
+    match state.handle_command(IpcCommand::Apply) {
+        IpcResponse::Error { message } => {
+            assert!(message.contains("remains pending"));
+        }
+        other => panic!("expected deferred Apply error, got {other:?}"),
+    }
+    assert_eq!(
+        state
+            .injected_apply_placements_call_count
+            .load(Ordering::SeqCst),
+        0,
+        "deferred IPC Apply must not dispatch native placement"
+    );
+
+    unblock.send(()).unwrap();
+    assert!(worker.control().wait_for_barrier(Duration::from_secs(2)));
+    assert_eq!(
+        state.try_consume_idle_layout_reapply(),
+        crate::temporary_ignore::IdleLayoutReapply::Applied
+    );
+    assert!(!state.pending_idle_layout_reapply);
+    assert!(
+        state
+            .injected_apply_placements_call_count
+            .load(Ordering::SeqCst)
+            > 0
+    );
+}
+
+#[test]
+fn test_cmd_resume_rolls_back_on_recovery_barrier_then_succeeds_after_landing() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = true;
+    state.pending_idle_layout_reapply = true;
+    state.injected_apply_placements_behavior =
+        Some(TestApplyPlacementsBehavior::SleepAndSucceed(Duration::ZERO));
+    let (event_tx, _event_rx) = tokio::sync::mpsc::channel(4);
+    let worker = animation_worker::AnimationWorkerHandle::spawn(
+        event_tx,
+        state.apply_worker_cancelled.clone(),
+    )
+    .unwrap();
+    let unblock = worker.block_for_test();
+    state.animation_worker_control = Some(worker.control());
+
+    match state.handle_command(IpcCommand::TogglePause) {
+        IpcResponse::Error { message } => assert!(message.contains("deferred")),
+        other => panic!("expected deferred resume error, got {other:?}"),
+    }
+    assert!(state.paused, "deferred resume must restore paused state");
+    assert_eq!(
+        state
+            .injected_apply_placements_call_count
+            .load(Ordering::SeqCst),
+        0,
+        "deferred resume must not dispatch native placement"
+    );
+    assert!(
+        state.take_recorded_taskbar_commands().is_empty(),
+        "deferred resume must not run post-apply taskbar effects"
+    );
+
+    unblock.send(()).unwrap();
+    assert!(worker.control().wait_for_barrier(Duration::from_secs(2)));
+    assert_eq!(
+        state.handle_command(IpcCommand::TogglePause),
+        IpcResponse::Ok
+    );
+    assert!(!state.paused);
+    assert!(!state.pending_idle_layout_reapply);
+    assert!(
+        state
+            .injected_apply_placements_call_count
+            .load(Ordering::SeqCst)
+            > 0
+    );
 }
 
 #[test]

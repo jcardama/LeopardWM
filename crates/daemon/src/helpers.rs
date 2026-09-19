@@ -710,13 +710,27 @@ impl AppState {
             self.pending_drag_hint = Some(crate::state::DragHintAction::Hide);
         } else {
             self.pending_layout_apply_timeout_report = None;
-            if let Err(err) = self.apply_layout() {
-                self.paused = was_paused;
-                warn!(
-                    "Resume apply failed via {}; restoring paused state: {}",
-                    source, err
-                );
-                return Err(err);
+            match self.apply_layout() {
+                Ok(crate::layout_apply::LayoutApplyOutcome::Completed) => {}
+                Ok(crate::layout_apply::LayoutApplyOutcome::DeferredByRecoveryBarrier) => {
+                    self.paused = was_paused;
+                    let error = anyhow::anyhow!(
+                        "Resume apply deferred while recovery animation placement finishes"
+                    );
+                    warn!(
+                        "Resume apply failed via {}; restoring paused state: {}",
+                        source, error
+                    );
+                    return Err(error);
+                }
+                Err(error) => {
+                    self.paused = was_paused;
+                    warn!(
+                        "Resume apply failed via {}; restoring paused state: {}",
+                        source, error
+                    );
+                    return Err(error);
+                }
             }
             // Park inactive workspaces only after a successful active apply so a
             // failed resume cannot move them while rolling back to paused.
