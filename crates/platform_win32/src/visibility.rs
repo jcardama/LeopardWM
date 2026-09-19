@@ -360,10 +360,10 @@ pub fn uncloak_all_visible_windows() {
     eprintln!("[leopardwm] Emergency window restore complete");
 }
 
-/// Cascade windows starting at (0, 0) on the primary monitor work area.
+/// Cascade windows from the primary monitor work area's origin.
 ///
-/// Each window is sized to 60% of the work area and offset by 30px from the
-/// previous one. Off-screen windows are first restored, then cascaded.
+/// Each window uses 50% of the work-area height with approximately 4:3 width
+/// and 30px offsets. Off-screen windows are first restored, then cascaded.
 pub fn cascade_windows(window_ids: &[WindowId]) -> Result<(), Win32Error> {
     let work_area =
         get_primary_monitor().map_or(Rect::new(0, 0, 1920, 1080), |monitor| monitor.work_area);
@@ -372,10 +372,15 @@ pub fn cascade_windows(window_ids: &[WindowId]) -> Result<(), Win32Error> {
         work_area,
         || {
             let recovery = restore_all_windows_moved_offscreen();
+            tracing::info!(
+                restored_count = recovery.restored_count,
+                partial = recovery.error.is_some(),
+                "Release MoveOffScreen recovery completed"
+            );
             recovery.error.map_or(Ok(()), Err)
         },
         restore_minimized_window,
-        |placements| apply_placements(placements, &PlatformConfig::default(), None, false),
+        |placements| apply_placements(placements, &PlatformConfig::default(), None, true),
         crate::is_window_valid,
     )
 }
@@ -676,6 +681,35 @@ mod tests {
         assert!(message.contains("20"));
         assert!(message.contains("50"));
         assert!(!message.contains("destroyed during restore"));
+    }
+
+    #[test]
+    fn cascade_rechecks_liveness_after_real_minimized_restore_failure() {
+        for live_at_caller in [false, true] {
+            let liveness_reads = std::cell::Cell::new(0);
+            let is_live = |_| {
+                let read = liveness_reads.get();
+                liveness_reads.set(read + 1);
+                read == 0 || live_at_caller
+            };
+            let result = cascade_windows_with(
+                &[10],
+                Rect::new(0, 0, 1920, 1080),
+                || Ok(()),
+                |window_id| restore_minimized_window_with(window_id, |_| true, |_| {}, is_live),
+                |_| Ok(Default::default()),
+                is_live,
+            );
+            assert_eq!(liveness_reads.get(), 2);
+            if live_at_caller {
+                assert!(result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("remained minimized"));
+            } else {
+                result.unwrap();
+            }
+        }
     }
 
     #[test]

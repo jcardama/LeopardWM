@@ -11,6 +11,10 @@ All notable changes to LeopardWM will be documented in this file.
   and cascades tiled and floating memberships without removing them. Use
   `lwm toggle-pause` to resume; recovery failures and live windows that cannot be
   restored, cascaded, or remain maximized leave tiling paused and are reported.
+  Release drains older placement work before cascading and orders final positions
+  after queued animation frames. A busy worker leaves tiling paused without a
+  cascade; explicitly retry the command once the worker finishes. Partial
+  off-screen recovery logs its restored-window count.
 - **Landings whose visible origin differs from the requested origin by more than 2 px are now logged at warn level with both rectangles.**
   Window drift reports can be diagnosed from a default-level daemon log; placement behavior is unchanged.
 - **Opt-in touchpad gesture diagnostic capture writes a bounded dedicated report.**

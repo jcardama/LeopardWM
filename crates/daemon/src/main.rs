@@ -179,8 +179,7 @@ async fn setup_daemon_runtime(
             &apply_worker_cancelled,
             &apply_epoch,
             || {
-                if !animation_worker_control
-                    .wait_for_session_end_barrier(SESSION_END_ANIMATION_BARRIER_TIMEOUT)
+                if !animation_worker_control.wait_for_barrier(SESSION_END_ANIMATION_BARRIER_TIMEOUT)
                 {
                     warn!("Animation worker did not reach the session-end barrier before recovery");
                 }
@@ -3666,15 +3665,7 @@ async fn main() -> Result<()> {
             }
             DaemonEvent::CrossfadeComplete { epoch } => {
                 let mut state = state.lock().await;
-                let active = state.active_crossfade.as_ref().map(|s| s.epoch);
-                if active == Some(epoch) {
-                    state.active_crossfade = None;
-                }
-                // Always release this epoch's re-registration barrier.
-                // Per-epoch tracking means an aborted fade's stale
-                // CrossfadeComplete only clears its own entry, not a
-                // newer in-flight fade's.
-                state.crossfade_sources.remove(&epoch);
+                state.acknowledge_crossfade_complete(epoch);
             }
             DaemonEvent::HideSnapHint => {
                 if let Some(ref overlay) = snap_hint_overlay {

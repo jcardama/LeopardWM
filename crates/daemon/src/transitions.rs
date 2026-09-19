@@ -339,6 +339,14 @@ impl AppState {
         }
     }
 
+    pub(crate) fn acknowledge_crossfade_complete(&mut self, epoch: u64) {
+        if self.active_crossfade.as_ref().map(|state| state.epoch) == Some(epoch) {
+            self.active_crossfade = None;
+        }
+        // A stale completion releases only its own re-registration barrier.
+        self.crossfade_sources.remove(&epoch);
+    }
+
     /// Drop re-registration barriers whose `CrossfadeComplete` never
     /// arrived (worker died/stuck), so their source wids aren't stranded
     /// out of the ghost path forever. A crossfade can't legitimately

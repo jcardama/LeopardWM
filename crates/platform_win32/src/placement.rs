@@ -877,27 +877,51 @@ fn uncloak_becoming_visible(entries: &[DeferEntry]) {
 
 /// Position all entries in one DeferWindowPos batch; returns (applied, failed ids).
 fn position_entries(entries: &[DeferEntry], post_animation_landing: bool) -> (u32, HashSet<u64>) {
+    position_entries_with(
+        entries,
+        post_animation_landing,
+        |entry| unsafe {
+            SetWindowPos(
+                entry.hwnd,
+                None,
+                entry.x,
+                entry.y,
+                entry.w,
+                entry.h,
+                (entry.flags & !SWP_FRAMECHANGED) | SWP_ASYNCWINDOWPOS,
+            )
+        },
+        position_entries_batch,
+    )
+}
+
+fn position_entries_with<Q, P>(
+    entries: &[DeferEntry],
+    post_animation_landing: bool,
+    mut queue_endpoint: Q,
+    position_batch: P,
+) -> (u32, HashSet<u64>)
+where
+    Q: FnMut(&DeferEntry) -> windows::core::Result<()>,
+    P: FnOnce(&[DeferEntry]) -> HashSet<u64>,
+{
+    let mut endpoint_failures = HashSet::new();
     if post_animation_landing {
         // A synchronous move can overtake older async frames on the owner thread.
         // Queue the endpoint last as well, so those frames cannot undo the landing.
         for entry in entries {
-            if let Err(error) = unsafe {
-                SetWindowPos(
-                    entry.hwnd,
-                    None,
-                    entry.x,
-                    entry.y,
-                    entry.w,
-                    entry.h,
-                    (entry.flags & !SWP_FRAMECHANGED) | SWP_ASYNCWINDOWPOS,
-                )
-            } {
+            if let Err(error) = queue_endpoint(entry) {
                 tracing::warn!(window_id = entry.window_id, %error, "Could not queue animation endpoint");
+                endpoint_failures.insert(entry.window_id);
             }
         }
     }
-    let mut applied = 0u32;
+    let mut failures = position_batch(entries);
+    failures.extend(endpoint_failures);
+    ((entries.len() - failures.len()) as u32, failures)
+}
 
+fn position_entries_batch(entries: &[DeferEntry]) -> HashSet<u64> {
     // Track windows that failed positioning (excluded from cache).
     let mut failed_window_ids: std::collections::HashSet<u64> = std::collections::HashSet::new();
 
@@ -922,7 +946,6 @@ fn position_entries(entries: &[DeferEntry], post_animation_landing: bool) -> (u3
                             failed_window_ids.insert(entry.window_id);
                         }
                     }
-                    applied = (entries.len() - failed_window_ids.len()) as u32;
                 }
                 Ok(initial_hdwp) => {
                     let mut hdwp = initial_hdwp;
@@ -963,9 +986,6 @@ fn position_entries(entries: &[DeferEntry], post_animation_landing: bool) -> (u3
                                     failed_window_ids.insert(entry.window_id);
                                 }
                             }
-                            applied = (entries.len() - failed_window_ids.len()) as u32;
-                        } else {
-                            applied = entries.len() as u32;
                         }
                     } else {
                         // DeferWindowPos failed — HDWP is already freed by Win32.
@@ -985,14 +1005,13 @@ fn position_entries(entries: &[DeferEntry], post_animation_landing: bool) -> (u3
                                 failed_window_ids.insert(entry.window_id);
                             }
                         }
-                        applied = (entries.len() - failed_window_ids.len()) as u32;
                     }
                 }
             }
         }
     }
 
-    (applied, failed_window_ids)
+    failed_window_ids
 }
 
 type SuspectedSizes = (Option<i32>, Option<i32>);
@@ -2427,6 +2446,65 @@ mod tests {
             flags: SET_WINDOW_POS_FLAGS(0),
             column_index: 0,
         }
+    }
+
+    #[test]
+    fn endpoint_failure_survives_successful_batch_or_fallback() {
+        let entries = [fresh_inset_entry(10, 0), fresh_inset_entry(20, 0)];
+        for batch_failures in [HashSet::new(), HashSet::from([20]), HashSet::from([10])] {
+            let mut queued = Vec::new();
+            let (applied, failed) = position_entries_with(
+                &entries,
+                true,
+                |entry| {
+                    queued.push(entry.window_id);
+                    if entry.window_id == 10 {
+                        Err(windows::core::Error::from_hresult(windows::core::HRESULT(
+                            -1,
+                        )))
+                    } else {
+                        Ok(())
+                    }
+                },
+                |_| batch_failures.clone(),
+            );
+            assert_eq!(queued, [10, 20]);
+            let mut expected = batch_failures;
+            expected.insert(10);
+            assert_eq!(applied, (2 - expected.len()) as u32);
+            assert_eq!(failed, expected);
+        }
+    }
+
+    #[test]
+    fn ordered_retry_must_queue_endpoints_again_to_resolve_failure() {
+        let entries = [fresh_inset_entry(10, 0)];
+        for queue_succeeds in [false, true] {
+            let (applied, failed) = position_entries_with(
+                &entries,
+                true,
+                |_| {
+                    if queue_succeeds {
+                        Ok(())
+                    } else {
+                        Err(windows::core::Error::from_hresult(windows::core::HRESULT(
+                            -1,
+                        )))
+                    }
+                },
+                |_| HashSet::new(),
+            );
+            assert_eq!(applied, u32::from(queue_succeeds));
+            assert_eq!(failed.contains(&10), !queue_succeeds);
+        }
+        let (applied, failed) = position_entries_with(
+            &entries,
+            false,
+            |_| panic!("ordinary positioning must not queue an endpoint"),
+            |_| HashSet::new(),
+        );
+        assert_eq!(applied, 1);
+        assert!(failed.is_empty());
     }
 
     fn global_cached_insets(window_id: WindowId) -> Option<(i32, i32, i32, i32)> {

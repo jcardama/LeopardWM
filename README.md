@@ -280,7 +280,12 @@ cascades every tiled and floating managed window. Membership and admission stay
 intact: use `lwm toggle-pause` to resume tiling. The command has no confirmation
 prompt. If recovery fails or a live window cannot be restored, cascaded, or is
 still maximized, release may be partial, tiling remains paused, and the CLI
-reports the failure.
+reports the failure. Release first invalidates older animation work and waits up
+to 100 ms for the animation worker. If that worker is busy, or a timed-out
+placement worker is still recovering, no cascade is performed and tiling stays
+paused. Retry `lwm release-all-windows` after the worker finishes; the failed
+request never schedules a later cascade. Final cascade positions are ordered
+after previously queued animation positions, and ordering failures are reported.
 
 ### Autostart (boot with Windows)
 
