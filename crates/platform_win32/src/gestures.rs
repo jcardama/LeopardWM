@@ -63,7 +63,25 @@ const GESTURE_DIAGNOSTIC_ADMISSION_STEP: u64 = 2;
 static GESTURE_DIAGNOSTIC_CAPTURE_STATE: AtomicU64 = AtomicU64::new(0);
 
 /// Keeps an already-admitted diagnostic emitter visible to capture shutdown.
-pub struct GestureDiagnosticAdmission;
+///
+/// `admit_gesture_diagnostic_capture()` is the only source, so the admission
+/// count cannot be decremented by work that was never admitted. Neither the
+/// original unit form nor a field literal can reconstruct it externally:
+///
+/// ```compile_fail
+/// use leopardwm_platform_win32::GestureDiagnosticAdmission;
+///
+/// let _forged = GestureDiagnosticAdmission;
+/// ```
+///
+/// ```compile_fail
+/// use leopardwm_platform_win32::GestureDiagnosticAdmission;
+///
+/// let _forged = GestureDiagnosticAdmission { _private: () };
+/// ```
+pub struct GestureDiagnosticAdmission {
+    _private: (),
+}
 
 impl Drop for GestureDiagnosticAdmission {
     fn drop(&mut self) {
@@ -96,7 +114,7 @@ pub fn admit_gesture_diagnostic_capture() -> Option<GestureDiagnosticAdmission> 
             Ordering::AcqRel,
             Ordering::Acquire,
         ) {
-            Ok(_) => return Some(GestureDiagnosticAdmission),
+            Ok(_) => return Some(GestureDiagnosticAdmission { _private: () }),
             Err(next) => state = next,
         }
     }

@@ -45,6 +45,9 @@ All notable changes to LeopardWM will be documented in this file.
 - **The repository now carries a placement-report triage record for #104 and #112.**
   The record at `agent_docs/placement-report-triage.md` captures current evidence
   state and the bounded next steps; no placement behavior changed.
+- **The gesture diagnostic capture admission token is no longer externally constructible.**
+  A private field means the admission counter can only be released by work that was
+  actually admitted; capture report content is unchanged.
 
 ## 0.2.9
 
