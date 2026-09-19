@@ -518,6 +518,7 @@ impl AppState {
                 "Layout application skipped: previous timed-out apply worker is still finishing"
             ));
         }
+        self.pending_idle_layout_reapply = false;
         self.retain_application_fullscreen_sessions();
         self.applying_layout = true;
 

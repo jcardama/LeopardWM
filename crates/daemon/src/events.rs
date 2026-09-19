@@ -112,6 +112,10 @@ pub(crate) enum DaemonEvent {
         target_hwnd: u64,
         new_title: Option<String>,
     },
+    /// Retry a layout apply that toggle-ignore deferred until apply and
+    /// animation workers are idle. Armed by `finish_daemon_event`; the
+    /// handler re-arms while consume still reports `Waiting`.
+    IdleLayoutReapply,
     /// Debounced persist trigger. Emitted by the background save task
     /// after a quiet period following one or more persisted-state
     /// changes. Handled on the main loop, which builds the snapshot JSON

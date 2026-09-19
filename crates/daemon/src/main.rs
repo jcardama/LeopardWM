@@ -710,6 +710,7 @@ struct EventLoopCtx<'a> {
     snap_hint_timer_handle: &'a mut Option<tokio::task::JoinHandle<()>>,
     focus_follows_mouse_timer: &'a mut Option<tokio::task::JoinHandle<()>>,
     display_change_timer: &'a mut Option<tokio::task::JoinHandle<()>>,
+    idle_layout_reapply_timer: &'a mut Option<tokio::task::JoinHandle<()>>,
     mouse_hook_handle: &'a mut Option<MouseHookHandle>,
 }
 
@@ -3337,13 +3338,48 @@ async fn handle_display_change_settled(ctx: &mut EventLoopCtx<'_>) {
     }
 }
 
+fn abort_join_handle(handle: Option<tokio::task::JoinHandle<()>>) {
+    if let Some(handle) = handle {
+        handle.abort();
+    }
+}
+
+fn arm_idle_layout_reapply_timer(ctx: &mut EventLoopCtx<'_>) {
+    if ctx.idle_layout_reapply_timer.is_some() {
+        return;
+    }
+    let tx = ctx.event_tx.clone();
+    *ctx.idle_layout_reapply_timer = Some(tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(16)).await;
+        let _ = tx.send(DaemonEvent::IdleLayoutReapply).await;
+    }));
+}
+
+async fn handle_idle_layout_reapply(ctx: &mut EventLoopCtx<'_>) {
+    if let Some(handle) = ctx.idle_layout_reapply_timer.take() {
+        handle.abort();
+    }
+    let outcome = {
+        let mut state = ctx.state.lock().await;
+        state.try_consume_idle_layout_reapply()
+    };
+    if matches!(outcome, crate::temporary_ignore::IdleLayoutReapply::Waiting) {
+        arm_idle_layout_reapply_timer(ctx);
+    }
+}
+
 /// Finish each processed event before waiting for the next one.
-async fn finish_daemon_event(ctx: &EventLoopCtx<'_>) {
+async fn finish_daemon_event(ctx: &mut EventLoopCtx<'_>) {
     sync_pending_layout_apply_timeout_ui(ctx.state, ctx.tray_manager, &*ctx.hotkey_state).await;
-    ctx.state
-        .lock()
-        .await
-        .publish_workspace_state_if_subscribed();
+    let should_arm_idle_reapply = {
+        let mut state = ctx.state.lock().await;
+        let pending = state.pending_idle_layout_reapply && !state.paused;
+        state.publish_workspace_state_if_subscribed();
+        pending
+    };
+    if should_arm_idle_reapply {
+        arm_idle_layout_reapply_timer(ctx);
+    }
 }
 
 #[tokio::main]
@@ -3560,6 +3596,7 @@ async fn main() -> Result<()> {
     // processing until the changes settle to avoid sizing windows to a
     // transient work area.
     let mut display_change_timer: Option<tokio::task::JoinHandle<()>> = None;
+    let mut idle_layout_reapply_timer: Option<tokio::task::JoinHandle<()>> = None;
 
     let mut ctx = EventLoopCtx {
         state: &state,
@@ -3575,6 +3612,7 @@ async fn main() -> Result<()> {
         snap_hint_timer_handle: &mut snap_hint_timer_handle,
         focus_follows_mouse_timer: &mut focus_follows_mouse_timer,
         display_change_timer: &mut display_change_timer,
+        idle_layout_reapply_timer: &mut idle_layout_reapply_timer,
         mouse_hook_handle: &mut mouse_hook_handle,
     };
 
@@ -3689,6 +3727,7 @@ async fn main() -> Result<()> {
             DaemonEvent::DisplayChangeSettled => {
                 handle_display_change_settled(&mut ctx).await;
             }
+            DaemonEvent::IdleLayoutReapply => handle_idle_layout_reapply(&mut ctx).await,
             DaemonEvent::Shutdown => {
                 info!("Shutdown signal received");
                 run_shutdown_cleanup(&state, ShutdownMode::Graceful).await;
@@ -3696,23 +3735,17 @@ async fn main() -> Result<()> {
             }
         }
 
-        finish_daemon_event(&ctx).await;
+        finish_daemon_event(&mut ctx).await;
     }
 
     // Stop the update-checker worker so it doesn't hold up shutdown.
     update_check_cancel.store(true, std::sync::atomic::Ordering::SeqCst);
     stop_animation_worker_and_run_recovery(animation_worker, &state, event_rx).await;
 
-    // Clean up timers if running
-    if let Some(handle) = snap_hint_timer_handle {
-        handle.abort();
-    }
-    if let Some(handle) = focus_follows_mouse_timer {
-        handle.abort();
-    }
-    if let Some(handle) = display_change_timer {
-        handle.abort();
-    }
+    abort_join_handle(snap_hint_timer_handle);
+    abort_join_handle(focus_follows_mouse_timer);
+    abort_join_handle(display_change_timer);
+    abort_join_handle(idle_layout_reapply_timer);
 
     // Join forwarding threads with timeout for graceful shutdown
     info!("Waiting for forwarding threads to exit...");

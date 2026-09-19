@@ -331,6 +331,7 @@ pub(crate) enum AdmissionKind {
 pub(crate) enum AdmitOutcome {
     Admitted,
     AlreadyManaged,
+    AdmittedPlacementFailed,
     GatedIgnored,
     TransientSuppressed,
     NoWindowInfo,
@@ -597,10 +598,7 @@ impl AppState {
             .retain(|_, t| t.elapsed() < RECENTLY_HIDDEN_TTL);
 
         if kind == AdmissionKind::Automatic
-            && matches!(
-                self.temporary_ignore_gate(hwnd),
-                crate::temporary_ignore::IgnoreGate::Block
-            )
+            && self.temporary_ignore_gate(hwnd) == crate::temporary_ignore::IgnoreGate::Block
         {
             return AdmitOutcome::GatedIgnored;
         }
@@ -908,9 +906,12 @@ impl AppState {
                     if matches!(action, config::WindowAction::Tile) {
                         self.disable_snap_for_window(hwnd);
                     }
-                    if let Err(e) = self.apply_layout() {
-                        warn!("Failed to apply layout after window create: {}", e);
-                    }
+                    let layout_failed = self
+                        .apply_layout()
+                        .inspect_err(|e| {
+                            warn!("Failed to apply layout after window create: {}", e);
+                        })
+                        .is_err();
                     // In fullscreen the other tiled windows are hidden only by
                     // the fullscreen window sitting on top of them (cloaking an
                     // external window is a no-op), so a tiled window Windows just
@@ -957,7 +958,11 @@ impl AppState {
                             }
                         }
                     }
-                    return AdmitOutcome::Admitted;
+                    return if layout_failed {
+                        AdmitOutcome::AdmittedPlacementFailed
+                    } else {
+                        AdmitOutcome::Admitted
+                    };
                 } else {
                     debug!("Failed to add window {} to workspace", hwnd);
                     return AdmitOutcome::InsertFailed;
@@ -979,6 +984,14 @@ impl AppState {
         // is cloaked, so only a real destroy (not a spurious Hidden
         // from cloaking) should clear its designation.
         if !is_hidden_event {
+            if self.hwnd_lifetime_is_currently_live(hwnd) {
+                debug!(
+                    "Ignoring stale Destroyed for live hwnd {} (current lifetime still present)",
+                    hwnd
+                );
+                self.on_temporary_ignore_destroyed(hwnd);
+                return;
+            }
             self.scratchpad_on_window_destroyed(hwnd);
             self.sticky_on_window_destroyed(hwnd);
             self.on_temporary_ignore_destroyed(hwnd);

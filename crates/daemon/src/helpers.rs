@@ -138,7 +138,12 @@ impl AppState {
             return true;
         }
         if self.temporary_ignores.contains_key(&wid) {
-            return true;
+            if self.temporary_ignore_is_live(wid) {
+                return true;
+            }
+            if self.temporary_ignore_is_dead(wid) {
+                return false;
+            }
         }
         #[cfg(test)]
         {

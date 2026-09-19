@@ -2668,6 +2668,32 @@ mod tests {
     }
 
     #[test]
+    fn dwm_uncloak_window_clears_placement_park_and_ghost_cloak() {
+        let _serialize = lock_cloak_set_tests();
+        let wid: WindowId = 0xFFFF_FFFF_FFFF_FF22;
+        let _membership = CloakMembershipGuard::claim(wid);
+        mark_placement_parked(wid);
+        mark_ghost_cloaked(wid);
+        assert!(
+            is_placement_parked(wid),
+            "mark_placement_parked must record GLOBAL_CLOAKED ownership"
+        );
+        assert!(
+            is_placement_cloaked(wid),
+            "ghost cloak must make the window placement-cloaked"
+        );
+        dwm_uncloak_window(wid);
+        assert!(
+            !is_placement_parked(wid),
+            "dwm_uncloak_window must clear placement park ownership"
+        );
+        assert!(
+            !is_placement_cloaked(wid),
+            "dwm_uncloak_window must clear ghost cloak"
+        );
+    }
+
+    #[test]
     fn test_apply_placements_empty() {
         let _serialize = lock_cloak_set_tests();
         // Verify empty placements succeed without error

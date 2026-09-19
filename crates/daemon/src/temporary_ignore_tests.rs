@@ -1,9 +1,16 @@
 use crate::config::{self, Config};
 use crate::event_handler::AdmitOutcome;
-use crate::state::AppState;
-use leopardwm_core_layout::Rect;
+use crate::state::{
+    AppState, DragPreviewMode, DragState, TestApplyPlacementsBehavior, TestApplyPlacementsOutcome,
+    TestApplyPlacementsStep,
+};
+use crate::temporary_ignore::{IdentityReadError, IdleLayoutReapply};
+use leopardwm_core_layout::{Rect, Visibility};
 use leopardwm_ipc::{IpcCommand, IpcResponse};
-use leopardwm_platform_win32::{ManageBlock, MonitorInfo, WindowEvent, WindowInfo};
+use leopardwm_platform_win32::{
+    ManageBlock, MonitorInfo, PlacementLanding, WindowEvent, WindowInfo,
+};
+use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -82,6 +89,61 @@ fn error_message(response: IpcResponse) -> String {
     match response {
         IpcResponse::Error { message } => message,
         other => panic!("expected error, got {other:?}"),
+    }
+}
+
+fn record_peer_placements(state: &mut AppState) {
+    state.paused = false;
+    state.reduce_motion = true;
+    state.injected_apply_placements_behavior = Some(TestApplyPlacementsBehavior::Scripted(vec![
+        TestApplyPlacementsStep {
+            delay: Duration::ZERO,
+            outcome: TestApplyPlacementsOutcome::Succeed {
+                landings: vec![PlacementLanding {
+                    window_id: 20,
+                    requested_rect: Rect::new(20, 20, 400, 300),
+                    requested_visibility: Visibility::Visible,
+                    actual_visible_rect: Some(Rect::new(20, 20, 400, 300)),
+                    actual_outer_rect: Some(Rect::new(20, 20, 400, 300)),
+                    failed: false,
+                    unreadable: false,
+                }],
+            },
+        },
+    ]));
+}
+
+fn placement_batches_contain(state: &AppState, hwnd: u64) -> bool {
+    state
+        .injected_apply_placements_batches
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|batch| batch.contains(&hwnd))
+}
+
+fn last_placement_batch(state: &AppState) -> Vec<u64> {
+    state
+        .injected_apply_placements_batches
+        .lock()
+        .unwrap()
+        .last()
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn consume_idle_until_settled(state: &mut AppState) -> IdleLayoutReapply {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let outcome = state.try_consume_idle_layout_reapply();
+        if !matches!(outcome, IdleLayoutReapply::Waiting) {
+            return outcome;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "idle layout reapply stayed Waiting"
+        );
+        std::thread::yield_now();
     }
 }
 
@@ -229,7 +291,8 @@ fn stale_identity_is_pruned_and_failed_read_stays_closed() {
     assert!(state.find_window_workspace(10).is_some());
 
     ignore_foreground(&mut state, 10);
-    state.injected_identity_read_error = Some("identity api failed".into());
+    state.injected_identity_read_error =
+        Some(IdentityReadError::Transient("identity api failed".into()));
     state.handle_window_event(WindowEvent::Created(10));
     assert!(state.find_window_workspace(10).is_none());
     assert!(state.temporary_ignores.contains_key(&10));
@@ -304,7 +367,9 @@ fn explicit_readmit_overrides_workspace_routing_without_focus_switch() {
     assert_eq!(state.find_window_workspace(40), Some((1, 0)));
     assert_eq!(state.active_workspace_idx(1), 0);
     assert_eq!(state.focused_monitor, focused_monitor);
-    assert_eq!(state.previous_focused_hwnd, Some(10));
+    assert_eq!(state.previous_focused_hwnd, Some(40));
+    assert_eq!(state.last_border_show_hwnd.load(Ordering::Relaxed), 40);
+    assert_eq!(state.last_broadcast_focused, Some((1, Some(40))));
     assert_eq!(
         state.focused_workspace().unwrap().focused_window(),
         Some(40)
@@ -341,6 +406,13 @@ fn stamp_and_drain_failures_keep_ownership_and_pause() {
     assert!(state.find_window_workspace(10).is_some());
     assert!(state.temporary_ignores.is_empty());
     assert_eq!(state.paused, paused);
+    assert!(state.pending_idle_layout_reapply);
+    assert_eq!(
+        state
+            .injected_apply_placements_call_count
+            .load(Ordering::SeqCst),
+        0
+    );
     finish_tx.send(()).unwrap();
     let deadline = Instant::now() + Duration::from_secs(2);
     while !state.pending_apply_workers[0].is_finished() {
@@ -363,6 +435,7 @@ fn readmit_drain_failure_keeps_ignore_and_pause() {
     assert!(state.temporary_ignores.contains_key(&10));
     assert!(state.find_window_workspace(10).is_none());
     assert_eq!(state.paused, paused);
+    assert!(state.pending_idle_layout_reapply);
     finish_tx.send(()).unwrap();
     let deadline = Instant::now() + Duration::from_secs(2);
     while !state.pending_apply_workers[0].is_finished() {
@@ -388,6 +461,7 @@ fn animation_barrier_failure_keeps_managed_window() {
     assert!(message.contains("remains managed"));
     assert!(state.find_window_workspace(10).is_some());
     assert_eq!(state.paused, paused);
+    assert!(state.pending_idle_layout_reapply);
     unblock.send(()).unwrap();
     assert!(worker.control().wait_for_barrier(Duration::from_secs(2)));
 }
@@ -412,4 +486,324 @@ fn recently_hidden_recovery_does_not_readmit_ignored_window() {
     state.handle_window_event(WindowEvent::Focused(10, 0));
     assert!(state.find_window_workspace(10).is_none());
     assert!(state.temporary_ignores.contains_key(&10));
+}
+
+#[test]
+fn delayed_destroy_skips_cleanup_for_reused_managed_and_ignored_hwnd() {
+    let mut state = managed_state();
+    ignore_foreground(&mut state, 10);
+    let old_token = state.temporary_ignores.get(&10).unwrap().token;
+    state.injected_lifetime_tokens.insert(10, old_token + 99);
+    state.handle_window_event(WindowEvent::Created(10));
+    assert!(state.find_window_workspace(10).is_some());
+    state.tab_title_overrides.insert(10, "replacement".into());
+    state.handle_window_event(WindowEvent::Destroyed(10));
+    assert_eq!(state.find_window_workspace(10), Some((1, 0)));
+    assert_eq!(
+        state.tab_title_overrides.get(&10).map(String::as_str),
+        Some("replacement")
+    );
+
+    let mut ignored = managed_state();
+    ignore_foreground(&mut ignored, 20);
+    ignored.tab_title_overrides.insert(20, "ignored".into());
+    ignored.handle_window_event(WindowEvent::Destroyed(20));
+    assert!(ignored.temporary_ignores.contains_key(&20));
+    assert!(ignored.find_window_workspace(20).is_none());
+    assert_eq!(
+        ignored.tab_title_overrides.get(&20).map(String::as_str),
+        Some("ignored")
+    );
+}
+
+#[test]
+fn production_equivalent_dead_identity_prunes_ignore() {
+    let mut state = managed_state();
+    ignore_foreground(&mut state, 10);
+    state.injected_identity_read_error = Some(IdentityReadError::Gone);
+    state.handle_window_event(WindowEvent::Destroyed(10));
+    assert!(state.temporary_ignores.is_empty());
+    assert!(state.find_window_workspace(10).is_none());
+    assert!(!state.all_managed_window_ids().contains(&10));
+}
+
+#[test]
+fn injected_live_unmarked_hwnd_skips_delayed_destroy_cleanup() {
+    let mut state = managed_state();
+    ignore_foreground(&mut state, 10);
+    state.injected_lifetime_tokens.remove(&10);
+    state.injected_live_hwnds.insert(10);
+    state.handle_window_event(WindowEvent::Created(10));
+    assert_eq!(state.find_window_workspace(10), Some((1, 0)));
+    state.tab_title_overrides.insert(10, "replacement".into());
+    state.handle_window_event(WindowEvent::Destroyed(10));
+    assert_eq!(state.find_window_workspace(10), Some((1, 0)));
+    assert_eq!(
+        state.tab_title_overrides.get(&10).map(String::as_str),
+        Some("replacement")
+    );
+}
+
+#[test]
+fn apply_layout_failure_is_truthful_on_unmanage_and_readmit() {
+    let mut unmanage = managed_state();
+    unmanage.reduce_motion = true;
+    unmanage.paused = false;
+    unmanage
+        .apply_worker_cancelled
+        .store(true, Ordering::SeqCst);
+    set_foreground(&mut unmanage, 10);
+    let message = error_message(unmanage.handle_command(IpcCommand::ToggleIgnore));
+    assert!(message.contains("layout failed"));
+    assert!(unmanage.find_window_workspace(10).is_none());
+    assert!(unmanage.temporary_ignores.contains_key(&10));
+    assert!(!unmanage.all_managed_window_ids().contains(&10));
+
+    let mut readmit = managed_state();
+    ignore_foreground(&mut readmit, 10);
+    readmit.reduce_motion = true;
+    readmit.paused = false;
+    readmit.apply_worker_cancelled.store(true, Ordering::SeqCst);
+    set_foreground(&mut readmit, 10);
+    let message = error_message(readmit.handle_command(IpcCommand::ToggleIgnore));
+    assert!(message.contains("re-admitted"));
+    assert!(message.contains("layout failed"));
+    assert!(readmit.find_window_workspace(10).is_some());
+    assert!(!readmit.temporary_ignores.contains_key(&10));
+    assert_eq!(
+        readmit
+            .all_managed_window_ids()
+            .iter()
+            .filter(|&&id| id == 10)
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn unmanage_clears_owned_tab_title_and_survives_hwnd_reuse() {
+    let mut state = managed_state();
+    state.tab_title_overrides.insert(10, "owned".into());
+    set_foreground(&mut state, 10);
+    assert!(matches!(
+        state.handle_command(IpcCommand::ToggleIgnore),
+        IpcResponse::Ok
+    ));
+    assert!(!state.tab_title_overrides.contains_key(&10));
+    assert!(state.temporary_ignores.contains_key(&10));
+
+    let old_token = state.temporary_ignores.get(&10).unwrap().token;
+    state.injected_lifetime_tokens.insert(10, old_token + 7);
+    state.handle_window_event(WindowEvent::Created(10));
+    assert!(state.find_window_workspace(10).is_some());
+    assert!(!state.temporary_ignores.contains_key(&10));
+}
+
+#[test]
+fn identity_mismatch_reflows_peers_without_restoring_native() {
+    let mut state = managed_state();
+    state.injected_native_restore_error = Some("must not restore onto replacement".into());
+    state.injected_identity_read_override = Some(Ok(Some(u64::MAX)));
+    set_foreground(&mut state, 10);
+    let message = error_message(state.handle_command(IpcCommand::ToggleIgnore));
+    assert!(message.contains("not ignored"));
+    assert!(
+        !message.contains("must not restore"),
+        "mismatch must not restore native state onto the replacement: {message}"
+    );
+    assert!(state.find_window_workspace(10).is_none());
+    assert!(!state.temporary_ignores.contains_key(&10));
+    assert!(state.find_window_workspace(20).is_some());
+    assert!(state.find_window_workspace(30).is_some());
+}
+
+#[test]
+fn failed_drain_reapplies_only_after_workers_idle() {
+    let mut state = managed_state();
+    record_peer_placements(&mut state);
+    set_foreground(&mut state, 10);
+    let (finish_tx, finish_rx) = mpsc::channel();
+    let handle = std::thread::spawn(move || finish_rx.recv().unwrap());
+    state.pending_apply_workers.push(handle);
+    let message = error_message(state.handle_command(IpcCommand::ToggleIgnore));
+    assert!(message.contains("remains managed"));
+    assert!(state.find_window_workspace(10).is_some());
+    assert!(!state.paused);
+    assert_eq!(
+        state.try_consume_idle_layout_reapply(),
+        IdleLayoutReapply::Waiting
+    );
+    assert_eq!(
+        state
+            .injected_apply_placements_call_count
+            .load(Ordering::SeqCst),
+        0
+    );
+
+    finish_tx.send(()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !state.pending_apply_workers[0].is_finished() {
+        assert!(Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    assert_eq!(
+        consume_idle_until_settled(&mut state),
+        IdleLayoutReapply::Applied
+    );
+    assert!(!state.pending_idle_layout_reapply);
+    assert!(!state.paused);
+    assert!(state.find_window_workspace(10).is_some());
+    assert!(
+        placement_batches_contain(&state, 20),
+        "idle reapply must place remaining peer 20, got {:?}",
+        state.injected_apply_placements_batches.lock().unwrap()
+    );
+}
+
+#[test]
+fn failed_drain_reapplies_after_animation_barrier_idle() {
+    let mut state = managed_state();
+    record_peer_placements(&mut state);
+    let (event_tx, _event_rx) = tokio::sync::mpsc::channel(4);
+    let worker = crate::animation_worker::AnimationWorkerHandle::spawn(
+        event_tx,
+        state.apply_worker_cancelled.clone(),
+    )
+    .unwrap();
+    let unblock = worker.block_for_test();
+    state.animation_worker_control = Some(worker.control());
+    set_foreground(&mut state, 10);
+    let message = error_message(state.handle_command(IpcCommand::ToggleIgnore));
+    assert!(message.contains("remains managed"));
+    assert!(state.find_window_workspace(10).is_some());
+    assert_eq!(
+        state.try_consume_idle_layout_reapply(),
+        IdleLayoutReapply::Waiting
+    );
+    assert_eq!(
+        state
+            .injected_apply_placements_call_count
+            .load(Ordering::SeqCst),
+        0
+    );
+    unblock.send(()).unwrap();
+    assert_eq!(
+        consume_idle_until_settled(&mut state),
+        IdleLayoutReapply::Applied
+    );
+    assert!(!state.paused);
+    assert!(state.find_window_workspace(10).is_some());
+    assert!(
+        placement_batches_contain(&state, 20),
+        "barrier-idle reapply must place remaining peer 20, got {:?}",
+        state.injected_apply_placements_batches.lock().unwrap()
+    );
+}
+
+#[test]
+fn transient_identity_after_drain_reapplies_peers() {
+    let mut state = managed_state();
+    record_peer_placements(&mut state);
+    set_foreground(&mut state, 10);
+    state.injected_identity_read_override = Some(Err(IdentityReadError::Transient(
+        "identity probe failed".into(),
+    )));
+    let message = error_message(state.handle_command(IpcCommand::ToggleIgnore));
+    assert!(message.contains("remains managed"));
+    assert!(state.find_window_workspace(10).is_some());
+    assert!(!state.temporary_ignores.contains_key(&10));
+    assert!(!state.paused);
+    assert!(!state.pending_idle_layout_reapply);
+    assert_eq!(
+        state.try_consume_idle_layout_reapply(),
+        IdleLayoutReapply::NotPending
+    );
+    assert!(
+        placement_batches_contain(&state, 20),
+        "transient-after-drain must reapply peer 20, got {:?}",
+        state.injected_apply_placements_batches.lock().unwrap()
+    );
+}
+
+#[test]
+fn rejected_readmit_after_drain_reapplies_peers() {
+    let mut state = managed_state();
+    record_peer_placements(&mut state);
+    ignore_foreground(&mut state, 10);
+    let calls_after_unmanage = state
+        .injected_apply_placements_call_count
+        .load(Ordering::SeqCst);
+    state.config.window_rules.push(config::WindowRule {
+        match_class: Some("TiledClass".into()),
+        action: config::WindowAction::Ignore,
+        ..Default::default()
+    });
+    state.compiled_rules = state.config.compile_window_rules();
+    set_foreground(&mut state, 10);
+    let message = error_message(state.handle_command(IpcCommand::ToggleIgnore));
+    assert!(message.contains("remains ignored"));
+    assert!(state.temporary_ignores.contains_key(&10));
+    assert!(state.find_window_workspace(10).is_none());
+    assert!(!state.paused);
+    assert!(!state.pending_idle_layout_reapply);
+    assert!(
+        state
+            .injected_apply_placements_call_count
+            .load(Ordering::SeqCst)
+            > calls_after_unmanage
+    );
+    assert!(
+        last_placement_batch(&state).contains(&20),
+        "rejected readmit after drain must reapply peer 20, last batch {:?}",
+        last_placement_batch(&state)
+    );
+}
+
+#[test]
+fn unmanage_cancels_unfinished_move_size_so_end_does_not_reinsert() {
+    let mut state = managed_state();
+    state.drag_state = Some(DragState {
+        hwnd: 10,
+        is_tiled: true,
+        source_monitor: 1,
+        source_workspace_idx: 0,
+        source_window_slot: 0,
+        current_column_index: 0,
+        last_drop_target: None,
+        last_hint_update: None,
+        removed_from_source: true,
+        preview_mode: DragPreviewMode::None,
+        target_column_peers: Vec::new(),
+        source_column_peers: Vec::new(),
+    });
+    ignore_foreground(&mut state, 10);
+    assert!(state.drag_state.is_none());
+    state.handle_window_event(WindowEvent::MoveSizeEnd(10));
+    assert!(state.find_window_workspace(10).is_none());
+    assert!(state.temporary_ignores.contains_key(&10));
+    assert_eq!(
+        state
+            .all_managed_window_ids()
+            .iter()
+            .filter(|&&id| id == 10)
+            .count(),
+        0
+    );
+}
+
+#[test]
+fn dead_ignored_hwnd_does_not_clear_live_focus() {
+    let mut state = managed_state();
+    ignore_foreground(&mut state, 10);
+    state.previous_focused_hwnd = Some(20);
+    state.last_broadcast_focused = Some((1, Some(20)));
+    let hides_before = state.border_hide_count.load(Ordering::Relaxed);
+    state.injected_identity_read_error = Some(IdentityReadError::Gone);
+    state.handle_window_event(WindowEvent::Focused(10, 0));
+    assert_eq!(state.previous_focused_hwnd, Some(20));
+    assert_eq!(state.last_broadcast_focused, Some((1, Some(20))));
+    assert_eq!(
+        state.border_hide_count.load(Ordering::Relaxed),
+        hides_before
+    );
 }

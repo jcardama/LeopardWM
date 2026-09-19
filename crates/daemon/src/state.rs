@@ -666,6 +666,11 @@ pub(crate) struct AppState {
     /// an async-frame burst, so nudging them just produces a visible 1 px
     /// resize on every Chromium / Firefox / Cascadia window with no benefit.
     pub(crate) post_animation_nudge_pending: bool,
+    /// Set when toggle-ignore aborts in-flight placement and must not start a
+    /// concurrent apply. `try_consume_idle_layout_reapply` applies once both
+    /// apply workers and the animation worker are idle. The event loop arms a
+    /// short timer to retry while this stays pending and tiling is not paused.
+    pub(crate) pending_idle_layout_reapply: bool,
     /// Injected window info for testing. When set, `lookup_window_info()` returns
     /// entries from this map instead of calling `enumerate_windows()`.
     #[cfg(test)]
@@ -681,11 +686,16 @@ pub(crate) struct AppState {
     #[cfg(test)]
     pub(crate) injected_lifetime_tokens: HashMap<u64, u64>,
     #[cfg(test)]
+    pub(crate) injected_live_hwnds: HashSet<u64>,
+    #[cfg(test)]
     pub(crate) next_injected_lifetime_token: u64,
     #[cfg(test)]
     pub(crate) injected_identity_stamp_error: Option<String>,
     #[cfg(test)]
-    pub(crate) injected_identity_read_error: Option<String>,
+    pub(crate) injected_identity_read_error: Option<crate::temporary_ignore::IdentityReadError>,
+    #[cfg(test)]
+    pub(crate) injected_identity_read_override:
+        Option<Result<Option<u64>, crate::temporary_ignore::IdentityReadError>>,
     #[cfg(test)]
     pub(crate) injected_identity_clear_error: Option<String>,
     #[cfg(test)]
@@ -1043,6 +1053,7 @@ impl AppState {
             crossfade_epoch_counter: 0,
             animation_worker_control: None,
             post_animation_nudge_pending: false,
+            pending_idle_layout_reapply: false,
             #[cfg(test)]
             injected_window_info: HashMap::new(),
             #[cfg(test)]
@@ -1056,11 +1067,15 @@ impl AppState {
             #[cfg(test)]
             injected_lifetime_tokens: HashMap::new(),
             #[cfg(test)]
+            injected_live_hwnds: HashSet::new(),
+            #[cfg(test)]
             next_injected_lifetime_token: 1,
             #[cfg(test)]
             injected_identity_stamp_error: None,
             #[cfg(test)]
             injected_identity_read_error: None,
+            #[cfg(test)]
+            injected_identity_read_override: None,
             #[cfg(test)]
             injected_identity_clear_error: None,
             #[cfg(test)]

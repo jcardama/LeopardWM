@@ -3,7 +3,9 @@
 use crate::event_handler::{AdmissionKind, AdmitOutcome};
 use crate::state::AppState;
 use leopardwm_ipc::IpcResponse;
-use tracing::{debug, info, warn};
+#[cfg(not(test))]
+use leopardwm_platform_win32::Win32Error;
+use tracing::{debug, info};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TemporaryIgnoreEntry {
@@ -16,6 +18,29 @@ pub(crate) struct TemporaryIgnoreEntry {
 pub(crate) enum IgnoreGate {
     Allow,
     Block,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum IdentityReadError {
+    Gone,
+    Transient(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum IdleLayoutReapply {
+    NotPending,
+    Applied,
+    Waiting,
+    Paused,
+}
+
+impl std::fmt::Display for IdentityReadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Gone => write!(f, "window not found"),
+            Self::Transient(message) => write!(f, "{message}"),
+        }
+    }
 }
 
 impl AppState {
@@ -51,17 +76,11 @@ impl AppState {
                 );
                 IgnoreGate::Block
             }
-            Ok(Some(_)) | Ok(None) => {
-                if self
-                    .temporary_ignores
-                    .get(&hwnd)
-                    .is_some_and(|current| current.token == entry.token)
-                {
-                    self.temporary_ignores.remove(&hwnd);
-                }
+            Ok(Some(_)) | Ok(None) | Err(IdentityReadError::Gone) => {
+                self.remove_temporary_ignore_if_token(hwnd, entry.token);
                 IgnoreGate::Allow
             }
-            Err(error) => {
+            Err(IdentityReadError::Transient(error)) => {
                 debug!(
                     "Temporary ignore identity read failed for {}: {}; keeping ignore",
                     hwnd, error
@@ -82,22 +101,55 @@ impl AppState {
                     hwnd, entry.process_id, entry.class_name
                 );
             }
-            Ok(Some(_)) | Ok(None) => {
-                if self
-                    .temporary_ignores
-                    .get(&hwnd)
-                    .is_some_and(|current| current.token == entry.token)
-                {
-                    self.temporary_ignores.remove(&hwnd);
-                }
+            Ok(Some(_)) | Ok(None) | Err(IdentityReadError::Gone) => {
+                self.remove_temporary_ignore_if_token(hwnd, entry.token);
             }
-            Err(error) => {
+            Err(IdentityReadError::Transient(error)) => {
                 debug!(
                     "Keeping temporary ignore for {} after destroy identity failure: {}",
                     hwnd, error
                 );
             }
         }
+    }
+
+    /// Production `Ok(_)` means `IsWindow` succeeded. Tests cannot call
+    /// `IsWindow` on synthetic HWNDs, so `Ok(None)` there is only a missing
+    /// token unless a test injects live-unmarked proof.
+    pub(crate) fn hwnd_lifetime_is_currently_live(&self, hwnd: u64) -> bool {
+        match self.read_ignore_identity(hwnd) {
+            Ok(Some(_)) => true,
+            Ok(None) => {
+                #[cfg(test)]
+                {
+                    self.injected_live_hwnds.contains(&hwnd)
+                }
+                #[cfg(not(test))]
+                {
+                    true
+                }
+            }
+            Err(IdentityReadError::Gone) => false,
+            Err(IdentityReadError::Transient(_)) => true,
+        }
+    }
+
+    pub(crate) fn temporary_ignore_is_live(&self, hwnd: u64) -> bool {
+        let Some(entry) = self.temporary_ignores.get(&hwnd) else {
+            return false;
+        };
+        match self.read_ignore_identity(hwnd) {
+            Ok(Some(token)) if token == entry.token => true,
+            Ok(Some(_)) | Ok(None) | Err(IdentityReadError::Gone) => false,
+            Err(IdentityReadError::Transient(_)) => true,
+        }
+    }
+
+    pub(crate) fn temporary_ignore_is_dead(&self, hwnd: u64) -> bool {
+        matches!(
+            self.read_ignore_identity(hwnd),
+            Err(IdentityReadError::Gone)
+        )
     }
 
     fn temporarily_unmanage(&mut self, hwnd: u64) -> IpcResponse {
@@ -109,23 +161,21 @@ impl AppState {
         };
         if let Err(reason) = self.drain_pending_placement_work() {
             let _ = self.clear_ignore_identity(hwnd);
+            self.request_idle_layout_reapply();
             return IpcResponse::error(format!("Window remains managed: {reason}"));
         }
         match self.read_ignore_identity(hwnd) {
             Ok(Some(live)) if live == token => {}
-            Ok(_) => {
-                self.remove_managed_membership(hwnd);
-                self.forget_managed_metadata(hwnd);
-                return IpcResponse::error(
-                    "Foreground window is no longer the stamped lifetime and was not ignored"
-                        .to_string(),
-                );
+            Ok(_) | Err(IdentityReadError::Gone) => {
+                return self.abandon_stale_unmanage(hwnd);
             }
-            Err(error) => {
+            Err(IdentityReadError::Transient(error)) => {
+                self.request_idle_layout_reapply();
                 return IpcResponse::error(format!("Window remains managed: {error}"));
             }
         }
 
+        self.cancel_matching_unfinished_move_size_ui(hwnd);
         let snapshot = self.snapshot_layout();
         let was_tiled = self.remove_managed_membership(hwnd);
         let restore_result = self.restore_unmanaged_native_state(hwnd);
@@ -141,28 +191,23 @@ impl AppState {
                 class_name: class_name.clone(),
             },
         );
-        if was_tiled {
-            let mut snapshot = snapshot;
-            snapshot.remove(&hwnd);
-            if self.start_layout_transition(snapshot) {
-                if let Some(ref mut transition) = self.layout_transition {
-                    transition.suppress_landing_focus_resync = true;
-                }
-            }
-        }
-        if let Err(error) = self.apply_layout() {
-            warn!("Failed to apply layout after toggle-ignore: {}", error);
-        }
-        match restore_result {
-            Ok(()) => {
+        let layout_result = self.reflow_peers_after_unmanage(hwnd, was_tiled, snapshot);
+        match (restore_result, layout_result) {
+            (Ok(()), Ok(())) => {
                 info!(
                     "Temporarily ignored window {} (pid {} class {})",
                     hwnd, process_id, class_name
                 );
                 IpcResponse::Ok
             }
-            Err(error) => IpcResponse::error(format!(
+            (Err(error), Ok(())) => IpcResponse::error(format!(
                 "Window was unmanaged but native restore failed: {error}"
+            )),
+            (Ok(()), Err(error)) => {
+                IpcResponse::error(format!("Window was unmanaged but layout failed: {error}"))
+            }
+            (Err(restore), Err(layout)) => IpcResponse::error(format!(
+                "Window was unmanaged but native restore failed: {restore}; layout failed: {layout}"
             )),
         }
     }
@@ -175,39 +220,124 @@ impl AppState {
         };
         match self.read_ignore_identity(hwnd) {
             Ok(Some(token)) if token == entry.token => {}
-            Ok(Some(_)) | Ok(None) => {
-                if self
-                    .temporary_ignores
-                    .get(&hwnd)
-                    .is_some_and(|current| current.token == entry.token)
-                {
-                    self.temporary_ignores.remove(&hwnd);
-                }
+            Ok(Some(_)) | Ok(None) | Err(IdentityReadError::Gone) => {
+                self.remove_temporary_ignore_if_token(hwnd, entry.token);
                 return IpcResponse::error(
                     "Foreground window is not the ignored lifetime and was not re-admitted",
                 );
             }
-            Err(error) => {
+            Err(IdentityReadError::Transient(error)) => {
                 return IpcResponse::error(format!("Window remains ignored: {error}"));
             }
         }
         if let Err(reason) = self.drain_pending_placement_work() {
+            self.request_idle_layout_reapply();
             return IpcResponse::error(format!("Window remains ignored: {reason}"));
         }
         let outcome = self.try_admit_window(hwnd, AdmissionKind::ExplicitReadmit);
-        if matches!(
-            outcome,
-            AdmitOutcome::Admitted | AdmitOutcome::AlreadyManaged
-        ) {
-            self.temporary_ignores.remove(&hwnd);
-            let _ = self.clear_ignore_identity(hwnd);
-            info!("Re-admitted temporarily ignored window {}", hwnd);
-            return IpcResponse::Ok;
+        match outcome {
+            AdmitOutcome::Admitted | AdmitOutcome::AlreadyManaged => {
+                self.commit_readmit(hwnd);
+                IpcResponse::Ok
+            }
+            AdmitOutcome::AdmittedPlacementFailed => {
+                self.commit_readmit(hwnd);
+                IpcResponse::error(
+                    "Window was re-admitted but layout failed; it remains managed and is no longer ignored",
+                )
+            }
+            other => {
+                self.request_idle_layout_reapply();
+                IpcResponse::error(format!(
+                    "Window remains ignored: {}",
+                    readmit_failure_reason(other)
+                ))
+            }
         }
-        IpcResponse::error(format!(
-            "Window remains ignored: {}",
-            readmit_failure_reason(outcome)
-        ))
+    }
+
+    fn commit_readmit(&mut self, hwnd: u64) {
+        self.temporary_ignores.remove(&hwnd);
+        let _ = self.clear_ignore_identity(hwnd);
+        self.adopt_os_foreground_without_stealing_focus(hwnd);
+        info!("Re-admitted temporarily ignored window {}", hwnd);
+    }
+
+    fn adopt_os_foreground_without_stealing_focus(&mut self, hwnd: u64) {
+        let Some((monitor_id, _)) = self.find_window_workspace(hwnd) else {
+            return;
+        };
+        self.focused_monitor = monitor_id;
+        self.previous_focused_hwnd = Some(hwnd);
+        self.last_focus_change_at = Some(std::time::Instant::now());
+        self.show_border(hwnd);
+        self.broadcast_focused_window_if_changed(monitor_id as i64, Some(hwnd));
+    }
+
+    fn abandon_stale_unmanage(&mut self, hwnd: u64) -> IpcResponse {
+        self.cancel_matching_unfinished_move_size_ui(hwnd);
+        let snapshot = self.snapshot_layout();
+        let was_tiled = self.remove_managed_membership(hwnd);
+        self.forget_managed_metadata(hwnd);
+        let layout_result = self.reflow_peers_after_unmanage(hwnd, was_tiled, snapshot);
+        let mut message =
+            "Foreground window is no longer the stamped lifetime and was not ignored".to_string();
+        if let Err(error) = layout_result {
+            message = format!("{message}; layout failed: {error}");
+        }
+        IpcResponse::error(message)
+    }
+
+    fn reflow_peers_after_unmanage(
+        &mut self,
+        hwnd: u64,
+        was_tiled: bool,
+        mut snapshot: std::collections::HashMap<u64, leopardwm_core_layout::Rect>,
+    ) -> Result<(), String> {
+        if was_tiled {
+            snapshot.remove(&hwnd);
+            if self.start_layout_transition(snapshot) {
+                if let Some(ref mut transition) = self.layout_transition {
+                    transition.suppress_landing_focus_resync = true;
+                }
+            }
+        }
+        self.apply_layout().map_err(|error| error.to_string())
+    }
+
+    fn request_idle_layout_reapply(&mut self) {
+        self.pending_idle_layout_reapply = true;
+        let _ = self.try_consume_idle_layout_reapply();
+    }
+
+    pub(crate) fn try_consume_idle_layout_reapply(&mut self) -> IdleLayoutReapply {
+        if !self.pending_idle_layout_reapply {
+            return IdleLayoutReapply::NotPending;
+        }
+        self.reap_finished_pending_apply_workers();
+        if !self.pending_apply_workers.is_empty() {
+            return IdleLayoutReapply::Waiting;
+        }
+        if !self.animation_placement_worker_is_idle() {
+            return IdleLayoutReapply::Waiting;
+        }
+        if self.paused {
+            return IdleLayoutReapply::Paused;
+        }
+        let _ = self.apply_layout();
+        if !self.pending_idle_layout_reapply {
+            IdleLayoutReapply::Applied
+        } else if self.paused {
+            IdleLayoutReapply::Paused
+        } else {
+            IdleLayoutReapply::Waiting
+        }
+    }
+
+    fn animation_placement_worker_is_idle(&self) -> bool {
+        self.animation_worker_control
+            .as_ref()
+            .is_none_or(|control| control.wait_for_barrier(std::time::Duration::from_millis(1)))
     }
 
     fn remove_managed_membership(&mut self, hwnd: u64) -> bool {
@@ -240,6 +370,8 @@ impl AppState {
         self.clear_physical_window_state(hwnd);
         self.sticky_windows.remove(&hwnd);
         self.scratchpad_on_window_destroyed(hwnd);
+        leopardwm_platform_win32::snapshot::snapshot_remove(hwnd);
+        self.tab_title_overrides.remove(&hwnd);
         if self.previous_focused_hwnd == Some(hwnd) {
             self.hide_border();
             self.previous_focused_hwnd = None;
@@ -261,12 +393,23 @@ impl AppState {
         if let Some(error) = self.injected_native_restore_error.take() {
             failures.push(error);
         }
+        leopardwm_platform_win32::dwm_uncloak_window(hwnd);
         self.forget_managed_metadata(hwnd);
         self.update_tab_strip();
         if failures.is_empty() {
             Ok(())
         } else {
             Err(failures.join("; "))
+        }
+    }
+
+    fn remove_temporary_ignore_if_token(&mut self, hwnd: u64, token: u64) {
+        if self
+            .temporary_ignores
+            .get(&hwnd)
+            .is_some_and(|current| current.token == token)
+        {
+            self.temporary_ignores.remove(&hwnd);
         }
     }
 
@@ -289,17 +432,23 @@ impl AppState {
             .map_err(|error| error.to_string())
     }
 
-    fn read_ignore_identity(&self, hwnd: u64) -> Result<Option<u64>, String> {
+    fn read_ignore_identity(&self, hwnd: u64) -> Result<Option<u64>, IdentityReadError> {
         #[cfg(test)]
         {
+            if let Some(override_value) = &self.injected_identity_read_override {
+                return override_value.clone();
+            }
             if let Some(error) = &self.injected_identity_read_error {
                 return Err(error.clone());
             }
             Ok(self.injected_lifetime_tokens.get(&hwnd).copied())
         }
         #[cfg(not(test))]
-        leopardwm_platform_win32::read_window_lifetime_token(hwnd)
-            .map_err(|error| error.to_string())
+        match leopardwm_platform_win32::read_window_lifetime_token(hwnd) {
+            Ok(token) => Ok(token),
+            Err(Win32Error::WindowNotFound(_)) => Err(IdentityReadError::Gone),
+            Err(error) => Err(IdentityReadError::Transient(error.to_string())),
+        }
     }
 
     fn clear_ignore_identity(&mut self, hwnd: u64) -> Result<(), String> {
@@ -328,6 +477,8 @@ fn readmit_failure_reason(outcome: AdmitOutcome) -> &'static str {
         AdmitOutcome::TransientConsoleHost => "transient console host",
         AdmitOutcome::TransientSuppressed => "window is transiently suppressed",
         AdmitOutcome::GatedIgnored => "window is temporarily ignored",
-        AdmitOutcome::Admitted | AdmitOutcome::AlreadyManaged => "unexpected admission success",
+        AdmitOutcome::Admitted
+        | AdmitOutcome::AlreadyManaged
+        | AdmitOutcome::AdmittedPlacementFailed => "unexpected admission success",
     }
 }
