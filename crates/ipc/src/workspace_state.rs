@@ -189,7 +189,7 @@ mod tests {
         assert!(matches!(
             events.first(),
             Some(IpcEvent::WorkspaceSnapshotBegin {
-                protocol_version: 4,
+                protocol_version: 5,
                 revision: 42,
                 ..
             })
@@ -240,7 +240,7 @@ mod tests {
         assert!(chunks > 1, "fixture must exceed a single IPC frame");
         assert!(events
             .iter()
-            .all(|event| { serde_json::to_vec(event).unwrap().len() + 1 <= MAX_IPC_MESSAGE_SIZE }));
+            .all(|event| serde_json::to_vec(event).unwrap().len() < MAX_IPC_MESSAGE_SIZE));
     }
 
     #[test]

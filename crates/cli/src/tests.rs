@@ -7,7 +7,7 @@ use crate::daemon_cmds::*;
 use crate::doctor::*;
 use crate::ipc_client::*;
 use anyhow::Context;
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use leopardwm_ipc::{
     ElevationBlockReason, ElevationBlockedWindow, EventKind, IpcCommand, IpcResponse,
     MAX_IPC_MESSAGE_SIZE,
@@ -337,6 +337,15 @@ fn test_to_ipc_command_toggle_pause() {
 }
 
 #[test]
+fn test_to_ipc_command_release_all_windows() {
+    let cmd = Commands::ReleaseAllWindows;
+    assert!(matches!(
+        to_ipc_command(&cmd),
+        IpcCommand::ReleaseAllWindows
+    ));
+}
+
+#[test]
 fn test_to_ipc_command_panic_revert() {
     let cmd = Commands::PanicRevert;
     assert!(matches!(to_ipc_command(&cmd), IpcCommand::PanicRevert));
@@ -625,6 +634,19 @@ fn test_cli_alias_recover_parses_to_panic_revert() {
 fn test_cli_alias_pause_parses_to_toggle_pause() {
     let cli = Cli::try_parse_from(["leopardwm-cli", "pause"]).expect("alias should parse");
     assert!(matches!(cli.command, Commands::TogglePause));
+}
+
+#[test]
+fn test_cli_release_all_windows_parses() {
+    let cli = Cli::try_parse_from(["leopardwm-cli", "release-all-windows"])
+        .expect("release command should parse");
+    assert!(matches!(cli.command, Commands::ReleaseAllWindows));
+}
+
+#[test]
+fn test_cli_help_lists_release_all_windows() {
+    let help = Cli::command().render_help().to_string();
+    assert!(help.contains("release-all-windows"));
 }
 
 #[test]

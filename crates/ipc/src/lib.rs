@@ -30,7 +30,8 @@ const MAX_PIPE_SCOPE_SEGMENT_LEN: usize = 64;
 ///   associated binding/diagnostic records.
 /// - v4: complete workspace-state snapshots and monitor-targeted
 ///   workspace switching.
-pub const IPC_PROTOCOL_VERSION: u32 = 4;
+/// - v5: `ReleaseAllWindows` command.
+pub const IPC_PROTOCOL_VERSION: u32 = 5;
 /// Minimum protocol version this crate supports.
 pub const IPC_MIN_SUPPORTED_PROTOCOL_VERSION: u32 = 1;
 
@@ -496,6 +497,8 @@ pub enum IpcCommand {
     PanicRevert,
     /// Toggle paused state for tiling operations.
     TogglePause,
+    /// Pause tiling and cascade every managed window without removing membership.
+    ReleaseAllWindows,
     /// Toggle the swap-chain ghost-animation feature at runtime.
     /// `None` queries current state; `Some(b)` sets it. Returns
     /// `BoolValue` with the new (or current) state.
@@ -914,6 +917,7 @@ mod tests {
             IpcCommand::Stop,
             IpcCommand::PanicRevert,
             IpcCommand::TogglePause,
+            IpcCommand::ReleaseAllWindows,
             IpcCommand::CloseWindow,
             IpcCommand::ToggleFloating,
             IpcCommand::ToggleFullscreen,
@@ -1334,15 +1338,29 @@ mod tests {
     }
 
     #[test]
-    fn test_protocol_version_bumped_to_v4() {
+    fn test_protocol_version_bumped_to_v5() {
         // Sanity guard: bumping the version forces a deliberate review of
         // wire-compat docs in agent_docs/ipc-events.md when this test breaks.
-        assert_eq!(IPC_PROTOCOL_VERSION, 4);
+        assert_eq!(IPC_PROTOCOL_VERSION, 5);
         // Older additive-protocol clients should still negotiate.
         assert!(is_protocol_version_supported(1));
         assert!(is_protocol_version_supported(2));
         assert!(is_protocol_version_supported(3));
         assert!(is_protocol_version_supported(4));
+        assert!(is_protocol_version_supported(5));
+    }
+
+    #[test]
+    fn release_all_windows_command_uses_the_stable_wire_name() {
+        let command = IpcCommand::ReleaseAllWindows;
+        assert_eq!(
+            serde_json::to_string(&command).unwrap(),
+            r#"{"type":"release_all_windows"}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<IpcCommand>(r#"{"type":"release_all_windows"}"#).unwrap(),
+            command
+        );
     }
 
     #[test]

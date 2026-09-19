@@ -11,6 +11,7 @@ async fn workspace_subscription_starts_with_complete_state() {
         device_name: "DISPLAY1".into(),
         scale_factor: 1.0,
     };
+    #[allow(clippy::arc_with_non_send_sync)]
     let state = Arc::new(Mutex::new(AppState::new_with_config(
         Config::default(),
         vec![monitor],
@@ -258,6 +259,7 @@ fn event_publication_skips_projection_without_stream_subscribers() {
 #[tokio::test]
 async fn legacy_subscription_does_not_trigger_workspace_publication() {
     use leopardwm_ipc::IpcEvent;
+    #[allow(clippy::arc_with_non_send_sync)]
     let state = Arc::new(Mutex::new(fixture()));
     let (tx, rx) = tokio::sync::oneshot::channel();
     handle_ipc_subscribe(&state, EventKind::legacy_default(), tx).await;
@@ -284,6 +286,7 @@ async fn legacy_subscription_does_not_trigger_workspace_publication() {
 #[tokio::test]
 async fn workspace_traffic_cannot_evict_legacy_events_with_mixed_subscribers() {
     use leopardwm_ipc::IpcEvent;
+    #[allow(clippy::arc_with_non_send_sync)]
     let state = Arc::new(Mutex::new(fixture()));
     let (tx, rx) = tokio::sync::oneshot::channel();
     handle_ipc_subscribe(&state, EventKind::legacy_default(), tx).await;
@@ -390,6 +393,7 @@ fn benchmark_workspace_projection_with_large_membership() {
 #[tokio::test]
 async fn subscribe_handoff_has_no_duplicate_or_missing_revision() {
     use leopardwm_ipc::IpcEvent;
+    #[allow(clippy::arc_with_non_send_sync)]
     let state = Arc::new(Mutex::new(fixture()));
     let (tx, rx) = tokio::sync::oneshot::channel();
     handle_ipc_subscribe(

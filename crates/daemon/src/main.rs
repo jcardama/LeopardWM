@@ -29,6 +29,9 @@ mod notify;
 mod overview;
 mod persistence;
 mod physical_placement;
+mod release;
+#[cfg(test)]
+mod release_tests;
 mod scratchpad;
 mod settings;
 mod startup;
@@ -56,7 +59,7 @@ use layout_apply::AnimationPlacementResult;
 use leopardwm_core_layout::Rect;
 use leopardwm_ipc::{pipe_name_candidates, preferred_pipe_name, IpcCommand, IpcResponse};
 use leopardwm_platform_win32::{
-    cascade_windows, enumerate_monitors, enumerate_windows, format_hotkey, install_event_hooks,
+    enumerate_monitors, enumerate_windows, format_hotkey, install_event_hooks,
     install_keyboard_hook, install_mouse_hook, overlay::OverlayWindow, register_gestures,
     register_system_events, restore_windows_moved_offscreen, set_display_change_sender,
     set_dpi_awareness, set_power_state_sender, set_recording, set_session_end_handler,
@@ -1607,7 +1610,10 @@ async fn handle_ipc_command(
 
     let is_reload = matches!(&cmd, IpcCommand::Reload);
     let is_resize = matches!(&cmd, IpcCommand::Resize { .. });
-    let is_toggle_pause = matches!(&cmd, IpcCommand::TogglePause);
+    let is_pause_state_command = matches!(
+        &cmd,
+        IpcCommand::TogglePause | IpcCommand::ReleaseAllWindows
+    );
 
     let (response, should_animate, column_rect, hint_duration) = {
         let mut state = ctx.state.lock().await;
@@ -1644,7 +1650,7 @@ async fn handle_ipc_command(
         debug!("Client disconnected before receiving IPC response");
     }
 
-    if is_toggle_pause {
+    if is_pause_state_command {
         let state = ctx.state.lock().await;
         if let Some(ref mgr) = ctx.tray_manager {
             mgr.update_pause_text(state.paused);
@@ -2092,6 +2098,63 @@ async fn launch_config_editor(ctx: &mut EventLoopCtx<'_>) {
     leopardwm_platform_win32::shell::open(&path);
 }
 
+async fn handle_release_all_windows(ctx: &mut EventLoopCtx<'_>) {
+    warn!("Tray: Release all windows requested");
+    let release_error = {
+        let mut state = ctx.state.lock().await;
+        state.release_all_windows().err().map(|error| {
+            warn!("Tray release all windows failed: {}", error);
+            error.to_string()
+        })
+    };
+    if let Some(ref mgr) = ctx.tray_manager {
+        let state = ctx.state.lock().await;
+        mgr.update_pause_text(state.paused);
+        mgr.update_tooltip(
+            state.all_managed_window_ids().len(),
+            state.monitors.len(),
+            state.paused,
+            Some((
+                ctx.hotkey_state.registered_count,
+                ctx.hotkey_state.requested_count,
+            )),
+            (state.active_workspace_idx(state.focused_monitor) + 1) as u8,
+        );
+    }
+    if let Some(error) = release_error {
+        std::thread::spawn(move || {
+            use windows::core::{w, HSTRING};
+            use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+            let message = HSTRING::from(format!(
+                "Windows may have been only partially released. Tiling remains paused.\n\nDetails: {error}"
+            ));
+            unsafe {
+                let _ = MessageBoxW(None, &message, w!("LeopardWM"), MB_OK | MB_ICONERROR);
+            }
+        });
+    } else {
+        let event_tx_clone = ctx.event_tx.clone();
+        std::thread::spawn(move || {
+            use windows::core::w;
+            use windows::Win32::UI::WindowsAndMessaging::{
+                MessageBoxW, IDYES, MB_ICONQUESTION, MB_YESNO,
+            };
+            let result = unsafe {
+                MessageBoxW(
+                    None,
+                    w!("All windows have been released and cascaded.\n\nWould you like to restart tiling?"),
+                    w!("LeopardWM"),
+                    MB_YESNO | MB_ICONQUESTION,
+                )
+            };
+            if result == IDYES {
+                let _ =
+                    event_tx_clone.blocking_send(DaemonEvent::Tray(tray::TrayEvent::TogglePause));
+            }
+        });
+    }
+}
+
 async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEvent) {
     match tray_event {
         tray::TrayEvent::Refresh => {
@@ -2200,47 +2263,7 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
             }
             leopardwm_platform_win32::shell::open(&log_dir);
         }
-        tray::TrayEvent::ReleaseAllWindows => {
-            warn!("Tray: Release all windows requested");
-            {
-                let mut state = ctx.state.lock().await;
-                // 1. Pause tiling
-                if !state.paused {
-                    let _ = state.toggle_pause("release all windows");
-                }
-                // 2. Clear focus and hide border
-                state.hide_border();
-                state.previous_focused_hwnd = None;
-                let monitor = state.focused_monitor as i64;
-                state.broadcast_focused_window_if_changed(monitor, None);
-                // 3. Cascade all managed windows
-                let window_ids = state.all_managed_window_ids();
-                cascade_windows(&window_ids);
-            }
-            if let Some(ref mgr) = ctx.tray_manager {
-                mgr.update_pause_text(true);
-            }
-            // 3. Ask user if they want to restart tiling
-            let event_tx_clone = ctx.event_tx.clone();
-            std::thread::spawn(move || {
-                use windows::core::w;
-                use windows::Win32::UI::WindowsAndMessaging::{
-                    MessageBoxW, IDYES, MB_ICONQUESTION, MB_YESNO,
-                };
-                let result = unsafe {
-                    MessageBoxW(
-                        None,
-                        w!("All windows have been released and cascaded.\n\nWould you like to restart tiling?"),
-                        w!("LeopardWM"),
-                        MB_YESNO | MB_ICONQUESTION,
-                    )
-                };
-                if result == IDYES {
-                    let _ = event_tx_clone
-                        .blocking_send(DaemonEvent::Tray(tray::TrayEvent::TogglePause));
-                }
-            });
-        }
+        tray::TrayEvent::ReleaseAllWindows => handle_release_all_windows(ctx).await,
         tray::TrayEvent::ToggleActiveBorder => {
             let mut state = ctx.state.lock().await;
             state.config.appearance.active_border = !state.config.appearance.active_border;

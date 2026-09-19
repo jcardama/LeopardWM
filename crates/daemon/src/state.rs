@@ -690,6 +690,11 @@ pub(crate) struct AppState {
     pub(crate) injected_apply_placements_call_count: Arc<AtomicUsize>,
     #[cfg(test)]
     pub(crate) injected_apply_placements_batches: Arc<std::sync::Mutex<Vec<Vec<u64>>>>,
+    /// Test-only cascade result and observations for release-all behavior.
+    #[cfg(test)]
+    pub(crate) injected_release_cascade_error: Option<String>,
+    #[cfg(test)]
+    pub(crate) released_window_id_batches: Vec<Vec<u64>>,
     /// Number of late-worker recovery passes executed after cancellation.
     #[cfg(test)]
     pub(crate) late_worker_recovery_count: Arc<AtomicUsize>,
@@ -1040,6 +1045,10 @@ impl AppState {
             injected_apply_placements_call_count: Arc::new(AtomicUsize::new(0)),
             #[cfg(test)]
             injected_apply_placements_batches: Arc::new(std::sync::Mutex::new(Vec::new())),
+            #[cfg(test)]
+            injected_release_cascade_error: None,
+            #[cfg(test)]
+            released_window_id_batches: Vec::new(),
             #[cfg(test)]
             late_worker_recovery_count: Arc::new(AtomicUsize::new(0)),
             #[cfg(test)]

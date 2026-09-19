@@ -110,6 +110,7 @@ pub(crate) fn to_ipc_command(cmd: &Commands) -> IpcCommand {
         Commands::EmergencyUncloak => unreachable!("EmergencyUncloak handled separately"),
         Commands::Stop => IpcCommand::Stop,
         Commands::TogglePause => IpcCommand::TogglePause,
+        Commands::ReleaseAllWindows => IpcCommand::ReleaseAllWindows,
         Commands::Ghost { action } => IpcCommand::SetGhostAnimation {
             enabled: match action {
                 GhostAction::Enable => Some(true),

@@ -282,51 +282,67 @@ pub fn uncloak_all_managed_windows(window_ids: &[WindowId]) {
     );
 }
 
-/// Restore any top-level window parked at MoveOffScreen sentinel coordinates.
-///
-/// This helper is panic-safe and best-effort, making it suitable for panic
-/// hooks where daemon state may be unavailable or poisoned.
-pub fn restore_all_windows_moved_offscreen_best_effort() -> usize {
+struct OffscreenRecovery {
+    restored_count: usize,
+    error: Option<Win32Error>,
+}
+
+fn restore_all_windows_moved_offscreen() -> OffscreenRecovery {
     let _dpi = match RecoveryDpiContext::enter() {
         Ok(context) => context,
-        Err(e) => {
-            eprintln!("[leopardwm] Emergency MoveOffScreen restore skipped: {}", e);
-            return 0;
+        Err(error) => {
+            return OffscreenRecovery {
+                restored_count: 0,
+                error: Some(error),
+            }
         }
     };
     let primary = match get_primary_monitor() {
         Ok(primary) => primary,
-        Err(e) => {
-            eprintln!(
-                "[leopardwm] Emergency MoveOffScreen restore skipped: no primary monitor ({})",
-                e
-            );
-            return 0;
+        Err(error) => {
+            return OffscreenRecovery {
+                restored_count: 0,
+                error: Some(error),
+            }
         }
     };
-
     let window_ids = collect_all_top_level_window_ids();
     let (restored_count, failures) = restore_windows_moved_offscreen_with_work_area(
         &window_ids,
         &primary.work_area,
         restore_window_if_offscreen_to_work_area,
     );
+    let error = (!failures.is_empty()).then(|| {
+        combine_operation_failures(
+            "Failed to restore one or more MoveOffScreen windows",
+            failures,
+        )
+    });
+    OffscreenRecovery {
+        restored_count,
+        error,
+    }
+}
 
-    if !failures.is_empty() {
+/// Restore any top-level window parked at MoveOffScreen sentinel coordinates.
+///
+/// This helper is panic-safe and best-effort, making it suitable for panic
+/// hooks where daemon state may be unavailable or poisoned.
+pub fn restore_all_windows_moved_offscreen_best_effort() -> usize {
+    let recovery = restore_all_windows_moved_offscreen();
+    if let Some(error) = recovery.error {
         eprintln!(
-            "[leopardwm] Emergency MoveOffScreen restore had {} hard failure(s)",
-            failures.len()
+            "[leopardwm] Emergency MoveOffScreen restore had a failure: {}",
+            error
         );
     }
-
-    if restored_count > 0 {
+    if recovery.restored_count > 0 {
         eprintln!(
             "[leopardwm] Emergency MoveOffScreen restore recovered {} window(s)",
-            restored_count
+            recovery.restored_count
         );
     }
-
-    restored_count
+    recovery.restored_count
 }
 
 /// Restore all visible windows on the system, best-effort.
@@ -345,53 +361,99 @@ pub fn uncloak_all_visible_windows() {
 ///
 /// Each window is sized to 60% of the work area and offset by 30px from the
 /// previous one. Off-screen windows are first restored, then cascaded.
-pub fn cascade_windows(window_ids: &[WindowId]) {
-    let work_area = match get_primary_monitor() {
-        Ok(m) => m.work_area,
-        Err(_) => Rect {
-            x: 0,
-            y: 0,
-            width: 1920,
-            height: 1080,
+pub fn cascade_windows(window_ids: &[WindowId]) -> Result<(), Win32Error> {
+    let work_area =
+        get_primary_monitor().map_or(Rect::new(0, 0, 1920, 1080), |monitor| monitor.work_area);
+    cascade_windows_with(
+        window_ids,
+        work_area,
+        || {
+            let recovery = restore_all_windows_moved_offscreen();
+            recovery.error.map_or(Ok(()), Err)
         },
-    };
+        |window_id| {
+            let hwnd = HWND(window_id as *mut c_void);
+            unsafe {
+                if IsIconic(hwnd).as_bool() {
+                    let _ = ShowWindow(hwnd, SW_RESTORE);
+                }
+            }
+            Ok(())
+        },
+        |placements| apply_placements(placements, &PlatformConfig::default(), None, false),
+    )
+}
 
-    let _ = restore_all_windows_moved_offscreen_best_effort();
-
-    // Use height as the base so windows look reasonable on ultrawide monitors
+fn cascade_windows_with<R, M, A>(
+    window_ids: &[WindowId],
+    work_area: Rect,
+    mut recover: R,
+    mut restore_minimized: M,
+    mut apply: A,
+) -> Result<(), Win32Error>
+where
+    R: FnMut() -> Result<(), Win32Error>,
+    M: FnMut(WindowId) -> Result<(), Win32Error>,
+    A: FnMut(&[WindowPlacement]) -> Result<crate::placement::ApplyPlacementsResult, Win32Error>,
+{
+    let recovery_error = recover().err();
     let cascade_h = (work_area.height as f64 * 0.5) as i32;
-    let cascade_w = (cascade_h as f64 * 1.33) as i32; // 4:3 aspect ratio
-    let step = 30;
-
+    let cascade_w = (cascade_h as f64 * 1.33) as i32;
     let placements: Vec<WindowPlacement> = window_ids
         .iter()
         .enumerate()
-        .map(|(i, &wid)| {
-            let offset = (i as i32) * step;
+        .map(|(index, &window_id)| {
+            let offset = index as i32 * 30;
             WindowPlacement {
-                window_id: wid,
-                rect: Rect {
-                    x: work_area.x + offset,
-                    y: work_area.y + offset,
-                    width: cascade_w,
-                    height: cascade_h,
-                },
+                window_id,
+                rect: Rect::new(
+                    work_area.x + offset,
+                    work_area.y + offset,
+                    cascade_w,
+                    cascade_h,
+                ),
                 visibility: Visibility::Visible,
                 column_index: 0,
             }
         })
         .collect();
 
-    for &wid in window_ids {
-        let hwnd = HWND(wid as *mut c_void);
-        unsafe {
-            if IsIconic(hwnd).as_bool() {
-                let _ = ShowWindow(hwnd, SW_RESTORE);
-            }
+    let mut failures = Vec::new();
+    if let Some(error) = recovery_error {
+        failures.push(format!("MoveOffScreen recovery: {error}"));
+    }
+    for &window_id in window_ids {
+        if let Err(error) = restore_minimized(window_id) {
+            failures.push(format!("restore minimized window {window_id}: {error}"));
         }
     }
+    match apply(&placements) {
+        Ok(result) => {
+            for landing in result.landings {
+                if landing.failed || landing.unreadable {
+                    failures.push(format!(
+                        "window {} could not be {} after cascade",
+                        landing.window_id,
+                        if landing.failed {
+                            "positioned"
+                        } else {
+                            "verified"
+                        }
+                    ));
+                }
+            }
+        }
+        Err(error) => failures.push(format!("apply cascade placements: {error}")),
+    }
 
-    let _ = apply_placements(&placements, &PlatformConfig::default(), None, false);
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(combine_operation_failures(
+            "Failed to cascade one or more windows",
+            failures,
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -400,6 +462,129 @@ mod tests {
     use windows::Win32::UI::HiDpi::{
         AreDpiAwarenessContextsEqual, GetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT_UNAWARE,
     };
+
+    #[test]
+    fn cascade_continues_after_recovery_failure_and_reports_it() {
+        let window_ids = [10, 20];
+        let mut restored = Vec::new();
+        let mut applied = Vec::new();
+        let error = cascade_windows_with(
+            &window_ids,
+            Rect::new(0, 0, 1920, 1080),
+            || Err(Win32Error::SetPositionFailed("recovery failed".to_string())),
+            |window_id| {
+                restored.push(window_id);
+                Ok(())
+            },
+            |placements| {
+                applied.extend(placements.iter().map(|placement| placement.window_id));
+                Ok(Default::default())
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(restored, window_ids);
+        assert_eq!(applied, window_ids);
+        assert!(error.to_string().contains("recovery failed"));
+    }
+
+    #[test]
+    fn cascade_reports_failed_and_unreadable_landings_without_size_mismatch() {
+        let result = cascade_windows_with(
+            &[10, 20, 30],
+            Rect::new(0, 0, 1920, 1080),
+            || Ok(()),
+            |_| Ok(()),
+            |placements| {
+                Ok(crate::placement::ApplyPlacementsResult {
+                    landings: vec![
+                        crate::placement::PlacementLanding {
+                            window_id: 10,
+                            requested_rect: placements[0].rect,
+                            requested_visibility: Visibility::Visible,
+                            actual_visible_rect: None,
+                            actual_outer_rect: None,
+                            failed: true,
+                            unreadable: false,
+                        },
+                        crate::placement::PlacementLanding {
+                            window_id: 20,
+                            requested_rect: placements[1].rect,
+                            requested_visibility: Visibility::Visible,
+                            actual_visible_rect: None,
+                            actual_outer_rect: None,
+                            failed: false,
+                            unreadable: true,
+                        },
+                    ],
+                    ..Default::default()
+                })
+            },
+        )
+        .unwrap_err();
+        assert!(result.to_string().contains("10"));
+        assert!(result.to_string().contains("20"));
+    }
+
+    #[test]
+    fn cascade_accepts_successful_landings_with_size_mismatches() {
+        assert!(cascade_windows_with(
+            &[10],
+            Rect::new(0, 0, 1920, 1080),
+            || Ok(()),
+            |_| Ok(()),
+            |placements| {
+                Ok(crate::placement::ApplyPlacementsResult {
+                    landings: vec![crate::placement::PlacementLanding {
+                        window_id: 10,
+                        requested_rect: placements[0].rect,
+                        requested_visibility: Visibility::Visible,
+                        actual_visible_rect: Some(Rect::new(0, 0, 800, 600)),
+                        actual_outer_rect: Some(Rect::new(0, 0, 804, 604)),
+                        failed: false,
+                        unreadable: false,
+                    }],
+                    ..Default::default()
+                })
+            },
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn cascade_reports_outer_apply_error_after_attempting_every_restore() {
+        let mut restored = Vec::new();
+        let error = cascade_windows_with(
+            &[10, 20],
+            Rect::new(0, 0, 1920, 1080),
+            || Ok(()),
+            |window_id| {
+                restored.push(window_id);
+                Ok(())
+            },
+            |_| Err(Win32Error::SetPositionFailed("apply failed".to_string())),
+        )
+        .unwrap_err();
+        assert_eq!(restored, [10, 20]);
+        assert!(error.to_string().contains("apply failed"));
+    }
+
+    #[test]
+    fn cascade_empty_input_is_a_successful_no_op() {
+        let mut applied = false;
+        assert!(cascade_windows_with(
+            &[],
+            Rect::new(0, 0, 1920, 1080),
+            || Ok(()),
+            |_| unreachable!("no windows should be restored"),
+            |_| {
+                applied = true;
+                Ok(Default::default())
+            },
+        )
+        .is_ok());
+        assert!(applied);
+    }
 
     fn set_test_dpi_context(context: DPI_AWARENESS_CONTEXT) -> RecoveryDpiContext {
         let previous = unsafe { SetThreadDpiAwarenessContext(context) };

@@ -125,6 +125,8 @@ pub(crate) enum Commands {
     /// Toggle pause/resume of tiling operations
     #[command(visible_alias = "pause")]
     TogglePause,
+    /// Pause tiling and cascade every managed window without removing it from management
+    ReleaseAllWindows,
     /// Enable, disable, or check the swap-chain ghost-animation feature
     Ghost {
         #[command(subcommand)]
