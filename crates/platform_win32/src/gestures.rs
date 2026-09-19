@@ -794,6 +794,23 @@ mod tests {
 
     static DIAGNOSTIC_GATE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+    fn diagnostic_gate_test_guard() -> std::sync::MutexGuard<'static, ()> {
+        DIAGNOSTIC_GATE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
+    #[test]
+    fn diagnostic_gate_test_lock_recovers_after_panic() {
+        let panic = std::panic::catch_unwind(|| {
+            let _guard = diagnostic_gate_test_guard();
+            panic!("intentional test-lock poisoning");
+        });
+        assert!(panic.is_err());
+        let _guard = diagnostic_gate_test_guard();
+        DIAGNOSTIC_GATE_TEST_LOCK.clear_poison();
+    }
+
     fn input(
         now_ms: u128,
         axis: WheelAxis,
@@ -1020,7 +1037,7 @@ mod tests {
         engine: &mut WheelGestureEngine,
         sample: WheelGestureInput,
     ) -> (WheelGestureResult, Vec<String>) {
-        let _gate_guard = DIAGNOSTIC_GATE_TEST_LOCK.lock().unwrap();
+        let _gate_guard = diagnostic_gate_test_guard();
         let result = engine.process(sample);
         begin_gesture_diagnostic_capture();
         let lines = capture_diag(|| {
@@ -1211,7 +1228,7 @@ mod tests {
 
     #[test]
     fn capture_gate_controls_production_registration_emitter() {
-        let _gate_guard = DIAGNOSTIC_GATE_TEST_LOCK.lock().unwrap();
+        let _gate_guard = diagnostic_gate_test_guard();
         end_gesture_diagnostic_capture();
         let closed = capture_diag(|| emit_gesture_registration("registered"));
         assert!(closed.is_empty());
@@ -1224,7 +1241,7 @@ mod tests {
 
     #[test]
     fn capture_gate_controls_production_wheel_emitter() {
-        let _gate_guard = DIAGNOSTIC_GATE_TEST_LOCK.lock().unwrap();
+        let _gate_guard = diagnostic_gate_test_guard();
         let mut engine = WheelGestureEngine::new();
         let sample = input(0, WheelAxis::Vertical, 120, false, 0);
         let result = engine.process(sample);

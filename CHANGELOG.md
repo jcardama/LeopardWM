@@ -9,12 +9,14 @@ All notable changes to LeopardWM will be documented in this file.
 - **Landings whose visible origin differs from the requested origin by more than 2 px are now logged at warn level with both rectangles.**
   Window drift reports can be diagnosed from a default-level daemon log; placement behavior is unchanged.
 - **Opt-in touchpad gesture diagnostic capture writes a bounded dedicated report.**
-  `[gestures] diagnostic_capture_secs` (default 0, max 120) is startup-only; `lwm reload` does not start a capture. Restart with `lwm stop` then `lwm run`. The report distinguishes hook delivery, classifier pass/reject, accumulation, timeout, cooldown, recognized events, and daemon binding dispatch, including no-action. Capture is independent of whether gestures themselves are enabled. `lwm collect-logs` includes the full capture file. Default-off does not truncate a previous report; a new capture replaces it.
+  `[gestures] diagnostic_capture_secs` (default 0, max 120) is startup-only; `lwm reload` does not start a capture. Restart with `lwm stop` then `lwm run`. The report distinguishes hook delivery, classifier pass/reject, accumulation, timeout, cooldown, recognized events, and daemon binding dispatch, including no-action. Capture can report disabled registration when gestures are disabled, but hook input is recorded only when gestures are enabled and registration succeeds. `lwm collect-logs` includes the full capture file. Default-off does not truncate a previous report; a new capture replaces it.
 
 ### Fixes
 
 - **Gesture capture now preserves an existing report when duplicate daemon startup is rejected.**
   Closed captures no longer evaluate diagnostic trace fields, and admitted or in-flight deadline-boundary work prevents a false `no_input=true` result.
+- **The gesture capture's 256 KiB limit now includes the header and summary.**
+  Space is reserved for the complete summary so capped records remain visible in its counters.
 - **Closing the last window on a workspace keeps that workspace selected.**
   An attributable Windows replacement activation on another workspace or
   monitor no longer follows away from a genuinely empty selection (no tiled
@@ -48,6 +50,8 @@ All notable changes to LeopardWM will be documented in this file.
 - **The gesture diagnostic capture admission token is no longer externally constructible.**
   A private field means the admission counter can only be released by work that was
   actually admitted; capture report content is unchanged.
+- **Gesture diagnostic tests recover their serialization locks after a test panic.**
+  A poisoned lock no longer turns one failure into unrelated lock-acquisition failures.
 
 ## 0.2.9
 

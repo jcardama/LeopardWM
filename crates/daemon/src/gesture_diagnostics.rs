@@ -32,6 +32,8 @@ const WORKER_POLL: Duration = Duration::from_millis(50);
 const STARTUP_READY_TIMEOUT: Duration = Duration::from_secs(1);
 const DEFAULT_MAX_RECORDS: usize = 4096;
 const DEFAULT_MAX_BYTES: usize = 256 * 1024;
+// Keep the complete summary even when records exhaust the file budget.
+const SUMMARY_RESERVED_BYTES: usize = 1024;
 const DEFAULT_CHANNEL_CAPACITY: usize = 256;
 const FINAL_DRAIN_MAX_RECORDS: usize = DEFAULT_CHANNEL_CAPACITY;
 
@@ -249,6 +251,14 @@ pub fn start_capture(
     let thread = thread::Builder::new()
         .name("gesture-diag-capture".into())
         .spawn(move || {
+            let mut header_bytes = Vec::new();
+            write_header(&mut header_bytes, &header).expect("writing to a Vec cannot fail");
+            if header_bytes.len() + SUMMARY_RESERVED_BYTES > limits.max_bytes {
+                let _ = ready_tx.send(Err(
+                    "byte limit cannot fit the capture header and summary".to_string()
+                ));
+                return;
+            }
             let mut file = match File::create(&path) {
                 Ok(file) => file,
                 Err(e) => {
@@ -256,14 +266,14 @@ pub fn start_capture(
                     return;
                 }
             };
-            if let Err(e) = write_header(&mut file, &header) {
+            if let Err(e) = file.write_all(&header_bytes) {
                 let _ = ready_tx.send(Err(e.to_string()));
                 return;
             }
             if ready_tx.send(Ok(())).is_err() {
                 return;
             }
-            run_worker(file, limits, rx, worker_state);
+            run_worker(file, limits, rx, worker_state, header_bytes.len());
         })
         .map_err(|e| {
             eprintln!(
@@ -493,12 +503,12 @@ fn run_worker(
     limits: CaptureLimits,
     rx: mpsc::Receiver<CaptureRecord>,
     state: CaptureState,
+    mut bytes_written: usize,
 ) {
     let deadline = Instant::now() + limits.duration;
     let mut counts = StageCounts::default();
     let mut records_written: u64 = 0;
     let mut records_capped: u64 = 0;
-    let mut bytes_written: usize = 0;
     let mut end_reason = loop {
         if state.shutdown.load(Ordering::Relaxed) {
             break "shutdown";
@@ -583,7 +593,7 @@ fn append_record(
 ) -> io::Result<()> {
     let line_len = record.line.len() + 1;
     if *records_written as usize >= limits.max_records
-        || *bytes_written + line_len > limits.max_bytes
+        || *bytes_written + line_len > limits.max_bytes - SUMMARY_RESERVED_BYTES
     {
         *records_capped += 1;
         return Ok(());
@@ -595,7 +605,7 @@ fn append_record(
     Ok(())
 }
 
-fn write_header(file: &mut File, header: &CaptureHeader) -> io::Result<()> {
+fn write_header(file: &mut impl Write, header: &CaptureHeader) -> io::Result<()> {
     writeln!(file, "# leopardwm gesture capture")?;
     writeln!(file, "version={}", sanitize_header(&header.version))?;
     writeln!(
@@ -693,7 +703,7 @@ mod tests {
     static CAPTURE_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     fn capture_test_guard() -> std::sync::MutexGuard<'static, ()> {
-        CAPTURE_TEST_LOCK.lock().unwrap()
+        CAPTURE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     fn test_dir() -> PathBuf {
@@ -734,6 +744,115 @@ mod tests {
             },
             "general trace after capture"
         );
+    }
+
+    #[test]
+    fn capture_test_lock_recovers_after_panic() {
+        let panic = std::panic::catch_unwind(|| {
+            let _guard = capture_test_guard();
+            panic!("intentional test-lock poisoning");
+        });
+        assert!(panic.is_err());
+        let _guard = capture_test_guard();
+        CAPTURE_TEST_LOCK.clear_poison();
+    }
+
+    #[test]
+    fn summary_reservation_covers_maximum_counters() {
+        let counts = StageCounts {
+            hook_delivery: u64::MAX,
+            classifier: u64::MAX,
+            accumulation: u64::MAX,
+            timeout: u64::MAX,
+            cooldown: u64::MAX,
+            recognized: u64::MAX,
+            dispatch: u64::MAX,
+            registration: u64::MAX,
+        };
+        let mut body = Vec::new();
+        write_summary(
+            &mut body,
+            CaptureSummary {
+                end_reason: "write_error",
+                records_written: u64::MAX,
+                records_dropped: u64::MAX,
+                records_capped: u64::MAX,
+                records_admitted_at_close: u64::MAX,
+                records_in_flight_at_close: u64::MAX,
+                records_after_close: u64::MAX,
+                counts: &counts,
+            },
+        )
+        .unwrap();
+        assert!(body.len() <= SUMMARY_RESERVED_BYTES, "{}", body.len());
+    }
+
+    #[test]
+    fn byte_limit_includes_header_records_and_complete_summary() {
+        let _capture_guard = capture_test_guard();
+        let header = test_header(1);
+        let mut header_bytes = Vec::new();
+        write_header(&mut header_bytes, &header).unwrap();
+        let record_len = "stage=registration state=registered\n".len();
+        for record_budget in [0, record_len - 1, record_len, record_len * 2] {
+            let dir = test_dir();
+            let max_bytes = header_bytes.len() + SUMMARY_RESERVED_BYTES + record_budget;
+            let limits = CaptureLimits {
+                duration: Duration::from_millis(100),
+                max_records: DEFAULT_MAX_RECORDS,
+                max_bytes,
+                channel_capacity: 128,
+            };
+            let handle = start_capture(&dir, header.clone(), limits).unwrap();
+            emit_under_capture(&handle, || {
+                for _ in 0..64 {
+                    emit_gesture_registration("registered");
+                }
+            });
+            handle.wait_for_deadline();
+            let body = read_capture(&dir);
+            let expected_records = record_budget / record_len;
+            assert!(body.len() <= max_bytes, "{} > {max_bytes}", body.len());
+            assert_eq!(
+                std::fs::metadata(capture_log_path(&dir)).unwrap().len(),
+                body.len() as u64
+            );
+            assert!(body.starts_with("# leopardwm gesture capture\n"), "{body}");
+            assert!(body.contains("# summary\n"), "{body}");
+            assert!(body.contains("end_reason=deadline"), "{body}");
+            assert!(
+                body.contains(&format!("records_written={expected_records}\n")),
+                "{body}"
+            );
+            assert!(
+                body.contains(&format!("records_capped={}\n", 64 - expected_records)),
+                "{body}"
+            );
+            assert!(body.contains("no_input=false"), "{body}");
+            assert!(
+                body.ends_with(&format!("stage_registration={expected_records}\n")),
+                "{body}"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[test]
+    fn undersized_byte_limit_preserves_existing_report() {
+        let _capture_guard = capture_test_guard();
+        let dir = test_dir();
+        let path = capture_log_path(&dir);
+        let header = test_header(1);
+        let mut header_bytes = Vec::new();
+        write_header(&mut header_bytes, &header).unwrap();
+        for max_bytes in [0, header_bytes.len() + SUMMARY_RESERVED_BYTES - 1] {
+            std::fs::write(&path, "keep-me\n").unwrap();
+            let mut limits = CaptureLimits::from_secs(1);
+            limits.max_bytes = max_bytes;
+            assert!(start_capture(&dir, header.clone(), limits).is_none());
+            assert_eq!(read_capture(&dir), "keep-me\n");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
