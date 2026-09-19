@@ -39,6 +39,7 @@ mod placement;
 mod system;
 mod types;
 mod visibility;
+mod window_identity;
 mod window_query;
 mod window_style;
 
@@ -84,6 +85,9 @@ pub use visibility::{
     move_window_offscreen, position_window, restore_all_windows_moved_offscreen_best_effort,
     restore_window_moved_offscreen, restore_windows_moved_offscreen, uncloak_all_managed_windows,
     uncloak_all_visible_windows,
+};
+pub use window_identity::{
+    clear_window_lifetime_token, read_window_lifetime_token, stamp_window_lifetime_token,
 };
 pub use window_query::{
     cursor_is_over_window, get_cursor_pos, get_window_chrome_rect, get_window_corner_radius,

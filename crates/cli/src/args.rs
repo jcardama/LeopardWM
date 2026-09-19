@@ -152,6 +152,8 @@ pub(crate) enum Commands {
     ToggleSticky,
     /// Toggle where new windows open: their own new column or stacked into the focused column
     ToggleNewWindowPlacement,
+    /// Toggle session-only ignore for the actual OS foreground window
+    ToggleIgnore,
     /// Toggle tabbed mode on the focused column (niri-style: only the
     /// active tab is visible, with a tab strip overlay above the column)
     ToggleTabbed,

@@ -37,6 +37,9 @@ mod settings;
 mod startup;
 mod state;
 mod sticky;
+mod temporary_ignore;
+#[cfg(test)]
+mod temporary_ignore_tests;
 #[cfg(test)]
 mod tests;
 mod transitions;

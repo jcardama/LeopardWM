@@ -37,6 +37,7 @@ fn action(id: &str, default_key: Option<&str>, label: &str, group: &'static str)
 /// The ordered catalog of every bindable action. Order here is the display
 /// order in the settings UI; `group` drives section headers there and in
 /// the generated config template.
+#[allow(clippy::too_many_lines)]
 pub fn hotkey_catalog() -> Vec<HotkeyAction> {
     let mut v = vec![
         action("focus_left", Some("Ctrl+Alt+H"), "Focus left", "Focus"),
@@ -267,6 +268,12 @@ pub fn hotkey_catalog() -> Vec<HotkeyAction> {
             "Window",
         ),
         action(
+            "toggle_ignore",
+            None,
+            "Toggle ignore for the foreground window",
+            "Window",
+        ),
+        action(
             "toggle_pause",
             Some("Ctrl+Alt+P"),
             "Toggle pause",
@@ -408,6 +415,7 @@ pub fn command_for_action(id: &str) -> Option<crate::IpcCommand> {
         "scratchpad_toggle" => IpcCommand::ScratchpadToggle,
         "toggle_sticky" => IpcCommand::ToggleSticky,
         "toggle_new_window_placement" => IpcCommand::ToggleNewWindowPlacement,
+        "toggle_ignore" => IpcCommand::ToggleIgnore,
         "toggle_tabbed" => IpcCommand::ToggleTabbed,
         "width_third" => IpcCommand::SetColumnWidth { fraction: 0.333 },
         "width_half" => IpcCommand::SetColumnWidth { fraction: 0.5 },
@@ -580,6 +588,24 @@ mod tests {
                 a.id
             );
         }
+    }
+
+    #[test]
+    fn test_toggle_ignore_is_catalogued_without_default_binding() {
+        use crate::IpcCommand;
+        let action = hotkey_catalog()
+            .into_iter()
+            .find(|action| action.id == "toggle_ignore")
+            .expect("toggle_ignore must be in the catalog");
+        assert!(action.default_key.is_none());
+        assert_eq!(action.group, "Window");
+        assert_eq!(
+            command_for_action("toggle_ignore"),
+            Some(IpcCommand::ToggleIgnore)
+        );
+        assert!(!default_bindings_map()
+            .values()
+            .any(|value| value == "toggle_ignore"));
     }
 
     #[test]

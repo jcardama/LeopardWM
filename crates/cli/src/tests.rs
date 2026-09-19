@@ -346,6 +346,12 @@ fn test_to_ipc_command_release_all_windows() {
 }
 
 #[test]
+fn test_to_ipc_command_toggle_ignore() {
+    let cmd = Commands::ToggleIgnore;
+    assert!(matches!(to_ipc_command(&cmd), IpcCommand::ToggleIgnore));
+}
+
+#[test]
 fn test_to_ipc_command_panic_revert() {
     let cmd = Commands::PanicRevert;
     assert!(matches!(to_ipc_command(&cmd), IpcCommand::PanicRevert));
@@ -647,6 +653,19 @@ fn test_cli_release_all_windows_parses() {
 fn test_cli_help_lists_release_all_windows() {
     let help = Cli::command().render_help().to_string();
     assert!(help.contains("release-all-windows"));
+}
+
+#[test]
+fn test_cli_toggle_ignore_parses() {
+    let cli = Cli::try_parse_from(["leopardwm-cli", "toggle-ignore"])
+        .expect("toggle-ignore should parse");
+    assert!(matches!(cli.command, Commands::ToggleIgnore));
+}
+
+#[test]
+fn test_cli_help_lists_toggle_ignore() {
+    let help = Cli::command().render_help().to_string();
+    assert!(help.contains("toggle-ignore"));
 }
 
 #[test]
@@ -1184,6 +1203,10 @@ fn test_generate_default_config_contains_hotkeys() {
     assert!(config.contains("toggle_floating"));
     assert!(config.contains("\"Win+Ctrl+Escape\" = \"panic_revert\""));
     assert!(config.contains("toggle_pause"));
+    assert!(
+        !config.contains("toggle_ignore"),
+        "toggle_ignore has no default binding and must not appear in the generated template"
+    );
 }
 
 #[test]

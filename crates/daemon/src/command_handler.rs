@@ -429,6 +429,7 @@ impl AppState {
                 Ok(()) => IpcResponse::Ok,
                 Err(e) => IpcResponse::error(format!("Failed to release all windows: {}", e)),
             },
+            IpcCommand::ToggleIgnore => self.toggle_ignore(),
             IpcCommand::SetGhostAnimation { enabled } => self.handle_set_ghost_animation(enabled),
             IpcCommand::Stop => {
                 // This is handled specially in the event loop

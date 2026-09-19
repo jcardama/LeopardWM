@@ -266,7 +266,14 @@ lwm toggle-fullscreen
 lwm scratchpad-stash                   # stash focused window (or release the scratchpad)
 lwm scratchpad-toggle                  # summon / hide the scratchpad
 lwm toggle-sticky                      # pin / unpin focused window on every workspace
+lwm toggle-ignore                      # session-only ignore for the OS foreground window
 ```
+
+`lwm toggle-ignore` targets the actual OS foreground window, not LeopardWM's cached
+focus. Toggling out unmanages that window for this daemon session only; toggling
+it back in re-admits it on the current monitor's active workspace. Persistent
+Ignore rules still win. The action is in the hotkey catalog with no default
+shortcut.
 
 ### Release all managed windows
 

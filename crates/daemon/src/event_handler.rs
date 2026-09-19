@@ -319,6 +319,30 @@ pub(crate) enum ElevationCheck {
     BlockedKnown,
 }
 
+/// How a window is being considered for management.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AdmissionKind {
+    Automatic,
+    ExplicitReadmit,
+}
+
+/// Result of a shared admission attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AdmitOutcome {
+    Admitted,
+    AlreadyManaged,
+    GatedIgnored,
+    TransientSuppressed,
+    NoWindowInfo,
+    #[cfg_attr(test, allow(dead_code))]
+    ShellCloaked,
+    ElevationBlocked,
+    TransientConsoleHost,
+    PersistentIgnore,
+    DialogLike,
+    InsertFailed,
+}
+
 impl AppState {
     /// Handle a window lifecycle event.
     pub(crate) fn handle_window_event(&mut self, event: WindowEvent) {
@@ -485,6 +509,28 @@ impl AppState {
         }
     }
 
+    pub(crate) fn elevation_blocks_admission(
+        &mut self,
+        hwnd: u64,
+        pid: u32,
+        title: &str,
+        class_name: &str,
+    ) -> bool {
+        #[cfg(test)]
+        {
+            let _ = (pid, class_name);
+            if let Some(block) = self.injected_manage_block.get(&hwnd).copied() {
+                return !matches!(
+                    self.note_elevation_block(hwnd, title, block),
+                    ElevationCheck::Manageable
+                );
+            }
+            false
+        }
+        #[cfg(not(test))]
+        self.skip_if_elevation_blocked(hwnd, pid, title, class_name)
+    }
+
     /// Re-assert the fullscreen window `fs_wid` as the focused and foreground
     /// window, after something tried to put another window in front of it (a new
     /// window opening, or a window self-activating behind it). The Win32 raise is
@@ -513,44 +559,62 @@ impl AppState {
     }
 
     fn on_window_created(&mut self, hwnd: u64) {
+        let _ = self.try_admit_window(hwnd, AdmissionKind::Automatic);
+    }
+
+    pub(crate) fn try_admit_window(&mut self, hwnd: u64, kind: AdmissionKind) -> AdmitOutcome {
         // Suppress transient windows that rapidly show/hide the same HWND
         // (e.g., Electron notification popups from Beeper, Slack).
-        if let Some(&hidden_at) = self.recently_hidden_hwnds.get(&hwnd) {
-            if hidden_at.elapsed() < RECENTLY_HIDDEN_TTL {
-                // Only suppress genuinely popup-shaped re-creations (the Electron
-                // notification toasts this guard exists for). A real window the
-                // user dismissed quickly (e.g. Edge's download popup) keeps a
-                // caption/minimize box; suppressing it would leave it floating,
-                // untracked and overlaying the layout, for the whole TTL. Tests
-                // inject synthetic HWNDs with no real window style, so the shape
-                // check is production-only and suppression stays unconditional
-                // under cfg(test).
-                #[cfg(not(test))]
-                let is_popup = leopardwm_platform_win32::is_frameless_popup(hwnd);
-                #[cfg(test)]
-                let is_popup = true;
-                if is_popup {
-                    debug!(
-                        "Ignoring transient re-created popup {} (hidden {}ms ago)",
-                        hwnd,
-                        hidden_at.elapsed().as_millis()
-                    );
-                    return;
+        if kind == AdmissionKind::Automatic {
+            if let Some(&hidden_at) = self.recently_hidden_hwnds.get(&hwnd) {
+                if hidden_at.elapsed() < RECENTLY_HIDDEN_TTL {
+                    // Only suppress genuinely popup-shaped re-creations (the Electron
+                    // notification toasts this guard exists for). A real window the
+                    // user dismissed quickly (e.g. Edge's download popup) keeps a
+                    // caption/minimize box; suppressing it would leave it floating,
+                    // untracked and overlaying the layout, for the whole TTL. Tests
+                    // inject synthetic HWNDs with no real window style, so the shape
+                    // check is production-only and suppression stays unconditional
+                    // under cfg(test).
+                    #[cfg(not(test))]
+                    let is_popup = leopardwm_platform_win32::is_frameless_popup(hwnd);
+                    #[cfg(test)]
+                    let is_popup = true;
+                    if is_popup {
+                        debug!(
+                            "Ignoring transient re-created popup {} (hidden {}ms ago)",
+                            hwnd,
+                            hidden_at.elapsed().as_millis()
+                        );
+                        return AdmitOutcome::TransientSuppressed;
+                    }
+                    self.recently_hidden_hwnds.remove(&hwnd);
                 }
-                self.recently_hidden_hwnds.remove(&hwnd);
             }
         }
         // Lazily evict expired entries on the Created path too
         self.recently_hidden_hwnds
             .retain(|_, t| t.elapsed() < RECENTLY_HIDDEN_TTL);
 
+        if kind == AdmissionKind::Automatic
+            && matches!(
+                self.temporary_ignore_gate(hwnd),
+                crate::temporary_ignore::IgnoreGate::Block
+            )
+        {
+            return AdmitOutcome::GatedIgnored;
+        }
+
         if self.find_window_workspace(hwnd).is_some() {
             debug!("Window {} already managed, ignoring create event", hwnd);
-            return;
+            return AdmitOutcome::AlreadyManaged;
         }
 
         // Try to get window info for filtering and monitor assignment
-        if let Some(win_info) = self.lookup_window_info(hwnd) {
+        let Some(win_info) = self.lookup_window_info(hwnd) else {
+            return AdmitOutcome::NoWindowInfo;
+        };
+        {
             // Skip shell-cloaked windows (suspended UWP frames, windows
             // on other virtual desktops). These are valid HWNDs with
             // WS_VISIBLE but no rendered content.
@@ -560,21 +624,20 @@ impl AppState {
                     "Ignoring shell-cloaked window: {} ({})",
                     win_info.title, win_info.class_name
                 );
-                return;
+                return AdmitOutcome::ShellCloaked;
             }
 
             // Windows UIPI blocks a non-elevated daemon from repositioning an
             // elevated window: SetWindowPos is silently refused, so tiling it
             // would reserve a column the window never occupies. Leave it
             // floating where the OS placed it and ignore it for the session.
-            #[cfg(not(test))]
-            if self.skip_if_elevation_blocked(
+            if self.elevation_blocks_admission(
                 hwnd,
                 win_info.process_id,
                 &win_info.title,
                 &win_info.class_name,
             ) {
-                return;
+                return AdmitOutcome::ElevationBlocked;
             }
 
             let executable = get_process_executable(win_info.process_id).unwrap_or_default();
@@ -599,7 +662,7 @@ impl AppState {
                     "Skipping transient console-host window with exe-path title: {} ({})",
                     win_info.title, win_info.class_name
                 );
-                return;
+                return AdmitOutcome::TransientConsoleHost;
             }
 
             // Match once: the action and the per-app open extras both come from
@@ -627,7 +690,7 @@ impl AppState {
                     "Ignoring window by rule: {} ({})",
                     win_info.title, win_info.class_name
                 );
-                return;
+                return AdmitOutcome::PersistentIgnore;
             }
 
             // No user rule matched and the window has a classic dialog shape (a
@@ -640,7 +703,7 @@ impl AppState {
                     "Leaving dialog-like window unmanaged: {} ({})",
                     win_info.title, win_info.class_name
                 );
-                return;
+                return AdmitOutcome::DialogLike;
             }
 
             // New windows belong to the monitor containing their opening center,
@@ -675,12 +738,14 @@ impl AppState {
             let active_idx = self.active_workspace_idx(monitor_id);
             // A sticky window shows on every workspace, so it always opens on the
             // active one; an open_on_workspace would only hide it until a switch.
-            let target_idx = if rule_sticky {
+            // Explicit readmit always uses the active workspace of the native monitor.
+            let target_idx = if rule_sticky || kind == AdmissionKind::ExplicitReadmit {
                 active_idx
             } else {
                 rule_workspace.unwrap_or(active_idx)
             };
-            let opens_in_background = target_idx != active_idx;
+            let opens_in_background =
+                kind != AdmissionKind::ExplicitReadmit && target_idx != active_idx;
             if opens_in_background {
                 self.ensure_workspace_exists(monitor_id, target_idx);
             }
@@ -697,9 +762,17 @@ impl AppState {
             // Per-app initial column width (viewport fraction -> px). A width
             // remembered from before this window was hidden takes precedence,
             // so a reshown window keeps its size instead of resetting.
-            let rule_width_px = self.take_remembered_column_width(hwnd).or_else(|| {
+            let rule_width_px = if kind == AdmissionKind::ExplicitReadmit {
                 rule_column_width.map(|f| ((f * f64::from(viewport_width)).round() as i32).max(100))
-            });
+            } else {
+                self.take_remembered_column_width(hwnd).or_else(|| {
+                    rule_column_width
+                        .map(|f| ((f * f64::from(viewport_width)).round() as i32).max(100))
+                })
+            };
+            let take_workspace_focus = kind == AdmissionKind::ExplicitReadmit
+                || self.config.behavior.focus_new_windows
+                || opens_in_background;
 
             if let Some(workspace) = self
                 .workspaces
@@ -738,7 +811,7 @@ impl AppState {
                         let ok = if let Some(slot) = rule_slot {
                             // A slot rule opens the window as its own column at
                             // that slot, overriding in-column stacking.
-                            if self.config.behavior.focus_new_windows || opens_in_background {
+                            if take_workspace_focus {
                                 workspace
                                     .insert_window_at_column(hwnd, rule_width_px, slot)
                                     .is_ok()
@@ -755,13 +828,13 @@ impl AppState {
                             let col = workspace.focused_column_index();
                             let row = workspace.focused_window_index_in_column() + 1;
                             let ok = workspace.insert_window_in_column_at(hwnd, col, row).is_ok();
-                            if ok && self.config.behavior.focus_new_windows {
+                            if ok && take_workspace_focus {
                                 if let Err(e) = workspace.focus_window(hwnd) {
                                     warn!("Focusing new in-column window {} failed: {:?}", hwnd, e);
                                 }
                             }
                             ok
-                        } else if self.config.behavior.focus_new_windows || opens_in_background {
+                        } else if take_workspace_focus {
                             // A background open still takes the target
                             // workspace's local focus (so it's focused
                             // when that workspace is activated); OS
@@ -809,11 +882,16 @@ impl AppState {
                         }
                         self.sticky_windows.insert(hwnd);
                     }
-                    if self.config.behavior.focus_new_windows && !opens_in_background {
+                    if kind == AdmissionKind::Automatic
+                        && self.config.behavior.focus_new_windows
+                        && !opens_in_background
+                    {
                         self.focused_monitor = monitor_id;
                         if matches!(action, config::WindowAction::Float) {
                             self.previous_focused_hwnd = Some(hwnd);
                         }
+                        workspace.ensure_focused_visible_animated(viewport_width);
+                    } else if kind == AdmissionKind::ExplicitReadmit {
                         workspace.ensure_focused_visible_animated(viewport_width);
                     }
                     if opens_in_background {
@@ -856,30 +934,36 @@ impl AppState {
                     // Skip the newcomer's foreground sync when we're about to
                     // re-raise the fullscreen window, to avoid a double focus
                     // transition.
-                    if self.config.behavior.focus_new_windows
+                    if kind == AdmissionKind::Automatic
+                        && self.config.behavior.focus_new_windows
                         && !opens_in_background
                         && keep_fullscreen_on_top.is_none()
                     {
                         self.sync_foreground_window();
                     }
-                    if let Some(fs_wid) = keep_fullscreen_on_top {
-                        if self.config.behavior.focus_new_windows
-                            || monitor_id == self.focused_monitor
-                        {
-                            self.reassert_fullscreen_focus(fs_wid);
-                        } else if let Err(e) =
-                            leopardwm_platform_win32::raise_window_no_activate(fs_wid)
-                        {
-                            debug!(
-                                "Could not raise fullscreen window {} without activation: {:?}",
-                                fs_wid, e
-                            );
+                    if kind == AdmissionKind::Automatic {
+                        if let Some(fs_wid) = keep_fullscreen_on_top {
+                            if self.config.behavior.focus_new_windows
+                                || monitor_id == self.focused_monitor
+                            {
+                                self.reassert_fullscreen_focus(fs_wid);
+                            } else if let Err(e) =
+                                leopardwm_platform_win32::raise_window_no_activate(fs_wid)
+                            {
+                                debug!(
+                                    "Could not raise fullscreen window {} without activation: {:?}",
+                                    fs_wid, e
+                                );
+                            }
                         }
                     }
+                    return AdmitOutcome::Admitted;
                 } else {
                     debug!("Failed to add window {} to workspace", hwnd);
+                    return AdmitOutcome::InsertFailed;
                 }
             }
+            AdmitOutcome::InsertFailed
         }
     }
 
@@ -897,6 +981,7 @@ impl AppState {
         if !is_hidden_event {
             self.scratchpad_on_window_destroyed(hwnd);
             self.sticky_on_window_destroyed(hwnd);
+            self.on_temporary_ignore_destroyed(hwnd);
             // Forget any remembered floating focus for this window so
             // a recycled HWND can't wrongly re-focus on workspace return.
             self.floating_focus.retain(|_, &mut h| h != hwnd);
@@ -1769,6 +1854,17 @@ impl AppState {
 
     /// Recovery and cleanup when focus lands on an unmanaged window.
     fn on_unmanaged_window_focused(&mut self, hwnd: u64) {
+        if matches!(
+            self.temporary_ignore_gate(hwnd),
+            crate::temporary_ignore::IgnoreGate::Block
+        ) {
+            self.hide_border();
+            self.previous_focused_hwnd = None;
+            let monitor_id = self.focused_monitor as i64;
+            self.broadcast_focused_window_if_changed(monitor_id, None);
+            return;
+        }
+
         // Recovery path: if a user focuses a window that was
         // suppressed by recently_hidden_hwnds (e.g., tray-restored
         // app), re-add it now. A user focusing a window proves it's

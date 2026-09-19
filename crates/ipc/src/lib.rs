@@ -29,8 +29,8 @@ const MAX_PIPE_SCOPE_SEGMENT_LEN: usize = 64;
 /// - v3: effective hotkey query — `QueryHotkeys`, `HotkeyList`, and the
 ///   associated binding/diagnostic records.
 /// - v4: complete workspace-state snapshots and monitor-targeted
-///   workspace switching. `ReleaseAllWindows` is additive and retains v4
-///   compatibility.
+///   workspace switching. `ReleaseAllWindows` and `ToggleIgnore` are
+///   additive and retain v4 compatibility.
 pub const IPC_PROTOCOL_VERSION: u32 = 4;
 /// Minimum protocol version this crate supports.
 pub const IPC_MIN_SUPPORTED_PROTOCOL_VERSION: u32 = 1;
@@ -499,6 +499,8 @@ pub enum IpcCommand {
     TogglePause,
     /// Pause tiling and cascade every managed window without removing membership.
     ReleaseAllWindows,
+    /// Toggle session-only ignore for the actual OS foreground window.
+    ToggleIgnore,
     /// Toggle the swap-chain ghost-animation feature at runtime.
     /// `None` queries current state; `Some(b)` sets it. Returns
     /// `BoolValue` with the new (or current) state.
@@ -843,6 +845,16 @@ mod tests {
     }
 
     #[test]
+    fn test_toggle_ignore_wire_name_is_stable() {
+        let cmd = IpcCommand::ToggleIgnore;
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert_eq!(json, r#"{"type":"toggle_ignore"}"#);
+
+        let parsed: IpcCommand = serde_json::from_str(r#"{"type":"toggle_ignore"}"#).unwrap();
+        assert_eq!(parsed, IpcCommand::ToggleIgnore);
+    }
+
+    #[test]
     fn test_response_serialization() {
         let resp = IpcResponse::Ok;
         let json = serde_json::to_string(&resp).unwrap();
@@ -918,6 +930,7 @@ mod tests {
             IpcCommand::PanicRevert,
             IpcCommand::TogglePause,
             IpcCommand::ReleaseAllWindows,
+            IpcCommand::ToggleIgnore,
             IpcCommand::CloseWindow,
             IpcCommand::ToggleFloating,
             IpcCommand::ToggleFullscreen,

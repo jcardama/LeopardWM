@@ -573,6 +573,9 @@ pub(crate) struct AppState {
     /// it's never re-tiled and the user is notified only once. Session-only,
     /// never persisted.
     pub(crate) elevation_blocked: HashMap<u64, ElevationBlockedRecord>,
+    /// Session-only temporary ignore set. Keyed by HWND with a lifetime token
+    /// that distinguishes recycled handles. Never persisted.
+    pub(crate) temporary_ignores: HashMap<u64, crate::temporary_ignore::TemporaryIgnoreEntry>,
     /// Column width a tiled window had when it was hidden, keyed by HWND, so a
     /// window that disappears and reappears (e.g. a third-party virtual-desktop
     /// tool hiding/showing windows on switch) re-tiles at its prior width
@@ -675,6 +678,22 @@ pub(crate) struct AppState {
     pub(crate) injected_foreground_is_valid: Option<bool>,
     #[cfg(test)]
     pub(crate) injected_next_foreground_hwnd: Option<Option<u64>>,
+    #[cfg(test)]
+    pub(crate) injected_lifetime_tokens: HashMap<u64, u64>,
+    #[cfg(test)]
+    pub(crate) next_injected_lifetime_token: u64,
+    #[cfg(test)]
+    pub(crate) injected_identity_stamp_error: Option<String>,
+    #[cfg(test)]
+    pub(crate) injected_identity_read_error: Option<String>,
+    #[cfg(test)]
+    pub(crate) injected_identity_clear_error: Option<String>,
+    #[cfg(test)]
+    pub(crate) injected_manage_block: HashMap<u64, leopardwm_platform_win32::ManageBlock>,
+    #[cfg(test)]
+    pub(crate) injected_enumerated_windows: Option<Vec<leopardwm_platform_win32::WindowInfo>>,
+    #[cfg(test)]
+    pub(crate) injected_native_restore_error: Option<String>,
     /// Per-window native maximize responses for deterministic daemon tests.
     #[cfg(test)]
     pub(crate) injected_window_maximized: HashMap<u64, bool>,
@@ -1006,6 +1025,7 @@ impl AppState {
             recently_hidden_hwnds: HashMap::new(),
             pending_edit_config_pull: None,
             elevation_blocked: HashMap::new(),
+            temporary_ignores: HashMap::new(),
             hidden_column_widths: HashMap::new(),
             move_origins: HashMap::new(),
             stashed_monitor_layouts: HashMap::new(),
@@ -1033,6 +1053,22 @@ impl AppState {
             injected_foreground_is_valid: None,
             #[cfg(test)]
             injected_next_foreground_hwnd: None,
+            #[cfg(test)]
+            injected_lifetime_tokens: HashMap::new(),
+            #[cfg(test)]
+            next_injected_lifetime_token: 1,
+            #[cfg(test)]
+            injected_identity_stamp_error: None,
+            #[cfg(test)]
+            injected_identity_read_error: None,
+            #[cfg(test)]
+            injected_identity_clear_error: None,
+            #[cfg(test)]
+            injected_manage_block: HashMap::new(),
+            #[cfg(test)]
+            injected_enumerated_windows: None,
+            #[cfg(test)]
+            injected_native_restore_error: None,
             #[cfg(test)]
             injected_window_maximized: HashMap::new(),
             #[cfg(test)]

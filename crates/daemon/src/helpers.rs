@@ -137,6 +137,9 @@ impl AppState {
         if self.find_window_workspace(wid).is_some() {
             return true;
         }
+        if self.temporary_ignores.contains_key(&wid) {
+            return true;
+        }
         #[cfg(test)]
         {
             if self.injected_window_info.contains_key(&wid) {

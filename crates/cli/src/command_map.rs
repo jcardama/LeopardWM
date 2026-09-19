@@ -71,6 +71,7 @@ pub(crate) fn to_ipc_command(cmd: &Commands) -> IpcCommand {
         Commands::ScratchpadToggle => IpcCommand::ScratchpadToggle,
         Commands::ToggleSticky => IpcCommand::ToggleSticky,
         Commands::ToggleNewWindowPlacement => IpcCommand::ToggleNewWindowPlacement,
+        Commands::ToggleIgnore => IpcCommand::ToggleIgnore,
         Commands::ToggleTabbed => IpcCommand::ToggleTabbed,
         Commands::SetWidth { fraction } => IpcCommand::SetColumnWidth {
             fraction: *fraction,

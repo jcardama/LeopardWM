@@ -4,6 +4,15 @@ All notable changes to LeopardWM will be documented in this file.
 
 ## 0.2.10
 
+### Features
+
+- **Session-only ignore for the actual OS foreground window.** `lwm toggle-ignore`
+  (and the unbound `toggle_ignore` hotkey catalog action) unmanages the live
+  foreground HWND without writing application rules or changing pause state.
+  The same command re-admits a previously ignored eligible window onto the
+  current monitor's active workspace. Persistent Ignore still wins. Memory is
+  session-only and is cleared when the daemon restarts.
+
 ### Improvements
 
 - **Release every managed window from the CLI with `lwm release-all-windows`.**

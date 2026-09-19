@@ -19,27 +19,9 @@ impl AppState {
         self.previous_focused_hwnd = None;
         self.broadcast_focused_window_if_changed(self.focused_monitor as i64, None);
 
-        self.bump_physical_invalidation();
-        let (request_id, invalidation_id) = self.physical_request_ids();
-        self.abandon_physical_request(request_id, invalidation_id);
-        self.animation_inflight_request_id = None;
-        self.applying_layout = false;
-        self.abort_active_ghost_transition();
-        self.abort_layout_transition();
-
-        self.reap_finished_pending_apply_workers();
-        if !self.pending_apply_workers.is_empty() {
+        if let Err(reason) = self.drain_pending_placement_work() {
             return Err(anyhow!(
-                "An earlier placement worker is still running. No cascade was performed; tiling remains paused. Retry release-all-windows after it finishes."
-            ));
-        }
-        if self
-            .animation_worker_control
-            .as_ref()
-            .is_some_and(|control| !control.wait_for_barrier(RELEASE_BARRIER_TIMEOUT))
-        {
-            return Err(anyhow!(
-                "The animation worker did not become idle in time. No cascade was performed; tiling remains paused. Retry release-all-windows after it finishes."
+                "{reason}. No cascade was performed; tiling remains paused. Retry release-all-windows after it finishes."
             ));
         }
 
@@ -64,5 +46,30 @@ impl AppState {
             return result.clone().map_err(anyhow::Error::msg);
         }
         cascade_windows(window_ids).map_err(Into::into)
+    }
+
+    /// Cancel in-flight physical/animation work and wait for workers to idle.
+    /// Does not change pause state or cascade windows.
+    pub(crate) fn drain_pending_placement_work(&mut self) -> Result<(), String> {
+        self.bump_physical_invalidation();
+        let (request_id, invalidation_id) = self.physical_request_ids();
+        self.abandon_physical_request(request_id, invalidation_id);
+        self.animation_inflight_request_id = None;
+        self.applying_layout = false;
+        self.abort_active_ghost_transition();
+        self.abort_layout_transition();
+
+        self.reap_finished_pending_apply_workers();
+        if !self.pending_apply_workers.is_empty() {
+            return Err("An earlier placement worker is still running".into());
+        }
+        if self
+            .animation_worker_control
+            .as_ref()
+            .is_some_and(|control| !control.wait_for_barrier(RELEASE_BARRIER_TIMEOUT))
+        {
+            return Err("The animation worker did not become idle in time".into());
+        }
+        Ok(())
     }
 }
