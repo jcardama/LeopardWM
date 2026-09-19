@@ -1,7 +1,6 @@
 //! Startup utilities: banner, crash report, and duplicate-instance detection.
 
 use leopardwm_ipc::pipe_name_candidates;
-use tracing::warn;
 
 /// Startup banner info for display after initialization.
 pub struct StartupInfo {
@@ -175,8 +174,8 @@ pub(crate) async fn check_already_running() -> bool {
             if pipe_probe_error_indicates_running(error)
                 && error.raw_os_error() != Some(ERROR_PIPE_BUSY)
             {
-                warn!(
-                    "Named pipe probe for {} failed with non-NotFound error ({}); assuming daemon is already running to avoid duplicate instances",
+                eprintln!(
+                    "[leopardwm] Warning: named pipe probe for {} failed with non-NotFound error ({}); assuming daemon is already running to avoid duplicate instances",
                     pipe_name,
                     error
                 );

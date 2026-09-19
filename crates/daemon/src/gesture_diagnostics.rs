@@ -15,10 +15,11 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, SyncSender, TrySendError};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 use tracing::field::{Field, Visit};
+use tracing::subscriber::Interest;
 use tracing::{Event, Subscriber};
 use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::layer::{Context, Filter};
@@ -96,6 +97,11 @@ struct CaptureRecord {
     line: String,
 }
 
+struct GateLifecycle {
+    open: bool,
+    admitted_at_close: u64,
+}
+
 #[derive(Clone)]
 struct CaptureState {
     dropped: Arc<AtomicU64>,
@@ -103,20 +109,29 @@ struct CaptureState {
     active: Arc<AtomicBool>,
     in_flight: Arc<AtomicU64>,
     after_close: Arc<AtomicU64>,
-    gate_open: Arc<AtomicBool>,
+    gate: Arc<Mutex<GateLifecycle>>,
 }
 
 impl CaptureState {
     fn open_gate(&self) {
-        if !self.gate_open.swap(true, Ordering::AcqRel) {
+        let mut gate = self.gate.lock().unwrap();
+        if self.active.load(Ordering::Acquire) && !gate.open {
             leopardwm_platform_win32::begin_gesture_diagnostic_capture();
+            gate.open = true;
         }
     }
 
-    fn close_gate(&self) {
-        if self.gate_open.swap(false, Ordering::AcqRel) {
-            leopardwm_platform_win32::end_gesture_diagnostic_capture();
+    /// Closes admission and returns the producers admitted at closure. The
+    /// snapshot survives the first close so a handle dropped before the worker
+    /// writes its summary cannot discard the uncertainty the worker reports.
+    fn close_gate(&self) -> u64 {
+        let mut gate = self.gate.lock().unwrap();
+        if gate.open {
+            gate.open = false;
+            gate.admitted_at_close = leopardwm_platform_win32::end_gesture_diagnostic_capture();
         }
+        self.active.store(false, Ordering::Release);
+        gate.admitted_at_close
     }
 }
 
@@ -160,7 +175,6 @@ impl GestureCaptureHandle {
 impl Drop for GestureCaptureHandle {
     fn drop(&mut self) {
         self.state.close_gate();
-        self.state.active.store(false, Ordering::Release);
         self.state.shutdown.store(true, Ordering::SeqCst);
         join_short(&mut self.thread, SHUTDOWN_JOIN);
     }
@@ -180,6 +194,14 @@ where
 {
     fn enabled(&self, metadata: &tracing::Metadata<'_>, _ctx: &Context<'_, S>) -> bool {
         metadata.target() == GESTURE_DIAG_TARGET && self.state.active.load(Ordering::Acquire)
+    }
+
+    fn callsite_enabled(&self, metadata: &'static tracing::Metadata<'static>) -> Interest {
+        if metadata.target() == GESTURE_DIAG_TARGET {
+            Interest::sometimes()
+        } else {
+            Interest::never()
+        }
     }
 }
 
@@ -218,7 +240,10 @@ pub fn start_capture(
         active: Arc::new(AtomicBool::new(true)),
         in_flight: Arc::new(AtomicU64::new(0)),
         after_close: Arc::new(AtomicU64::new(0)),
-        gate_open: Arc::new(AtomicBool::new(false)),
+        gate: Arc::new(Mutex::new(GateLifecycle {
+            open: false,
+            admitted_at_close: 0,
+        })),
     };
     let worker_state = state.clone();
     let thread = thread::Builder::new()
@@ -258,12 +283,13 @@ pub fn start_capture(
             })
         }
         Ok(Err(e)) => {
+            state.close_gate();
             eprintln!("[leopardwm] Warning: gesture diagnostic capture could not start: {e}");
             let _ = thread.join();
             None
         }
         Err(e) => {
-            state.active.store(false, Ordering::Release);
+            state.close_gate();
             state.shutdown.store(true, Ordering::SeqCst);
             eprintln!("[leopardwm] Warning: gesture diagnostic capture did not start: {e}");
             let _ = thread.join();
@@ -274,9 +300,9 @@ pub fn start_capture(
 
 /// Emit a dispatch-stage record using the shared diagnostic target.
 pub fn emit_dispatch(event: GestureEvent, binding: &'static str, command: Option<&str>) {
-    if !leopardwm_platform_win32::gesture_diagnostic_capture_active() {
+    let Some(_admission) = leopardwm_platform_win32::admit_gesture_diagnostic_capture() else {
         return;
-    }
+    };
     if let Some(command) = command {
         tracing::trace!(
             target: GESTURE_DIAG_TARGET,
@@ -440,6 +466,7 @@ struct CaptureSummary<'a> {
     records_written: u64,
     records_dropped: u64,
     records_capped: u64,
+    records_admitted_at_close: u64,
     records_in_flight_at_close: u64,
     records_after_close: u64,
     counts: &'a StageCounts,
@@ -506,8 +533,7 @@ fn run_worker(
 
     // Closing admission before draining prevents post-deadline work from
     // extending the capture. The channel capacity bounds this final drain.
-    state.close_gate();
-    state.active.store(false, Ordering::Release);
+    let records_admitted_at_close = state.close_gate();
     let records_in_flight_at_close = state.in_flight.load(Ordering::Acquire);
     for _ in 0..limits.channel_capacity.clamp(1, FINAL_DRAIN_MAX_RECORDS) {
         let Ok(record) = rx.try_recv() else {
@@ -536,6 +562,7 @@ fn run_worker(
         records_written,
         records_dropped,
         records_capped,
+        records_admitted_at_close,
         records_in_flight_at_close,
         records_after_close,
         counts: &counts,
@@ -543,7 +570,6 @@ fn run_worker(
     if let Err(e) = write_summary(&mut file, summary) {
         eprintln!("[leopardwm] Warning: gesture diagnostic capture failed to write summary ({e})");
     }
-    state.active.store(false, Ordering::Release);
 }
 
 fn append_record(
@@ -599,6 +625,7 @@ fn write_summary(file: &mut impl Write, summary: CaptureSummary<'_>) -> io::Resu
     let no_input = summary.counts.hook_delivery == 0
         && summary.records_dropped == 0
         && summary.records_capped == 0
+        && summary.records_admitted_at_close == 0
         && summary.records_in_flight_at_close == 0
         && summary.records_after_close == 0;
     writeln!(file)?;
@@ -607,6 +634,11 @@ fn write_summary(file: &mut impl Write, summary: CaptureSummary<'_>) -> io::Resu
     writeln!(file, "records_written={}", summary.records_written)?;
     writeln!(file, "records_dropped={}", summary.records_dropped)?;
     writeln!(file, "records_capped={}", summary.records_capped)?;
+    writeln!(
+        file,
+        "records_admitted_at_close={}",
+        summary.records_admitted_at_close
+    )?;
     writeln!(
         file,
         "records_in_flight_at_close={}",
@@ -658,6 +690,11 @@ mod tests {
     use tracing_subscriber::prelude::*;
 
     static TEST_DIR_SEQ: AtomicU64 = AtomicU64::new(0);
+    static CAPTURE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn capture_test_guard() -> std::sync::MutexGuard<'static, ()> {
+        CAPTURE_TEST_LOCK.lock().unwrap()
+    }
 
     fn test_dir() -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -688,24 +725,6 @@ mod tests {
         tracing::subscriber::with_default(subscriber, emit);
     }
 
-    fn emit_diagnostic_probe(visits: &AtomicU64) {
-        if !leopardwm_platform_win32::gesture_diagnostic_capture_active() {
-            return;
-        }
-        tracing::trace!(
-            target: GESTURE_DIAG_TARGET,
-            stage = GESTURE_DIAG_STAGE_HOOK_DELIVERY,
-            axis = "vertical",
-            delta = {
-                visits.fetch_add(1, Ordering::Relaxed);
-                120
-            },
-            flags = 0u32,
-            mods_held = false,
-            swipe_candidate = false,
-        );
-    }
-
     fn emit_general_trace_probe(visits: &AtomicU64) {
         tracing::trace!(
             target: "leopardwm::test_general",
@@ -730,6 +749,7 @@ mod tests {
 
     #[test]
     fn no_input_completes_on_deadline_without_further_events() {
+        let _capture_guard = capture_test_guard();
         let dir = test_dir();
         let mut limits = CaptureLimits::from_secs(1);
         limits.duration = Duration::from_millis(200);
@@ -756,6 +776,7 @@ mod tests {
                 records_written: 0,
                 records_dropped: 0,
                 records_capped: 0,
+                records_admitted_at_close: 0,
                 records_in_flight_at_close: 1,
                 records_after_close: 1,
                 counts: &counts,
@@ -767,12 +788,68 @@ mod tests {
     }
 
     #[test]
-    fn production_filter_stops_inactive_diagnostics_without_vetoing_general_trace() {
+    fn admitted_producer_at_deadline_prevents_no_input_without_blocking_shutdown() {
+        let _capture_guard = capture_test_guard();
         let dir = test_dir();
         let mut limits = CaptureLimits::from_secs(1);
         limits.duration = Duration::from_millis(100);
         let handle = start_capture(&dir, test_header(1), limits).unwrap();
-        let diagnostic_visits = Arc::new(AtomicU64::new(0));
+        let admission = leopardwm_platform_win32::admit_gesture_diagnostic_capture()
+            .expect("capture gate should admit the real producer path");
+
+        let started = Instant::now();
+        handle.wait_for_deadline();
+        let elapsed = started.elapsed();
+        let body = read_capture(&dir);
+        assert!(
+            elapsed < Duration::from_millis(600),
+            "capture took {elapsed:?}"
+        );
+        assert!(body.contains("records_admitted_at_close=1"), "{body}");
+        assert!(body.contains("no_input=false"), "{body}");
+        drop(admission);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn dropped_handle_still_reports_admission_at_close() {
+        let _capture_guard = capture_test_guard();
+        let dir = test_dir();
+        let mut limits = CaptureLimits::from_secs(1);
+        limits.duration = Duration::from_secs(30);
+        let handle = start_capture(&dir, test_header(1), limits).unwrap();
+        let admission = leopardwm_platform_win32::admit_gesture_diagnostic_capture()
+            .expect("capture gate should admit the real producer path");
+
+        // The handle closes admission before the worker reaches its own close,
+        // so the worker's summary must read the snapshot rather than a second,
+        // now-empty close.
+        drop(handle);
+
+        // The summary is written line by line, so wait for its last line before
+        // reading the fields written above it.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let body = loop {
+            let body = read_capture(&dir);
+            if body.contains("stage_registration=") {
+                break body;
+            }
+            assert!(Instant::now() < deadline, "no summary written: {body}");
+            thread::sleep(Duration::from_millis(10));
+        };
+        assert!(body.contains("records_admitted_at_close=1"), "{body}");
+        assert!(body.contains("no_input=false"), "{body}");
+        drop(admission);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn production_filter_stops_inactive_diagnostics_without_vetoing_general_trace() {
+        let _capture_guard = capture_test_guard();
+        let dir = test_dir();
+        let mut limits = CaptureLimits::from_secs(1);
+        limits.duration = Duration::from_millis(100);
+        let handle = start_capture(&dir, test_header(1), limits).unwrap();
         let general_visits = Arc::new(AtomicU64::new(0));
         let general = Arc::new(Mutex::new(Vec::<u8>::new()));
         let writer_buf = Arc::clone(&general);
@@ -786,14 +863,19 @@ mod tests {
             .with(handle.layer().with_filter(handle.filter()));
 
         tracing::subscriber::with_default(subscriber, || {
-            emit_diagnostic_probe(&diagnostic_visits);
+            emit_gesture_registration("registered");
             handle.wait_for_deadline();
-            emit_diagnostic_probe(&diagnostic_visits);
+            emit_gesture_registration("registered");
             emit_general_trace_probe(&general_visits);
         });
 
-        assert_eq!(diagnostic_visits.load(Ordering::Relaxed), 1);
         assert_eq!(general_visits.load(Ordering::Relaxed), 1);
+        let body = read_capture(&dir);
+        assert_eq!(
+            body.matches("stage=registration state=registered").count(),
+            1,
+            "{body}"
+        );
         let general = String::from_utf8(general.lock().unwrap().clone()).unwrap();
         assert!(general.contains("general trace after capture"), "{general}");
         let _ = std::fs::remove_dir_all(&dir);
@@ -801,6 +883,7 @@ mod tests {
 
     #[test]
     fn new_capture_replaces_prior_report() {
+        let _capture_guard = capture_test_guard();
         let dir = test_dir();
         let path = capture_log_path(&dir);
         std::fs::write(&path, "stale-report\n").unwrap();
@@ -816,6 +899,7 @@ mod tests {
 
     #[test]
     fn deadline_does_not_require_further_input() {
+        let _capture_guard = capture_test_guard();
         let dir = test_dir();
         let mut limits = CaptureLimits::from_secs(1);
         limits.duration = Duration::from_millis(250);
@@ -838,6 +922,7 @@ mod tests {
 
     #[test]
     fn continuing_input_cannot_extend_deadline_capture() {
+        let _capture_guard = capture_test_guard();
         let dir = test_dir();
         let limits = CaptureLimits {
             duration: Duration::from_millis(120),
@@ -883,6 +968,7 @@ mod tests {
 
     #[test]
     fn bounded_count_reports_cap_and_does_not_claim_no_input() {
+        let _capture_guard = capture_test_guard();
         let dir = test_dir();
         let limits = CaptureLimits {
             duration: Duration::from_millis(400),
@@ -921,7 +1007,10 @@ mod tests {
                 active: Arc::new(AtomicBool::new(true)),
                 in_flight: Arc::new(AtomicU64::new(0)),
                 after_close: Arc::new(AtomicU64::new(0)),
-                gate_open: Arc::new(AtomicBool::new(false)),
+                gate: Arc::new(Mutex::new(GateLifecycle {
+                    open: false,
+                    admitted_at_close: 0,
+                })),
             },
         };
         let subscriber = tracing_subscriber::registry().with(layer);
@@ -940,6 +1029,7 @@ mod tests {
 
     #[test]
     fn no_action_dispatch_omits_unknown_command_text() {
+        let _capture_guard = capture_test_guard();
         let dir = test_dir();
         let mut limits = CaptureLimits::from_secs(1);
         limits.duration = Duration::from_millis(250);
@@ -973,6 +1063,7 @@ mod tests {
 
     #[test]
     fn capture_excludes_unrelated_application_data() {
+        let _capture_guard = capture_test_guard();
         let dir = test_dir();
         let mut limits = CaptureLimits::from_secs(1);
         limits.duration = Duration::from_millis(250);
@@ -1007,6 +1098,7 @@ mod tests {
 
     #[test]
     fn info_filter_ignores_trace_diagnostics_and_capture_still_records() {
+        let _capture_guard = capture_test_guard();
         let dir = test_dir();
         let mut limits = CaptureLimits::from_secs(1);
         limits.duration = Duration::from_millis(250);

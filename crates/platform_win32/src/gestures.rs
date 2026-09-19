@@ -2,7 +2,7 @@
 
 use crate::{recover_poisoned_mutex, Win32Error, WM_QUIT_LLHOOK_THREAD};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicU64, Ordering},
     mpsc,
 };
 use windows::Win32::System::Threading::GetCurrentThreadId;
@@ -54,21 +54,52 @@ pub const GESTURE_DIAG_STAGE_RECOGNIZED: &str = "recognized";
 pub const GESTURE_DIAG_STAGE_DISPATCH: &str = "dispatch";
 pub const GESTURE_DIAG_STAGE_REGISTRATION: &str = "registration";
 
-static GESTURE_DIAGNOSTIC_CAPTURE_ACTIVE: AtomicBool = AtomicBool::new(false);
+const GESTURE_DIAGNOSTIC_GATE_OPEN: u64 = 1;
+const GESTURE_DIAGNOSTIC_ADMISSION_STEP: u64 = 2;
+
+// Bit 0 is the capture gate; the remaining bits count admitted emitters. Closing
+// clears the gate with one atomic operation, so no emitter can be admitted after
+// the worker snapshots the count for its bounded summary.
+static GESTURE_DIAGNOSTIC_CAPTURE_STATE: AtomicU64 = AtomicU64::new(0);
+
+/// Keeps an already-admitted diagnostic emitter visible to capture shutdown.
+pub struct GestureDiagnosticAdmission;
+
+impl Drop for GestureDiagnosticAdmission {
+    fn drop(&mut self) {
+        GESTURE_DIAGNOSTIC_CAPTURE_STATE
+            .fetch_sub(GESTURE_DIAGNOSTIC_ADMISSION_STEP, Ordering::Release);
+    }
+}
 
 /// Enables trace construction for the bounded daemon diagnostic capture.
 pub fn begin_gesture_diagnostic_capture() {
-    GESTURE_DIAGNOSTIC_CAPTURE_ACTIVE.store(true, Ordering::Release);
+    GESTURE_DIAGNOSTIC_CAPTURE_STATE.fetch_or(GESTURE_DIAGNOSTIC_GATE_OPEN, Ordering::Release);
 }
 
-/// Stops trace construction after the bounded daemon diagnostic capture ends.
-pub fn end_gesture_diagnostic_capture() {
-    GESTURE_DIAGNOSTIC_CAPTURE_ACTIVE.store(false, Ordering::Release);
+/// Stops new trace construction and returns emitters admitted at closure.
+pub fn end_gesture_diagnostic_capture() -> u64 {
+    GESTURE_DIAGNOSTIC_CAPTURE_STATE.fetch_and(!GESTURE_DIAGNOSTIC_GATE_OPEN, Ordering::AcqRel)
+        / GESTURE_DIAGNOSTIC_ADMISSION_STEP
 }
 
-/// Whether the daemon's bounded diagnostic capture currently accepts records.
-pub fn gesture_diagnostic_capture_active() -> bool {
-    GESTURE_DIAGNOSTIC_CAPTURE_ACTIVE.load(Ordering::Acquire)
+/// Attempts to admit a diagnostic emitter without waiting on capture I/O.
+pub fn admit_gesture_diagnostic_capture() -> Option<GestureDiagnosticAdmission> {
+    let mut state = GESTURE_DIAGNOSTIC_CAPTURE_STATE.load(Ordering::Acquire);
+    loop {
+        if state & GESTURE_DIAGNOSTIC_GATE_OPEN == 0 {
+            return None;
+        }
+        match GESTURE_DIAGNOSTIC_CAPTURE_STATE.compare_exchange_weak(
+            state,
+            state + GESTURE_DIAGNOSTIC_ADMISSION_STEP,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => return Some(GestureDiagnosticAdmission),
+            Err(next) => state = next,
+        }
+    }
 }
 
 /// Wheel message constants (not all exposed by windows-rs).
@@ -558,9 +589,10 @@ fn send_gesture_event(event: GestureEvent) {
 
 /// Emit a registration-stage record on the dedicated diagnostic target.
 pub fn emit_gesture_registration(state: &'static str) {
-    if gesture_diagnostic_capture_active() {
-        emit_gesture_registration_active(state);
-    }
+    let Some(_admission) = admit_gesture_diagnostic_capture() else {
+        return;
+    };
+    emit_gesture_registration_active(state);
 }
 
 fn emit_gesture_registration_active(state: &'static str) {
@@ -579,9 +611,9 @@ fn emit_wheel_diagnostics(
     swipe_candidate: bool,
     result: &WheelGestureResult,
 ) {
-    if !gesture_diagnostic_capture_active() {
+    let Some(_admission) = admit_gesture_diagnostic_capture() else {
         return;
-    }
+    };
     emit_wheel_diagnostics_active(axis, delta, flags, mods_held, swipe_candidate, result);
 }
 
@@ -741,6 +773,8 @@ unsafe extern "system" fn gesture_mouse_hook_proc(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    static DIAGNOSTIC_GATE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn input(
         now_ms: u128,
@@ -968,9 +1002,11 @@ mod tests {
         engine: &mut WheelGestureEngine,
         sample: WheelGestureInput,
     ) -> (WheelGestureResult, Vec<String>) {
+        let _gate_guard = DIAGNOSTIC_GATE_TEST_LOCK.lock().unwrap();
         let result = engine.process(sample);
+        begin_gesture_diagnostic_capture();
         let lines = capture_diag(|| {
-            emit_wheel_diagnostics_active(
+            emit_wheel_diagnostics(
                 sample.axis,
                 sample.delta,
                 sample.flags,
@@ -979,6 +1015,7 @@ mod tests {
                 &result,
             );
         });
+        end_gesture_diagnostic_capture();
         (result, lines)
     }
 
@@ -1152,6 +1189,54 @@ mod tests {
         assert!(lines
             .iter()
             .any(|line| line.contains("mods_held=true") && line.contains("swipe_candidate=false")));
+    }
+
+    #[test]
+    fn capture_gate_controls_production_registration_emitter() {
+        let _gate_guard = DIAGNOSTIC_GATE_TEST_LOCK.lock().unwrap();
+        end_gesture_diagnostic_capture();
+        let closed = capture_diag(|| emit_gesture_registration("registered"));
+        assert!(closed.is_empty());
+
+        begin_gesture_diagnostic_capture();
+        let open = capture_diag(|| emit_gesture_registration("registered"));
+        end_gesture_diagnostic_capture();
+        assert_eq!(open, vec!["stage=registration state=registered"]);
+    }
+
+    #[test]
+    fn capture_gate_controls_production_wheel_emitter() {
+        let _gate_guard = DIAGNOSTIC_GATE_TEST_LOCK.lock().unwrap();
+        let mut engine = WheelGestureEngine::new();
+        let sample = input(0, WheelAxis::Vertical, 120, false, 0);
+        let result = engine.process(sample);
+
+        end_gesture_diagnostic_capture();
+        let closed = capture_diag(|| {
+            emit_wheel_diagnostics(
+                sample.axis,
+                sample.delta,
+                sample.flags,
+                sample.mods_held,
+                sample.swipe_candidate,
+                &result,
+            );
+        });
+        assert!(closed.is_empty());
+
+        begin_gesture_diagnostic_capture();
+        let open = capture_diag(|| {
+            emit_wheel_diagnostics(
+                sample.axis,
+                sample.delta,
+                sample.flags,
+                sample.mods_held,
+                sample.swipe_candidate,
+                &result,
+            );
+        });
+        end_gesture_diagnostic_capture();
+        assert!(open.iter().any(|line| line.contains("stage=hook_delivery")));
     }
 
     #[test]

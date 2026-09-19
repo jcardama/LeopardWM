@@ -2053,42 +2053,6 @@ mod gesture_dispatch_tests {
     }
 }
 
-#[cfg(test)]
-mod startup_tests {
-    use super::*;
-
-    #[test]
-    fn duplicate_rejection_preserves_existing_capture_artifact() {
-        let dir =
-            std::env::temp_dir().join(format!("lwm-duplicate-capture-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = gesture_diagnostics::capture_log_path(&dir);
-        std::fs::write(&path, "prior-report\n").unwrap();
-
-        let duplicate_detected = true;
-        let mut capture_started = false;
-        let capture = (!duplicate_detected).then(|| {
-            capture_started = true;
-            gesture_diagnostics::start_capture(
-                &dir,
-                gesture_diagnostics::CaptureHeader {
-                    version: "test".to_string(),
-                    gestures_enabled_config: true,
-                    capture_limit_secs: 1,
-                    daemon_integrity: "Medium".to_string(),
-                },
-                gesture_diagnostics::CaptureLimits::from_secs(1),
-            )
-        });
-
-        assert!(capture.is_none());
-        assert!(!capture_started);
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "prior-report\n");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-}
-
 /// Open the config file in the user's editor and arm the "Edit Config" pull, so
 /// a single-instance editor that raises an existing window on another workspace
 /// gets pulled to the active workspace (see `try_edit_config_pull`).
