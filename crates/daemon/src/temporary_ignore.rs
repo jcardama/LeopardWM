@@ -335,22 +335,22 @@ impl AppState {
         if self.paused {
             return IdleLayoutReapply::Paused;
         }
-        if !self
+        let recovery_animation_landing = !self
             .apply_worker_cancelled
             .load(std::sync::atomic::Ordering::SeqCst)
-        {
-            if let Some(remaining) = self
-                .layout_transition
-                .as_ref()
-                .map(|transition| transition.duration_ms.saturating_sub(transition.elapsed_ms))
-            {
-                self.tick_animations(remaining);
-            }
+            && self.settle_interrupted_animations_for_recovery();
+        let requires_post_animation_nudge =
+            recovery_animation_landing || self.post_animation_nudge_pending;
+        if recovery_animation_landing {
+            self.post_animation_nudge_pending = true;
         }
         match self.apply_layout() {
             Ok(LayoutApplyOutcome::Completed) => {}
             Ok(LayoutApplyOutcome::DeferredByRecoveryBarrier) => return IdleLayoutReapply::Waiting,
             Err(error) => {
+                if requires_post_animation_nudge {
+                    self.post_animation_nudge_pending = true;
+                }
                 self.idle_layout_reapply_failures =
                     self.idle_layout_reapply_failures.saturating_add(1);
                 if self.idle_layout_reapply_failures >= MAX_IDLE_LAYOUT_REAPPLY_FAILURES {

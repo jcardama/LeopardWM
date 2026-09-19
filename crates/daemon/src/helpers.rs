@@ -710,9 +710,13 @@ impl AppState {
             self.pending_drag_hint = Some(crate::state::DragHintAction::Hide);
         } else {
             self.pending_layout_apply_timeout_report = None;
-            match self.apply_layout() {
-                Ok(crate::layout_apply::LayoutApplyOutcome::Completed) => {}
-                Ok(crate::layout_apply::LayoutApplyOutcome::DeferredByRecoveryBarrier) => {
+            let recovery_landed = if self.pending_idle_layout_reapply && self.is_animating() {
+                if matches!(
+                    self.try_consume_idle_layout_reapply(),
+                    crate::temporary_ignore::IdleLayoutReapply::Applied
+                ) {
+                    true
+                } else {
                     self.paused = was_paused;
                     let error = anyhow::anyhow!(
                         "Resume apply deferred while recovery animation placement finishes"
@@ -723,13 +727,31 @@ impl AppState {
                     );
                     return Err(error);
                 }
-                Err(error) => {
-                    self.paused = was_paused;
-                    warn!(
-                        "Resume apply failed via {}; restoring paused state: {}",
-                        source, error
-                    );
-                    return Err(error);
+            } else {
+                false
+            };
+            if !recovery_landed {
+                match self.apply_layout() {
+                    Ok(crate::layout_apply::LayoutApplyOutcome::Completed) => {}
+                    Ok(crate::layout_apply::LayoutApplyOutcome::DeferredByRecoveryBarrier) => {
+                        self.paused = was_paused;
+                        let error = anyhow::anyhow!(
+                            "Resume apply deferred while recovery animation placement finishes"
+                        );
+                        warn!(
+                            "Resume apply failed via {}; restoring paused state: {}",
+                            source, error
+                        );
+                        return Err(error);
+                    }
+                    Err(error) => {
+                        self.paused = was_paused;
+                        warn!(
+                            "Resume apply failed via {}; restoring paused state: {}",
+                            source, error
+                        );
+                        return Err(error);
+                    }
                 }
             }
             // Park inactive workspaces only after a successful active apply so a

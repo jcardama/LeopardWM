@@ -67,6 +67,35 @@ impl AppState {
         still_animating
     }
 
+    pub(crate) fn settle_interrupted_animations_for_recovery(&mut self) -> bool {
+        if !self.is_animating() {
+            return false;
+        }
+
+        self.abort_active_ghost_transition();
+        let mut scroll_anims_settled = false;
+        for workspaces in self.workspaces.values_mut() {
+            for workspace in workspaces {
+                if workspace.is_animating() {
+                    workspace.stop_animation();
+                    scroll_anims_settled = true;
+                }
+            }
+        }
+        if scroll_anims_settled {
+            self.sync_taskbar_buttons();
+        }
+
+        if let Some(remaining) = self
+            .layout_transition
+            .as_ref()
+            .map(|transition| transition.duration_ms.saturating_sub(transition.elapsed_ms))
+        {
+            self.tick_animations(remaining);
+        }
+        true
+    }
+
     /// Snapshot the current placement rects for all tiled windows.
     /// Call this *before* a structural layout change.
     pub(crate) fn snapshot_layout(

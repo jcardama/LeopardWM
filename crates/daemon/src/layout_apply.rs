@@ -515,13 +515,17 @@ impl AppState {
                 "Layout application skipped: shutdown/revert cleanup is in progress"
             ));
         }
-        if self.pending_idle_layout_reapply && !self.animation_placement_worker_is_idle() {
+        if self.pending_idle_layout_reapply
+            && (!self.animation_placement_worker_is_idle() || self.is_animating())
+        {
             return Ok(LayoutApplyOutcome::DeferredByRecoveryBarrier);
         }
-        // During layout transitions, the animation worker drives positioning.
+        // During ordinary layout transitions, the animation worker drives positioning.
         if self.layout_transition.is_some() {
             return Ok(LayoutApplyOutcome::Completed);
         }
+        let preserve_recovery_post_animation_nudge =
+            self.pending_idle_layout_reapply && self.post_animation_nudge_pending;
         if !self.pending_apply_workers.is_empty() {
             return Err(anyhow!(
                 "Layout application skipped: previous timed-out apply worker is still finishing"
@@ -621,6 +625,9 @@ impl AppState {
             Err(error) => {
                 self.abandon_physical_request(physical_request_id, physical_invalidation_id);
                 self.applying_layout = false;
+                if preserve_recovery_post_animation_nudge {
+                    self.post_animation_nudge_pending = true;
+                }
                 return Err(error);
             }
         };
@@ -748,6 +755,9 @@ impl AppState {
             }
         };
         self.applying_layout = false;
+        if result.is_err() && preserve_recovery_post_animation_nudge {
+            self.post_animation_nudge_pending = true;
+        }
 
         // Reposition border to track the focused window after layout changes.
         // A thumbnail-revoked source remains cloaked until this exact landing
@@ -1204,8 +1214,12 @@ impl AppState {
 
     /// Post-success bookkeeping: border, tab strip, and deduped LayoutChanged broadcast.
     fn finalize_layout_success(&mut self) {
+        let completed_idle_recovery = self.pending_idle_layout_reapply;
         self.pending_idle_layout_reapply = false;
         self.idle_layout_reapply_failures = 0;
+        if completed_idle_recovery && self.pending_suppress_landing_focus_resync {
+            self.sync_foreground_after_animation_landing();
+        }
         if let Some(hwnd) = self.previous_focused_hwnd {
             if self.config.appearance.active_border {
                 self.show_border(hwnd);

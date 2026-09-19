@@ -574,7 +574,15 @@ impl AppState {
     }
 
     pub(crate) fn sync_foreground_after_animation_landing(&mut self) {
-        let suppress = self.pending_suppress_landing_focus_resync;
+        self.sync_foreground_after_animation_landing_with_suppression(
+            self.pending_suppress_landing_focus_resync,
+        );
+    }
+
+    pub(crate) fn sync_foreground_after_animation_landing_with_suppression(
+        &mut self,
+        suppress: bool,
+    ) {
         self.pending_suppress_landing_focus_resync = false;
         if should_sync_foreground_on_animation_landing(self.paused, suppress) {
             self.sync_foreground_window();

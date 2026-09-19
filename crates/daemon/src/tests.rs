@@ -1451,6 +1451,243 @@ fn test_interrupted_animation_recovery_lands_after_barrier_release() {
 }
 
 #[test]
+fn test_interrupted_recovery_settles_ghosts_scroll_nudge_and_focus_after_retry() {
+    use crate::state::{
+        GhostEntry, TestApplyPlacementsBehavior, TestApplyPlacementsOutcome,
+        TestApplyPlacementsStep,
+    };
+
+    const WID: u64 = u64::MAX - 42;
+    struct GhostCloakGuard(u64);
+    impl Drop for GhostCloakGuard {
+        fn drop(&mut self) {
+            leopardwm_platform_win32::unmark_ghost_cloaked(self.0);
+        }
+    }
+
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = false;
+    {
+        let workspace = &mut state.workspaces.get_mut(&1).unwrap()[0];
+        for hwnd in [WID, WID - 1, WID - 2] {
+            workspace.insert_window(hwnd, Some(800)).unwrap();
+        }
+        workspace.set_reduce_motion(false);
+        workspace.focus_window(WID).unwrap();
+        workspace.start_scroll_animation(400.0, 1920, Some(1_000), None);
+    }
+    state.previous_focused_hwnd = Some(WID);
+    let landing = state.workspaces[&1][0]
+        .compute_placements(state.layout_viewport(1))
+        .into_iter()
+        .find(|placement| placement.window_id == WID)
+        .unwrap();
+    let snapshot = state.snapshot_layout();
+    state.start_layout_transition_with_duration(snapshot, 150);
+    state
+        .layout_transition
+        .as_mut()
+        .unwrap()
+        .suppress_landing_focus_resync = true;
+    state.ghost_handles.insert(
+        WID,
+        GhostEntry::new(0, "GhostClass".into(), Rect::new(0, 0, 800, 600)),
+    );
+    let _cloak_guard = GhostCloakGuard(WID);
+    leopardwm_platform_win32::mark_ghost_cloaked(WID);
+    state.pending_idle_layout_reapply = true;
+    state.injected_apply_placements_behavior = Some(TestApplyPlacementsBehavior::Scripted(vec![
+        TestApplyPlacementsStep {
+            delay: Duration::ZERO,
+            outcome: TestApplyPlacementsOutcome::Fail,
+        },
+        TestApplyPlacementsStep {
+            delay: Duration::ZERO,
+            outcome: TestApplyPlacementsOutcome::Succeed {
+                landings: vec![leopardwm_platform_win32::PlacementLanding {
+                    window_id: WID,
+                    requested_rect: landing.rect,
+                    requested_visibility: landing.visibility,
+                    actual_visible_rect: Some(landing.rect),
+                    actual_outer_rect: Some(landing.rect),
+                    failed: false,
+                    unreadable: false,
+                }],
+            },
+        },
+    ]));
+    let (event_tx, _event_rx) = tokio::sync::mpsc::channel(4);
+    let worker = animation_worker::AnimationWorkerHandle::spawn(
+        event_tx,
+        state.apply_worker_cancelled.clone(),
+    )
+    .unwrap();
+    let unblock = worker.block_for_test();
+    state.animation_worker_control = Some(worker.control());
+
+    assert_eq!(
+        state.try_consume_idle_layout_reapply(),
+        crate::temporary_ignore::IdleLayoutReapply::Waiting
+    );
+    assert!(state.ghost_handles.contains_key(&WID));
+    assert!(state.layout_transition.is_some());
+
+    unblock.send(()).unwrap();
+    assert!(worker.control().wait_for_barrier(Duration::from_secs(2)));
+    assert_eq!(
+        state.try_consume_idle_layout_reapply(),
+        crate::temporary_ignore::IdleLayoutReapply::Waiting
+    );
+    assert!(state.layout_transition.is_none());
+    assert!(!state.workspaces[&1][0].is_animating());
+    assert_eq!(state.workspaces[&1][0].scroll_offset(), 400.0);
+    assert!(state.ghost_handles.is_empty());
+    assert!(state.ghost_sources_pending_safe_landing.contains(&WID));
+    assert!(leopardwm_platform_win32::is_placement_cloaked(WID));
+    assert!(state.post_animation_nudge_pending);
+    assert!(state.pending_suppress_landing_focus_resync);
+
+    assert_eq!(
+        state.try_consume_idle_layout_reapply(),
+        crate::temporary_ignore::IdleLayoutReapply::Applied
+    );
+    assert!(!state.pending_idle_layout_reapply);
+    assert!(!state.post_animation_nudge_pending);
+    assert!(!state.pending_suppress_landing_focus_resync);
+    assert_eq!(state.previous_focused_hwnd, Some(WID));
+    assert!(!state.ghost_sources_pending_safe_landing.contains(&WID));
+    assert!(!leopardwm_platform_win32::is_placement_cloaked(WID));
+    assert_eq!(
+        state
+            .injected_apply_placements_call_count
+            .load(Ordering::SeqCst),
+        2
+    );
+}
+
+#[test]
+fn test_explicit_apply_consumes_suppressed_recovery_landing_after_failure() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = false;
+    {
+        let workspace = &mut state.workspaces.get_mut(&1).unwrap()[0];
+        workspace.insert_window(100, Some(800)).unwrap();
+        workspace.focus_window(100).unwrap();
+    }
+    state.previous_focused_hwnd = Some(100);
+    let snapshot = state.snapshot_layout();
+    state.start_layout_transition_with_duration(snapshot, 150);
+    state
+        .layout_transition
+        .as_mut()
+        .unwrap()
+        .suppress_landing_focus_resync = true;
+    state.pending_idle_layout_reapply = true;
+    state.injected_apply_placements_behavior =
+        Some(TestApplyPlacementsBehavior::SleepAndFail(Duration::ZERO));
+
+    assert_eq!(
+        state.try_consume_idle_layout_reapply(),
+        crate::temporary_ignore::IdleLayoutReapply::Waiting
+    );
+    assert!(state.layout_transition.is_none());
+    assert!(state.pending_idle_layout_reapply);
+    assert!(state.pending_suppress_landing_focus_resync);
+    assert!(state.post_animation_nudge_pending);
+
+    state.injected_apply_placements_behavior =
+        Some(TestApplyPlacementsBehavior::SleepAndFail(Duration::ZERO));
+    assert!(matches!(
+        state.handle_command(IpcCommand::Apply),
+        IpcResponse::Error { .. }
+    ));
+    assert!(state.pending_idle_layout_reapply);
+    assert!(state.pending_suppress_landing_focus_resync);
+    assert!(
+        state.post_animation_nudge_pending,
+        "a failed explicit recovery retry must retain its post-animation nudge"
+    );
+
+    state.injected_apply_placements_behavior =
+        Some(TestApplyPlacementsBehavior::SleepAndSucceed(Duration::ZERO));
+    assert_eq!(state.handle_command(IpcCommand::Apply), IpcResponse::Ok);
+    assert!(!state.pending_idle_layout_reapply);
+    assert!(!state.pending_suppress_landing_focus_resync);
+    assert!(!state.post_animation_nudge_pending);
+    assert_eq!(state.previous_focused_hwnd, Some(100));
+}
+
+#[test]
+fn test_normal_animation_landing_preserves_recovery_suppression_through_apply() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = false;
+    state.workspaces.get_mut(&1).unwrap()[0]
+        .insert_window(100, Some(800))
+        .unwrap();
+    let snapshot = state.snapshot_layout();
+    state.start_layout_transition_with_duration(snapshot, 150);
+    state
+        .layout_transition
+        .as_mut()
+        .unwrap()
+        .suppress_landing_focus_resync = true;
+    state.pending_idle_layout_reapply = true;
+    assert!(state.tick_animations(150));
+    assert!(state.layout_transition.is_none());
+    assert!(state.pending_suppress_landing_focus_resync);
+
+    state.post_animation_nudge_pending = true;
+    let landing_suppress_focus_resync = state.pending_suppress_landing_focus_resync;
+    state.injected_apply_placements_behavior =
+        Some(TestApplyPlacementsBehavior::SleepAndSucceed(Duration::ZERO));
+    assert!(state.apply_layout().is_ok());
+    assert!(!state.pending_idle_layout_reapply);
+    assert!(!state.pending_suppress_landing_focus_resync);
+    let updates_before_landing_sync = state.tab_strip_update_count.load(Ordering::Relaxed);
+
+    state.sync_foreground_after_animation_landing_with_suppression(landing_suppress_focus_resync);
+    assert_eq!(
+        state.tab_strip_update_count.load(Ordering::Relaxed),
+        updates_before_landing_sync,
+        "the normal landing must retain recovery suppression after apply finalization"
+    );
+
+    state.sync_foreground_after_animation_landing();
+    assert_eq!(
+        state.tab_strip_update_count.load(Ordering::Relaxed),
+        updates_before_landing_sync + 1,
+        "the next unrelated landing must not inherit recovery suppression"
+    );
+}
+
+#[test]
+fn test_interrupted_recovery_settles_scroll_only_animation() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = false;
+    {
+        let workspace = &mut state.workspaces.get_mut(&1).unwrap()[0];
+        for hwnd in [100, 200, 300] {
+            workspace.insert_window(hwnd, Some(800)).unwrap();
+        }
+        workspace.set_reduce_motion(false);
+        workspace.start_scroll_animation(400.0, 1920, Some(1_000), None);
+    }
+    state.pending_idle_layout_reapply = true;
+    state.injected_apply_placements_behavior =
+        Some(TestApplyPlacementsBehavior::SleepAndSucceed(Duration::ZERO));
+
+    assert_eq!(
+        state.try_consume_idle_layout_reapply(),
+        crate::temporary_ignore::IdleLayoutReapply::Applied
+    );
+    let workspace = &state.workspaces[&1][0];
+    assert_eq!(workspace.scroll_offset(), 400.0);
+    assert!(!workspace.is_animating());
+    assert!(!state.pending_idle_layout_reapply);
+    assert!(!state.post_animation_nudge_pending);
+}
+
+#[test]
 fn test_invalidated_animation_result_releases_only_matching_latch() {
     let mut state = AppState::new_with_config(test_config(), two_monitors());
     state.workspaces.get_mut(&1).unwrap()[0]
@@ -6830,6 +7067,99 @@ fn test_cmd_apply() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
     let resp = state.handle_command(IpcCommand::Apply);
     assert_eq!(resp, IpcResponse::Ok);
+}
+
+#[test]
+fn test_cmd_apply_defers_until_idle_recovery_settles_surviving_transition() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = false;
+    state.workspaces.get_mut(&1).unwrap()[0]
+        .insert_window(100, Some(800))
+        .unwrap();
+    let snapshot = state.snapshot_layout();
+    state.start_layout_transition_with_duration(snapshot, 150);
+    state.pending_idle_layout_reapply = true;
+    state.injected_apply_placements_behavior =
+        Some(TestApplyPlacementsBehavior::SleepAndSucceed(Duration::ZERO));
+
+    match state.handle_command(IpcCommand::Apply) {
+        IpcResponse::Error { message } => assert!(message.contains("remains pending")),
+        other => panic!("expected deferred Apply error, got {other:?}"),
+    }
+    assert_eq!(
+        state
+            .injected_apply_placements_call_count
+            .load(Ordering::SeqCst),
+        0,
+        "Apply must not claim a physical landing while recovery still has a transition"
+    );
+    assert!(state.pending_idle_layout_reapply);
+    assert!(state.layout_transition.is_some());
+
+    assert_eq!(
+        state.try_consume_idle_layout_reapply(),
+        crate::temporary_ignore::IdleLayoutReapply::Applied
+    );
+    assert!(!state.pending_idle_layout_reapply);
+    assert!(state.layout_transition.is_none());
+}
+
+#[test]
+fn test_cmd_resume_recovers_surviving_transition_after_barrier_clears() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = true;
+    state.workspaces.get_mut(&1).unwrap()[0]
+        .insert_window(100, Some(800))
+        .unwrap();
+    let snapshot = state.snapshot_layout();
+    state.start_layout_transition_with_duration(snapshot, 150);
+    state.pending_idle_layout_reapply = true;
+    state.injected_apply_placements_behavior =
+        Some(TestApplyPlacementsBehavior::SleepAndSucceed(Duration::ZERO));
+    let (event_tx, _event_rx) = tokio::sync::mpsc::channel(4);
+    let worker = animation_worker::AnimationWorkerHandle::spawn(
+        event_tx,
+        state.apply_worker_cancelled.clone(),
+    )
+    .unwrap();
+    let unblock = worker.block_for_test();
+    state.animation_worker_control = Some(worker.control());
+
+    match state.handle_command(IpcCommand::TogglePause) {
+        IpcResponse::Error { message } => assert!(message.contains("deferred")),
+        other => panic!("expected deferred resume error, got {other:?}"),
+    }
+    assert!(state.paused, "busy recovery must restore paused state");
+    assert!(state.pending_idle_layout_reapply);
+    assert!(state.layout_transition.is_some());
+    assert_eq!(
+        state
+            .injected_apply_placements_call_count
+            .load(Ordering::SeqCst),
+        0,
+        "busy resume must not dispatch a recovery landing"
+    );
+    assert!(
+        state.take_recorded_taskbar_commands().is_empty(),
+        "busy resume must not run completion-only taskbar effects"
+    );
+
+    unblock.send(()).unwrap();
+    assert!(worker.control().wait_for_barrier(Duration::from_secs(2)));
+    assert_eq!(
+        state.handle_command(IpcCommand::TogglePause),
+        IpcResponse::Ok
+    );
+    assert!(!state.paused);
+    assert!(!state.pending_idle_layout_reapply);
+    assert!(state.layout_transition.is_none());
+    assert!(
+        state
+            .injected_apply_placements_call_count
+            .load(Ordering::SeqCst)
+            > 0,
+        "idle resume must settle and physically land the surviving transition"
+    );
 }
 
 #[test]

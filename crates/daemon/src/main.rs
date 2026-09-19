@@ -3146,6 +3146,7 @@ async fn handle_animation_frame_applied(
             // visible 1 px wobble on every Chromium / Firefox
             // window every time the layout is re-applied.
             state.post_animation_nudge_pending = true;
+            let landing_suppress_focus_resync = state.pending_suppress_landing_focus_resync;
             let landing_ok = matches!(
                 state.apply_layout(),
                 Ok(crate::layout_apply::LayoutApplyOutcome::Completed)
@@ -3272,7 +3273,9 @@ async fn handle_animation_frame_applied(
             // focused_column. This re-asserts the correct focus
             // after the animation has settled.
             let pending_sticky = state.pending_sticky_refocus.take();
-            state.sync_foreground_after_animation_landing();
+            state.sync_foreground_after_animation_landing_with_suppression(
+                landing_suppress_focus_resync,
+            );
             // A workspace switch left a focused pinned window behind
             // it: those same spurious foreground events can have
             // clobbered previous_focused_hwnd mid-slide, making the
