@@ -278,8 +278,9 @@ This pauses tiling, clears LeopardWM's active decoration, globally attempts to
 restore any top-level windows parked at LeopardWM's off-screen sentinel, and
 cascades every tiled and floating managed window. Membership and admission stay
 intact: use `lwm toggle-pause` to resume tiling. The command has no confirmation
-prompt. If any recovery or placement fails, release may be partial, tiling remains
-paused, and the CLI reports the failure.
+prompt. If recovery fails or a live window cannot be restored, cascaded, or is
+still maximized, release may be partial, tiling remains paused, and the CLI
+reports the failure.
 
 ### Autostart (boot with Windows)
 

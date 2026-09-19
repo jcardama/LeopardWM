@@ -306,12 +306,15 @@ fn restore_all_windows_moved_offscreen() -> OffscreenRecovery {
             }
         }
     };
-    let window_ids = collect_all_top_level_window_ids();
-    let (restored_count, failures) = restore_windows_moved_offscreen_with_work_area(
-        &window_ids,
+    let collection = collect_all_top_level_window_ids();
+    let (restored_count, mut failures) = restore_windows_moved_offscreen_with_work_area(
+        &collection.window_ids,
         &primary.work_area,
         restore_window_if_offscreen_to_work_area,
     );
+    if let Some(error) = collection.error {
+        failures.push(format!("top-level window enumeration: {error}"));
+    }
     let error = (!failures.is_empty()).then(|| {
         combine_operation_failures(
             "Failed to restore one or more MoveOffScreen windows",
@@ -371,34 +374,66 @@ pub fn cascade_windows(window_ids: &[WindowId]) -> Result<(), Win32Error> {
             let recovery = restore_all_windows_moved_offscreen();
             recovery.error.map_or(Ok(()), Err)
         },
-        |window_id| {
-            let hwnd = HWND(window_id as *mut c_void);
-            unsafe {
-                if IsIconic(hwnd).as_bool() {
-                    let _ = ShowWindow(hwnd, SW_RESTORE);
-                }
-            }
-            Ok(())
-        },
+        restore_minimized_window,
         |placements| apply_placements(placements, &PlatformConfig::default(), None, false),
+        crate::is_window_valid,
     )
 }
 
-fn cascade_windows_with<R, M, A>(
+fn restore_minimized_window(window_id: WindowId) -> Result<(), Win32Error> {
+    restore_minimized_window_with(
+        window_id,
+        |window_id| unsafe { IsIconic(HWND(window_id as *mut c_void)).as_bool() },
+        |window_id| unsafe {
+            let _ = ShowWindow(HWND(window_id as *mut c_void), SW_RESTORE);
+        },
+        crate::is_window_valid,
+    )
+}
+
+fn restore_minimized_window_with<I, R, L>(
+    window_id: WindowId,
+    mut is_iconic: I,
+    mut restore: R,
+    mut is_live: L,
+) -> Result<(), Win32Error>
+where
+    I: FnMut(WindowId) -> bool,
+    R: FnMut(WindowId),
+    L: FnMut(WindowId) -> bool,
+{
+    if !is_iconic(window_id) {
+        return Ok(());
+    }
+
+    restore(window_id);
+    if !is_iconic(window_id) || !is_live(window_id) {
+        return Ok(());
+    }
+
+    Err(Win32Error::SetPositionFailed(format!(
+        "Window {window_id} remained minimized after restore"
+    )))
+}
+
+fn cascade_windows_with<R, M, A, L>(
     window_ids: &[WindowId],
     work_area: Rect,
     mut recover: R,
     mut restore_minimized: M,
     mut apply: A,
+    mut is_live: L,
 ) -> Result<(), Win32Error>
 where
     R: FnMut() -> Result<(), Win32Error>,
     M: FnMut(WindowId) -> Result<(), Win32Error>,
     A: FnMut(&[WindowPlacement]) -> Result<crate::placement::ApplyPlacementsResult, Win32Error>,
+    L: FnMut(WindowId) -> bool,
 {
     let recovery_error = recover().err();
+    // Use height as the base so windows look reasonable on ultrawide monitors.
     let cascade_h = (work_area.height as f64 * 0.5) as i32;
-    let cascade_w = (cascade_h as f64 * 1.33) as i32;
+    let cascade_w = (cascade_h as f64 * 1.33) as i32; // 4:3 aspect ratio
     let placements: Vec<WindowPlacement> = window_ids
         .iter()
         .enumerate()
@@ -424,13 +459,28 @@ where
     }
     for &window_id in window_ids {
         if let Err(error) = restore_minimized(window_id) {
-            failures.push(format!("restore minimized window {window_id}: {error}"));
+            if is_benign_side_effect_error(&error) || !is_live(window_id) {
+                tracing::debug!(
+                    "Ignoring vanished window {} during cascade restore: {}",
+                    window_id,
+                    error
+                );
+            } else {
+                failures.push(format!("restore minimized window {window_id}: {error}"));
+            }
         }
     }
     match apply(&placements) {
         Ok(result) => {
+            for window_id in result.maximized_skipped_window_ids {
+                if is_live(window_id) {
+                    failures.push(format!(
+                        "window {window_id} was skipped because it remained maximized"
+                    ));
+                }
+            }
             for landing in result.landings {
-                if landing.failed || landing.unreadable {
+                if (landing.failed || landing.unreadable) && is_live(landing.window_id) {
                     failures.push(format!(
                         "window {} could not be {} after cascade",
                         landing.window_id,
@@ -464,14 +514,18 @@ mod tests {
     };
 
     #[test]
-    fn cascade_continues_after_recovery_failure_and_reports_it() {
+    fn cascade_continues_after_enumeration_failure_and_reports_it() {
         let window_ids = [10, 20];
         let mut restored = Vec::new();
         let mut applied = Vec::new();
         let error = cascade_windows_with(
             &window_ids,
             Rect::new(0, 0, 1920, 1080),
-            || Err(Win32Error::SetPositionFailed("recovery failed".to_string())),
+            || {
+                Err(Win32Error::EnumerationFailed(
+                    "EnumWindows failed".to_string(),
+                ))
+            },
             |window_id| {
                 restored.push(window_id);
                 Ok(())
@@ -480,16 +534,17 @@ mod tests {
                 applied.extend(placements.iter().map(|placement| placement.window_id));
                 Ok(Default::default())
             },
+            |_| true,
         )
         .unwrap_err();
 
         assert_eq!(restored, window_ids);
         assert_eq!(applied, window_ids);
-        assert!(error.to_string().contains("recovery failed"));
+        assert!(error.to_string().contains("EnumWindows failed"));
     }
 
     #[test]
-    fn cascade_reports_failed_and_unreadable_landings_without_size_mismatch() {
+    fn cascade_reports_live_failed_and_unreadable_landings_without_size_mismatch() {
         let result = cascade_windows_with(
             &[10, 20, 30],
             Rect::new(0, 0, 1920, 1080),
@@ -520,6 +575,7 @@ mod tests {
                     ..Default::default()
                 })
             },
+            |_| true,
         )
         .unwrap_err();
         assert!(result.to_string().contains("10"));
@@ -547,6 +603,7 @@ mod tests {
                     ..Default::default()
                 })
             },
+            |_| true,
         )
         .is_ok());
     }
@@ -563,10 +620,87 @@ mod tests {
                 Ok(())
             },
             |_| Err(Win32Error::SetPositionFailed("apply failed".to_string())),
+            |_| true,
         )
         .unwrap_err();
         assert_eq!(restored, [10, 20]);
         assert!(error.to_string().contains("apply failed"));
+    }
+
+    #[test]
+    fn cascade_ignores_vanished_windows_but_reports_live_skipped_outcomes() {
+        let error = cascade_windows_with(
+            &[10, 20, 30, 40, 50],
+            Rect::new(0, 0, 1920, 1080),
+            || Ok(()),
+            |window_id| {
+                if window_id == 10 {
+                    Err(Win32Error::SetPositionFailed(
+                        "destroyed during restore".to_string(),
+                    ))
+                } else {
+                    Ok(())
+                }
+            },
+            |placements| {
+                Ok(crate::placement::ApplyPlacementsResult {
+                    maximized_skipped_window_ids: vec![20, 30],
+                    landings: vec![
+                        crate::placement::PlacementLanding {
+                            window_id: 40,
+                            requested_rect: placements[3].rect,
+                            requested_visibility: Visibility::Visible,
+                            actual_visible_rect: None,
+                            actual_outer_rect: None,
+                            failed: true,
+                            unreadable: false,
+                        },
+                        crate::placement::PlacementLanding {
+                            window_id: 50,
+                            requested_rect: placements[4].rect,
+                            requested_visibility: Visibility::Visible,
+                            actual_visible_rect: None,
+                            actual_outer_rect: None,
+                            failed: false,
+                            unreadable: true,
+                        },
+                    ],
+                    ..Default::default()
+                })
+            },
+            |window_id| !matches!(window_id, 10 | 30 | 40),
+        )
+        .unwrap_err();
+
+        let message = error.to_string();
+        assert!(message.contains("20"));
+        assert!(message.contains("50"));
+        assert!(!message.contains("destroyed during restore"));
+    }
+
+    #[test]
+    fn restore_minimized_window_reports_a_live_window_that_stays_iconic() {
+        let mut iconic_states = [true, true].into_iter();
+        let error = restore_minimized_window_with(
+            10,
+            |_| iconic_states.next().unwrap_or(true),
+            |_| {},
+            |_| true,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("remained minimized"));
+    }
+
+    #[test]
+    fn restore_minimized_window_ignores_a_window_that_vanishes_during_restore() {
+        let mut iconic_states = [true, true].into_iter();
+        assert!(restore_minimized_window_with(
+            10,
+            |_| iconic_states.next().unwrap_or(true),
+            |_| {},
+            |_| false,
+        )
+        .is_ok());
     }
 
     #[test]
@@ -581,6 +715,7 @@ mod tests {
                 applied = true;
                 Ok(Default::default())
             },
+            |_| true,
         )
         .is_ok());
         assert!(applied);

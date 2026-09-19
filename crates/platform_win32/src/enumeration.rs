@@ -736,16 +736,29 @@ pub fn get_process_executable(pid: u32) -> Option<String> {
     }
 }
 
+pub(crate) struct TopLevelWindowIdCollection {
+    pub(crate) window_ids: Vec<WindowId>,
+    pub(crate) error: Option<Win32Error>,
+}
+
 /// Collect all top-level window IDs (used by emergency restore).
-pub(crate) fn collect_all_top_level_window_ids() -> Vec<WindowId> {
-    let mut window_ids: Vec<WindowId> = Vec::new();
-    unsafe {
-        let _ = EnumWindows(
+pub(crate) fn collect_all_top_level_window_ids() -> TopLevelWindowIdCollection {
+    collect_all_top_level_window_ids_with(|window_ids| unsafe {
+        EnumWindows(
             Some(collect_all_window_ids_callback),
-            LPARAM((&mut window_ids as *mut Vec<WindowId>) as isize),
-        );
-    }
-    window_ids
+            LPARAM((window_ids as *mut Vec<WindowId>) as isize),
+        )
+        .map_err(|error| Win32Error::EnumerationFailed(format!("EnumWindows failed: {error}")))
+    })
+}
+
+fn collect_all_top_level_window_ids_with<F>(enumerate: F) -> TopLevelWindowIdCollection
+where
+    F: FnOnce(&mut Vec<WindowId>) -> Result<(), Win32Error>,
+{
+    let mut window_ids = Vec::new();
+    let error = enumerate(&mut window_ids).err();
+    TopLevelWindowIdCollection { window_ids, error }
 }
 
 unsafe extern "system" fn collect_all_window_ids_callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
@@ -760,6 +773,22 @@ unsafe extern "system" fn collect_all_window_ids_callback(hwnd: HWND, lparam: LP
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn collect_all_top_level_window_ids_surfaces_error_without_losing_partial_ids() {
+        let collection = collect_all_top_level_window_ids_with(|window_ids| {
+            window_ids.extend([10, 20]);
+            Err(Win32Error::EnumerationFailed(
+                "injected EnumWindows failure".to_string(),
+            ))
+        });
+        assert_eq!(collection.window_ids, [10, 20]);
+        assert!(collection
+            .error
+            .unwrap()
+            .to_string()
+            .contains("injected EnumWindows failure"));
+    }
 
     #[test]
     fn test_is_excluded_tool_window() {

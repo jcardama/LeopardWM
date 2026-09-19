@@ -29,9 +29,9 @@ const MAX_PIPE_SCOPE_SEGMENT_LEN: usize = 64;
 /// - v3: effective hotkey query — `QueryHotkeys`, `HotkeyList`, and the
 ///   associated binding/diagnostic records.
 /// - v4: complete workspace-state snapshots and monitor-targeted
-///   workspace switching.
-/// - v5: `ReleaseAllWindows` command.
-pub const IPC_PROTOCOL_VERSION: u32 = 5;
+///   workspace switching. `ReleaseAllWindows` is additive and retains v4
+///   compatibility.
+pub const IPC_PROTOCOL_VERSION: u32 = 4;
 /// Minimum protocol version this crate supports.
 pub const IPC_MIN_SUPPORTED_PROTOCOL_VERSION: u32 = 1;
 
@@ -1338,16 +1338,13 @@ mod tests {
     }
 
     #[test]
-    fn test_protocol_version_bumped_to_v5() {
-        // Sanity guard: bumping the version forces a deliberate review of
-        // wire-compat docs in agent_docs/ipc-events.md when this test breaks.
-        assert_eq!(IPC_PROTOCOL_VERSION, 5);
-        // Older additive-protocol clients should still negotiate.
+    fn test_protocol_version_remains_v4_for_additive_release_command() {
+        assert_eq!(IPC_PROTOCOL_VERSION, 4);
         assert!(is_protocol_version_supported(1));
         assert!(is_protocol_version_supported(2));
         assert!(is_protocol_version_supported(3));
         assert!(is_protocol_version_supported(4));
-        assert!(is_protocol_version_supported(5));
+        assert!(!is_protocol_version_supported(5));
     }
 
     #[test]

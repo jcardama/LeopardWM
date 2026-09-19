@@ -9,7 +9,8 @@ All notable changes to LeopardWM will be documented in this file.
 - **Release every managed window from the CLI with `lwm release-all-windows`.**
   The command pauses tiling, clears active decoration, restores off-screen windows,
   and cascades tiled and floating memberships without removing them. Use
-  `lwm toggle-pause` to resume; errors leave tiling paused and are reported.
+  `lwm toggle-pause` to resume; recovery failures and live windows that cannot be
+  restored, cascaded, or remain maximized leave tiling paused and are reported.
 - **Landings whose visible origin differs from the requested origin by more than 2 px are now logged at warn level with both rectangles.**
   Window drift reports can be diagnosed from a default-level daemon log; placement behavior is unchanged.
 - **Opt-in touchpad gesture diagnostic capture writes a bounded dedicated report.**

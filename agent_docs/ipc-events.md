@@ -28,15 +28,15 @@ Press Ctrl+C to disconnect. The daemon does not need to know who is listening; r
 
 ## Protocol versions and capability checks
 
-The current IPC protocol is v5; the minimum supported version remains v1.
+The current IPC protocol is v4; the minimum supported version remains v1.
 Version 2 added tabbed-column data and commands. Version 3 adds the one-shot
 `QueryHotkeys` command (`{"type":"query_hotkeys"}`) and `HotkeyList` response
 (`status: "hotkey_list"`) with binding records, scroll modifier, and issues.
 Version 4 adds opt-in complete workspace-state snapshots and monitor-targeted
-workspace switching. Version 5 adds `ReleaseAllWindows`
-(`{"type":"release_all_windows"}`), which pauses tiling and cascades every
-managed window while retaining workspace membership. It has no prompt; a
-failed recovery or placement returns an error and leaves tiling paused.
+workspace switching. `ReleaseAllWindows` (`{"type":"release_all_windows"}`) is
+an additive v4 command that pauses tiling and cascades every managed window while
+retaining workspace membership. It has no prompt; a failed recovery or live
+placement outcome returns an error and leaves tiling paused.
 See [the hotkey query contract](shortcut-guide.md#ipc-contract) for ordering,
 collision resolution, and the distinction between configuration and runtime
 registration health.
@@ -108,7 +108,7 @@ lwm workspace 2 --monitor '\\.\DISPLAY2'
 the same event frames as a subscription, then exits. The CLI consumes its initial
 `workspace_state_ready` response. On the wire, send
 `{"type":"query_workspace_state"}`; the first response is
-`{"status":"workspace_state_ready","protocol_version":5}`.
+`{"status":"workspace_state_ready","protocol_version":4}`.
 The CLI gives the acknowledgment and each complete newline-terminated query frame
 a five-second read deadline. A timeout fails the query, including a stalled partial
 frame. The deadline resets for each frame; long-lived subscriptions have no query
@@ -118,7 +118,7 @@ A workspace subscription retains the existing `subscribed` response and echoes
 `workspace_state` in `events`. After either response, switch to the event parser:
 
 ```json
-{"type":"workspace_snapshot_begin","protocol_version":5,"session_id":"opaque-daemon-session","revision":42,"focused_monitor_device_name":"\\\\.\\DISPLAY2"}
+{"type":"workspace_snapshot_begin","protocol_version":4,"session_id":"opaque-daemon-session","revision":42,"focused_monitor_device_name":"\\\\.\\DISPLAY2"}
 {"type":"workspace_snapshot_chunk","revision":42,"records":[{"kind":"monitor","monitor_device_name":"\\\\.\\DISPLAY2","monitor_id":65537,"active_workspace_index":1},{"kind":"workspace","monitor_device_name":"\\\\.\\DISPLAY2","workspace_index":1,"name":"code"},{"kind":"window","monitor_device_name":"\\\\.\\DISPLAY2","workspace_index":1,"hwnd":123456,"is_floating":true,"is_sticky":false}]}
 {"type":"workspace_snapshot_end","revision":42}
 ```
@@ -190,7 +190,7 @@ hardware serial numbers; use the latest snapshot after display reconfiguration.
 The legacy `query_workspace`, `switch_workspace`, and default subscription wire
 contracts remain unchanged. Old daemons reject the new filter/commands; clients
 must report unsupported capability rather than silently use incomplete legacy data.
-Workspace IPC was introduced in protocol **v4**; the current protocol is v5.
+Workspace IPC was introduced in and remains protocol **v4**.
 Do not infer workspace-state support from the numeric version alone; require the acknowledged
 `workspace_state` filter (or successful one-shot handshake).
 
