@@ -3030,15 +3030,22 @@ async fn handle_animation_frame_applied(
         }
         let resumed = {
             let mut state = ctx.state.lock().await;
-            if action == InterruptedAnimationFrameAction::ReapplyThenResume {
-                if let Err(error) = state.apply_layout() {
-                    warn!(
-                        "Current layout landing after invalidated animation frame failed: {}",
-                        error
-                    );
+            let can_resume = if action == InterruptedAnimationFrameAction::ReapplyThenResume {
+                match state.apply_layout() {
+                    Ok(crate::layout_apply::LayoutApplyOutcome::Completed) => true,
+                    Ok(crate::layout_apply::LayoutApplyOutcome::DeferredByRecoveryBarrier) => false,
+                    Err(error) => {
+                        warn!(
+                            "Current layout landing after invalidated animation frame failed: {}",
+                            error
+                        );
+                        false
+                    }
                 }
-            }
-            if state.is_animating() {
+            } else {
+                true
+            };
+            if can_resume && state.is_animating() {
                 state.tick_animations(0);
                 matches!(state.send_animation_frame(ctx.animation_worker), Ok(true))
             } else {
@@ -3131,10 +3138,13 @@ async fn handle_animation_frame_applied(
             // visible 1 px wobble on every Chromium / Firefox
             // window every time the layout is re-applied.
             state.post_animation_nudge_pending = true;
-            let landing_ok = state.apply_layout().is_ok();
+            let landing_ok = matches!(
+                state.apply_layout(),
+                Ok(crate::layout_apply::LayoutApplyOutcome::Completed)
+            );
             if !landing_ok {
                 warn!(
-                    "Final landing layout failed; dropping any active ghosts \
+                    "Final landing layout was not completed; dropping any active ghosts \
                      without crossfade"
                 );
             }

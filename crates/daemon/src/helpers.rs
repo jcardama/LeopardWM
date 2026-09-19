@@ -430,7 +430,12 @@ impl AppState {
             snapshot.remove(&crate::state::DRAG_PLACEHOLDER_HWND);
             self.start_layout_transition(snapshot);
             match self.apply_layout() {
-                Ok(()) => StalePruneLayout::Applied,
+                Ok(crate::layout_apply::LayoutApplyOutcome::Completed) => StalePruneLayout::Applied,
+                Ok(crate::layout_apply::LayoutApplyOutcome::DeferredByRecoveryBarrier) => {
+                    StalePruneLayout::Failed(anyhow::anyhow!(
+                        "Layout application deferred while recovery animation placement finishes"
+                    ))
+                }
                 Err(e) => StalePruneLayout::Failed(e),
             }
         } else {

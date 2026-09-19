@@ -1,6 +1,7 @@
 //! Session-only temporary ignore for the actual OS foreground window.
 
 use crate::event_handler::{AdmissionKind, AdmitOutcome};
+use crate::layout_apply::LayoutApplyOutcome;
 use crate::state::AppState;
 use leopardwm_ipc::IpcResponse;
 #[cfg(not(test))]
@@ -80,8 +81,7 @@ impl AppState {
                 IgnoreGate::Block
             }
             Ok(Some(_)) | Ok(None) | Err(IdentityReadError::Gone) => {
-                self.forget_recycled_temporary_ignore_caches(hwnd);
-                self.remove_temporary_ignore_if_token(hwnd, entry.token);
+                self.retire_stale_temporary_ignore(hwnd, entry.token);
                 IgnoreGate::Allow
             }
             Err(IdentityReadError::Transient(error)) => {
@@ -106,7 +106,7 @@ impl AppState {
                 );
             }
             Ok(Some(_)) | Ok(None) | Err(IdentityReadError::Gone) => {
-                self.remove_temporary_ignore_if_token(hwnd, entry.token);
+                self.retire_stale_temporary_ignore(hwnd, entry.token);
             }
             Err(IdentityReadError::Transient(error)) => {
                 debug!(
@@ -225,7 +225,7 @@ impl AppState {
         match self.read_ignore_identity(hwnd) {
             Ok(Some(token)) if token == entry.token => {}
             Ok(Some(_)) | Ok(None) | Err(IdentityReadError::Gone) => {
-                self.remove_temporary_ignore_if_token(hwnd, entry.token);
+                self.retire_stale_temporary_ignore(hwnd, entry.token);
                 return IpcResponse::error(
                     "Foreground window is not the ignored lifetime and was not re-admitted",
                 );
@@ -306,7 +306,13 @@ impl AppState {
                 }
             }
         }
-        self.apply_layout().map_err(|error| error.to_string())
+        match self.apply_layout() {
+            Ok(LayoutApplyOutcome::Completed) => Ok(()),
+            Ok(LayoutApplyOutcome::DeferredByRecoveryBarrier) => {
+                Err("Layout reflow remains pending while animation placement finishes".into())
+            }
+            Err(error) => Err(error.to_string()),
+        }
     }
 
     fn request_idle_layout_reapply(&mut self) {
@@ -329,20 +335,25 @@ impl AppState {
         if self.paused {
             return IdleLayoutReapply::Paused;
         }
-        if let Err(error) = self.apply_layout() {
-            self.idle_layout_reapply_failures = self.idle_layout_reapply_failures.saturating_add(1);
-            if self.idle_layout_reapply_failures >= MAX_IDLE_LAYOUT_REAPPLY_FAILURES {
+        match self.apply_layout() {
+            Ok(LayoutApplyOutcome::Completed) => {}
+            Ok(LayoutApplyOutcome::DeferredByRecoveryBarrier) => return IdleLayoutReapply::Waiting,
+            Err(error) => {
+                self.idle_layout_reapply_failures =
+                    self.idle_layout_reapply_failures.saturating_add(1);
+                if self.idle_layout_reapply_failures >= MAX_IDLE_LAYOUT_REAPPLY_FAILURES {
+                    warn!(
+                        "Deferring temporary-ignore layout recovery after {} failed attempts: {}",
+                        self.idle_layout_reapply_failures, error
+                    );
+                    return IdleLayoutReapply::DeferredFailure;
+                }
                 warn!(
-                    "Deferring temporary-ignore layout recovery after {} failed attempts: {}",
+                    "Temporary-ignore layout recovery attempt {} failed; retrying: {}",
                     self.idle_layout_reapply_failures, error
                 );
-                return IdleLayoutReapply::DeferredFailure;
+                return IdleLayoutReapply::Waiting;
             }
-            warn!(
-                "Temporary-ignore layout recovery attempt {} failed; retrying: {}",
-                self.idle_layout_reapply_failures, error
-            );
-            return IdleLayoutReapply::Waiting;
         }
         if !self.pending_idle_layout_reapply {
             IdleLayoutReapply::Applied
@@ -430,6 +441,11 @@ impl AppState {
         } else {
             Err(failures.join("; "))
         }
+    }
+
+    fn retire_stale_temporary_ignore(&mut self, hwnd: u64, token: u64) {
+        self.forget_recycled_temporary_ignore_caches(hwnd);
+        self.remove_temporary_ignore_if_token(hwnd, token);
     }
 
     fn forget_recycled_temporary_ignore_caches(&mut self, hwnd: u64) {

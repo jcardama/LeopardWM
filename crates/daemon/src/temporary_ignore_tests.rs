@@ -1,5 +1,6 @@
 use crate::config::{self, Config};
 use crate::event_handler::AdmitOutcome;
+use crate::layout_apply::LayoutApplyOutcome;
 use crate::state::{
     AppState, DragPreviewMode, DragState, MoveOrigin, StashedMonitorLayout,
     TestApplyPlacementsBehavior, TestApplyPlacementsOutcome, TestApplyPlacementsStep,
@@ -145,6 +146,48 @@ fn consume_idle_until_settled(state: &mut AppState) -> IdleLayoutReapply {
         );
         std::thread::yield_now();
     }
+}
+
+fn seed_recycled_lifetime_caches(state: &mut AppState, hwnd: u64) {
+    state.overview_icon_cache.insert(hwnd, Some(0x1234));
+    state.move_origins.insert(
+        hwnd,
+        MoveOrigin {
+            monitor: 1,
+            ws_idx: 0,
+            column: 0,
+            sibling: None,
+        },
+    );
+    state.move_origins.insert(
+        20,
+        MoveOrigin {
+            monitor: 1,
+            ws_idx: 0,
+            column: 0,
+            sibling: Some(hwnd),
+        },
+    );
+    let mut stale_workspace = state.focused_workspace().unwrap().clone();
+    stale_workspace.insert_window(hwnd, None).unwrap();
+    state.stashed_monitor_layouts.insert(
+        "STALE".into(),
+        StashedMonitorLayout {
+            workspaces: vec![stale_workspace],
+            active_workspace: 0,
+            source_viewport_width: 1920,
+        },
+    );
+}
+
+fn assert_recycled_lifetime_caches_cleared(state: &AppState, hwnd: u64) {
+    assert!(!state.overview_icon_cache.contains_key(&hwnd));
+    assert!(!state.move_origins.contains_key(&hwnd));
+    assert_eq!(state.move_origins.get(&20).unwrap().sibling, None);
+    assert!(state.stashed_monitor_layouts.values().all(|layout| layout
+        .workspaces
+        .iter()
+        .all(|workspace| !workspace.contains_window(hwnd))));
 }
 
 #[test]
@@ -822,7 +865,10 @@ fn ordinary_apply_waits_for_pending_recovery_animation_barrier() {
     state.animation_worker_control = Some(worker.control());
     state.pending_idle_layout_reapply = true;
 
-    state.apply_layout().unwrap();
+    assert_eq!(
+        state.apply_layout().unwrap(),
+        LayoutApplyOutcome::DeferredByRecoveryBarrier
+    );
 
     assert!(state.pending_idle_layout_reapply);
     assert_eq!(
@@ -834,6 +880,14 @@ fn ordinary_apply_waits_for_pending_recovery_animation_barrier() {
     );
     unblock.send(()).unwrap();
     assert!(worker.control().wait_for_barrier(Duration::from_secs(2)));
+    assert_eq!(state.apply_layout().unwrap(), LayoutApplyOutcome::Completed);
+    assert!(!state.pending_idle_layout_reapply);
+    assert!(
+        state
+            .injected_apply_placements_call_count
+            .load(Ordering::SeqCst)
+            > 0
+    );
 }
 
 #[test]
@@ -901,53 +955,114 @@ fn reused_ignored_hwnd_clears_old_caches_before_preserving_new_lifetime() {
     let mut state = managed_state();
     ignore_foreground(&mut state, 10);
     let old_token = state.temporary_ignores.get(&10).unwrap().token;
-    state.overview_icon_cache.insert(10, Some(0x1234));
-    state.move_origins.insert(
-        10,
-        MoveOrigin {
-            monitor: 1,
-            ws_idx: 0,
-            column: 0,
-            sibling: None,
-        },
-    );
-    state.move_origins.insert(
-        20,
-        MoveOrigin {
-            monitor: 1,
-            ws_idx: 0,
-            column: 0,
-            sibling: Some(10),
-        },
-    );
-    let mut stale_workspace = state.focused_workspace().unwrap().clone();
-    stale_workspace.insert_window(10, None).unwrap();
-    state.stashed_monitor_layouts.insert(
-        "STALE".into(),
-        StashedMonitorLayout {
-            workspaces: vec![stale_workspace],
-            active_workspace: 0,
-            source_viewport_width: 1920,
-        },
-    );
+    seed_recycled_lifetime_caches(&mut state, 10);
 
     state.injected_lifetime_tokens.insert(10, old_token + 1);
     state.handle_window_event(WindowEvent::Created(10));
 
     assert_eq!(state.find_window_workspace(10), Some((1, 0)));
     assert!(!state.temporary_ignores.contains_key(&10));
-    assert!(!state.overview_icon_cache.contains_key(&10));
-    assert!(!state.move_origins.contains_key(&10));
-    assert_eq!(state.move_origins.get(&20).unwrap().sibling, None);
-    assert!(state.stashed_monitor_layouts.values().all(|layout| layout
-        .workspaces
-        .iter()
-        .all(|workspace| !workspace.contains_window(10))));
+    assert_recycled_lifetime_caches_cleared(&state, 10);
 
     state.overview_icon_cache.insert(10, Some(0x5678));
     state.handle_window_event(WindowEvent::Destroyed(10));
     assert_eq!(state.find_window_workspace(10), Some((1, 0)));
     assert_eq!(state.overview_icon_cache.get(&10), Some(&Some(0x5678)));
+}
+
+#[test]
+fn delayed_destroy_before_created_retires_old_ignored_lifetime_caches() {
+    let mut state = managed_state();
+    ignore_foreground(&mut state, 10);
+    let old_token = state.temporary_ignores.get(&10).unwrap().token;
+    seed_recycled_lifetime_caches(&mut state, 10);
+    state.injected_lifetime_tokens.insert(10, old_token + 1);
+
+    state.handle_window_event(WindowEvent::Destroyed(10));
+
+    assert!(!state.temporary_ignores.contains_key(&10));
+    assert_recycled_lifetime_caches_cleared(&state, 10);
+    state.handle_window_event(WindowEvent::Created(10));
+    assert_eq!(state.find_window_workspace(10), Some((1, 0)));
+
+    state.overview_icon_cache.insert(10, Some(0x5678));
+    state.handle_window_event(WindowEvent::Destroyed(10));
+    assert_eq!(state.find_window_workspace(10), Some((1, 0)));
+    assert_eq!(state.overview_icon_cache.get(&10), Some(&Some(0x5678)));
+}
+
+#[test]
+fn explicit_mismatch_retires_old_caches_before_automatic_admission() {
+    let mut state = managed_state();
+    ignore_foreground(&mut state, 10);
+    let old_token = state.temporary_ignores.get(&10).unwrap().token;
+    seed_recycled_lifetime_caches(&mut state, 10);
+    state.injected_lifetime_tokens.insert(10, old_token + 1);
+    set_foreground(&mut state, 10);
+
+    let message = error_message(state.handle_command(IpcCommand::ToggleIgnore));
+
+    assert!(message.contains("not the ignored lifetime"));
+    assert!(!state.temporary_ignores.contains_key(&10));
+    assert_recycled_lifetime_caches_cleared(&state, 10);
+    state.handle_window_event(WindowEvent::Created(10));
+    assert_eq!(state.find_window_workspace(10), Some((1, 0)));
+
+    state.overview_icon_cache.insert(10, Some(0x5678));
+    state.handle_window_event(WindowEvent::Destroyed(10));
+    assert_eq!(state.find_window_workspace(10), Some((1, 0)));
+    assert_eq!(state.overview_icon_cache.get(&10), Some(&Some(0x5678)));
+}
+
+#[test]
+fn pending_recovery_respects_paused_and_cancelled_guards_before_barrier() {
+    let mut paused = managed_state();
+    let (paused_tx, _paused_rx) = tokio::sync::mpsc::channel(4);
+    let paused_worker = crate::animation_worker::AnimationWorkerHandle::spawn(
+        paused_tx,
+        paused.apply_worker_cancelled.clone(),
+    )
+    .unwrap();
+    let paused_unblock = paused_worker.block_for_test();
+    paused.animation_worker_control = Some(paused_worker.control());
+    paused.pending_idle_layout_reapply = true;
+
+    assert_eq!(
+        paused.apply_layout().unwrap(),
+        LayoutApplyOutcome::Completed
+    );
+    assert_eq!(
+        paused
+            .injected_apply_placements_call_count
+            .load(Ordering::SeqCst),
+        0
+    );
+    paused_unblock.send(()).unwrap();
+
+    let mut cancelled = managed_state();
+    cancelled.paused = false;
+    let (cancelled_tx, _cancelled_rx) = tokio::sync::mpsc::channel(4);
+    let cancelled_worker = crate::animation_worker::AnimationWorkerHandle::spawn(
+        cancelled_tx,
+        cancelled.apply_worker_cancelled.clone(),
+    )
+    .unwrap();
+    let cancelled_unblock = cancelled_worker.block_for_test();
+    cancelled.animation_worker_control = Some(cancelled_worker.control());
+    cancelled.pending_idle_layout_reapply = true;
+    cancelled
+        .apply_worker_cancelled
+        .store(true, Ordering::SeqCst);
+
+    let error = cancelled.apply_layout().unwrap_err();
+    assert!(error.to_string().contains("shutdown/revert cleanup"));
+    assert_eq!(
+        cancelled
+            .injected_apply_placements_call_count
+            .load(Ordering::SeqCst),
+        0
+    );
+    cancelled_unblock.send(()).unwrap();
 }
 
 #[test]
