@@ -671,6 +671,10 @@ pub(crate) struct AppState {
     /// apply workers and the animation worker are idle. The event loop arms a
     /// short timer to retry while this stays pending and tiling is not paused.
     pub(crate) pending_idle_layout_reapply: bool,
+    /// Consecutive failed automatic recovery attempts. The pending request is
+    /// retained after the bounded retry budget is exhausted so a later normal
+    /// layout apply can still complete it.
+    pub(crate) idle_layout_reapply_failures: u8,
     /// Injected window info for testing. When set, `lookup_window_info()` returns
     /// entries from this map instead of calling `enumerate_windows()`.
     #[cfg(test)]
@@ -704,6 +708,9 @@ pub(crate) struct AppState {
     pub(crate) injected_enumerated_windows: Option<Vec<leopardwm_platform_win32::WindowInfo>>,
     #[cfg(test)]
     pub(crate) injected_native_restore_error: Option<String>,
+    /// Count of uncloak requests that production would issue to DWM.
+    #[cfg(test)]
+    pub(crate) injected_native_uncloak_count: AtomicUsize,
     /// Per-window native maximize responses for deterministic daemon tests.
     #[cfg(test)]
     pub(crate) injected_window_maximized: HashMap<u64, bool>,
@@ -1054,6 +1061,7 @@ impl AppState {
             animation_worker_control: None,
             post_animation_nudge_pending: false,
             pending_idle_layout_reapply: false,
+            idle_layout_reapply_failures: 0,
             #[cfg(test)]
             injected_window_info: HashMap::new(),
             #[cfg(test)]
@@ -1084,6 +1092,8 @@ impl AppState {
             injected_enumerated_windows: None,
             #[cfg(test)]
             injected_native_restore_error: None,
+            #[cfg(test)]
+            injected_native_uncloak_count: AtomicUsize::new(0),
             #[cfg(test)]
             injected_window_maximized: HashMap::new(),
             #[cfg(test)]

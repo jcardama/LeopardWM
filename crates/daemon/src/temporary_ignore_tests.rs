@@ -1,8 +1,8 @@
 use crate::config::{self, Config};
 use crate::event_handler::AdmitOutcome;
 use crate::state::{
-    AppState, DragPreviewMode, DragState, TestApplyPlacementsBehavior, TestApplyPlacementsOutcome,
-    TestApplyPlacementsStep,
+    AppState, DragPreviewMode, DragState, MoveOrigin, StashedMonitorLayout,
+    TestApplyPlacementsBehavior, TestApplyPlacementsOutcome, TestApplyPlacementsStep,
 };
 use crate::temporary_ignore::{IdentityReadError, IdleLayoutReapply};
 use leopardwm_core_layout::{Rect, Visibility};
@@ -805,5 +805,159 @@ fn dead_ignored_hwnd_does_not_clear_live_focus() {
     assert_eq!(
         state.border_hide_count.load(Ordering::Relaxed),
         hides_before
+    );
+}
+
+#[test]
+fn ordinary_apply_waits_for_pending_recovery_animation_barrier() {
+    let mut state = managed_state();
+    record_peer_placements(&mut state);
+    let (event_tx, _event_rx) = tokio::sync::mpsc::channel(4);
+    let worker = crate::animation_worker::AnimationWorkerHandle::spawn(
+        event_tx,
+        state.apply_worker_cancelled.clone(),
+    )
+    .unwrap();
+    let unblock = worker.block_for_test();
+    state.animation_worker_control = Some(worker.control());
+    state.pending_idle_layout_reapply = true;
+
+    state.apply_layout().unwrap();
+
+    assert!(state.pending_idle_layout_reapply);
+    assert_eq!(
+        state
+            .injected_apply_placements_call_count
+            .load(Ordering::SeqCst),
+        0,
+        "ordinary apply must not dispatch while recovery's animation barrier is busy"
+    );
+    unblock.send(()).unwrap();
+    assert!(worker.control().wait_for_barrier(Duration::from_secs(2)));
+}
+
+#[test]
+fn pending_recovery_retries_failed_apply_then_clears_only_after_success() {
+    let mut state = managed_state();
+    state.reduce_motion = true;
+    state.paused = false;
+    state.injected_apply_placements_behavior = Some(TestApplyPlacementsBehavior::Scripted(vec![
+        TestApplyPlacementsStep {
+            delay: Duration::ZERO,
+            outcome: TestApplyPlacementsOutcome::Fail,
+        },
+        TestApplyPlacementsStep {
+            delay: Duration::ZERO,
+            outcome: TestApplyPlacementsOutcome::Succeed {
+                landings: Vec::new(),
+            },
+        },
+    ]));
+    state.pending_idle_layout_reapply = true;
+
+    assert_eq!(
+        state.try_consume_idle_layout_reapply(),
+        IdleLayoutReapply::Waiting
+    );
+    assert!(state.pending_idle_layout_reapply);
+    assert_eq!(state.idle_layout_reapply_failures, 1);
+
+    assert_eq!(
+        state.try_consume_idle_layout_reapply(),
+        IdleLayoutReapply::Applied
+    );
+    assert!(!state.pending_idle_layout_reapply);
+    assert_eq!(state.idle_layout_reapply_failures, 0);
+}
+
+#[test]
+fn pending_recovery_defers_after_bounded_failures_without_clearing_request() {
+    let mut state = managed_state();
+    state.reduce_motion = true;
+    state.paused = false;
+    state.injected_apply_placements_behavior =
+        Some(TestApplyPlacementsBehavior::SleepAndFail(Duration::ZERO));
+    state.pending_idle_layout_reapply = true;
+
+    assert_eq!(
+        state.try_consume_idle_layout_reapply(),
+        IdleLayoutReapply::Waiting
+    );
+    assert_eq!(
+        state.try_consume_idle_layout_reapply(),
+        IdleLayoutReapply::Waiting
+    );
+    assert_eq!(
+        state.try_consume_idle_layout_reapply(),
+        IdleLayoutReapply::DeferredFailure
+    );
+    assert!(state.pending_idle_layout_reapply);
+    assert_eq!(state.idle_layout_reapply_failures, 3);
+    assert!(!state.idle_layout_reapply_timer_needed());
+}
+
+#[test]
+fn reused_ignored_hwnd_clears_old_caches_before_preserving_new_lifetime() {
+    let mut state = managed_state();
+    ignore_foreground(&mut state, 10);
+    let old_token = state.temporary_ignores.get(&10).unwrap().token;
+    state.overview_icon_cache.insert(10, Some(0x1234));
+    state.move_origins.insert(
+        10,
+        MoveOrigin {
+            monitor: 1,
+            ws_idx: 0,
+            column: 0,
+            sibling: None,
+        },
+    );
+    state.move_origins.insert(
+        20,
+        MoveOrigin {
+            monitor: 1,
+            ws_idx: 0,
+            column: 0,
+            sibling: Some(10),
+        },
+    );
+    let mut stale_workspace = state.focused_workspace().unwrap().clone();
+    stale_workspace.insert_window(10, None).unwrap();
+    state.stashed_monitor_layouts.insert(
+        "STALE".into(),
+        StashedMonitorLayout {
+            workspaces: vec![stale_workspace],
+            active_workspace: 0,
+            source_viewport_width: 1920,
+        },
+    );
+
+    state.injected_lifetime_tokens.insert(10, old_token + 1);
+    state.handle_window_event(WindowEvent::Created(10));
+
+    assert_eq!(state.find_window_workspace(10), Some((1, 0)));
+    assert!(!state.temporary_ignores.contains_key(&10));
+    assert!(!state.overview_icon_cache.contains_key(&10));
+    assert!(!state.move_origins.contains_key(&10));
+    assert_eq!(state.move_origins.get(&20).unwrap().sibling, None);
+    assert!(state.stashed_monitor_layouts.values().all(|layout| layout
+        .workspaces
+        .iter()
+        .all(|workspace| !workspace.contains_window(10))));
+
+    state.overview_icon_cache.insert(10, Some(0x5678));
+    state.handle_window_event(WindowEvent::Destroyed(10));
+    assert_eq!(state.find_window_workspace(10), Some((1, 0)));
+    assert_eq!(state.overview_icon_cache.get(&10), Some(&Some(0x5678)));
+}
+
+#[test]
+fn temporary_ignore_test_seam_records_native_uncloak_intent() {
+    let mut state = managed_state();
+    ignore_foreground(&mut state, 10);
+
+    assert_eq!(
+        state.injected_native_uncloak_count.load(Ordering::Relaxed),
+        1,
+        "temporary ignore must request native uncloaking in production"
     );
 }

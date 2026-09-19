@@ -5,7 +5,7 @@ use crate::state::AppState;
 use leopardwm_ipc::IpcResponse;
 #[cfg(not(test))]
 use leopardwm_platform_win32::Win32Error;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TemporaryIgnoreEntry {
@@ -31,8 +31,11 @@ pub(crate) enum IdleLayoutReapply {
     NotPending,
     Applied,
     Waiting,
+    DeferredFailure,
     Paused,
 }
+
+const MAX_IDLE_LAYOUT_REAPPLY_FAILURES: u8 = 3;
 
 impl std::fmt::Display for IdentityReadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -77,6 +80,7 @@ impl AppState {
                 IgnoreGate::Block
             }
             Ok(Some(_)) | Ok(None) | Err(IdentityReadError::Gone) => {
+                self.forget_recycled_temporary_ignore_caches(hwnd);
                 self.remove_temporary_ignore_if_token(hwnd, entry.token);
                 IgnoreGate::Allow
             }
@@ -307,6 +311,7 @@ impl AppState {
 
     fn request_idle_layout_reapply(&mut self) {
         self.pending_idle_layout_reapply = true;
+        self.idle_layout_reapply_failures = 0;
         let _ = self.try_consume_idle_layout_reapply();
     }
 
@@ -324,7 +329,21 @@ impl AppState {
         if self.paused {
             return IdleLayoutReapply::Paused;
         }
-        let _ = self.apply_layout();
+        if let Err(error) = self.apply_layout() {
+            self.idle_layout_reapply_failures = self.idle_layout_reapply_failures.saturating_add(1);
+            if self.idle_layout_reapply_failures >= MAX_IDLE_LAYOUT_REAPPLY_FAILURES {
+                warn!(
+                    "Deferring temporary-ignore layout recovery after {} failed attempts: {}",
+                    self.idle_layout_reapply_failures, error
+                );
+                return IdleLayoutReapply::DeferredFailure;
+            }
+            warn!(
+                "Temporary-ignore layout recovery attempt {} failed; retrying: {}",
+                self.idle_layout_reapply_failures, error
+            );
+            return IdleLayoutReapply::Waiting;
+        }
         if !self.pending_idle_layout_reapply {
             IdleLayoutReapply::Applied
         } else if self.paused {
@@ -334,7 +353,13 @@ impl AppState {
         }
     }
 
-    fn animation_placement_worker_is_idle(&self) -> bool {
+    pub(crate) fn idle_layout_reapply_timer_needed(&self) -> bool {
+        self.pending_idle_layout_reapply
+            && !self.paused
+            && self.idle_layout_reapply_failures < MAX_IDLE_LAYOUT_REAPPLY_FAILURES
+    }
+
+    pub(crate) fn animation_placement_worker_is_idle(&self) -> bool {
         self.animation_worker_control
             .as_ref()
             .is_none_or(|control| control.wait_for_barrier(std::time::Duration::from_millis(1)))
@@ -393,7 +418,11 @@ impl AppState {
         if let Some(error) = self.injected_native_restore_error.take() {
             failures.push(error);
         }
+        #[cfg(not(test))]
         leopardwm_platform_win32::dwm_uncloak_window(hwnd);
+        #[cfg(test)]
+        self.injected_native_uncloak_count
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.forget_managed_metadata(hwnd);
         self.update_tab_strip();
         if failures.is_empty() {
@@ -401,6 +430,31 @@ impl AppState {
         } else {
             Err(failures.join("; "))
         }
+    }
+
+    fn forget_recycled_temporary_ignore_caches(&mut self, hwnd: u64) {
+        self.overview_icon_cache.remove(&hwnd);
+        self.hidden_column_widths.remove(&hwnd);
+        self.move_origins.remove(&hwnd);
+        for origin in self.move_origins.values_mut() {
+            if origin.sibling == Some(hwnd) {
+                origin.sibling = None;
+            }
+        }
+        self.floating_focus.retain(|_, focused| *focused != hwnd);
+        leopardwm_platform_win32::taskbar::taskbar_forget(hwnd);
+        leopardwm_platform_win32::clear_suspected_oversize(hwnd);
+        for layout in self.stashed_monitor_layouts.values_mut() {
+            for workspace in &mut layout.workspaces {
+                let _ = workspace.remove_window(hwnd);
+                workspace.remove_floating(hwnd);
+            }
+        }
+        self.stashed_monitor_layouts.retain(|_, layout| {
+            layout.workspaces.iter().any(|workspace| {
+                workspace.window_count() > 0 || !workspace.floating_windows().is_empty()
+            })
+        });
     }
 
     fn remove_temporary_ignore_if_token(&mut self, hwnd: u64, token: u64) {

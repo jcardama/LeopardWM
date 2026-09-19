@@ -501,6 +501,9 @@ impl AppState {
             run_layout_apply_recovery_pass(&managed_window_ids, "late-apply-worker");
         }
 
+        if self.pending_idle_layout_reapply && !self.animation_placement_worker_is_idle() {
+            return Ok(());
+        }
         if self.paused {
             return Ok(());
         }
@@ -518,7 +521,6 @@ impl AppState {
                 "Layout application skipped: previous timed-out apply worker is still finishing"
             ));
         }
-        self.pending_idle_layout_reapply = false;
         self.retain_application_fullscreen_sessions();
         self.applying_layout = true;
 
@@ -566,6 +568,7 @@ impl AppState {
         if placements_unchanged
             && self.physical_fast_path_ok()
             && !self.post_animation_nudge_pending
+            && !self.pending_idle_layout_reapply
             && !bypass_fast_path
         {
             self.applying_layout = false;
@@ -1185,6 +1188,8 @@ impl AppState {
 
     /// Post-success bookkeeping: border, tab strip, and deduped LayoutChanged broadcast.
     fn finalize_layout_success(&mut self) {
+        self.pending_idle_layout_reapply = false;
+        self.idle_layout_reapply_failures = 0;
         if let Some(hwnd) = self.previous_focused_hwnd {
             if self.config.appearance.active_border {
                 self.show_border(hwnd);

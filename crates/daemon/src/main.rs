@@ -3373,9 +3373,9 @@ async fn finish_daemon_event(ctx: &mut EventLoopCtx<'_>) {
     sync_pending_layout_apply_timeout_ui(ctx.state, ctx.tray_manager, &*ctx.hotkey_state).await;
     let should_arm_idle_reapply = {
         let mut state = ctx.state.lock().await;
-        let pending = state.pending_idle_layout_reapply && !state.paused;
+        let timer_needed = state.idle_layout_reapply_timer_needed();
         state.publish_workspace_state_if_subscribed();
-        pending
+        timer_needed
     };
     if should_arm_idle_reapply {
         arm_idle_layout_reapply_timer(ctx);
