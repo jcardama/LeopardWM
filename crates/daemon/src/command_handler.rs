@@ -412,6 +412,10 @@ impl AppState {
             IpcCommand::QueryFocused => self.handle_query_focused(),
             IpcCommand::QueryHotkeys => self.handle_query_hotkeys(),
             IpcCommand::Refresh => self.handle_refresh(),
+            IpcCommand::Apply
+                if self.paused && self.pending_idle_layout_reapply => IpcResponse::error(
+                "Layout application remains pending while tiling is paused after a failed resume",
+            ),
             IpcCommand::Apply => match self.apply_layout() {
                 Ok(LayoutApplyOutcome::Completed) => {
                     info!("Applied layout");

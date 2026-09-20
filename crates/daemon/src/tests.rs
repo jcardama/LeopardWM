@@ -7063,10 +7063,18 @@ fn test_cmd_scroll_empty() {
 }
 
 #[test]
-fn test_cmd_apply() {
+fn test_cmd_apply_while_ordinary_paused_is_a_noop_success() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
-    let resp = state.handle_command(IpcCommand::Apply);
-    assert_eq!(resp, IpcResponse::Ok);
+    assert!(state.paused);
+
+    assert_eq!(state.handle_command(IpcCommand::Apply), IpcResponse::Ok);
+    assert_eq!(
+        state
+            .injected_apply_placements_call_count
+            .load(Ordering::SeqCst),
+        0,
+        "ordinary paused Apply must not dispatch placement"
+    );
 }
 
 #[test]
@@ -7143,6 +7151,19 @@ fn test_cmd_resume_recovers_surviving_transition_after_barrier_clears() {
         state.take_recorded_taskbar_commands().is_empty(),
         "busy resume must not run completion-only taskbar effects"
     );
+    match state.handle_command(IpcCommand::Apply) {
+        IpcResponse::Error { message } => assert!(message.contains("remains pending")),
+        other => panic!("expected pending Apply error, got {other:?}"),
+    }
+    assert!(state.paused);
+    assert!(state.pending_idle_layout_reapply);
+    assert_eq!(
+        state
+            .injected_apply_placements_call_count
+            .load(Ordering::SeqCst),
+        0,
+        "paused Apply after busy resume must not dispatch placement"
+    );
 
     unblock.send(()).unwrap();
     assert!(worker.control().wait_for_barrier(Duration::from_secs(2)));
@@ -7160,6 +7181,51 @@ fn test_cmd_resume_recovers_surviving_transition_after_barrier_clears() {
             > 0,
         "idle resume must settle and physically land the surviving transition"
     );
+}
+
+#[test]
+fn test_cmd_apply_stays_pending_after_failed_resume_until_later_resume_lands() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = true;
+    state.pending_idle_layout_reapply = true;
+    state.injected_apply_placements_behavior =
+        Some(TestApplyPlacementsBehavior::SleepAndFail(Duration::ZERO));
+
+    match state.handle_command(IpcCommand::TogglePause) {
+        IpcResponse::Error { message } => {
+            assert!(message.contains("injected apply_placements failure"))
+        }
+        other => panic!("expected failed resume error, got {other:?}"),
+    }
+    assert!(state.paused);
+    assert!(state.pending_idle_layout_reapply);
+    let placement_calls_after_failed_resume = state
+        .injected_apply_placements_call_count
+        .load(Ordering::SeqCst);
+    assert!(placement_calls_after_failed_resume > 0);
+
+    match state.handle_command(IpcCommand::Apply) {
+        IpcResponse::Error { message } => assert!(message.contains("remains pending")),
+        other => panic!("expected pending Apply error, got {other:?}"),
+    }
+    assert!(state.paused);
+    assert!(state.pending_idle_layout_reapply);
+    assert_eq!(
+        state
+            .injected_apply_placements_call_count
+            .load(Ordering::SeqCst),
+        placement_calls_after_failed_resume,
+        "paused Apply after failed resume must not dispatch another placement"
+    );
+
+    state.injected_apply_placements_behavior =
+        Some(TestApplyPlacementsBehavior::SleepAndSucceed(Duration::ZERO));
+    assert_eq!(
+        state.handle_command(IpcCommand::TogglePause),
+        IpcResponse::Ok
+    );
+    assert!(!state.paused);
+    assert!(!state.pending_idle_layout_reapply);
 }
 
 #[test]
