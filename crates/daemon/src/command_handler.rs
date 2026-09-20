@@ -413,17 +413,22 @@ impl AppState {
             IpcCommand::QueryHotkeys => self.handle_query_hotkeys(),
             IpcCommand::Refresh => self.handle_refresh(),
             IpcCommand::Apply
-                if self.paused && self.pending_idle_layout_reapply => IpcResponse::error(
-                "Layout application remains pending while tiling is paused after a failed resume",
-            ),
+                if self.paused && self.pending_idle_layout_reapply =>
+            {
+                IpcResponse::ApplyPending {
+                    message: "Layout application remains pending while tiling is paused"
+                        .to_string(),
+                }
+            }
             IpcCommand::Apply => match self.apply_layout() {
                 Ok(LayoutApplyOutcome::Completed) => {
                     info!("Applied layout");
                     IpcResponse::Ok
                 }
-                Ok(LayoutApplyOutcome::DeferredByRecoveryBarrier) => IpcResponse::error(
-                    "Layout application remains pending while recovery animation placement finishes",
-                ),
+                Ok(LayoutApplyOutcome::DeferredByRecoveryBarrier) => IpcResponse::ApplyPending {
+                    message: "Layout application remains pending while recovery animation placement finishes"
+                        .to_string(),
+                },
                 Err(error) => IpcResponse::error(format!("Failed to apply layout: {}", error)),
             },
             IpcCommand::Reload => self.handle_reload(),

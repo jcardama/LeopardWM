@@ -240,6 +240,10 @@ pub(crate) fn apply_error_response_recovery_message() -> &'static str {
     "Daemon returned a non-success apply response. Local emergency visibility restore was executed. Verify windows are visible, then run `leopardwm-cli status` before retrying."
 }
 
+pub(crate) fn apply_pending_response_message() -> &'static str {
+    "Layout application remains pending. Retry after recovery finishes."
+}
+
 pub(crate) fn stop_error_response_recovery_message() -> &'static str {
     "Daemon returned a non-success stop response. Local emergency visibility restore was executed. Treat shutdown as unconfirmed and run `leopardwm-cli status`."
 }
@@ -310,13 +314,27 @@ pub(crate) async fn handle_run(
 
     let response = send_apply_with_recovery().await?;
     print_response(&response);
-    if is_non_success_response(&response) {
-        run_local_emergency_visibility_restore(apply_non_success_recovery_reason())
-            .context("Failed to execute local emergency visibility restore")?;
-        anyhow::bail!(apply_error_response_recovery_message());
-    }
+    conclude_apply_command_response(&response, run_local_emergency_visibility_restore)?;
 
     Ok(())
+}
+
+/// Same decision used by `handle_run`. Invokes `restore` only for Error/Unknown.
+pub(crate) fn conclude_apply_command_response(
+    response: &IpcResponse,
+    mut restore: impl FnMut(&str) -> Result<()>,
+) -> Result<()> {
+    match response {
+        IpcResponse::Error { .. } | IpcResponse::Unknown => {
+            restore(apply_non_success_recovery_reason())
+                .context("Failed to execute local emergency visibility restore")?;
+            anyhow::bail!(apply_error_response_recovery_message());
+        }
+        IpcResponse::ApplyPending { .. } => {
+            anyhow::bail!(apply_pending_response_message());
+        }
+        _ => Ok(()),
+    }
 }
 
 async fn send_apply_with_recovery() -> Result<IpcResponse> {

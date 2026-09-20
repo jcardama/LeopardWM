@@ -869,7 +869,62 @@ fn test_unknown_response_parse_maps_to_unknown() {
 #[test]
 fn test_is_non_success_response_for_unknown() {
     assert!(is_non_success_response(&IpcResponse::Unknown));
+    assert!(is_non_success_response(&IpcResponse::error("apply failed")));
     assert!(!is_non_success_response(&IpcResponse::Ok));
+    assert!(!is_non_success_response(&IpcResponse::ApplyPending {
+        message: "Layout application remains pending while tiling is paused".to_string(),
+    }));
+}
+
+fn restore_counter(
+    restores: &std::cell::Cell<usize>,
+) -> impl FnMut(&str) -> anyhow::Result<()> + '_ {
+    move |_| {
+        restores.set(restores.get() + 1);
+        Ok(())
+    }
+}
+
+#[test]
+fn test_conclude_apply_pending_is_non_success_without_restore() {
+    let restores = std::cell::Cell::new(0);
+    let response = IpcResponse::ApplyPending {
+        message: "Layout application remains pending while tiling is paused".to_string(),
+    };
+    let err = conclude_apply_command_response(&response, restore_counter(&restores))
+        .expect_err("pending apply must be non-success");
+    assert_eq!(restores.get(), 0);
+    assert_eq!(err.to_string(), apply_pending_response_message());
+    assert!(!apply_pending_response_message().contains("emergency"));
+    assert!(!apply_pending_response_message().contains("restore"));
+}
+
+#[test]
+fn test_conclude_apply_error_invokes_restore() {
+    let restores = std::cell::Cell::new(0);
+    let err = conclude_apply_command_response(
+        &IpcResponse::error("Failed to apply layout: boom"),
+        restore_counter(&restores),
+    )
+    .expect_err("error apply must be non-success");
+    assert_eq!(restores.get(), 1);
+    assert_eq!(err.to_string(), apply_error_response_recovery_message());
+}
+
+#[test]
+fn test_conclude_apply_unknown_invokes_restore() {
+    let restores = std::cell::Cell::new(0);
+    let err = conclude_apply_command_response(&IpcResponse::Unknown, restore_counter(&restores))
+        .expect_err("unknown apply must be non-success");
+    assert_eq!(restores.get(), 1);
+    assert_eq!(err.to_string(), apply_error_response_recovery_message());
+}
+
+#[test]
+fn test_conclude_apply_ok_does_not_restore() {
+    let restores = std::cell::Cell::new(0);
+    conclude_apply_command_response(&IpcResponse::Ok, restore_counter(&restores)).unwrap();
+    assert_eq!(restores.get(), 0);
 }
 
 #[test]
@@ -1078,6 +1133,14 @@ fn test_apply_error_response_recovery_message_is_actionable() {
 }
 
 #[test]
+fn test_apply_pending_response_message_is_pending_without_restore() {
+    let message = apply_pending_response_message();
+    assert!(message.contains("pending"));
+    assert!(!message.contains("emergency"));
+    assert!(!message.contains("restore"));
+}
+
+#[test]
 fn test_stop_error_response_recovery_message_is_actionable() {
     let message = stop_error_response_recovery_message();
     assert!(message.contains("non-success stop response"));
@@ -1105,6 +1168,24 @@ fn test_parse_ipc_response_line_parses_ok_response() {
     let raw = serde_json::to_string(&IpcResponse::Ok).unwrap();
     let response = parse_ipc_response_line(&raw).unwrap();
     assert!(matches!(response, IpcResponse::Ok));
+}
+
+#[test]
+fn test_parse_ipc_response_line_parses_error_and_apply_pending() {
+    let error_raw = serde_json::to_string(&IpcResponse::error("Failed to apply layout")).unwrap();
+    assert!(matches!(
+        parse_ipc_response_line(&error_raw).unwrap(),
+        IpcResponse::Error { .. }
+    ));
+
+    let pending_raw = serde_json::to_string(&IpcResponse::ApplyPending {
+        message: "Layout application remains pending while tiling is paused".to_string(),
+    })
+    .unwrap();
+    assert!(matches!(
+        parse_ipc_response_line(&pending_raw).unwrap(),
+        IpcResponse::ApplyPending { .. }
+    ));
 }
 
 #[test]

@@ -7066,6 +7066,11 @@ fn test_cmd_scroll_empty() {
 fn test_cmd_apply_while_ordinary_paused_is_a_noop_success() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
     assert!(state.paused);
+    state.workspaces.get_mut(&1).unwrap()[0]
+        .insert_window(100, Some(800))
+        .unwrap();
+    state.injected_apply_placements_behavior =
+        Some(TestApplyPlacementsBehavior::SleepAndSucceed(Duration::ZERO));
 
     assert_eq!(state.handle_command(IpcCommand::Apply), IpcResponse::Ok);
     assert_eq!(
@@ -7074,6 +7079,45 @@ fn test_cmd_apply_while_ordinary_paused_is_a_noop_success() {
             .load(Ordering::SeqCst),
         0,
         "ordinary paused Apply must not dispatch placement"
+    );
+}
+
+#[test]
+fn test_cmd_apply_completed_is_ok() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = false;
+    state.workspaces.get_mut(&1).unwrap()[0]
+        .insert_window(100, Some(800))
+        .unwrap();
+    state.injected_apply_placements_behavior =
+        Some(TestApplyPlacementsBehavior::SleepAndSucceed(Duration::ZERO));
+
+    assert_eq!(state.handle_command(IpcCommand::Apply), IpcResponse::Ok);
+    assert!(
+        state
+            .injected_apply_placements_call_count
+            .load(Ordering::SeqCst)
+            > 0,
+        "completed Apply must dispatch placement"
+    );
+}
+
+#[test]
+fn test_cmd_apply_reports_genuine_layout_failure() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = false;
+    state.workspaces.get_mut(&1).unwrap()[0]
+        .insert_window(100, Some(800))
+        .unwrap();
+    state.injected_apply_placements_behavior =
+        Some(TestApplyPlacementsBehavior::SleepAndFail(Duration::ZERO));
+
+    assert!(
+        matches!(
+            state.handle_command(IpcCommand::Apply),
+            IpcResponse::Error { .. }
+        ),
+        "genuine Apply failure must stay Error"
     );
 }
 
@@ -7090,10 +7134,13 @@ fn test_cmd_apply_defers_until_idle_recovery_settles_surviving_transition() {
     state.injected_apply_placements_behavior =
         Some(TestApplyPlacementsBehavior::SleepAndSucceed(Duration::ZERO));
 
-    match state.handle_command(IpcCommand::Apply) {
-        IpcResponse::Error { message } => assert!(message.contains("remains pending")),
-        other => panic!("expected deferred Apply error, got {other:?}"),
-    }
+    assert!(
+        matches!(
+            state.handle_command(IpcCommand::Apply),
+            IpcResponse::ApplyPending { .. }
+        ),
+        "expected deferred ApplyPending"
+    );
     assert_eq!(
         state
             .injected_apply_placements_call_count
@@ -7151,10 +7198,13 @@ fn test_cmd_resume_recovers_surviving_transition_after_barrier_clears() {
         state.take_recorded_taskbar_commands().is_empty(),
         "busy resume must not run completion-only taskbar effects"
     );
-    match state.handle_command(IpcCommand::Apply) {
-        IpcResponse::Error { message } => assert!(message.contains("remains pending")),
-        other => panic!("expected pending Apply error, got {other:?}"),
-    }
+    assert!(
+        matches!(
+            state.handle_command(IpcCommand::Apply),
+            IpcResponse::ApplyPending { .. }
+        ),
+        "expected pending ApplyPending after busy resume"
+    );
     assert!(state.paused);
     assert!(state.pending_idle_layout_reapply);
     assert_eq!(
@@ -7204,10 +7254,13 @@ fn test_cmd_apply_stays_pending_after_failed_resume_until_later_resume_lands() {
         .load(Ordering::SeqCst);
     assert!(placement_calls_after_failed_resume > 0);
 
-    match state.handle_command(IpcCommand::Apply) {
-        IpcResponse::Error { message } => assert!(message.contains("remains pending")),
-        other => panic!("expected pending Apply error, got {other:?}"),
-    }
+    assert!(
+        matches!(
+            state.handle_command(IpcCommand::Apply),
+            IpcResponse::ApplyPending { .. }
+        ),
+        "expected pending ApplyPending after failed resume"
+    );
     assert!(state.paused);
     assert!(state.pending_idle_layout_reapply);
     assert_eq!(
@@ -7244,12 +7297,13 @@ fn test_cmd_apply_reports_recovery_barrier_deferral_until_landing_succeeds() {
     let unblock = worker.block_for_test();
     state.animation_worker_control = Some(worker.control());
 
-    match state.handle_command(IpcCommand::Apply) {
-        IpcResponse::Error { message } => {
-            assert!(message.contains("remains pending"));
-        }
-        other => panic!("expected deferred Apply error, got {other:?}"),
-    }
+    assert!(
+        matches!(
+            state.handle_command(IpcCommand::Apply),
+            IpcResponse::ApplyPending { .. }
+        ),
+        "expected deferred ApplyPending"
+    );
     assert_eq!(
         state
             .injected_apply_placements_call_count

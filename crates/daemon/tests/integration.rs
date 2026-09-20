@@ -76,6 +76,9 @@ fn test_all_responses_roundtrip() {
         IpcResponse::Error {
             message: "Test error".to_string(),
         },
+        IpcResponse::ApplyPending {
+            message: "Recovery placement is still pending".to_string(),
+        },
         IpcResponse::WorkspaceState {
             columns: 3,
             windows: 5,

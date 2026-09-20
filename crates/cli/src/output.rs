@@ -11,6 +11,9 @@ pub(crate) fn print_response(response: &IpcResponse) {
         IpcResponse::Error { message } => {
             eprintln!("Error: {}", message);
         }
+        IpcResponse::ApplyPending { message } => {
+            println!("{}", message);
+        }
         IpcResponse::WorkspaceState {
             columns,
             windows,

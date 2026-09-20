@@ -217,6 +217,8 @@ lwm stop               # stop the daemon
 lwm status             # show version, monitor count, window count, uptime
 ```
 
+Matching versions (Recommended): use the CLI and daemon from the same release. Corrected `lwm run` pending-apply handling depends on both sides understanding `apply_pending`. A matching pair reports a still-pending recovery landing as a non-success without emergency visibility restore. An older CLI maps that status to unknown and may invoke emergency restore. Mixed versions are not negotiated or isolated on the pipe; the Apply request and workspace stream protocol version are unchanged.
+
 ### Query state
 
 ```bash

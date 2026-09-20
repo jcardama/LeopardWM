@@ -674,6 +674,11 @@ pub enum IpcResponse {
         /// Error message describing what went wrong.
         message: String,
     },
+    /// Apply was accepted but its recovery landing remains pending.
+    ApplyPending {
+        /// Message describing the pending recovery landing.
+        message: String,
+    },
     /// Workspace state query response.
     WorkspaceState {
         /// Number of columns in the workspace.
@@ -895,6 +900,76 @@ mod tests {
     }
 
     #[test]
+    fn test_apply_pending_response_roundtrip() {
+        let response = IpcResponse::ApplyPending {
+            message: "Recovery placement is still pending".to_string(),
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        assert_eq!(
+            json,
+            r#"{"status":"apply_pending","message":"Recovery placement is still pending"}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<IpcResponse>(&json).unwrap(),
+            response
+        );
+    }
+
+    #[test]
+    fn test_legacy_response_decoder_maps_apply_pending_to_unknown() {
+        #[derive(Debug, Deserialize, PartialEq)]
+        #[serde(tag = "status", rename_all = "snake_case")]
+        enum LegacyIpcResponse {
+            Ok,
+            Error {
+                message: String,
+            },
+            #[serde(other)]
+            Unknown,
+        }
+
+        let response = IpcResponse::ApplyPending {
+            message: "Recovery placement is still pending".to_string(),
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        assert_eq!(
+            serde_json::from_str::<LegacyIpcResponse>(&json).unwrap(),
+            LegacyIpcResponse::Unknown
+        );
+    }
+
+    #[test]
+    fn test_legacy_response_decoder_preserves_ok_and_error() {
+        #[derive(Debug, Deserialize, PartialEq)]
+        #[serde(tag = "status", rename_all = "snake_case")]
+        enum LegacyIpcResponse {
+            Ok,
+            Error {
+                message: String,
+            },
+            #[serde(other)]
+            Unknown,
+        }
+
+        assert_eq!(
+            serde_json::from_str::<LegacyIpcResponse>(
+                &serde_json::to_string(&IpcResponse::Ok).unwrap()
+            )
+            .unwrap(),
+            LegacyIpcResponse::Ok
+        );
+        assert_eq!(
+            serde_json::from_str::<LegacyIpcResponse>(
+                &serde_json::to_string(&IpcResponse::error("Test error")).unwrap()
+            )
+            .unwrap(),
+            LegacyIpcResponse::Error {
+                message: "Test error".to_string(),
+            }
+        );
+    }
+
+    #[test]
     fn test_all_command_types_roundtrip() {
         // Verify all command variants serialize and deserialize correctly
         let commands = vec![
@@ -971,6 +1046,9 @@ mod tests {
             IpcResponse::Ok,
             IpcResponse::Error {
                 message: "Test error".to_string(),
+            },
+            IpcResponse::ApplyPending {
+                message: "Recovery placement is still pending".to_string(),
             },
             IpcResponse::WorkspaceState {
                 columns: 5,
