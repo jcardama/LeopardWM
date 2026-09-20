@@ -915,19 +915,19 @@ mod tests {
         );
     }
 
+    #[derive(Debug, Deserialize, PartialEq)]
+    #[serde(tag = "status", rename_all = "snake_case")]
+    enum LegacyIpcResponse {
+        Ok,
+        Error {
+            message: String,
+        },
+        #[serde(other)]
+        Unknown,
+    }
+
     #[test]
     fn test_legacy_response_decoder_maps_apply_pending_to_unknown() {
-        #[derive(Debug, Deserialize, PartialEq)]
-        #[serde(tag = "status", rename_all = "snake_case")]
-        enum LegacyIpcResponse {
-            Ok,
-            Error {
-                message: String,
-            },
-            #[serde(other)]
-            Unknown,
-        }
-
         let response = IpcResponse::ApplyPending {
             message: "Recovery placement is still pending".to_string(),
         };
@@ -940,17 +940,6 @@ mod tests {
 
     #[test]
     fn test_legacy_response_decoder_preserves_ok_and_error() {
-        #[derive(Debug, Deserialize, PartialEq)]
-        #[serde(tag = "status", rename_all = "snake_case")]
-        enum LegacyIpcResponse {
-            Ok,
-            Error {
-                message: String,
-            },
-            #[serde(other)]
-            Unknown,
-        }
-
         assert_eq!(
             serde_json::from_str::<LegacyIpcResponse>(
                 &serde_json::to_string(&IpcResponse::Ok).unwrap()

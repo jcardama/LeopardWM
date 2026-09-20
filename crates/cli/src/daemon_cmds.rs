@@ -319,22 +319,19 @@ pub(crate) async fn handle_run(
     Ok(())
 }
 
-/// Same decision used by `handle_run`. Invokes `restore` only for Error/Unknown.
 pub(crate) fn conclude_apply_command_response(
     response: &IpcResponse,
     mut restore: impl FnMut(&str) -> Result<()>,
 ) -> Result<()> {
-    match response {
-        IpcResponse::Error { .. } | IpcResponse::Unknown => {
-            restore(apply_non_success_recovery_reason())
-                .context("Failed to execute local emergency visibility restore")?;
-            anyhow::bail!(apply_error_response_recovery_message());
-        }
-        IpcResponse::ApplyPending { .. } => {
-            anyhow::bail!(apply_pending_response_message());
-        }
-        _ => Ok(()),
+    if matches!(response, IpcResponse::ApplyPending { .. }) {
+        anyhow::bail!(apply_pending_response_message());
     }
+    if is_non_success_response(response) {
+        restore(apply_non_success_recovery_reason())
+            .context("Failed to execute local emergency visibility restore")?;
+        anyhow::bail!(apply_error_response_recovery_message());
+    }
+    Ok(())
 }
 
 async fn send_apply_with_recovery() -> Result<IpcResponse> {

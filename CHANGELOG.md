@@ -62,7 +62,7 @@ All notable changes to LeopardWM will be documented in this file.
 - **Gesture capture cannot prove finger count, device origin, or Windows touchpad-setting compatibility.**
   A zero-event interval is not proof that the hook is dead. Dropped or capped records mean input may have been lost; do not treat `no_input=true` as absent hardware when drops are reported. Elevated versus unelevated hook visibility is not guaranteed from this report.
 - **Corrected Apply pending handling requires matching CLI and daemon from the same release.**
-  Matching versions (Recommended). A newer daemon returns `apply_pending` when recovery landing is still outstanding. An older CLI maps that status to `Unknown` and may run emergency visibility restore. Mixed CLI/daemon versions are not negotiated or isolated on the pipe. The Apply request and workspace stream protocol version are unchanged.
+  A newer daemon returns `apply_pending` when recovery landing is still outstanding. An older CLI maps that status to `Unknown` and may run emergency visibility restore. Mixed CLI/daemon versions are not negotiated or isolated on the pipe. The Apply request and workspace stream protocol version are unchanged.
 
 ### Internal
 
