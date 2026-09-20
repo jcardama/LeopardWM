@@ -573,6 +573,7 @@ impl AppState {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn sync_foreground_after_animation_landing(&mut self) {
         self.sync_foreground_after_animation_landing_with_suppression(
             self.pending_suppress_landing_focus_resync,

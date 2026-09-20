@@ -136,15 +136,16 @@ fn last_placement_batch(state: &AppState) -> Vec<u64> {
 fn consume_idle_until_settled(state: &mut AppState) -> IdleLayoutReapply {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
-        let outcome = state.try_consume_idle_layout_reapply();
-        if !matches!(outcome, IdleLayoutReapply::Waiting) {
-            return outcome;
+        match state.try_consume_idle_layout_reapply() {
+            IdleLayoutReapply::Waiting => {
+                assert!(
+                    Instant::now() < deadline,
+                    "idle layout reapply stayed Waiting"
+                );
+                std::thread::yield_now();
+            }
+            outcome => return outcome,
         }
-        assert!(
-            Instant::now() < deadline,
-            "idle layout reapply stayed Waiting"
-        );
-        std::thread::yield_now();
     }
 }
 
@@ -909,10 +910,15 @@ fn pending_recovery_retries_failed_apply_then_clears_only_after_success() {
     ]));
     state.pending_idle_layout_reapply = true;
 
-    assert_eq!(
-        state.try_consume_idle_layout_reapply(),
-        IdleLayoutReapply::Waiting
-    );
+    match state.try_consume_idle_layout_reapply() {
+        IdleLayoutReapply::Failed { message } => {
+            assert!(
+                message.contains("injected apply_placements failure"),
+                "first recovery placement error must keep its provenance, got {message}"
+            );
+        }
+        other => panic!("expected Failed, got {other:?}"),
+    }
     assert!(state.pending_idle_layout_reapply);
     assert_eq!(state.idle_layout_reapply_failures, 1);
 
@@ -933,18 +939,17 @@ fn pending_recovery_defers_after_bounded_failures_without_clearing_request() {
         Some(TestApplyPlacementsBehavior::SleepAndFail(Duration::ZERO));
     state.pending_idle_layout_reapply = true;
 
-    assert_eq!(
-        state.try_consume_idle_layout_reapply(),
-        IdleLayoutReapply::Waiting
-    );
-    assert_eq!(
-        state.try_consume_idle_layout_reapply(),
-        IdleLayoutReapply::Waiting
-    );
-    assert_eq!(
-        state.try_consume_idle_layout_reapply(),
-        IdleLayoutReapply::DeferredFailure
-    );
+    for attempt in 1..=3 {
+        match state.try_consume_idle_layout_reapply() {
+            IdleLayoutReapply::Failed { message } => {
+                assert!(
+                    message.contains("injected apply_placements failure"),
+                    "recovery attempt {attempt} must keep placement error provenance, got {message}"
+                );
+            }
+            other => panic!("expected Failed on attempt {attempt}, got {other:?}"),
+        }
+    }
     assert!(state.pending_idle_layout_reapply);
     assert_eq!(state.idle_layout_reapply_failures, 3);
     assert!(!state.idle_layout_reapply_timer_needed());

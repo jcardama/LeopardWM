@@ -1534,10 +1534,15 @@ fn test_interrupted_recovery_settles_ghosts_scroll_nudge_and_focus_after_retry()
 
     unblock.send(()).unwrap();
     assert!(worker.control().wait_for_barrier(Duration::from_secs(2)));
-    assert_eq!(
-        state.try_consume_idle_layout_reapply(),
-        crate::temporary_ignore::IdleLayoutReapply::Waiting
-    );
+    match state.try_consume_idle_layout_reapply() {
+        crate::temporary_ignore::IdleLayoutReapply::Failed { message } => {
+            assert!(
+                message.contains("injected apply_placements failure"),
+                "first recovery placement error must keep its provenance, got {message}"
+            );
+        }
+        other => panic!("expected Failed, got {other:?}"),
+    }
     assert!(state.layout_transition.is_none());
     assert!(!state.workspaces[&1][0].is_animating());
     assert_eq!(state.workspaces[&1][0].scroll_offset(), 400.0);
@@ -1586,10 +1591,15 @@ fn test_explicit_apply_consumes_suppressed_recovery_landing_after_failure() {
     state.injected_apply_placements_behavior =
         Some(TestApplyPlacementsBehavior::SleepAndFail(Duration::ZERO));
 
-    assert_eq!(
-        state.try_consume_idle_layout_reapply(),
-        crate::temporary_ignore::IdleLayoutReapply::Waiting
-    );
+    match state.try_consume_idle_layout_reapply() {
+        crate::temporary_ignore::IdleLayoutReapply::Failed { message } => {
+            assert!(
+                message.contains("injected apply_placements failure"),
+                "first recovery placement error must keep its provenance, got {message}"
+            );
+        }
+        other => panic!("expected Failed, got {other:?}"),
+    }
     assert!(state.layout_transition.is_none());
     assert!(state.pending_idle_layout_reapply);
     assert!(state.pending_suppress_landing_focus_resync);
@@ -1685,6 +1695,278 @@ fn test_interrupted_recovery_settles_scroll_only_animation() {
     assert!(!workspace.is_animating());
     assert!(!state.pending_idle_layout_reapply);
     assert!(!state.post_animation_nudge_pending);
+}
+
+#[test]
+fn test_drain_then_pending_fresh_ghost_recovers_without_exposing_stale_rects() {
+    use crate::state::{
+        GhostEntry, TestApplyPlacementsBehavior, TestApplyPlacementsOutcome,
+        TestApplyPlacementsStep,
+    };
+
+    const SOURCE: u64 = u64::MAX - 60;
+    const PEER: u64 = u64::MAX - 61;
+    struct GhostCloakGuard(u64);
+    impl Drop for GhostCloakGuard {
+        fn drop(&mut self) {
+            leopardwm_platform_win32::unmark_ghost_cloaked(self.0);
+        }
+    }
+
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = false;
+    {
+        let workspace = &mut state.workspaces.get_mut(&1).unwrap()[0];
+        workspace.insert_window(SOURCE, Some(800)).unwrap();
+        workspace.insert_window(PEER, Some(800)).unwrap();
+        workspace.set_reduce_motion(false);
+    }
+
+    let placements = state.workspaces[&1][0].compute_placements(state.layout_viewport(1));
+    let source_rect = placements
+        .iter()
+        .find(|placement| placement.window_id == SOURCE)
+        .unwrap()
+        .rect;
+    let peer_rect = placements
+        .iter()
+        .find(|placement| placement.window_id == PEER)
+        .unwrap()
+        .rect;
+    state.apply_physical_projection(placements.clone());
+    let (request_id, invalidation_id) = state.physical_request_ids();
+    let landings: Vec<_> = placements
+        .iter()
+        .map(|placement| leopardwm_platform_win32::PlacementLanding {
+            window_id: placement.window_id,
+            requested_rect: placement.rect,
+            requested_visibility: placement.visibility,
+            actual_visible_rect: Some(placement.rect),
+            actual_outer_rect: Some(placement.rect),
+            failed: false,
+            unreadable: false,
+        })
+        .collect();
+    state.consume_physical_landings(request_id, invalidation_id, &landings, &[]);
+    assert!(state.physical_landing_is_safe_to_expose(SOURCE));
+    assert!(state.physical_landing_is_safe_to_expose(PEER));
+
+    state.ghost_handles.insert(
+        SOURCE,
+        GhostEntry::new(0, "GhostClass".into(), Rect::new(0, 0, 800, 600)),
+    );
+    let _source_cloak = GhostCloakGuard(SOURCE);
+    leopardwm_platform_win32::mark_ghost_cloaked(SOURCE);
+
+    state
+        .drain_pending_placement_work()
+        .expect("drain with no worker must succeed");
+    assert!(
+        !state.physical_landing_is_safe_to_expose(SOURCE),
+        "drain must invalidate older confirmed presentations"
+    );
+    assert!(
+        !state.physical_landing_is_safe_to_expose(PEER),
+        "drain must invalidate peer presentations in the same epoch bump"
+    );
+    assert!(state.ghost_handles.is_empty());
+    assert!(state.ghost_sources_pending_safe_landing.contains(&SOURCE));
+    assert!(leopardwm_platform_win32::is_placement_cloaked(SOURCE));
+
+    state.pending_idle_layout_reapply = true;
+    let snapshot = state.snapshot_layout();
+    state.start_layout_transition_with_duration(snapshot, 150);
+    state.ghost_handles.insert(
+        PEER,
+        GhostEntry::new(0, "GhostClass".into(), Rect::new(0, 0, 800, 600)),
+    );
+    let _peer_cloak = GhostCloakGuard(PEER);
+    leopardwm_platform_win32::mark_ghost_cloaked(PEER);
+    assert!(state.ghost_handles.contains_key(&PEER));
+    assert!(!state.ghost_sources_pending_safe_landing.contains(&PEER));
+
+    state.injected_apply_placements_behavior = Some(TestApplyPlacementsBehavior::Scripted(vec![
+        TestApplyPlacementsStep {
+            delay: Duration::ZERO,
+            outcome: TestApplyPlacementsOutcome::Fail,
+        },
+        TestApplyPlacementsStep {
+            delay: Duration::ZERO,
+            outcome: TestApplyPlacementsOutcome::Succeed {
+                landings: vec![
+                    leopardwm_platform_win32::PlacementLanding {
+                        window_id: SOURCE,
+                        requested_rect: source_rect,
+                        requested_visibility: leopardwm_core_layout::Visibility::Visible,
+                        actual_visible_rect: Some(source_rect),
+                        actual_outer_rect: Some(source_rect),
+                        failed: false,
+                        unreadable: false,
+                    },
+                    leopardwm_platform_win32::PlacementLanding {
+                        window_id: PEER,
+                        requested_rect: peer_rect,
+                        requested_visibility: leopardwm_core_layout::Visibility::Visible,
+                        actual_visible_rect: Some(peer_rect),
+                        actual_outer_rect: Some(peer_rect),
+                        failed: false,
+                        unreadable: false,
+                    },
+                ],
+            },
+        },
+    ]));
+
+    match state.try_consume_idle_layout_reapply() {
+        crate::temporary_ignore::IdleLayoutReapply::Failed { message } => {
+            assert!(
+                message.contains("injected apply_placements failure"),
+                "first recovery placement error must keep its provenance, got {message}"
+            );
+        }
+        other => panic!("expected first recovery apply to fail, got {other:?}"),
+    }
+    assert!(state.ghost_handles.is_empty());
+    assert!(
+        state.ghost_sources_pending_safe_landing.contains(&SOURCE),
+        "drain-invalidated source must stay pending after recovery abort"
+    );
+    assert!(
+        state.ghost_sources_pending_safe_landing.contains(&PEER),
+        "post-drain peer ghost must stay pending after recovery abort"
+    );
+    assert!(leopardwm_platform_win32::is_placement_cloaked(SOURCE));
+    assert!(leopardwm_platform_win32::is_placement_cloaked(PEER));
+    assert!(
+        !state.physical_landing_is_safe_to_expose(SOURCE),
+        "failed recovery must not expose the original source"
+    );
+    assert!(
+        !state.physical_landing_is_safe_to_expose(PEER),
+        "failed recovery must not expose the post-drain peer"
+    );
+
+    assert_eq!(
+        state.try_consume_idle_layout_reapply(),
+        crate::temporary_ignore::IdleLayoutReapply::Applied
+    );
+    assert!(state.layout_transition.is_none());
+    assert!(state.ghost_handles.is_empty());
+    assert!(!state.ghost_sources_pending_safe_landing.contains(&SOURCE));
+    assert!(!state.ghost_sources_pending_safe_landing.contains(&PEER));
+    assert!(!leopardwm_platform_win32::is_placement_cloaked(SOURCE));
+    assert!(!leopardwm_platform_win32::is_placement_cloaked(PEER));
+    assert!(state.physical_landing_is_safe_to_expose(SOURCE));
+    assert!(state.physical_landing_is_safe_to_expose(PEER));
+}
+
+#[test]
+fn test_filtered_empty_apply_releases_only_safe_pending_ghost_sources() {
+    use crate::physical_placement::{PhysicalKind, PhysicalPresentation};
+    use crate::state::ApplicationFullscreenState;
+
+    const SAFE: u64 = u64::MAX - 70;
+    const PARKED: u64 = u64::MAX - 71;
+    const UNCONFIRMED: u64 = u64::MAX - 72;
+    struct GhostCloakGuard(u64);
+    impl Drop for GhostCloakGuard {
+        fn drop(&mut self) {
+            leopardwm_platform_win32::unmark_ghost_cloaked(self.0);
+        }
+    }
+
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = false;
+    {
+        let workspace = &mut state.workspaces.get_mut(&1).unwrap()[0];
+        for hwnd in [SAFE, PARKED, UNCONFIRMED] {
+            workspace.insert_window(hwnd, Some(800)).unwrap();
+        }
+    }
+
+    let placements = state.workspaces[&1][0].compute_placements(state.layout_viewport(1));
+    let safe_placement = placements
+        .iter()
+        .find(|placement| placement.window_id == SAFE)
+        .unwrap()
+        .clone();
+    state.apply_physical_projection(vec![safe_placement.clone()]);
+    let (request_id, invalidation_id) = state.physical_request_ids();
+    state.consume_physical_landings(
+        request_id,
+        invalidation_id,
+        &[leopardwm_platform_win32::PlacementLanding {
+            window_id: SAFE,
+            requested_rect: safe_placement.rect,
+            requested_visibility: safe_placement.visibility,
+            actual_visible_rect: Some(safe_placement.rect),
+            actual_outer_rect: Some(safe_placement.rect),
+            failed: false,
+            unreadable: false,
+        }],
+        &[],
+    );
+    assert!(state.physical_landing_is_safe_to_expose(SAFE));
+
+    let safe_presentation = state.last_physical_presentations[&SAFE].clone();
+    state.last_physical_presentations.insert(
+        PARKED,
+        PhysicalPresentation {
+            physical: safe_presentation.physical.clone(),
+            kind: PhysicalKind::Parked,
+            request_id: safe_presentation.request_id,
+            invalidation_id: safe_presentation.invalidation_id,
+            confirmed: true,
+        },
+    );
+    state.last_physical_presentations.insert(
+        UNCONFIRMED,
+        PhysicalPresentation {
+            physical: safe_presentation.physical.clone(),
+            kind: PhysicalKind::Unchanged,
+            request_id: safe_presentation.request_id,
+            invalidation_id: safe_presentation.invalidation_id,
+            confirmed: false,
+        },
+    );
+    assert!(!state.physical_landing_is_safe_to_expose(PARKED));
+    assert!(!state.physical_landing_is_safe_to_expose(UNCONFIRMED));
+
+    for hwnd in [SAFE, PARKED, UNCONFIRMED] {
+        state.application_fullscreen.insert(
+            hwnd,
+            ApplicationFullscreenState {
+                monitor_id: 1,
+                rect: Rect::new(0, 0, 1920, 1080),
+            },
+        );
+        state.ghost_sources_pending_safe_landing.insert(hwnd);
+        leopardwm_platform_win32::mark_ghost_cloaked(hwnd);
+    }
+    let _safe = GhostCloakGuard(SAFE);
+    let _parked = GhostCloakGuard(PARKED);
+    let _unconfirmed = GhostCloakGuard(UNCONFIRMED);
+
+    assert!(state.injected_apply_placements_behavior.is_none());
+    assert_eq!(
+        state.apply_layout().unwrap(),
+        crate::layout_apply::LayoutApplyOutcome::Completed
+    );
+    assert_eq!(
+        state
+            .injected_apply_placements_call_count
+            .load(Ordering::SeqCst),
+        0,
+        "production empty/filtered apply must not spawn the injected worker"
+    );
+    assert!(!state.ghost_sources_pending_safe_landing.contains(&SAFE));
+    assert!(!leopardwm_platform_win32::is_placement_cloaked(SAFE));
+    assert!(state.ghost_sources_pending_safe_landing.contains(&PARKED));
+    assert!(leopardwm_platform_win32::is_placement_cloaked(PARKED));
+    assert!(state
+        .ghost_sources_pending_safe_landing
+        .contains(&UNCONFIRMED));
+    assert!(leopardwm_platform_win32::is_placement_cloaked(UNCONFIRMED));
 }
 
 #[test]
@@ -6896,6 +7178,146 @@ fn test_toggle_pause_resume_reports_apply_failure() {
         state.paused,
         "failed resume should restore paused state to avoid false resumed status"
     );
+}
+
+#[test]
+fn test_resume_reports_first_recovery_placement_error_while_animating() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = false;
+    state.workspaces.get_mut(&1).unwrap()[0]
+        .insert_window(100, Some(800))
+        .unwrap();
+    assert_eq!(
+        state.handle_command(IpcCommand::TogglePause),
+        IpcResponse::Ok
+    );
+    assert!(state.paused);
+
+    let snapshot = state.snapshot_layout();
+    state.start_layout_transition_with_duration(snapshot, 150);
+    state.pending_idle_layout_reapply = true;
+    state.injected_apply_placements_behavior =
+        Some(TestApplyPlacementsBehavior::SleepAndFail(Duration::ZERO));
+
+    let err = state
+        .toggle_pause("test resume first recovery error")
+        .expect_err("first placement failure must fail resume");
+    assert!(
+        err.to_string()
+            .contains("injected apply_placements failure"),
+        "resume must report the placement error, got {err}"
+    );
+    assert!(state.paused);
+    assert!(state.pending_idle_layout_reapply);
+    assert_eq!(state.idle_layout_reapply_failures, 1);
+    assert!(
+        !state.idle_layout_reapply_timer_needed(),
+        "paused rollback remains authoritative for timer arming after a real placement error"
+    );
+    assert!(state.layout_transition.is_none());
+
+    state.injected_apply_placements_behavior =
+        Some(TestApplyPlacementsBehavior::SleepAndSucceed(Duration::ZERO));
+    state
+        .toggle_pause("test resume after recovery error")
+        .expect("later successful resume must apply");
+    assert!(!state.paused);
+    assert!(!state.pending_idle_layout_reapply);
+    assert_eq!(state.idle_layout_reapply_failures, 0);
+}
+
+#[test]
+fn test_resume_reports_exhausted_recovery_placement_error_while_animating() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = false;
+    state.workspaces.get_mut(&1).unwrap()[0]
+        .insert_window(100, Some(800))
+        .unwrap();
+    assert_eq!(
+        state.handle_command(IpcCommand::TogglePause),
+        IpcResponse::Ok
+    );
+    assert!(state.paused);
+
+    let snapshot = state.snapshot_layout();
+    state.start_layout_transition_with_duration(snapshot, 150);
+    state.pending_idle_layout_reapply = true;
+    state.idle_layout_reapply_failures = 2;
+    state.injected_apply_placements_behavior =
+        Some(TestApplyPlacementsBehavior::SleepAndFail(Duration::ZERO));
+
+    let err = state
+        .toggle_pause("test resume exhausted recovery error")
+        .expect_err("exhausted placement failure must fail resume");
+    assert!(
+        err.to_string()
+            .contains("injected apply_placements failure"),
+        "resume must report the placement error at exhaustion, got {err}"
+    );
+    assert!(state.paused);
+    assert!(state.pending_idle_layout_reapply);
+    assert_eq!(state.idle_layout_reapply_failures, 3);
+    assert!(
+        !state.idle_layout_reapply_timer_needed(),
+        "exhausted failure count and paused rollback both keep the idle timer off"
+    );
+    assert!(state.layout_transition.is_none());
+
+    state.injected_apply_placements_behavior =
+        Some(TestApplyPlacementsBehavior::SleepAndSucceed(Duration::ZERO));
+    state
+        .toggle_pause("test resume after exhausted recovery error")
+        .expect("later successful resume must still apply after exhaustion");
+    assert!(!state.paused);
+    assert!(!state.pending_idle_layout_reapply);
+    assert_eq!(state.idle_layout_reapply_failures, 0);
+}
+
+#[test]
+fn test_resume_defers_while_recovery_animation_barrier_busy() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = false;
+    state.workspaces.get_mut(&1).unwrap()[0]
+        .insert_window(100, Some(800))
+        .unwrap();
+    assert_eq!(
+        state.handle_command(IpcCommand::TogglePause),
+        IpcResponse::Ok
+    );
+    assert!(state.paused);
+
+    let snapshot = state.snapshot_layout();
+    state.start_layout_transition_with_duration(snapshot, 150);
+    state.pending_idle_layout_reapply = true;
+    let (event_tx, _event_rx) = tokio::sync::mpsc::channel(4);
+    let worker = animation_worker::AnimationWorkerHandle::spawn(
+        event_tx,
+        state.apply_worker_cancelled.clone(),
+    )
+    .unwrap();
+    let unblock = worker.block_for_test();
+    state.animation_worker_control = Some(worker.control());
+
+    let err = state
+        .toggle_pause("test resume busy recovery barrier")
+        .expect_err("busy barrier must defer resume");
+    assert!(
+        err.to_string()
+            .contains("Resume apply deferred while recovery animation placement finishes"),
+        "busy resume must stay deferred, got {err}"
+    );
+    assert!(state.paused);
+    assert!(state.pending_idle_layout_reapply);
+    assert!(state.layout_transition.is_some());
+    assert_eq!(
+        state
+            .injected_apply_placements_call_count
+            .load(Ordering::SeqCst),
+        0
+    );
+
+    unblock.send(()).unwrap();
+    assert!(worker.control().wait_for_barrier(Duration::from_secs(2)));
 }
 
 #[test]

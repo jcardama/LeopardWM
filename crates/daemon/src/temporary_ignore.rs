@@ -27,12 +27,12 @@ pub(crate) enum IdentityReadError {
     Transient(String),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum IdleLayoutReapply {
     NotPending,
     Applied,
     Waiting,
-    DeferredFailure,
+    Failed { message: String },
     Paused,
 }
 
@@ -358,13 +358,15 @@ impl AppState {
                         "Deferring temporary-ignore layout recovery after {} failed attempts: {}",
                         self.idle_layout_reapply_failures, error
                     );
-                    return IdleLayoutReapply::DeferredFailure;
+                } else {
+                    warn!(
+                        "Temporary-ignore layout recovery attempt {} failed; retrying: {}",
+                        self.idle_layout_reapply_failures, error
+                    );
                 }
-                warn!(
-                    "Temporary-ignore layout recovery attempt {} failed; retrying: {}",
-                    self.idle_layout_reapply_failures, error
-                );
-                return IdleLayoutReapply::Waiting;
+                return IdleLayoutReapply::Failed {
+                    message: error.to_string(),
+                };
             }
         }
         if !self.pending_idle_layout_reapply {

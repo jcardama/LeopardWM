@@ -72,6 +72,8 @@ impl AppState {
             return false;
         }
 
+        // Snap remaining motion to final targets. Restarting an interrupted
+        // animation after drain would interpolate from invalidated geometry.
         self.abort_active_ghost_transition();
         let mut scroll_anims_settled = false;
         for workspaces in self.workspaces.values_mut() {

@@ -760,10 +760,7 @@ impl AppState {
         }
 
         // Reposition border to track the focused window after layout changes.
-        // A thumbnail-revoked source remains cloaked until this exact landing
-        // is current, confirmed, and not parked.
         if result.is_ok() && !deferred_by_recovery_barrier {
-            self.release_ghost_sources_after_physical_landing();
             self.finalize_layout_success();
         }
 
@@ -1212,13 +1209,17 @@ impl AppState {
         constraints_changed
     }
 
-    /// Post-success bookkeeping: border, tab strip, and deduped LayoutChanged broadcast.
+    /// Post-success bookkeeping: ghost release, border, tab strip, and deduped LayoutChanged broadcast.
     fn finalize_layout_success(&mut self) {
         let completed_idle_recovery = self.pending_idle_layout_reapply;
         self.pending_idle_layout_reapply = false;
         self.idle_layout_reapply_failures = 0;
+        // A thumbnail-revoked source remains cloaked until this landing is
+        // current, confirmed, and not parked. Empty or filtered dispatch uses
+        // the same helper so a cloaked source is not stranded without a worker.
+        self.release_ghost_sources_after_physical_landing();
         if completed_idle_recovery && self.pending_suppress_landing_focus_resync {
-            self.sync_foreground_after_animation_landing();
+            self.pending_suppress_landing_focus_resync = false;
         }
         if let Some(hwnd) = self.previous_focused_hwnd {
             if self.config.appearance.active_border {

@@ -710,49 +710,13 @@ impl AppState {
             self.pending_drag_hint = Some(crate::state::DragHintAction::Hide);
         } else {
             self.pending_layout_apply_timeout_report = None;
-            let recovery_landed = if self.pending_idle_layout_reapply && self.is_animating() {
-                if matches!(
-                    self.try_consume_idle_layout_reapply(),
-                    crate::temporary_ignore::IdleLayoutReapply::Applied
-                ) {
-                    true
-                } else {
-                    self.paused = was_paused;
-                    let error = anyhow::anyhow!(
-                        "Resume apply deferred while recovery animation placement finishes"
-                    );
-                    warn!(
-                        "Resume apply failed via {}; restoring paused state: {}",
-                        source, error
-                    );
-                    return Err(error);
-                }
-            } else {
-                false
-            };
-            if !recovery_landed {
-                match self.apply_layout() {
-                    Ok(crate::layout_apply::LayoutApplyOutcome::Completed) => {}
-                    Ok(crate::layout_apply::LayoutApplyOutcome::DeferredByRecoveryBarrier) => {
-                        self.paused = was_paused;
-                        let error = anyhow::anyhow!(
-                            "Resume apply deferred while recovery animation placement finishes"
-                        );
-                        warn!(
-                            "Resume apply failed via {}; restoring paused state: {}",
-                            source, error
-                        );
-                        return Err(error);
-                    }
-                    Err(error) => {
-                        self.paused = was_paused;
-                        warn!(
-                            "Resume apply failed via {}; restoring paused state: {}",
-                            source, error
-                        );
-                        return Err(error);
-                    }
-                }
+            if let Err(error) = self.resume_layout_after_unpause() {
+                self.paused = was_paused;
+                warn!(
+                    "Resume apply failed via {}; restoring paused state: {}",
+                    source, error
+                );
+                return Err(error);
             }
             // Park inactive workspaces only after a successful active apply so a
             // failed resume cannot move them while rolling back to paused.
@@ -763,5 +727,30 @@ impl AppState {
             self.sync_foreground_window();
         }
         Ok(())
+    }
+
+    fn resume_layout_after_unpause(&mut self) -> Result<()> {
+        const RESUME_DEFERRED: &str =
+            "Resume apply deferred while recovery animation placement finishes";
+        if self.pending_idle_layout_reapply && self.is_animating() {
+            match self.try_consume_idle_layout_reapply() {
+                crate::temporary_ignore::IdleLayoutReapply::Applied => return Ok(()),
+                crate::temporary_ignore::IdleLayoutReapply::Failed { message } => {
+                    return Err(anyhow::anyhow!(message));
+                }
+                crate::temporary_ignore::IdleLayoutReapply::Waiting => {
+                    return Err(anyhow::anyhow!(RESUME_DEFERRED));
+                }
+                crate::temporary_ignore::IdleLayoutReapply::NotPending
+                | crate::temporary_ignore::IdleLayoutReapply::Paused => {}
+            }
+        }
+        match self.apply_layout() {
+            Ok(crate::layout_apply::LayoutApplyOutcome::Completed) => Ok(()),
+            Ok(crate::layout_apply::LayoutApplyOutcome::DeferredByRecoveryBarrier) => {
+                Err(anyhow::anyhow!(RESUME_DEFERRED))
+            }
+            Err(error) => Err(error),
+        }
     }
 }
