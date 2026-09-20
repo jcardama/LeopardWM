@@ -1633,7 +1633,7 @@ fn event_loop_equivalent_final_landing(state: &mut AppState) -> bool {
         state.apply_layout(),
         Ok(crate::layout_apply::LayoutApplyOutcome::Completed)
     );
-    state.finish_animation_landing_focus_resync(landing_ok, captured_suppress);
+    state.finish_animation_landing_focus_resync(captured_suppress);
     landing_ok
 }
 
@@ -1683,7 +1683,7 @@ fn test_normal_animation_landing_preserves_recovery_suppression_through_apply() 
     assert!(!state.pending_suppress_landing_focus_resync);
     let updates_before_landing_sync = state.tab_strip_update_count.load(Ordering::Relaxed);
 
-    state.finish_animation_landing_focus_resync(landing_ok, captured_suppress);
+    state.finish_animation_landing_focus_resync(captured_suppress);
     assert_eq!(
         state.tab_strip_update_count.load(Ordering::Relaxed),
         updates_before_landing_sync,
@@ -1773,6 +1773,113 @@ fn test_event_loop_landing_retains_suppression_when_final_apply_deferred() {
     );
 
     assert_unrelated_landing_does_not_inherit_suppression(&mut state);
+}
+
+#[test]
+fn test_event_loop_landing_retains_suppression_when_paused_final_apply_is_noop() {
+    let mut state = arm_suppressed_recovery_final_landing();
+    state.injected_apply_placements_behavior =
+        Some(TestApplyPlacementsBehavior::SleepAndSucceed(Duration::ZERO));
+    assert_eq!(
+        state.handle_command(IpcCommand::TogglePause),
+        IpcResponse::Ok
+    );
+    assert!(state.paused);
+    assert!(state.pending_idle_layout_reapply);
+    assert!(state.pending_suppress_landing_focus_resync);
+
+    assert!(
+        event_loop_equivalent_final_landing(&mut state),
+        "paused apply_layout reports Completed without placing"
+    );
+    assert!(state.paused);
+    assert!(state.pending_idle_layout_reapply);
+    assert!(
+        state.pending_suppress_landing_focus_resync,
+        "a paused no-op final landing must keep recovery suppression"
+    );
+    assert_eq!(
+        state
+            .injected_apply_placements_call_count
+            .load(Ordering::SeqCst),
+        0,
+        "paused final landing must not dispatch placement"
+    );
+
+    assert_eq!(
+        state.handle_command(IpcCommand::TogglePause),
+        IpcResponse::Ok
+    );
+    assert!(!state.paused);
+    assert!(!state.pending_idle_layout_reapply);
+    assert!(!state.pending_suppress_landing_focus_resync);
+    assert!(
+        state
+            .injected_apply_placements_call_count
+            .load(Ordering::SeqCst)
+            > 0
+    );
+}
+
+#[test]
+fn test_event_loop_landing_consumes_nonrecovery_suppression_when_final_apply_fails() {
+    let mut state = departing_tiled_state(Some(100), Some(200));
+    state.handle_window_event(WindowEvent::Destroyed(100));
+    assert!(
+        state
+            .layout_transition
+            .as_ref()
+            .is_some_and(|transition| transition.suppress_landing_focus_resync),
+        "managed replacement departure must arm landing suppression"
+    );
+    assert!(
+        !state.pending_idle_layout_reapply,
+        "departing-focus suppression is not recovery"
+    );
+
+    let duration = state
+        .layout_transition
+        .as_ref()
+        .map(|transition| transition.duration_ms)
+        .unwrap_or(0);
+    assert!(state.tick_animations(duration));
+    assert!(state.layout_transition.is_none());
+    assert!(state.pending_suppress_landing_focus_resync);
+    assert!(!state.pending_idle_layout_reapply);
+    state.post_animation_nudge_pending = true;
+    state.injected_apply_placements_behavior =
+        Some(TestApplyPlacementsBehavior::SleepAndFail(Duration::ZERO));
+
+    assert!(!event_loop_equivalent_final_landing(&mut state));
+    assert!(!state.pending_idle_layout_reapply);
+    assert!(
+        !state.pending_suppress_landing_focus_resync,
+        "a non-recovery failed landing must still consume the one-shot"
+    );
+
+    {
+        let workspace = &mut state.workspaces.get_mut(&1).unwrap()[0];
+        workspace.insert_window(300, Some(800)).unwrap();
+        workspace.insert_window(400, Some(800)).unwrap();
+        workspace.set_reduce_motion(false);
+        workspace.start_scroll_animation(400.0, 1920, Some(1_000), None);
+    }
+    assert!(
+        state.workspaces[&1][0].is_animating(),
+        "next unrelated landing is a scroll-only animation"
+    );
+    let _ = state.tick_animations(1_000);
+    assert!(!state.workspaces[&1][0].is_animating());
+    assert!(!state.pending_suppress_landing_focus_resync);
+    state.post_animation_nudge_pending = true;
+    state.injected_apply_placements_behavior =
+        Some(TestApplyPlacementsBehavior::SleepAndSucceed(Duration::ZERO));
+    let updates_before = state.tab_strip_update_count.load(Ordering::Relaxed);
+    assert!(event_loop_equivalent_final_landing(&mut state));
+    assert!(
+        state.tab_strip_update_count.load(Ordering::Relaxed) > updates_before,
+        "the next unrelated scroll-only landing must resync after non-recovery suppression is consumed"
+    );
 }
 
 #[test]
