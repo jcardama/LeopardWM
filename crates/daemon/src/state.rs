@@ -713,6 +713,12 @@ pub(crate) struct AppState {
     /// Count of uncloak requests that production would issue to DWM.
     #[cfg(test)]
     pub(crate) injected_native_uncloak_count: AtomicUsize,
+    /// Test-only snap-disable result that skips `remove_maximizebox`.
+    #[cfg(test)]
+    pub(crate) injected_snap_disable_override: Option<Result<bool, String>>,
+    /// Snap-disable attempts that passed pause, config, and tracking guards.
+    #[cfg(test)]
+    pub(crate) injected_snap_disable_attempt_count: AtomicUsize,
     /// Per-window native maximize responses for deterministic daemon tests.
     #[cfg(test)]
     pub(crate) injected_window_maximized: HashMap<u64, bool>,
@@ -1098,6 +1104,10 @@ impl AppState {
             injected_native_restore_error: None,
             #[cfg(test)]
             injected_native_uncloak_count: AtomicUsize::new(0),
+            #[cfg(test)]
+            injected_snap_disable_override: None,
+            #[cfg(test)]
+            injected_snap_disable_attempt_count: AtomicUsize::new(0),
             #[cfg(test)]
             injected_window_maximized: HashMap::new(),
             #[cfg(test)]

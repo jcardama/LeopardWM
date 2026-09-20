@@ -140,9 +140,9 @@ impl AppState {
 
     /// One-read answer for `is_known_window`.
     ///
-    /// Matching token and transient reads stay known. Gone is unknown even if
-    /// tests still inject window info. Mismatch, missing, or an untracked HWND
-    /// fall through.
+    /// Matching token and injected transient reads stay known. Gone is unknown
+    /// even if tests still inject window info. Mismatch, missing, or an untracked
+    /// HWND fall through. Production `GetPropW` is handle or NULL.
     pub(crate) fn temporary_ignore_known(&self, hwnd: u64) -> Option<bool> {
         let entry = self.temporary_ignores.get(&hwnd)?;
         match self.read_ignore_identity(hwnd) {
@@ -222,8 +222,15 @@ impl AppState {
 
         self.cancel_matching_unfinished_move_size_ui(hwnd);
         let snapshot = self.snapshot_layout();
+        if let Err(error) = self.restore_unmanaged_geometry(hwnd) {
+            let _ = self.clear_ignore_identity(hwnd);
+            // SetWindowPos is not transactional. Retry placement rather than
+            // claiming the window was released.
+            self.request_idle_layout_reapply();
+            return IpcResponse::error(format!("Window remains managed: {error}"));
+        }
         let was_tiled = self.remove_managed_membership(hwnd);
-        let restore_result = self.restore_unmanaged_native_state(hwnd);
+        self.release_unmanaged_native_state(hwnd);
         let (process_id, class_name) = self
             .lookup_window_info(hwnd)
             .map(|info| (info.process_id, info.class_name))
@@ -236,24 +243,17 @@ impl AppState {
                 class_name: class_name.clone(),
             },
         );
-        let layout_result = self.reflow_peers_after_unmanage(hwnd, was_tiled, snapshot);
-        match (restore_result, layout_result) {
-            (Ok(()), Ok(())) => {
+        match self.reflow_peers_after_unmanage(hwnd, was_tiled, snapshot) {
+            Ok(()) => {
                 info!(
                     "Temporarily ignored window {} (pid {} class {})",
                     hwnd, process_id, class_name
                 );
                 IpcResponse::Ok
             }
-            (Err(error), Ok(())) => IpcResponse::error(format!(
-                "Window was unmanaged but native restore failed: {error}"
-            )),
-            (Ok(()), Err(error)) => {
+            Err(error) => {
                 IpcResponse::error(format!("Window was unmanaged but layout failed: {error}"))
             }
-            (Err(restore), Err(layout)) => IpcResponse::error(format!(
-                "Window was unmanaged but native restore failed: {restore}; layout failed: {layout}"
-            )),
         }
     }
 
@@ -471,19 +471,27 @@ impl AppState {
         }
     }
 
-    fn restore_unmanaged_native_state(&mut self, hwnd: u64) -> Result<(), String> {
-        let mut failures: Vec<String> = Vec::new();
+    fn restore_unmanaged_geometry(&mut self, hwnd: u64) -> Result<(), String> {
+        #[cfg(not(test))]
+        {
+            leopardwm_platform_win32::restore_window_moved_offscreen(hwnd)
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        }
+        #[cfg(test)]
+        {
+            let _ = hwnd;
+            match self.injected_native_restore_error.take() {
+                Some(error) => Err(error),
+                None => Ok(()),
+            }
+        }
+    }
+
+    fn release_unmanaged_native_state(&mut self, hwnd: u64) {
         self.restore_snap_for_window(hwnd);
         self.release_departing_hwnd_ghost(hwnd);
         leopardwm_platform_win32::taskbar::taskbar_show(hwnd);
-        #[cfg(not(test))]
-        if let Err(error) = leopardwm_platform_win32::restore_window_moved_offscreen(hwnd) {
-            failures.push(error.to_string());
-        }
-        #[cfg(test)]
-        if let Some(error) = self.injected_native_restore_error.take() {
-            failures.push(error);
-        }
         #[cfg(not(test))]
         leopardwm_platform_win32::dwm_uncloak_window(hwnd);
         #[cfg(test)]
@@ -491,11 +499,6 @@ impl AppState {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.forget_managed_metadata(hwnd);
         self.update_tab_strip();
-        if failures.is_empty() {
-            Ok(())
-        } else {
-            Err(failures.join("; "))
-        }
     }
 
     fn retire_stale_temporary_ignore(&mut self, hwnd: u64, token: u64) {
@@ -574,6 +577,9 @@ impl AppState {
         match leopardwm_platform_win32::read_window_lifetime_token(hwnd) {
             Ok(token) => Ok(token),
             Err(Win32Error::WindowNotFound(_)) => Err(IdentityReadError::Gone),
+            // GetPropW is handle-or-NULL and does not document GetLastError/UIPI
+            // failure. This arm is for other Win32Error variants on the public
+            // read signature, and for injected tests.
             Err(error) => Err(IdentityReadError::Transient(error.to_string())),
         }
     }

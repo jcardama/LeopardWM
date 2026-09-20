@@ -520,15 +520,155 @@ fn animation_barrier_failure_keeps_managed_window() {
 }
 
 #[test]
-fn native_restore_failure_still_unmanages_and_ignores() {
+fn native_restore_failure_keeps_window_managed() {
     let mut state = managed_state();
+    let paused = state.paused;
+    let focused_monitor = state.focused_monitor;
+    state.window_managed_at.insert(10, Instant::now());
+    state.tab_title_overrides.insert(10, "owned".into());
+    state.snap_disabled_hwnds.insert(10);
+    state.sticky_windows.insert(10);
+    state.previous_focused_hwnd = Some(10);
+    state
+        .last_placed_layout_rects
+        .insert(10, Rect::new(1, 2, 3, 4));
     set_foreground(&mut state, 10);
     state.injected_native_restore_error = Some("restore failed".into());
     let message = error_message(state.handle_command(IpcCommand::ToggleIgnore));
-    assert!(message.contains("was unmanaged"));
-    assert!(state.find_window_workspace(10).is_none());
-    assert!(state.temporary_ignores.contains_key(&10));
-    assert!(!state.all_managed_window_ids().contains(&10));
+    assert!(message.contains("remains managed"));
+    assert!(message.contains("restore failed"));
+    assert!(!message.contains("was unmanaged"));
+    assert_eq!(state.find_window_workspace(10), Some((1, 0)));
+    assert!(!state.temporary_ignores.contains_key(&10));
+    assert!(state.all_managed_window_ids().contains(&10));
+    assert_eq!(state.paused, paused);
+    assert_eq!(state.focused_monitor, focused_monitor);
+    assert_eq!(state.previous_focused_hwnd, Some(10));
+    assert_eq!(
+        state.tab_title_overrides.get(&10).map(String::as_str),
+        Some("owned")
+    );
+    assert!(state.snap_disabled_hwnds.contains(&10));
+    assert!(state.sticky_windows.contains(&10));
+    assert!(state.window_managed_at.contains_key(&10));
+    assert_eq!(
+        state.last_placed_layout_rects.get(&10),
+        Some(&Rect::new(1, 2, 3, 4))
+    );
+    assert_eq!(
+        state.injected_native_uncloak_count.load(Ordering::Relaxed),
+        0
+    );
+    assert!(!state.injected_lifetime_tokens.contains_key(&10));
+    assert!(state.pending_idle_layout_reapply);
+    assert!(state.find_window_workspace(20).is_some());
+    assert_eq!(state.find_window_workspace(30), Some((1, 1)));
+}
+
+#[test]
+fn paused_explicit_readmit_does_not_suppress_snap() {
+    let mut state = managed_state();
+    state.injected_snap_disable_override = Some(Ok(true));
+    ignore_foreground(&mut state, 10);
+    assert!(state.paused);
+    let attempts_before = state
+        .injected_snap_disable_attempt_count
+        .load(Ordering::Relaxed);
+    set_foreground(&mut state, 10);
+    assert!(matches!(
+        state.handle_command(IpcCommand::ToggleIgnore),
+        IpcResponse::Ok
+    ));
+    assert!(state.paused);
+    assert!(state.find_window_workspace(10).is_some());
+    assert!(!state.snap_disabled_hwnds.contains(&10));
+    assert_eq!(
+        state
+            .injected_snap_disable_attempt_count
+            .load(Ordering::Relaxed),
+        attempts_before
+    );
+}
+
+#[test]
+fn unpaused_explicit_readmit_suppresses_snap() {
+    let mut state = managed_state();
+    state.injected_snap_disable_override = Some(Ok(true));
+    ignore_foreground(&mut state, 10);
+    state.paused = false;
+    state.reduce_motion = true;
+    state.injected_apply_placements_behavior =
+        Some(TestApplyPlacementsBehavior::SleepAndSucceed(Duration::ZERO));
+    set_foreground(&mut state, 10);
+    assert!(matches!(
+        state.handle_command(IpcCommand::ToggleIgnore),
+        IpcResponse::Ok
+    ));
+    assert!(!state.paused);
+    assert!(state.find_window_workspace(10).is_some());
+    assert!(state.snap_disabled_hwnds.contains(&10));
+    assert!(
+        state
+            .injected_snap_disable_attempt_count
+            .load(Ordering::Relaxed)
+            >= 1
+    );
+}
+
+#[test]
+fn successful_resume_suppresses_snap_after_paused_readmit() {
+    let mut state = managed_state();
+    state.injected_snap_disable_override = Some(Ok(true));
+    ignore_foreground(&mut state, 10);
+    set_foreground(&mut state, 10);
+    assert!(matches!(
+        state.handle_command(IpcCommand::ToggleIgnore),
+        IpcResponse::Ok
+    ));
+    assert!(state.paused);
+    assert!(!state.snap_disabled_hwnds.contains(&10));
+    state.reduce_motion = true;
+    state.injected_apply_placements_behavior =
+        Some(TestApplyPlacementsBehavior::SleepAndSucceed(Duration::ZERO));
+    state
+        .toggle_pause("test resume after paused readmit")
+        .unwrap();
+    assert!(!state.paused);
+    assert!(state.snap_disabled_hwnds.contains(&10));
+    assert!(
+        state
+            .injected_snap_disable_attempt_count
+            .load(Ordering::Relaxed)
+            >= 1
+    );
+}
+
+#[test]
+fn failed_resume_does_not_suppress_snap_after_paused_readmit() {
+    let mut state = managed_state();
+    state.injected_snap_disable_override = Some(Ok(true));
+    ignore_foreground(&mut state, 10);
+    set_foreground(&mut state, 10);
+    assert!(matches!(
+        state.handle_command(IpcCommand::ToggleIgnore),
+        IpcResponse::Ok
+    ));
+    let attempts = state
+        .injected_snap_disable_attempt_count
+        .load(Ordering::Relaxed);
+    state.apply_worker_cancelled.store(true, Ordering::SeqCst);
+    let err = state
+        .toggle_pause("test failed resume after paused readmit")
+        .unwrap_err();
+    assert!(err.to_string().contains("shutdown/revert cleanup"));
+    assert!(state.paused);
+    assert!(!state.snap_disabled_hwnds.contains(&10));
+    assert_eq!(
+        state
+            .injected_snap_disable_attempt_count
+            .load(Ordering::Relaxed),
+        attempts
+    );
 }
 
 #[test]
@@ -1183,8 +1323,9 @@ fn shutdown_skips_gone_and_transient_ignore_token_clears() {
     let mut transient = managed_state();
     ignore_foreground(&mut transient, 10);
     let transient_token = ignored_token(&transient, 10);
-    transient.injected_identity_read_error =
-        Some(IdentityReadError::Transient("GetPropW failed".into()));
+    transient.injected_identity_read_error = Some(IdentityReadError::Transient(
+        "injected identity read failure".into(),
+    ));
     transient.injected_identity_clear_error = Some("transient must not clear".into());
     transient.begin_shutdown_or_revert();
     assert_eq!(
@@ -1224,8 +1365,9 @@ fn is_known_window_uses_one_identity_read_for_ignored_hwnds() {
 
     let mut transient = managed_state();
     ignore_foreground(&mut transient, 10);
-    transient.injected_identity_read_error =
-        Some(IdentityReadError::Transient("GetPropW failed".into()));
+    transient.injected_identity_read_error = Some(IdentityReadError::Transient(
+        "injected identity read failure".into(),
+    ));
     let (known, reads) = known_window_read_delta(&transient, 10);
     assert!(known);
     assert_eq!(reads, 1);

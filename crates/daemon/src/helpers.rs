@@ -133,8 +133,10 @@ impl AppState {
     ///
     /// Used by event validation to skip `is_valid_window` for windows we have
     /// info about, even if they aren't yet managed (e.g., during Created events).
-    /// Ignored HWND liveness is one identity read: matching and transient stay
-    /// known, Gone stays unknown, mismatch/missing fall through.
+    /// Ignored HWND liveness is one identity read: matching tokens stay known,
+    /// injected transient reads stay known, Gone stays unknown, mismatch/missing
+    /// fall through. Production reads are `IsWindow` plus `GetPropW` (handle or
+    /// NULL), not a documented GetLastError path.
     pub(crate) fn is_known_window(&self, wid: u64) -> bool {
         if self.find_window_workspace(wid).is_some() {
             return true;
@@ -611,13 +613,41 @@ impl AppState {
     // =========================================================================
 
     /// Remove WS_MAXIMIZEBOX from a tiled window to disable Snap Layouts.
-    /// Only acts if `disable_snap_layouts` is enabled and the window isn't already tracked.
+    /// No-op when snap layouts are disabled in config, tiling is paused, or
+    /// the window is already tracked. Successful resume re-suppresses tiled
+    /// windows.
     pub(crate) fn disable_snap_for_window(&mut self, hwnd: u64) {
         if !self.config.behavior.disable_snap_layouts {
             return;
         }
+        if self.paused {
+            return;
+        }
         if self.snap_disabled_hwnds.contains(&hwnd) {
             return;
+        }
+        #[cfg(test)]
+        {
+            if let Some(result) = self.injected_snap_disable_override.clone() {
+                self.injected_snap_disable_attempt_count
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                match result {
+                    Ok(true) => {
+                        self.snap_disabled_hwnds.insert(hwnd);
+                        debug!("Removed WS_MAXIMIZEBOX from window {}", hwnd);
+                    }
+                    Ok(false) => {
+                        debug!("Window {} already lacks WS_MAXIMIZEBOX, skipping", hwnd);
+                    }
+                    Err(error) => {
+                        warn!(
+                            "Failed to remove WS_MAXIMIZEBOX for window {}: {}",
+                            hwnd, error
+                        );
+                    }
+                }
+                return;
+            }
         }
         match leopardwm_platform_win32::remove_maximizebox(hwnd) {
             Ok(true) => {

@@ -32,7 +32,17 @@ All notable changes to LeopardWM will be documented in this file.
 ### Fixes
 
 - **Temporary ignore now distinguishes a recycled live HWND from a destroyed one.**
-  A delayed Destroyed event no longer wipes a replacement managed window or a still-ignored lifetime. A dead identity read prunes the session ignore instead of keeping it forever; a transient identity failure still stays closed. Unmanage and readmit report layout failures instead of returning success with contradictory membership. Unmanage restores geometry before clearing placement cloak and park, cancels an unfinished drag or resize so MoveSizeEnd cannot reinsert the window, and drops owned tab-title and snapshot state. Explicit readmit adopts internal focus, border, and broadcast to the OS foreground without setting native focus or switching workspace. A failed placement drain, a transient identity read after drain, or a rejected readmission after drain leaves a pending idle reapply. Every layout path now keeps that recovery pending until the animation barrier clears and placement succeeds; transient placement failures retry a bounded number of times before being logged as deferred. Reused HWND admission, delayed Destroyed, and explicit mismatch retirement each clear stale old-lifetime icon, move-origin, and stashed-layout cache entries before a replacement establishes its own state. Deferred recovery is distinct from a completed layout landing, including ghost and interrupted-animation handling, while paused and shutdown guards remain authoritative. Interrupted transitions and scrolls now settle to their final targets after the barrier clears rather than restarting the interrupted animation, retire active ghost ownership without exposing unsafe sources, and preserve the post-animation compositor nudge through a failed retry. Their matching focus-suppression one-shot is consumed by any successful recovered physical landing, including an empty or fullscreen-filtered landing and an explicit Apply after a failed automatic attempt. The animation-complete event-loop landing keeps that one-shot only while recovery is still pending, including a paused no-op apply, and consumes it on the successful retry. A non-recovery suppressed landing still consumes the one-shot if that apply fails, so a later ordinary landing can resync. Parked or unconfirmed pending ghost sources stay cloaked until a confirmed current-epoch landing. IPC Apply returns `apply_pending` for a still-pending landing instead of claiming success or a generic error, including while tiling is paused with recovery still pending; a genuine layout failure still returns Error. A resume safely settles a now-idle interrupted transition or rolls back while its barrier remains busy, and reports the actual placement error on a failed recovery attempt instead of treating an early failure as a busy barrier. The event loop consumes recovery without starting concurrent placement or changing pause.
+  A delayed Destroyed event no longer wipes a replacement managed window or a still-ignored lifetime. A dead identity read prunes the session ignore instead of keeping it forever; an injected transient identity failure still stays closed. Production identity reads are `IsWindow` plus `GetPropW` (property handle or NULL) and do not classify GetLastError. Unmanage and readmit report layout failures instead of returning success with contradictory membership. Unmanage restores geometry before clearing placement cloak and park, cancels an unfinished drag or resize so MoveSizeEnd cannot reinsert the window, and drops owned tab-title and snapshot state. Explicit readmit adopts internal focus, border, and broadcast to the OS foreground without setting native focus or switching workspace. A failed placement drain, an injected transient identity read after drain, or a rejected readmission after drain leaves a pending idle reapply. Every layout path now keeps that recovery pending until the animation barrier clears and placement succeeds; transient placement failures retry a bounded number of times before being logged as deferred. Reused HWND admission, delayed Destroyed, and explicit mismatch retirement each clear stale old-lifetime icon, move-origin, and stashed-layout cache entries before a replacement establishes its own state. Deferred recovery is distinct from a completed layout landing, including ghost and interrupted-animation handling, while paused and shutdown guards remain authoritative. Interrupted transitions and scrolls now settle to their final targets after the barrier clears rather than restarting the interrupted animation, retire active ghost ownership without exposing unsafe sources, and preserve the post-animation compositor nudge through a failed retry. Their matching focus-suppression one-shot is consumed by any successful recovered physical landing, including an empty or fullscreen-filtered landing and an explicit Apply after a failed automatic attempt. The animation-complete event-loop landing keeps that one-shot only while recovery is still pending, including a paused no-op apply, and consumes it on the successful retry. A non-recovery suppressed landing still consumes the one-shot if that apply fails, so a later ordinary landing can resync. Parked or unconfirmed pending ghost sources stay cloaked until a confirmed current-epoch landing. IPC Apply returns `apply_pending` for a still-pending landing instead of claiming success or a generic error, including while tiling is paused with recovery still pending; a genuine layout failure still returns Error. A resume safely settles a now-idle interrupted transition or rolls back while its barrier remains busy, and reports the actual placement error on a failed recovery attempt instead of treating an early failure as a busy barrier. The event loop consumes recovery without starting concurrent placement or changing pause.
+- **Toggle-ignore unmanage restores geometry before releasing membership.**
+  A detected native restore failure leaves the window managed, keeps owned
+  metadata, does not ignore or uncloak, and requests idle reapply. `SetWindowPos`
+  is not transactional; a failed restore may still have moved the window, so
+  recovery retries placement. Peer-layout failure after a successful release
+  still leaves the window unmanaged and ignored.
+- **Paused tiling no longer suppresses Snap Layouts on a newly tiled window.**
+  `disable_snap_for_window` is a no-op while paused. Successful resume still
+  suppresses all tiled windows; a failed resume stays paused without
+  re-suppression.
 - **Daemon exit now best-effort clears matching ignore lifetime tokens.**
   Temporarily ignored windows are not managed, so their owned properties survived
   normal cleanup. Graceful and panic-revert shutdown attempt a clear only after a
@@ -72,6 +82,12 @@ All notable changes to LeopardWM will be documented in this file.
   A zero-event interval is not proof that the hook is dead. Dropped or capped records mean input may have been lost; do not treat `no_input=true` as absent hardware when drops are reported. Elevated versus unelevated hook visibility is not guaranteed from this report.
 - **Corrected Apply pending handling requires matching CLI and daemon from the same release.**
   A newer daemon returns `apply_pending` when recovery landing is still outstanding. An older CLI maps that status to `Unknown` and may run emergency visibility restore. Mixed CLI/daemon versions are not negotiated or isolated on the pipe. The Apply request and workspace stream protocol version are unchanged.
+- **Ordinary managed HWND reuse is not lifetime-token identified.**
+  Session ignore stamps a native token; ordinary tiled and floating windows
+  do not. A recycled ordinary managed HWND that is already live when a delayed
+  Destroyed arrives can keep the previous membership and caches. Ignore-to-replacement
+  protection after Created is unchanged. Generalized managed identity tracking
+  is not in this release.
 - **Ignore lifetime tokens cannot be cleared after a crash, and matching-read
   clear is not race-free.**
   Best-effort token cleanup runs only on daemon exit paths. A crash or kill
@@ -93,9 +109,11 @@ All notable changes to LeopardWM will be documented in this file.
 - **Gesture diagnostic tests recover their serialization locks after a test panic.**
   A poisoned lock no longer turns one failure into unrelated lock-acquisition failures.
 - **`is_known_window` now classifies ignored HWND liveness with one identity read.**
-  Matching and transient reads stay known. Gone stays unknown even when tests
-  inject window info. Mismatch and missing still fall through to test-only
-  injected info.
+  Matching tokens stay known. Injected transient reads stay known. Gone stays
+  unknown even when tests inject window info. Mismatch and missing still fall
+  through to test-only injected info. Production reads use `IsWindow` and
+  `GetPropW` (handle or NULL); `GetPropW` has no documented GetLastError or UIPI
+  failure.
 
 ## 0.2.9
 

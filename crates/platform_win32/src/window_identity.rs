@@ -126,6 +126,10 @@ pub fn stamp_window_lifetime_token(window_id: WindowId) -> Result<u64, Win32Erro
 }
 
 /// Read the lifetime token currently stored on `window_id`, if any.
+///
+/// Liveness is `IsWindow`. `GetPropW` returns the stored handle, or NULL if
+/// the property is absent. That is not a documented `GetLastError` or UIPI
+/// failure path; missing is `Ok(None)`.
 pub fn read_window_lifetime_token(window_id: WindowId) -> Result<Option<u64>, Win32Error> {
     let hwnd = require_live_hwnd(window_id)?;
     let handle = unsafe { GetPropW(hwnd, TOKEN_PROPERTY) };

@@ -14129,6 +14129,8 @@ fn test_restore_structure_reapplies_snap_suppression() {
             tab_title_overrides: HashMap::new(),
         };
         let mut state = structure_restore_state();
+        // Production startup restore runs unpaused; AppState tests default paused.
+        state.paused = false;
         state.config.behavior.disable_snap_layouts = enabled;
         let expected_tracked = if enabled {
             HashSet::from([tiled.id(), inactive.id()])
