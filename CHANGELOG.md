@@ -39,6 +39,10 @@ All notable changes to LeopardWM will be documented in this file.
   is not transactional; a failed restore may still have moved the window, so
   recovery retries placement. Peer-layout failure after a successful release
   still leaves the window unmanaged and ignored.
+- **Toggle-ignore unmanage cancels unfinished drag or resize only after geometry restore succeeds.**
+  A detected restore failure keeps in-membership drag/resize tracking and overlay
+  state. Success still cancels before membership release so a delayed MoveSizeEnd
+  cannot reinsert.
 - **Paused tiling no longer suppresses Snap Layouts on a newly tiled window.**
   `disable_snap_for_window` is a no-op while paused. Successful resume still
   suppresses all tiled windows; a failed resume stays paused without

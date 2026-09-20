@@ -220,8 +220,8 @@ impl AppState {
             }
         }
 
-        self.cancel_matching_unfinished_move_size_ui(hwnd);
-        let snapshot = self.snapshot_layout();
+        // Restore first so a detected failure keeps unfinished drag/resize
+        // tracking. Snapshot after cancel so peer reflow sees post-cancel layout.
         if let Err(error) = self.restore_unmanaged_geometry(hwnd) {
             let _ = self.clear_ignore_identity(hwnd);
             // SetWindowPos is not transactional. Retry placement rather than
@@ -229,6 +229,8 @@ impl AppState {
             self.request_idle_layout_reapply();
             return IpcResponse::error(format!("Window remains managed: {error}"));
         }
+        self.cancel_matching_unfinished_move_size_ui(hwnd);
+        let snapshot = self.snapshot_layout();
         let was_tiled = self.remove_managed_membership(hwnd);
         self.release_unmanaged_native_state(hwnd);
         let (process_id, class_name) = self

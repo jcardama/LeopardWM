@@ -2,8 +2,9 @@ use crate::config::{self, Config};
 use crate::event_handler::AdmitOutcome;
 use crate::layout_apply::LayoutApplyOutcome;
 use crate::state::{
-    AppState, DragPreviewMode, DragState, MoveOrigin, StashedMonitorLayout,
-    TestApplyPlacementsBehavior, TestApplyPlacementsOutcome, TestApplyPlacementsStep,
+    AppState, DragHintAction, DragPreviewMode, DragState, MoveOrigin, ResizeAnimationRequest,
+    StashedMonitorLayout, TestApplyPlacementsBehavior, TestApplyPlacementsOutcome,
+    TestApplyPlacementsStep,
 };
 use crate::temporary_ignore::{IdentityReadError, IdleLayoutReapply};
 use leopardwm_core_layout::{Rect, Visibility};
@@ -91,6 +92,38 @@ fn error_message(response: IpcResponse) -> String {
         IpcResponse::Error { message } => message,
         other => panic!("expected error, got {other:?}"),
     }
+}
+
+fn in_membership_drag(hwnd: u64) -> DragState {
+    DragState {
+        hwnd,
+        is_tiled: true,
+        source_monitor: 1,
+        source_workspace_idx: 0,
+        source_window_slot: 0,
+        current_column_index: 0,
+        last_drop_target: None,
+        last_hint_update: None,
+        removed_from_source: false,
+        preview_mode: DragPreviewMode::None,
+        target_column_peers: Vec::new(),
+        source_column_peers: Vec::new(),
+    }
+}
+
+fn seed_resize_session(state: &mut AppState, hwnd: u64) {
+    state.resize_hwnd = Some(hwnd);
+    state.resize_preview_target = Some(Rect::new(0, 0, 800, 600));
+    state.resize_preview_display_rect = Some(Rect::new(0, 0, 800, 600));
+    state.pending_resize_animation = Some(ResizeAnimationRequest {
+        start_rect: Rect::new(0, 0, 800, 600),
+        target_rect: Rect::new(0, 0, 960, 600),
+    });
+    state.last_resize_hint_update = Some(Instant::now());
+    state.pending_drag_hint = Some(DragHintAction::ShowGhost {
+        rect: Rect::new(0, 0, 800, 600),
+    });
+    state.resize_preview_cancel.store(false, Ordering::Relaxed);
 }
 
 fn record_peer_placements(state: &mut AppState) {
@@ -566,6 +599,68 @@ fn native_restore_failure_keeps_window_managed() {
 }
 
 #[test]
+fn native_restore_failure_preserves_in_membership_drag() {
+    let mut state = managed_state();
+    state.drag_state = Some(in_membership_drag(10));
+    state.pending_drag_hint = Some(DragHintAction::ShowGhost {
+        rect: Rect::new(100, 0, 400, 600),
+    });
+    set_foreground(&mut state, 10);
+    state.injected_native_restore_error = Some("restore failed".into());
+    let message = error_message(state.handle_command(IpcCommand::ToggleIgnore));
+    assert!(message.contains("remains managed"));
+    assert_eq!(state.find_window_workspace(10), Some((1, 0)));
+    assert!(!state.temporary_ignores.contains_key(&10));
+    assert_eq!(
+        state.injected_native_uncloak_count.load(Ordering::Relaxed),
+        0
+    );
+    assert!(!state.injected_lifetime_tokens.contains_key(&10));
+    assert!(state.pending_idle_layout_reapply);
+    let drag = state
+        .drag_state
+        .as_ref()
+        .expect("in-membership drag must survive restore failure");
+    assert_eq!(drag.hwnd, 10);
+    assert!(!drag.removed_from_source);
+    assert!(matches!(
+        state.pending_drag_hint,
+        Some(DragHintAction::ShowGhost { .. })
+    ));
+}
+
+#[test]
+fn native_restore_failure_preserves_active_resize() {
+    let mut state = managed_state();
+    seed_resize_session(&mut state, 10);
+    set_foreground(&mut state, 10);
+    state.injected_native_restore_error = Some("restore failed".into());
+    let message = error_message(state.handle_command(IpcCommand::ToggleIgnore));
+    assert!(message.contains("remains managed"));
+    assert_eq!(state.find_window_workspace(10), Some((1, 0)));
+    assert!(!state.temporary_ignores.contains_key(&10));
+    assert_eq!(state.resize_hwnd, Some(10));
+    assert_eq!(state.resize_preview_target, Some(Rect::new(0, 0, 800, 600)));
+    assert_eq!(
+        state.resize_preview_display_rect,
+        Some(Rect::new(0, 0, 800, 600))
+    );
+    assert!(state.pending_resize_animation.is_some());
+    assert!(state.last_resize_hint_update.is_some());
+    assert!(!state.resize_preview_cancel.load(Ordering::Relaxed));
+    assert!(matches!(
+        state.pending_drag_hint,
+        Some(DragHintAction::ShowGhost { .. })
+    ));
+    assert_eq!(
+        state.injected_native_uncloak_count.load(Ordering::Relaxed),
+        0
+    );
+    assert!(!state.injected_lifetime_tokens.contains_key(&10));
+    assert!(state.pending_idle_layout_reapply);
+}
+
+#[test]
 fn paused_explicit_readmit_does_not_suppress_snap() {
     let mut state = managed_state();
     state.injected_snap_disable_override = Some(Ok(true));
@@ -955,22 +1050,13 @@ fn rejected_readmit_after_drain_reapplies_peers() {
 #[test]
 fn unmanage_cancels_unfinished_move_size_so_end_does_not_reinsert() {
     let mut state = managed_state();
-    state.drag_state = Some(DragState {
-        hwnd: 10,
-        is_tiled: true,
-        source_monitor: 1,
-        source_workspace_idx: 0,
-        source_window_slot: 0,
-        current_column_index: 0,
-        last_drop_target: None,
-        last_hint_update: None,
-        removed_from_source: true,
-        preview_mode: DragPreviewMode::None,
-        target_column_peers: Vec::new(),
-        source_column_peers: Vec::new(),
-    });
+    state.drag_state = Some(in_membership_drag(10));
     ignore_foreground(&mut state, 10);
     assert!(state.drag_state.is_none());
+    assert!(matches!(
+        state.pending_drag_hint,
+        Some(DragHintAction::Hide)
+    ));
     state.handle_window_event(WindowEvent::MoveSizeEnd(10));
     assert!(state.find_window_workspace(10).is_none());
     assert!(state.temporary_ignores.contains_key(&10));
@@ -982,6 +1068,26 @@ fn unmanage_cancels_unfinished_move_size_so_end_does_not_reinsert() {
             .count(),
         0
     );
+}
+
+#[test]
+fn unmanage_cancels_active_resize_so_end_does_not_reinsert() {
+    let mut state = managed_state();
+    seed_resize_session(&mut state, 10);
+    ignore_foreground(&mut state, 10);
+    assert_eq!(state.resize_hwnd, None);
+    assert!(state.resize_preview_target.is_none());
+    assert!(state.resize_preview_display_rect.is_none());
+    assert!(state.pending_resize_animation.is_none());
+    assert!(state.last_resize_hint_update.is_none());
+    assert!(state.resize_preview_cancel.load(Ordering::Relaxed));
+    assert!(matches!(
+        state.pending_drag_hint,
+        Some(DragHintAction::Hide)
+    ));
+    state.handle_window_event(WindowEvent::MoveSizeEnd(10));
+    assert!(state.find_window_workspace(10).is_none());
+    assert!(state.temporary_ignores.contains_key(&10));
 }
 
 #[test]
