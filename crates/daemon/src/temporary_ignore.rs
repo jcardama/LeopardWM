@@ -138,22 +138,63 @@ impl AppState {
         }
     }
 
-    pub(crate) fn temporary_ignore_is_live(&self, hwnd: u64) -> bool {
-        let Some(entry) = self.temporary_ignores.get(&hwnd) else {
-            return false;
-        };
+    /// One-read answer for `is_known_window`.
+    ///
+    /// Matching token and transient reads stay known. Gone is unknown even if
+    /// tests still inject window info. Mismatch, missing, or an untracked HWND
+    /// fall through.
+    pub(crate) fn temporary_ignore_known(&self, hwnd: u64) -> Option<bool> {
+        let entry = self.temporary_ignores.get(&hwnd)?;
         match self.read_ignore_identity(hwnd) {
-            Ok(Some(token)) if token == entry.token => true,
-            Ok(Some(_)) | Ok(None) | Err(IdentityReadError::Gone) => false,
-            Err(IdentityReadError::Transient(_)) => true,
+            Ok(Some(token)) if token == entry.token => Some(true),
+            Err(IdentityReadError::Transient(_)) => Some(true),
+            Err(IdentityReadError::Gone) => Some(false),
+            Ok(Some(_)) | Ok(None) => None,
         }
     }
 
-    pub(crate) fn temporary_ignore_is_dead(&self, hwnd: u64) -> bool {
-        matches!(
-            self.read_ignore_identity(hwnd),
-            Err(IdentityReadError::Gone)
-        )
+    /// Best-effort remove of matching owned ignore lifetime tokens at exit.
+    ///
+    /// Read and clear are separate Win32 calls, so a recycled HWND can appear
+    /// between them. A matching read is not an atomic no-race guarantee. Clear
+    /// is attempted only after a matching read, never for a mismatched, missing,
+    /// gone, or transient identity. Native clear errors do not block shutdown.
+    /// The session ignore map is left intact; this does not readmit.
+    pub(crate) fn clear_matching_ignore_lifetime_tokens(&mut self) {
+        let pending: Vec<(u64, u64)> = self
+            .temporary_ignores
+            .iter()
+            .map(|(&hwnd, entry)| (hwnd, entry.token))
+            .collect();
+        for (hwnd, expected_token) in pending {
+            match self.read_ignore_identity(hwnd) {
+                Ok(Some(token)) if token == expected_token => {
+                    if let Err(error) = self.clear_ignore_identity(hwnd) {
+                        warn!(
+                            "Failed to clear ignore lifetime token for {hwnd}: {error}; continuing shutdown"
+                        );
+                    } else {
+                        debug!("Matching ignore lifetime token clear succeeded for {hwnd}");
+                    }
+                }
+                Ok(Some(token)) => {
+                    debug!(
+                        "Skipping ignore token clear for {hwnd} (hwnd recycled; tracked {expected_token} live {token})"
+                    );
+                }
+                Ok(None) => {
+                    debug!("Skipping ignore token clear for {hwnd} (no lifetime token present)");
+                }
+                Err(IdentityReadError::Gone) => {
+                    debug!("Skipping ignore token clear for {hwnd} (window gone)");
+                }
+                Err(IdentityReadError::Transient(error)) => {
+                    warn!(
+                        "Skipping ignore token clear for {hwnd} after identity read failure: {error}; continuing shutdown"
+                    );
+                }
+            }
+        }
     }
 
     fn temporarily_unmanage(&mut self, hwnd: u64) -> IpcResponse {
@@ -519,6 +560,8 @@ impl AppState {
     fn read_ignore_identity(&self, hwnd: u64) -> Result<Option<u64>, IdentityReadError> {
         #[cfg(test)]
         {
+            self.injected_identity_read_count
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             if let Some(override_value) = &self.injected_identity_read_override {
                 return override_value.clone();
             }

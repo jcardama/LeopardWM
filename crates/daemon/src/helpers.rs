@@ -129,21 +129,18 @@ impl AppState {
         leopardwm_platform_win32::get_window_info(hwnd)
     }
 
-    /// Check whether a window ID is known to this state (managed or injected).
+    /// Check whether a window ID is known to this state (managed, ignored, or injected).
     ///
     /// Used by event validation to skip `is_valid_window` for windows we have
     /// info about, even if they aren't yet managed (e.g., during Created events).
+    /// Ignored HWND liveness is one identity read: matching and transient stay
+    /// known, Gone stays unknown, mismatch/missing fall through.
     pub(crate) fn is_known_window(&self, wid: u64) -> bool {
         if self.find_window_workspace(wid).is_some() {
             return true;
         }
-        if self.temporary_ignores.contains_key(&wid) {
-            if self.temporary_ignore_is_live(wid) {
-                return true;
-            }
-            if self.temporary_ignore_is_dead(wid) {
-                return false;
-            }
+        if let Some(known) = self.temporary_ignore_known(wid) {
+            return known;
         }
         #[cfg(test)]
         {

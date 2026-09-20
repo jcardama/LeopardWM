@@ -284,9 +284,18 @@ fn ignored_window_stays_out_through_lifecycle_and_release() {
     assert!(state.temporary_ignores.contains_key(&10));
 
     state.paused = false;
+    let ignored_token = state.temporary_ignores.get(&10).unwrap().token;
+    assert_eq!(
+        state.injected_lifetime_tokens.get(&10),
+        Some(&ignored_token)
+    );
     state.release_all_windows().unwrap();
     assert!(state.paused);
     assert!(state.temporary_ignores.contains_key(&10));
+    assert_eq!(
+        state.injected_lifetime_tokens.get(&10),
+        Some(&ignored_token)
+    );
     assert!(state.find_window_workspace(20).is_some());
     assert!(!state.all_managed_window_ids().contains(&10));
 
@@ -1080,4 +1089,193 @@ fn temporary_ignore_test_seam_records_native_uncloak_intent() {
         1,
         "temporary ignore must request native uncloaking in production"
     );
+}
+
+fn ignored_token(state: &AppState, hwnd: u64) -> u64 {
+    state
+        .temporary_ignores
+        .get(&hwnd)
+        .expect("hwnd should still be temporarily ignored")
+        .token
+}
+
+fn assert_ignore_map_intact_without_readmit(state: &AppState, hwnd: u64, token: u64) {
+    assert_eq!(
+        state.temporary_ignores.get(&hwnd).map(|entry| entry.token),
+        Some(token)
+    );
+    assert!(state.find_window_workspace(hwnd).is_none());
+}
+
+fn known_window_read_delta(state: &AppState, hwnd: u64) -> (bool, usize) {
+    let before = state.injected_identity_read_count.load(Ordering::SeqCst);
+    let known = state.is_known_window(hwnd);
+    let after = state.injected_identity_read_count.load(Ordering::SeqCst);
+    (known, after.saturating_sub(before))
+}
+
+#[test]
+fn shutdown_clears_matching_ignore_token_and_is_idempotent() {
+    let mut state = managed_state();
+    ignore_foreground(&mut state, 10);
+    ignore_foreground(&mut state, 20);
+    let token_10 = ignored_token(&state, 10);
+    let token_20 = ignored_token(&state, 20);
+    assert_eq!(state.injected_lifetime_tokens.get(&10), Some(&token_10));
+    assert_eq!(state.injected_lifetime_tokens.get(&20), Some(&token_20));
+
+    state.begin_shutdown_or_revert();
+
+    assert!(!state.injected_lifetime_tokens.contains_key(&10));
+    assert!(!state.injected_lifetime_tokens.contains_key(&20));
+    assert_ignore_map_intact_without_readmit(&state, 10, token_10);
+    assert_ignore_map_intact_without_readmit(&state, 20, token_20);
+
+    state.injected_identity_clear_error = Some("second pass must not clear".into());
+    state.begin_shutdown_or_revert();
+    assert_eq!(
+        state.injected_identity_clear_error.as_deref(),
+        Some("second pass must not clear")
+    );
+    assert!(!state.injected_lifetime_tokens.contains_key(&10));
+    assert_ignore_map_intact_without_readmit(&state, 10, token_10);
+}
+
+#[test]
+fn shutdown_does_not_clear_mismatched_or_missing_ignore_tokens() {
+    let mut state = managed_state();
+    ignore_foreground(&mut state, 10);
+    ignore_foreground(&mut state, 20);
+    let token_10 = ignored_token(&state, 10);
+    let token_20 = ignored_token(&state, 20);
+    let recycled = token_10 + 99;
+    state.injected_lifetime_tokens.insert(10, recycled);
+    state.injected_lifetime_tokens.remove(&20);
+    state.injected_identity_clear_error = Some("must not clear".into());
+
+    state.begin_shutdown_or_revert();
+
+    assert_eq!(state.injected_lifetime_tokens.get(&10), Some(&recycled));
+    assert!(!state.injected_lifetime_tokens.contains_key(&20));
+    assert_eq!(
+        state.injected_identity_clear_error.as_deref(),
+        Some("must not clear")
+    );
+    assert_ignore_map_intact_without_readmit(&state, 10, token_10);
+    assert_ignore_map_intact_without_readmit(&state, 20, token_20);
+}
+
+#[test]
+fn shutdown_skips_gone_and_transient_ignore_token_clears() {
+    let mut gone = managed_state();
+    ignore_foreground(&mut gone, 10);
+    let gone_token = ignored_token(&gone, 10);
+    gone.injected_identity_read_error = Some(IdentityReadError::Gone);
+    gone.injected_identity_clear_error = Some("gone must not clear".into());
+    gone.begin_shutdown_or_revert();
+    assert_eq!(gone.injected_lifetime_tokens.get(&10), Some(&gone_token));
+    assert_eq!(
+        gone.injected_identity_clear_error.as_deref(),
+        Some("gone must not clear")
+    );
+    assert_ignore_map_intact_without_readmit(&gone, 10, gone_token);
+
+    let mut transient = managed_state();
+    ignore_foreground(&mut transient, 10);
+    let transient_token = ignored_token(&transient, 10);
+    transient.injected_identity_read_error =
+        Some(IdentityReadError::Transient("GetPropW failed".into()));
+    transient.injected_identity_clear_error = Some("transient must not clear".into());
+    transient.begin_shutdown_or_revert();
+    assert_eq!(
+        transient.injected_lifetime_tokens.get(&10),
+        Some(&transient_token)
+    );
+    assert_eq!(
+        transient.injected_identity_clear_error.as_deref(),
+        Some("transient must not clear")
+    );
+    assert_ignore_map_intact_without_readmit(&transient, 10, transient_token);
+}
+
+#[test]
+fn shutdown_continues_after_ignore_token_clear_error() {
+    let mut state = managed_state();
+    ignore_foreground(&mut state, 10);
+    let token_10 = ignored_token(&state, 10);
+    state.injected_identity_clear_error = Some("RemovePropW failed".into());
+
+    let workers = state.begin_shutdown_or_revert();
+
+    assert!(workers.is_empty());
+    assert!(state.apply_worker_cancelled.load(Ordering::SeqCst));
+    assert_eq!(state.injected_lifetime_tokens.get(&10), Some(&token_10));
+    assert!(state.injected_identity_clear_error.is_none());
+    assert_ignore_map_intact_without_readmit(&state, 10, token_10);
+}
+
+#[test]
+fn is_known_window_uses_one_identity_read_for_ignored_hwnds() {
+    let mut matching = managed_state();
+    ignore_foreground(&mut matching, 10);
+    let (known, reads) = known_window_read_delta(&matching, 10);
+    assert!(known);
+    assert_eq!(reads, 1);
+
+    let mut transient = managed_state();
+    ignore_foreground(&mut transient, 10);
+    transient.injected_identity_read_error =
+        Some(IdentityReadError::Transient("GetPropW failed".into()));
+    let (known, reads) = known_window_read_delta(&transient, 10);
+    assert!(known);
+    assert_eq!(reads, 1);
+
+    let mut gone = managed_state();
+    ignore_foreground(&mut gone, 10);
+    gone.injected_identity_read_error = Some(IdentityReadError::Gone);
+    assert!(gone.injected_window_info.contains_key(&10));
+    let (known, reads) = known_window_read_delta(&gone, 10);
+    assert!(!known);
+    assert_eq!(reads, 1);
+
+    let mut mismatch_injected = managed_state();
+    ignore_foreground(&mut mismatch_injected, 10);
+    let token = ignored_token(&mismatch_injected, 10);
+    mismatch_injected
+        .injected_lifetime_tokens
+        .insert(10, token + 1);
+    let (known, reads) = known_window_read_delta(&mismatch_injected, 10);
+    assert!(known);
+    assert_eq!(reads, 1);
+
+    let mut missing_injected = managed_state();
+    ignore_foreground(&mut missing_injected, 10);
+    missing_injected.injected_lifetime_tokens.remove(&10);
+    let (known, reads) = known_window_read_delta(&missing_injected, 10);
+    assert!(known);
+    assert_eq!(reads, 1);
+
+    let mut mismatch_unknown = managed_state();
+    ignore_foreground(&mut mismatch_unknown, 10);
+    let token = ignored_token(&mismatch_unknown, 10);
+    mismatch_unknown
+        .injected_lifetime_tokens
+        .insert(10, token + 1);
+    mismatch_unknown.injected_window_info.remove(&10);
+    let (known, reads) = known_window_read_delta(&mismatch_unknown, 10);
+    assert!(!known);
+    assert_eq!(reads, 1);
+
+    let mut missing_unknown = managed_state();
+    ignore_foreground(&mut missing_unknown, 10);
+    missing_unknown.injected_lifetime_tokens.remove(&10);
+    missing_unknown.injected_window_info.remove(&10);
+    let (known, reads) = known_window_read_delta(&missing_unknown, 10);
+    assert!(!known);
+    assert_eq!(reads, 1);
+
+    let managed = managed_state();
+    let (known, reads) = known_window_read_delta(&managed, 10);
+    assert!(known);
+    assert_eq!(reads, 0);
 }

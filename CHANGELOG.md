@@ -33,6 +33,15 @@ All notable changes to LeopardWM will be documented in this file.
 
 - **Temporary ignore now distinguishes a recycled live HWND from a destroyed one.**
   A delayed Destroyed event no longer wipes a replacement managed window or a still-ignored lifetime. A dead identity read prunes the session ignore instead of keeping it forever; a transient identity failure still stays closed. Unmanage and readmit report layout failures instead of returning success with contradictory membership. Unmanage restores geometry before clearing placement cloak and park, cancels an unfinished drag or resize so MoveSizeEnd cannot reinsert the window, and drops owned tab-title and snapshot state. Explicit readmit adopts internal focus, border, and broadcast to the OS foreground without setting native focus or switching workspace. A failed placement drain, a transient identity read after drain, or a rejected readmission after drain leaves a pending idle reapply. Every layout path now keeps that recovery pending until the animation barrier clears and placement succeeds; transient placement failures retry a bounded number of times before being logged as deferred. Reused HWND admission, delayed Destroyed, and explicit mismatch retirement each clear stale old-lifetime icon, move-origin, and stashed-layout cache entries before a replacement establishes its own state. Deferred recovery is distinct from a completed layout landing, including ghost and interrupted-animation handling, while paused and shutdown guards remain authoritative. Interrupted transitions and scrolls now settle to their final targets after the barrier clears rather than restarting the interrupted animation, retire active ghost ownership without exposing unsafe sources, and preserve the post-animation compositor nudge through a failed retry. Their matching focus-suppression one-shot is consumed by any successful recovered physical landing, including an empty or fullscreen-filtered landing and an explicit Apply after a failed automatic attempt. The animation-complete event-loop landing keeps that one-shot only while recovery is still pending, including a paused no-op apply, and consumes it on the successful retry. A non-recovery suppressed landing still consumes the one-shot if that apply fails, so a later ordinary landing can resync. Parked or unconfirmed pending ghost sources stay cloaked until a confirmed current-epoch landing. IPC Apply returns `apply_pending` for a still-pending landing instead of claiming success or a generic error, including while tiling is paused with recovery still pending; a genuine layout failure still returns Error. A resume safely settles a now-idle interrupted transition or rolls back while its barrier remains busy, and reports the actual placement error on a failed recovery attempt instead of treating an early failure as a busy barrier. The event loop consumes recovery without starting concurrent placement or changing pause.
+- **Daemon exit now best-effort clears matching ignore lifetime tokens.**
+  Temporarily ignored windows are not managed, so their owned properties survived
+  normal cleanup. Graceful and panic-revert shutdown attempt a clear only after a
+  matching identity read. That is not an atomic no-race guarantee: a recycled HWND
+  can still appear between read and clear. Mismatch, missing, gone, and transient
+  reads skip clear. Native `RemovePropW` treats a missing property (NULL) as
+  success. A documented UIPI denial (`GetLastError` 5) is logged and does not
+  block exit. A NULL return that does not set last error cannot be distinguished
+  from missing. Release All does not clear those tokens.
 - **Gesture capture now preserves an existing report when duplicate daemon startup is rejected.**
   Closed captures no longer evaluate diagnostic trace fields, and admitted or in-flight deadline-boundary work prevents a false `no_input=true` result.
 - **The gesture capture's 256 KiB limit now includes the header and summary.**
@@ -63,6 +72,15 @@ All notable changes to LeopardWM will be documented in this file.
   A zero-event interval is not proof that the hook is dead. Dropped or capped records mean input may have been lost; do not treat `no_input=true` as absent hardware when drops are reported. Elevated versus unelevated hook visibility is not guaranteed from this report.
 - **Corrected Apply pending handling requires matching CLI and daemon from the same release.**
   A newer daemon returns `apply_pending` when recovery landing is still outstanding. An older CLI maps that status to `Unknown` and may run emergency visibility restore. Mixed CLI/daemon versions are not negotiated or isolated on the pipe. The Apply request and workspace stream protocol version are unchanged.
+- **Ignore lifetime tokens cannot be cleared after a crash, and matching-read
+  clear is not race-free.**
+  Best-effort token cleanup runs only on daemon exit paths. A crash or kill
+  leaves the native property on any still-live ignored window. A later daemon
+  treats a leftover token as inert unless it matches a new session ignore.
+  Read and `RemovePropW` are separate calls, so a recycled HWND can appear
+  after a matching read. `RemovePropW` documents NULL as not found and UIPI
+  blocks as `GetLastError` 5; a failure that returns NULL without setting last
+  error looks like missing and succeeds.
 
 ### Internal
 
@@ -74,6 +92,10 @@ All notable changes to LeopardWM will be documented in this file.
   actually admitted; capture report content is unchanged.
 - **Gesture diagnostic tests recover their serialization locks after a test panic.**
   A poisoned lock no longer turns one failure into unrelated lock-acquisition failures.
+- **`is_known_window` now classifies ignored HWND liveness with one identity read.**
+  Matching and transient reads stay known. Gone stays unknown even when tests
+  inject window info. Mismatch and missing still fall through to test-only
+  injected info.
 
 ## 0.2.9
 

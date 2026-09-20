@@ -703,6 +703,8 @@ pub(crate) struct AppState {
     #[cfg(test)]
     pub(crate) injected_identity_clear_error: Option<String>,
     #[cfg(test)]
+    pub(crate) injected_identity_read_count: AtomicUsize,
+    #[cfg(test)]
     pub(crate) injected_manage_block: HashMap<u64, leopardwm_platform_win32::ManageBlock>,
     #[cfg(test)]
     pub(crate) injected_enumerated_windows: Option<Vec<leopardwm_platform_win32::WindowInfo>>,
@@ -1086,6 +1088,8 @@ impl AppState {
             injected_identity_read_override: None,
             #[cfg(test)]
             injected_identity_clear_error: None,
+            #[cfg(test)]
+            injected_identity_read_count: AtomicUsize::new(0),
             #[cfg(test)]
             injected_manage_block: HashMap::new(),
             #[cfg(test)]
