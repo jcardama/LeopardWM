@@ -580,6 +580,20 @@ impl AppState {
         );
     }
 
+    /// Consume captured landing-focus suppression only after a completed
+    /// landing. A failed or deferred recovery landing keeps the one-shot so a
+    /// later successful retry can still skip the resync. Ordinary
+    /// (unsuppressed) landings still resync even when placement failed.
+    pub(crate) fn finish_animation_landing_focus_resync(
+        &mut self,
+        landing_completed: bool,
+        captured_suppress: bool,
+    ) {
+        if landing_completed || !captured_suppress {
+            self.sync_foreground_after_animation_landing_with_suppression(captured_suppress);
+        }
+    }
+
     pub(crate) fn sync_foreground_after_animation_landing_with_suppression(
         &mut self,
         suppress: bool,

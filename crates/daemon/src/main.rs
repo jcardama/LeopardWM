@@ -3273,9 +3273,7 @@ async fn handle_animation_frame_applied(
             // focused_column. This re-asserts the correct focus
             // after the animation has settled.
             let pending_sticky = state.pending_sticky_refocus.take();
-            state.sync_foreground_after_animation_landing_with_suppression(
-                landing_suppress_focus_resync,
-            );
+            state.finish_animation_landing_focus_resync(landing_ok, landing_suppress_focus_resync);
             // A workspace switch left a focused pinned window behind
             // it: those same spurious foreground events can have
             // clobbered previous_focused_hwnd mid-slide, making the

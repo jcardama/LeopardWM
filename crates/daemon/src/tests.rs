@@ -1627,8 +1627,17 @@ fn test_explicit_apply_consumes_suppressed_recovery_landing_after_failure() {
     assert_eq!(state.previous_focused_hwnd, Some(100));
 }
 
-#[test]
-fn test_normal_animation_landing_preserves_recovery_suppression_through_apply() {
+fn event_loop_equivalent_final_landing(state: &mut AppState) -> bool {
+    let captured_suppress = state.pending_suppress_landing_focus_resync;
+    let landing_ok = matches!(
+        state.apply_layout(),
+        Ok(crate::layout_apply::LayoutApplyOutcome::Completed)
+    );
+    state.finish_animation_landing_focus_resync(landing_ok, captured_suppress);
+    landing_ok
+}
+
+fn arm_suppressed_recovery_final_landing() -> AppState {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
     state.paused = false;
     state.workspaces.get_mut(&1).unwrap()[0]
@@ -1645,29 +1654,125 @@ fn test_normal_animation_landing_preserves_recovery_suppression_through_apply() 
     assert!(state.tick_animations(150));
     assert!(state.layout_transition.is_none());
     assert!(state.pending_suppress_landing_focus_resync);
-
     state.post_animation_nudge_pending = true;
-    let landing_suppress_focus_resync = state.pending_suppress_landing_focus_resync;
-    state.injected_apply_placements_behavior =
-        Some(TestApplyPlacementsBehavior::SleepAndSucceed(Duration::ZERO));
-    assert!(state.apply_layout().is_ok());
-    assert!(!state.pending_idle_layout_reapply);
-    assert!(!state.pending_suppress_landing_focus_resync);
+    state
+}
+
+fn assert_unrelated_landing_does_not_inherit_suppression(state: &mut AppState) {
     let updates_before_landing_sync = state.tab_strip_update_count.load(Ordering::Relaxed);
-
-    state.sync_foreground_after_animation_landing_with_suppression(landing_suppress_focus_resync);
-    assert_eq!(
-        state.tab_strip_update_count.load(Ordering::Relaxed),
-        updates_before_landing_sync,
-        "the normal landing must retain recovery suppression after apply finalization"
-    );
-
     state.sync_foreground_after_animation_landing();
     assert_eq!(
         state.tab_strip_update_count.load(Ordering::Relaxed),
         updates_before_landing_sync + 1,
         "the next unrelated landing must not inherit recovery suppression"
     );
+}
+
+#[test]
+fn test_normal_animation_landing_preserves_recovery_suppression_through_apply() {
+    let mut state = arm_suppressed_recovery_final_landing();
+    state.injected_apply_placements_behavior =
+        Some(TestApplyPlacementsBehavior::SleepAndSucceed(Duration::ZERO));
+    let captured_suppress = state.pending_suppress_landing_focus_resync;
+    let landing_ok = matches!(
+        state.apply_layout(),
+        Ok(crate::layout_apply::LayoutApplyOutcome::Completed)
+    );
+    assert!(landing_ok);
+    assert!(!state.pending_idle_layout_reapply);
+    assert!(!state.pending_suppress_landing_focus_resync);
+    let updates_before_landing_sync = state.tab_strip_update_count.load(Ordering::Relaxed);
+
+    state.finish_animation_landing_focus_resync(landing_ok, captured_suppress);
+    assert_eq!(
+        state.tab_strip_update_count.load(Ordering::Relaxed),
+        updates_before_landing_sync,
+        "the normal landing must retain recovery suppression after apply finalization"
+    );
+
+    assert_unrelated_landing_does_not_inherit_suppression(&mut state);
+}
+
+#[test]
+fn test_event_loop_landing_retains_suppression_when_final_apply_fails() {
+    let mut state = arm_suppressed_recovery_final_landing();
+    state.injected_apply_placements_behavior =
+        Some(TestApplyPlacementsBehavior::SleepAndFail(Duration::ZERO));
+    let updates_before = state.tab_strip_update_count.load(Ordering::Relaxed);
+
+    assert!(!event_loop_equivalent_final_landing(&mut state));
+    assert!(state.pending_idle_layout_reapply);
+    assert!(
+        state.pending_suppress_landing_focus_resync,
+        "a failed final landing must keep recovery suppression for retry"
+    );
+    assert_eq!(
+        state.tab_strip_update_count.load(Ordering::Relaxed),
+        updates_before,
+        "a failed suppressed landing must not consume the one-shot by resyncing"
+    );
+
+    state.injected_apply_placements_behavior =
+        Some(TestApplyPlacementsBehavior::SleepAndSucceed(Duration::ZERO));
+    let updates_before_success = state.tab_strip_update_count.load(Ordering::Relaxed);
+    assert!(event_loop_equivalent_final_landing(&mut state));
+    assert!(!state.pending_idle_layout_reapply);
+    assert!(!state.pending_suppress_landing_focus_resync);
+    assert_eq!(
+        state.tab_strip_update_count.load(Ordering::Relaxed),
+        updates_before_success + 1,
+        "successful recovered apply updates the strip once; captured suppression skips a second resync"
+    );
+
+    assert_unrelated_landing_does_not_inherit_suppression(&mut state);
+}
+
+#[test]
+fn test_event_loop_landing_retains_suppression_when_final_apply_deferred() {
+    let mut state = arm_suppressed_recovery_final_landing();
+    let (event_tx, _event_rx) = tokio::sync::mpsc::channel(4);
+    let worker = animation_worker::AnimationWorkerHandle::spawn(
+        event_tx,
+        state.apply_worker_cancelled.clone(),
+    )
+    .unwrap();
+    let unblock = worker.block_for_test();
+    state.animation_worker_control = Some(worker.control());
+    let updates_before = state.tab_strip_update_count.load(Ordering::Relaxed);
+
+    assert!(!event_loop_equivalent_final_landing(&mut state));
+    assert!(state.pending_idle_layout_reapply);
+    assert!(
+        state.pending_suppress_landing_focus_resync,
+        "a deferred final landing must keep recovery suppression for retry"
+    );
+    assert_eq!(
+        state.tab_strip_update_count.load(Ordering::Relaxed),
+        updates_before,
+        "a deferred suppressed landing must not consume the one-shot by resyncing"
+    );
+    assert_eq!(
+        state
+            .injected_apply_placements_call_count
+            .load(Ordering::SeqCst),
+        0
+    );
+
+    unblock.send(()).unwrap();
+    assert!(worker.control().wait_for_barrier(Duration::from_secs(2)));
+    state.injected_apply_placements_behavior =
+        Some(TestApplyPlacementsBehavior::SleepAndSucceed(Duration::ZERO));
+    let updates_before_success = state.tab_strip_update_count.load(Ordering::Relaxed);
+    assert!(event_loop_equivalent_final_landing(&mut state));
+    assert!(!state.pending_idle_layout_reapply);
+    assert!(!state.pending_suppress_landing_focus_resync);
+    assert_eq!(
+        state.tab_strip_update_count.load(Ordering::Relaxed),
+        updates_before_success + 1,
+        "successful recovered apply updates the strip once; captured suppression skips a second resync"
+    );
+
+    assert_unrelated_landing_does_not_inherit_suppression(&mut state);
 }
 
 #[test]
