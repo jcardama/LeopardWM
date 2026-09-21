@@ -6,6 +6,14 @@ All notable changes to LeopardWM will be documented in this file.
 
 ### Features
 
+- **Complete workspace state over the existing IPC subscription.** Opt in with
+  `lwm subscribe --events workspace_state` for coherent, byte-bounded snapshots
+  covering every connected monitor, all nine workspace slots, and tiled/floating
+  membership. Legacy default subscriptions remain unchanged. `lwm query workspaces`
+  returns one snapshot; `lwm workspace N --monitor DEVICE` selects a workspace on
+  an explicit monitor. IPC v4 adds this capability after v3 hotkey queries. See
+  `agent_docs/ipc-events.md` for schemas and recovery.
+
 - **Session-only ignore for the actual OS foreground window.** `lwm toggle-ignore`
   (and the unbound `toggle_ignore` hotkey catalog action) unmanages the live
   foreground HWND without writing application rules or changing pause state.
@@ -81,17 +89,17 @@ All notable changes to LeopardWM will be documented in this file.
   be treated as the replacement auto-activation. Eventless disappearance
   can arm the same guard while handling the first cross-workspace
   activation, so that first activation may be consumed and need to be
-  repeated.
+  repeated. That eventless-disappearance case is deferred to 0.2.11.
 - **Gesture capture cannot prove finger count, device origin, or Windows touchpad-setting compatibility.**
   A zero-event interval is not proof that the hook is dead. Dropped or capped records mean input may have been lost; do not treat `no_input=true` as absent hardware when drops are reported. Elevated versus unelevated hook visibility is not guaranteed from this report.
 - **Corrected Apply pending handling requires matching CLI and daemon from the same release.**
-  A newer daemon returns `apply_pending` when recovery landing is still outstanding. An older CLI maps that status to `Unknown` and may run emergency visibility restore. Mixed CLI/daemon versions are not negotiated or isolated on the pipe. The Apply request and workspace stream protocol version are unchanged.
+  A newer daemon returns `apply_pending` when recovery landing is still outstanding. An older CLI maps that status to `Unknown` and may run emergency visibility restore. Mixed CLI/daemon versions are not negotiated or isolated on the pipe. Pending handling does not change the Apply request shape. This release still advances the overall IPC protocol from v3 to v4 for workspace-state snapshots.
 - **Ordinary managed HWND reuse is not lifetime-token identified.**
   Session ignore stamps a native token; ordinary tiled and floating windows
   do not. A recycled ordinary managed HWND that is already live when a delayed
   Destroyed arrives can keep the previous membership and caches. Ignore-to-replacement
   protection after Created is unchanged. Generalized managed identity tracking
-  is not in this release.
+  is not in this release. Diagnosis of a bounded lifetime policy is deferred to 0.2.11.
 - **Ignore lifetime tokens cannot be cleared after a crash, and matching-read
   clear is not race-free.**
   Best-effort token cleanup runs only on daemon exit paths. A crash or kill
@@ -104,6 +112,9 @@ All notable changes to LeopardWM will be documented in this file.
 
 ### Internal
 
+- **IPC protocol v4 adds opt-in workspace-state snapshots and monitor-targeted
+  switching.** Legacy empty-filter subscriptions remain unchanged; consumers
+  must also verify that `workspace_state` appears in the acknowledged filter.
 - **The repository now carries a placement-report triage record for #104 and #112.**
   The record at `agent_docs/placement-report-triage.md` captures current evidence
   state and the bounded next steps; no placement behavior changed.
@@ -122,14 +133,6 @@ All notable changes to LeopardWM will be documented in this file.
 ## 0.2.9
 
 ### Features
-
-- **Complete workspace state over the existing IPC subscription.** Opt in with
-  `lwm subscribe --events workspace_state` for coherent, byte-bounded snapshots
-  covering every connected monitor, all nine workspace slots, and tiled/floating
-  membership. Legacy default subscriptions remain unchanged. `lwm query workspaces`
-  returns one snapshot; `lwm workspace N --monitor DEVICE` selects a workspace on
-  an explicit monitor. IPC v4 adds this capability after v3 hotkey queries. See
-  `agent_docs/ipc-events.md` for schemas and recovery.
 
 - **Query effective hotkeys and export a PowerToys Shortcut Guide manifest.**
   `lwm query hotkeys` lists resolved bindings and configuration diagnostics.
@@ -209,9 +212,6 @@ All notable changes to LeopardWM will be documented in this file.
 - **IPC protocol v3 adds `QueryHotkeys` and `HotkeyList`.** Existing v1/v2
   subscription clients remain supported; the new query/export commands require
   a daemon implementing v3.
-- **IPC protocol v4 adds opt-in workspace-state snapshots and monitor-targeted
-  switching.** Legacy empty-filter subscriptions remain unchanged; consumers
-  must also verify that `workspace_state` appears in the acknowledged filter.
 - **Snap Layout remove and restore can emit numeric style-geometry diagnostics.** With debug logging enabled, maximize-box remove and restore log HWND, process/thread ids, style bits, and outer/client/DWM-frame/NC-rendering measurements at before-style, after-style, and after-frame boundaries. Failed geometry or style reads log numeric HRESULT codes instead of zeros. These queries are synchronous operation-boundary measurements, not proof of delayed application layout. Placement, style-change, and no-op behavior are unchanged.
 - **Opt-in framed-window clipping proofs record bounded native feasibility evidence.** The framed probe measured non-client rendering/frame changes while clipped despite unchanged native dimensions, so that presentation limitation remains separate from mechanical viability. A second ignored, hidden-fixture matrix covers known absent, empty, simple, and complex regions; LTR and right-origin RTL slices; retained-controller cancellation, restore-order, replacement, stale-identity, and native restore retry/terminal-repair boundaries. Both are test-only: no scrolling fix or compatibility acceptance is claimed.
 - **Diagnostics validation hosts are opt-in and isolated from ordinary tests.** A unique-pipe test host and exact-pipe CLI consumer can record Medium/High integrity evidence without starting the full daemon or falling back to the daily-driver pipe.
@@ -228,6 +228,7 @@ All notable changes to LeopardWM will be documented in this file.
   while the GitHub Release archive contract used by Scoop Extras remains
   unchanged.
 - **Lockfile dependency updates:** serde 1.0.229, toml 1.1.5, and tokio 1.53.1.
+
 ## 0.2.8
 
 ### Features

@@ -1,6 +1,10 @@
 # Placement-report triage (#104, #112)
 
-This is an evidence intake record for local ticket LWM-210-01. It was reviewed on 2026-09-16 against published v0.2.9. It records reporter statements, log and code facts, and inferences for GitHub issues [#104](https://github.com/jcardama/LeopardWM/issues/104) and [#112](https://github.com/jcardama/LeopardWM/issues/112). No placement behavior is changed by this record.
+This is an evidence intake record for local ticket LWM-210-01.
+
+**Original intake, 2026-09-16:** reviewed against published v0.2.9. It records reporter statements, log and code facts, and inferences for GitHub issues [#104](https://github.com/jcardama/LeopardWM/issues/104) and [#112](https://github.com/jcardama/LeopardWM/issues/112). Reporter status below is as of that intake.
+
+**2026-09-20 code-diagnostic update:** documents the already-implemented default-level origin-drift warning in `physical_placement.rs`. It does not re-check GitHub reporter replies, reproduce #104 or #112, or claim a placement-behavior repair. No placement behavior is changed by this record.
 
 ## Evidence labels
 
@@ -147,20 +151,20 @@ Inference: frequency dropping with animation disabled points at the animated pat
 
 ### Diagnosability
 
-Verified by code mapping. Default log level is info (`crates/daemon/src/config.rs:497-499`).
+**Original intake, 2026-09-16 (code mapping as of that review):** Default log level is info (`default_log_level` in `crates/daemon/src/config.rs`). Synchronous `SetWindowPos` failures were collected but not logged at the platform call site. The daemon logged a warn for failed, unreadable, missing, or unconfirmed-parked landings, but its confirmation check for an ordinary placement only tested that an actual visible rect exists, not that it equals the requested rect, so a readable landing at the wrong rect produced no log line. A stale animation result that arrives late was logged at debug only; the `InvalidatedCurrent` branch logged nothing. Confirmed native-minimum records were debug only. `lwm collect-logs` included only the last 100 daemon log lines.
 
-Synchronous `SetWindowPos` failures are collected but not logged at the platform call site (`crates/platform_win32/src/placement.rs:904-925`, `crates/platform_win32/src/placement.rs:949-988`). The daemon logs a warn for failed, unreadable, missing, or unconfirmed-parked landings (`crates/daemon/src/physical_placement.rs:647-666`), but its confirmation check for an ordinary placement only tests that an actual visible rect exists, not that it equals the requested rect (`crates/daemon/src/physical_placement.rs:654-661`), so a readable landing at the wrong rect produces no log line.
+Conclusion at intake: a default-level log plus `lwm collect-logs` may expose failed or unreadable landings but cannot show or quantify readable wrong-rect drift.
 
-A stale animation result that arrives late is logged at debug only (`crates/daemon/src/layout_apply.rs:104-113`). The `InvalidatedCurrent` branch logs nothing (`crates/daemon/src/layout_apply.rs:115-125`). Confirmed native-minimum records are debug only (`crates/platform_win32/src/placement.rs:1284-1319`).
+**2026-09-20 code-diagnostic update (current tree; reporter GitHub state not rechecked):** `landing_origin_drift` (`crates/daemon/src/physical_placement.rs`, lines 358-373) and `drift_warning` (lines 375-386) now feed a warn in `consume_physical_landings` (lines 698-707). The warning fires only for a confirmed, non-skipped `PhysicalKind::Unchanged` landing that is visible, readable, and non-failed, when the origin differs by more than 2 px on either axis. It logs the requested rectangle and the actual visible rectangle. Placement behavior is unchanged.
 
-`lwm collect-logs` includes only the last 100 daemon log lines (`crates/cli/src/doctor.rs:327-341`).
+Not covered: origin drift of 2 px or less, size-only mismatch, skipped landings, and other unobserved drift (including parked, failed, unreadable, or non-visible landings). This is not a reporter reproduction and not a behavior repair of #112.
 
-Conclusion: a default-level log plus `lwm collect-logs` may expose failed or unreadable landings but cannot show or quantify readable wrong-rect drift; a useful capture still needs `behavior.log_level = "debug"`, the full daemon log file, and the last action before the displacement.
+A useful capture still needs `behavior.log_level = "debug"`, the full daemon log file (not only `lwm collect-logs`, which still includes the last 100 daemon log lines via `format_file_section` in `crates/cli/src/doctor.rs`), and the last action before the displacement. Stale animation results remain debug (`handle_animation_placement_result` in `crates/daemon/src/layout_apply.rs`); the `InvalidatedCurrent` branch still logs nothing; confirmed native-minimum records remain debug-only. Those paths supply context the origin-drift warning does not.
 
 ### Bounded next step (LWM-211-02)
 
-1. Ask the reporter for that debug capture before restarting the app.
-2. A small diagnostics-only candidate for v0.2.10, separately scoped, would be to log at warn when a confirmed landing rect differs from the requested rect in `crates/daemon/src/physical_placement.rs`, so drift becomes visible at the default level. Record this as a recommended follow-up, not implemented here.
+1. Ask the reporter for that debug capture before restarting the app. The 2026-09-20 update does not refresh reporter status.
+2. The previously recommended v0.2.10 diagnostics-only candidate is already implemented: `landing_origin_drift` and `drift_warning` in `crates/daemon/src/physical_placement.rs`, logged from `consume_physical_landings`. It covers confirmed, non-skipped `PhysicalKind::Unchanged` visible/readable/non-failed landings whose origin differs by more than 2 px on either axis, and logs requested plus actual visible rectangles. It does not diagnose origin drift of 2 px or less, size-only mismatch, skipped landings, or other unobserved drift, and it is not a reproduction or repair of #112.
 3. No animation or placement behavior change until a capture or deterministic reproduction exists.
 
 ## Findings for other tickets
@@ -195,3 +199,5 @@ action = "ignore"
 - No v0.2.9 reporter evidence.
 - No live desktop testing performed for this record.
 - No placement or animation behavior change.
+- The 2026-09-20 update did not re-check GitHub reporter state.
+- The origin-drift warn log does not cover all wrong-rect drift and is not a #112 repair.

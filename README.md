@@ -217,7 +217,7 @@ lwm stop               # stop the daemon
 lwm status             # show version, monitor count, window count, uptime
 ```
 
-Matching versions (Recommended): use the CLI and daemon from the same release. Corrected `lwm run` pending-apply handling depends on both sides understanding `apply_pending`. A matching pair reports a still-pending recovery landing as a non-success without emergency visibility restore. An older CLI maps that status to unknown and may invoke emergency restore. Mixed versions are not negotiated or isolated on the pipe; the Apply request and workspace stream protocol version are unchanged.
+Matching versions (Recommended): use the CLI and daemon from the same release. Corrected `lwm run` pending-apply handling depends on both sides understanding `apply_pending`. A matching pair reports a still-pending recovery landing as a non-success without emergency visibility restore. An older CLI maps that status to unknown and may invoke emergency restore. Mixed versions are not negotiated or isolated on the pipe. Pending handling does not change the Apply request shape. This release still advances the overall IPC protocol from v3 to v4 for workspace-state snapshots.
 
 ### Query state
 
@@ -320,7 +320,7 @@ After the daemon answers `Subscribed`, the connection stays open and streams
 `IpcEvent` frames as state changes occur. An empty filter preserves only the
 legacy event set (`workspace_changed`, `focused_window_changed`, `layout_changed`,
 `config_reloaded`, `heartbeat`); complete workspace snapshots require explicit
-`--events workspace_state` opt-in and acknowledgement. Targeted workspace commands
+`--events workspace_state` opt-in and acknowledgement (IPC v4). Targeted workspace commands
 use 1-based indices and transfer focus to the named monitor; snapshot indices are
 0-based. Full schemas and sample clients are in `agent_docs/ipc-events.md`.
 
