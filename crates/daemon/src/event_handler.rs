@@ -3,8 +3,9 @@
 use crate::config;
 use crate::state::{
     AppState, ApplicationFullscreenState, DragHintAction, DragState, ElevationBlockedRecord,
-    PendingLastWindowDeparture, EDIT_CONFIG_PULL_TTL, FALLBACK_VIEWPORT_HEIGHT,
-    FALLBACK_VIEWPORT_WIDTH, RECENTLY_HIDDEN_TTL, TRANSIENT_WINDOW_THRESHOLD,
+    LastWindowDepartureOrigin, PendingLastWindowDeparture, EDIT_CONFIG_PULL_TTL,
+    FALLBACK_VIEWPORT_HEIGHT, FALLBACK_VIEWPORT_WIDTH, RECENTLY_HIDDEN_TTL,
+    TRANSIENT_WINDOW_THRESHOLD,
 };
 use leopardwm_core_layout::{Rect, Workspace};
 #[cfg(not(test))]
@@ -1218,6 +1219,7 @@ impl AppState {
             self.arm_pending_last_window_departure(
                 decision.replacement_hwnd,
                 self.event_time_now_ms(),
+                LastWindowDepartureOrigin::DirectDestroyedOrHidden,
             );
         } else if decision.recover {
             self.sync_foreground_window();
@@ -1635,6 +1637,7 @@ impl AppState {
         &mut self,
         replacement_hwnd: Option<u64>,
         armed_at_event_time_ms: u32,
+        origin: LastWindowDepartureOrigin,
     ) {
         self.pending_last_window_departure = Some(PendingLastWindowDeparture {
             monitor: self.focused_monitor,
@@ -1642,6 +1645,7 @@ impl AppState {
             replacement_hwnd,
             set_at: std::time::Instant::now(),
             armed_at_event_time_ms,
+            origin,
         });
     }
 
@@ -1649,6 +1653,7 @@ impl AppState {
         &mut self,
         hwnd: u64,
         event_time_ms: u32,
+        monitor_id: leopardwm_platform_win32::MonitorId,
     ) -> bool {
         let Some(intent) = self.pending_last_window_departure else {
             return false;
@@ -1660,16 +1665,28 @@ impl AppState {
             self.pending_last_window_departure = None;
             return false;
         }
-        // Favor activation: a different HWND, or the same replacement with a
-        // strictly later WinEvent time, wins. Equality and wrap use the same
-        // compare as workspace-switch guards.
-        if Some(hwnd) != intent.replacement_hwnd
-            || !event_time_is_no_later_than(event_time_ms, intent.armed_at_event_time_ms)
-        {
+        // Exact sampled replacement: no-later Focused is suppressed. Direct
+        // Destroyed/Hidden with no sample binds the first no-later same-monitor
+        // managed HWND. Newer ticks, a later different HWND, and eventless-prune
+        // None do not infer.
+        if !event_time_is_no_later_than(event_time_ms, intent.armed_at_event_time_ms) {
             self.pending_last_window_departure = None;
             return false;
         }
-        true
+        if Some(hwnd) == intent.replacement_hwnd {
+            return true;
+        }
+        if intent.replacement_hwnd.is_none()
+            && intent.origin == LastWindowDepartureOrigin::DirectDestroyedOrHidden
+            && monitor_id == intent.monitor
+        {
+            if let Some(pending) = self.pending_last_window_departure.as_mut() {
+                pending.replacement_hwnd = Some(hwnd);
+            }
+            return true;
+        }
+        self.pending_last_window_departure = None;
+        false
     }
 
     fn on_window_focused(&mut self, hwnd: u64, event_time_ms: u32) {
@@ -1773,7 +1790,7 @@ impl AppState {
             if self.should_suppress_workspace_switch_focus(hwnd, event_time_ms) {
                 return;
             }
-            if self.should_suppress_last_window_departure_focus(hwnd, event_time_ms) {
+            if self.should_suppress_last_window_departure_focus(hwnd, event_time_ms, monitor_id) {
                 return;
             }
             self.follow_workspace_without_stealing_focus(monitor_id, ws_idx);

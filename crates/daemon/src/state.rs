@@ -815,6 +815,13 @@ impl PendingWorkspaceSwitchFocus {
     }
 }
 
+/// How the last-window empty-selection guard was armed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LastWindowDepartureOrigin {
+    DirectDestroyedOrHidden,
+    EventlessPrune,
+}
+
 /// Evidence that the focused monitor's selected workspace became empty
 /// because its last tiled and floating window departed.
 ///
@@ -830,6 +837,10 @@ impl PendingWorkspaceSwitchFocus {
 /// cross-workspace Focused event, so that activation may be consumed and
 /// need to be repeated.
 ///
+/// DirectDestroyedOrHidden with no sampled replacement binds the first
+/// no-later managed Focused on the same monitor, then uses that exact HWND.
+/// EventlessPrune does not infer from None. Unmanaged samples are not rewritten.
+///
 /// Distinct from `PendingWorkspaceSwitchFocus`; the two guards are not shared.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PendingLastWindowDeparture {
@@ -838,6 +849,7 @@ pub(crate) struct PendingLastWindowDeparture {
     pub(crate) replacement_hwnd: Option<u64>,
     pub(crate) set_at: std::time::Instant,
     pub(crate) armed_at_event_time_ms: u32,
+    pub(crate) origin: LastWindowDepartureOrigin,
 }
 
 impl PendingLastWindowDeparture {

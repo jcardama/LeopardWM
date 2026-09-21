@@ -5677,6 +5677,72 @@ fn last_window_cross_workspace_state() -> AppState {
     state
 }
 
+fn tile_open_on_workspace_rule(
+    match_class: &str,
+    open_on_workspace: u8,
+) -> crate::config::WindowRule {
+    crate::config::WindowRule {
+        match_class: Some(match_class.to_string()),
+        match_title: None,
+        match_executable: None,
+        action: crate::config::WindowAction::Tile,
+        width: None,
+        height: None,
+        corner_style: None,
+        open_on_workspace: Some(open_on_workspace),
+        open_maximized: false,
+        column_width: None,
+        open_in_column: None,
+        sticky: false,
+    }
+}
+
+/// Discord on workspace 3 and Steam on workspace 4 via `open_on_workspace`
+/// rules, with the user then selecting Discord's workspace. Close-time
+/// foreground still names Discord, so the empty-selection guard cannot sample
+/// Steam as the replacement HWND.
+fn last_window_rule_slot_unsampled_state() -> AppState {
+    let mut config = test_config();
+    config.window_rules = vec![
+        tile_open_on_workspace_rule("DiscordMain", 3),
+        tile_open_on_workspace_rule("SteamMain", 4),
+    ];
+    let mut state = AppState::new_with_config(config, test_monitors());
+    state.reduce_motion = false;
+    state.last_prune_at = Some(std::time::Instant::now());
+    state.injected_event_time_ms = Some(1_000);
+
+    let mut discord = make_test_window_info(100);
+    discord.class_name = "DiscordMain".to_string();
+    let mut steam = make_test_window_info(200);
+    steam.class_name = "SteamMain".to_string();
+    state.injected_window_info.insert(100, discord);
+    state.injected_window_info.insert(200, steam);
+
+    state.handle_window_event(WindowEvent::Created(200));
+    state.handle_window_event(WindowEvent::Created(100));
+
+    let mon = state.focused_monitor;
+    assert!(
+        state.workspaces.get(&mon).unwrap()[2].contains_window(100),
+        "Discord rule must admit onto workspace 3"
+    );
+    assert!(
+        state.workspaces.get(&mon).unwrap()[3].contains_window(200),
+        "Steam rule must admit onto workspace 4"
+    );
+    assert_eq!(state.active_workspace_idx(mon), 0);
+
+    assert!(matches!(
+        state.handle_command(IpcCommand::SwitchWorkspace { index: 3 }),
+        IpcResponse::Ok
+    ));
+    assert_eq!(state.active_workspace_idx(mon), 2);
+    assert_eq!(state.previous_focused_hwnd, Some(100));
+    state.injected_foreground_hwnd = Some(Some(100));
+    state
+}
+
 #[test]
 fn test_last_window_hidden_or_destroyed_preserves_empty_selection() {
     for event in [WindowEvent::Destroyed(100), WindowEvent::Hidden(100)] {
@@ -6062,6 +6128,228 @@ fn test_last_window_departure_guard_equality_wrap_and_expiry() {
     assert_eq!(expired.active_workspace_idx(mon), 1);
     assert_eq!(expired.previous_focused_hwnd, Some(200));
     assert_eq!(expired.pending_last_window_departure, None);
+}
+
+#[test]
+fn test_last_window_rule_slot_unsampled_auto_activation_preserves_empty_selection() {
+    for event in [WindowEvent::Destroyed(100), WindowEvent::Hidden(100)] {
+        let mut state = last_window_rule_slot_unsampled_state();
+        let mon = state.focused_monitor;
+
+        state.handle_window_event(event);
+        assert_eq!(state.active_workspace_idx(mon), 2);
+        assert_eq!(state.previous_focused_hwnd, None);
+        assert!(crate::event_handler::workspace_is_genuinely_empty(
+            &state.workspaces[&mon][2]
+        ));
+        let intent = state
+            .pending_last_window_departure
+            .expect("empty Discord workspace must arm the last-window guard");
+        assert_eq!(intent.replacement_hwnd, None);
+        assert!(state.workspaces[&mon][3].contains_window(200));
+
+        assert_eq!(
+            intent.origin,
+            LastWindowDepartureOrigin::DirectDestroyedOrHidden
+        );
+
+        state.handle_window_event(WindowEvent::Focused(200, intent.armed_at_event_time_ms));
+        assert_eq!(
+            state.active_workspace_idx(mon),
+            2,
+            "unsampled Steam auto-activation must not leave the empty Discord workspace"
+        );
+        assert_eq!(state.focused_monitor, mon);
+        assert_eq!(state.previous_focused_hwnd, None);
+        assert_eq!(
+            state
+                .pending_last_window_departure
+                .unwrap()
+                .replacement_hwnd,
+            Some(200)
+        );
+        assert!(state.workspaces[&mon][3].contains_window(200));
+    }
+}
+
+#[test]
+fn test_last_window_unsampled_newer_tick_activation_wins() {
+    let mut state = last_window_rule_slot_unsampled_state();
+    let mon = state.focused_monitor;
+    state.handle_window_event(WindowEvent::Destroyed(100));
+    let armed_at = state
+        .pending_last_window_departure
+        .unwrap()
+        .armed_at_event_time_ms;
+
+    state.handle_window_event(WindowEvent::Focused(200, armed_at.wrapping_add(1)));
+    assert_eq!(state.active_workspace_idx(mon), 3);
+    assert_eq!(state.previous_focused_hwnd, Some(200));
+    assert_eq!(state.pending_last_window_departure, None);
+}
+
+#[test]
+fn test_last_window_unsampled_duplicate_inferred_replacement_stays() {
+    let mut state = last_window_rule_slot_unsampled_state();
+    let mon = state.focused_monitor;
+    state.handle_window_event(WindowEvent::Destroyed(100));
+    let armed_at = state
+        .pending_last_window_departure
+        .unwrap()
+        .armed_at_event_time_ms;
+
+    state.handle_window_event(WindowEvent::Focused(200, armed_at));
+    let bound = state.pending_last_window_departure.unwrap();
+    assert_eq!(bound.replacement_hwnd, Some(200));
+    state.handle_window_event(WindowEvent::Focused(200, armed_at));
+
+    assert_eq!(state.active_workspace_idx(mon), 2);
+    assert_eq!(state.previous_focused_hwnd, None);
+    assert_eq!(state.pending_last_window_departure, Some(bound));
+}
+
+#[test]
+fn test_last_window_unsampled_different_hwnd_after_binding_wins() {
+    let mut state = last_window_rule_slot_unsampled_state();
+    let mon = state.focused_monitor;
+    state
+        .injected_window_info
+        .insert(300, make_test_window_info(300));
+    state.workspaces.get_mut(&mon).unwrap()[3]
+        .insert_window(300, Some(800))
+        .unwrap();
+    state.handle_window_event(WindowEvent::Destroyed(100));
+    let armed_at = state
+        .pending_last_window_departure
+        .unwrap()
+        .armed_at_event_time_ms;
+
+    state.handle_window_event(WindowEvent::Focused(200, armed_at));
+    assert_eq!(
+        state
+            .pending_last_window_departure
+            .unwrap()
+            .replacement_hwnd,
+        Some(200)
+    );
+
+    state.handle_window_event(WindowEvent::Focused(300, armed_at));
+    assert_eq!(state.active_workspace_idx(mon), 3);
+    assert_eq!(state.previous_focused_hwnd, Some(300));
+    assert_eq!(state.pending_last_window_departure, None);
+}
+
+#[test]
+fn test_last_window_unsampled_different_monitor_activation_follows() {
+    let mut state = AppState::new_with_config(test_config(), two_monitors());
+    state.reduce_motion = false;
+    state.last_prune_at = Some(std::time::Instant::now());
+    state.injected_event_time_ms = Some(1_000);
+    for hwnd in [100, 200] {
+        state
+            .injected_window_info
+            .insert(hwnd, make_test_window_info(hwnd));
+    }
+    state.handle_window_event(WindowEvent::Created(100));
+    state.workspaces.get_mut(&2).unwrap()[0]
+        .insert_window(200, Some(800))
+        .unwrap();
+    state
+        .window_managed_at
+        .insert(200, std::time::Instant::now());
+    state.previous_focused_hwnd = Some(100);
+    state.injected_foreground_hwnd = Some(Some(100));
+
+    state.handle_window_event(WindowEvent::Destroyed(100));
+    assert_eq!(state.focused_monitor, 1);
+    assert_eq!(
+        state
+            .pending_last_window_departure
+            .unwrap()
+            .replacement_hwnd,
+        None
+    );
+
+    state.handle_window_event(WindowEvent::Focused(200, 1_000));
+    assert_eq!(state.focused_monitor, 2);
+    assert_eq!(state.active_workspace_idx(2), 0);
+    assert_eq!(state.previous_focused_hwnd, Some(200));
+    assert_eq!(state.pending_last_window_departure, None);
+}
+
+#[test]
+fn test_last_window_unsampled_expired_guard_follows() {
+    let mut state = last_window_rule_slot_unsampled_state();
+    let mon = state.focused_monitor;
+    state.handle_window_event(WindowEvent::Destroyed(100));
+    state.pending_last_window_departure.as_mut().unwrap().set_at =
+        std::time::Instant::now() - PendingLastWindowDeparture::TTL;
+
+    state.handle_window_event(WindowEvent::Focused(200, 1_000));
+    assert_eq!(state.active_workspace_idx(mon), 3);
+    assert_eq!(state.previous_focused_hwnd, Some(200));
+    assert_eq!(state.pending_last_window_departure, None);
+}
+
+#[test]
+fn test_last_window_unsampled_explicit_workspace_command_supersedes_guard() {
+    let mut state = last_window_rule_slot_unsampled_state();
+    let mon = state.focused_monitor;
+    state.handle_window_event(WindowEvent::Destroyed(100));
+    assert!(state.pending_last_window_departure.is_some());
+
+    assert!(matches!(
+        state.handle_command(IpcCommand::SwitchWorkspace { index: 1 }),
+        IpcResponse::Ok
+    ));
+    assert_eq!(state.pending_last_window_departure, None);
+    assert_eq!(state.active_workspace_idx(mon), 0);
+
+    state.handle_window_event(WindowEvent::Focused(200, 1_000));
+    assert_eq!(state.active_workspace_idx(mon), 3);
+    assert_eq!(state.previous_focused_hwnd, Some(200));
+}
+
+#[test]
+fn test_last_window_sampled_different_hwnd_still_follows() {
+    let mut state = last_window_cross_workspace_state();
+    let mon = state.focused_monitor;
+    state
+        .injected_window_info
+        .insert(300, make_test_window_info(300));
+    state.workspaces.get_mut(&mon).unwrap()[1]
+        .insert_window(300, Some(800))
+        .unwrap();
+    state.handle_window_event(WindowEvent::Destroyed(100));
+    assert_eq!(
+        state
+            .pending_last_window_departure
+            .unwrap()
+            .replacement_hwnd,
+        Some(200)
+    );
+
+    state.handle_window_event(WindowEvent::Focused(300, 1_000));
+    assert_eq!(state.active_workspace_idx(mon), 1);
+    assert_eq!(state.previous_focused_hwnd, Some(300));
+    assert_eq!(state.pending_last_window_departure, None);
+}
+
+#[test]
+fn test_last_window_eventless_none_does_not_infer_replacement() {
+    let mut state = last_window_cross_workspace_state();
+    let mon = state.focused_monitor;
+    state.injected_foreground_hwnd = Some(None);
+    state.prune_stale_windows_for_test(&[100]);
+    let intent = state.pending_last_window_departure.unwrap();
+    assert_eq!(intent.replacement_hwnd, None);
+    assert_eq!(intent.origin, LastWindowDepartureOrigin::EventlessPrune);
+    assert_eq!(state.active_workspace_idx(mon), 0);
+
+    state.handle_window_event(WindowEvent::Focused(200, 1_000));
+    assert_eq!(state.active_workspace_idx(mon), 1);
+    assert_eq!(state.previous_focused_hwnd, Some(200));
+    assert_eq!(state.pending_last_window_departure, None);
 }
 
 #[test]

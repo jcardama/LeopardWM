@@ -448,7 +448,11 @@ impl AppState {
                     _ => None,
                 },
             );
-            self.arm_pending_last_window_departure(replacement, self.event_time_now_ms());
+            self.arm_pending_last_window_departure(
+                replacement,
+                self.event_time_now_ms(),
+                LastWindowDepartureOrigin::EventlessPrune,
+            );
         } else if layout_changed || focus_changed {
             self.reconcile_border_without_stealing_focus();
         }
