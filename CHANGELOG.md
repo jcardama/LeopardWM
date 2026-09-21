@@ -32,8 +32,8 @@ All notable changes to LeopardWM will be documented in this file.
   after queued animation frames. A busy worker leaves tiling paused without a
   cascade; explicitly retry the command once the worker finishes. Partial
   off-screen recovery logs its restored-window count.
-- **Landings whose visible origin differs from the requested origin by more than 2 px are now logged at warn level with both rectangles.**
-  Window drift reports can be diagnosed from a default-level daemon log; placement behavior is unchanged.
+- **Confirmed, non-skipped ordinary visible landings now log origin drift greater than 2 px at warn level with both rectangles.**
+  The warning excludes parked, failed, unreadable, and non-visible landings, drift of 2 px or less, and size-only mismatches. Eligible drift can be diagnosed from a default-level daemon log; placement behavior is unchanged.
 - **Opt-in touchpad gesture diagnostic capture writes a bounded dedicated report.**
   `[gestures] diagnostic_capture_secs` (default 0, max 120) is startup-only; `lwm reload` does not start a capture. Restart with `lwm stop` then `lwm run`. The report distinguishes hook delivery, classifier pass/reject, accumulation, timeout, cooldown, recognized events, and daemon binding dispatch, including no-action. Capture can report disabled registration when gestures are disabled, but hook input is recorded only when gestures are enabled and registration succeeds. `lwm collect-logs` includes the full capture file. Default-off does not truncate a previous report; a new capture replaces it.
 
@@ -99,7 +99,7 @@ All notable changes to LeopardWM will be documented in this file.
   do not. A recycled ordinary managed HWND that is already live when a delayed
   Destroyed arrives can keep the previous membership and caches. Ignore-to-replacement
   protection after Created is unchanged. Generalized managed identity tracking
-  is not in this release. Diagnosis of a bounded lifetime policy is deferred to 0.2.11.
+  is not in this release. A bounded lifetime-identity policy for ordinary managed windows is deferred to 0.2.11.
 - **Ignore lifetime tokens cannot be cleared after a crash, and matching-read
   clear is not race-free.**
   Best-effort token cleanup runs only on daemon exit paths. A crash or kill
