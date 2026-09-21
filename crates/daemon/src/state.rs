@@ -838,7 +838,8 @@ pub(crate) enum LastWindowDepartureOrigin {
 /// need to be repeated.
 ///
 /// DirectDestroyedOrHidden with no sampled replacement binds the first
-/// no-later managed Focused on the same monitor, then uses that exact HWND.
+/// no-later managed Focused on another workspace of the same monitor, then
+/// uses that exact HWND. Same-workspace activations are not inferred.
 /// EventlessPrune does not infer from None. Unmanaged samples are not rewritten.
 ///
 /// Distinct from `PendingWorkspaceSwitchFocus`; the two guards are not shared.

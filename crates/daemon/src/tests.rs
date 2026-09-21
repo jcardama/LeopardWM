@@ -6173,6 +6173,46 @@ fn test_last_window_rule_slot_unsampled_auto_activation_preserves_empty_selectio
 }
 
 #[test]
+fn test_last_window_unsampled_same_workspace_created_focus_is_adopted() {
+    let mut state = last_window_cross_workspace_state();
+    state.injected_foreground_hwnd = Some(Some(100));
+    let mon = state.focused_monitor;
+    state.handle_window_event(WindowEvent::Destroyed(100));
+    let armed_at = state
+        .pending_last_window_departure
+        .unwrap()
+        .armed_at_event_time_ms;
+    assert_eq!(state.active_workspace_idx(mon), 0);
+    assert_eq!(state.previous_focused_hwnd, None);
+
+    state.config.behavior.focus_new_windows = false;
+    state
+        .injected_window_info
+        .insert(300, make_test_window_info(300));
+    state.handle_window_event(WindowEvent::Created(300));
+    assert!(state.workspaces[&mon][0].contains_window(300));
+    assert_eq!(state.active_workspace_idx(mon), 0);
+    assert_eq!(state.previous_focused_hwnd, None);
+    assert_eq!(
+        state
+            .pending_last_window_departure
+            .unwrap()
+            .replacement_hwnd,
+        None
+    );
+    let shows_before = state.border_show_count.load(Ordering::Relaxed);
+
+    state.handle_window_event(WindowEvent::Focused(300, armed_at));
+    assert_eq!(state.active_workspace_idx(mon), 0);
+    assert_eq!(state.previous_focused_hwnd, Some(300));
+    assert_eq!(state.pending_last_window_departure, None);
+    assert!(
+        state.border_show_count.load(Ordering::Relaxed) > shows_before,
+        "same-workspace Focused after empty Created must adopt and show the border"
+    );
+}
+
+#[test]
 fn test_last_window_unsampled_newer_tick_activation_wins() {
     let mut state = last_window_rule_slot_unsampled_state();
     let mon = state.focused_monitor;

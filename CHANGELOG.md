@@ -7,7 +7,7 @@ All notable changes to LeopardWM will be documented in this file.
 ### Fixes
 
 - **Closing the last window keeps the empty workspace when the replacement HWND is not yet sampled.**
-  If Destroyed or Hidden empties the selected workspace while the departing window is still the foreground, the first no-later managed activation on that monitor is bound as the close-time replacement and does not switch workspaces. A later tick, a different window after that bind, an explicit workspace switch, and eventless pruning are unchanged.
+  If Destroyed or Hidden empties the selected workspace while the departing window is still the foreground, the first no-later managed activation on another workspace of that monitor is bound as the close-time replacement and does not switch workspaces. A later tick, a different window after that bind, an explicit workspace switch, and eventless pruning are unchanged.
 
 ## 0.2.10
 

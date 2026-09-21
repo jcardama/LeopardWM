@@ -1654,6 +1654,7 @@ impl AppState {
         hwnd: u64,
         event_time_ms: u32,
         monitor_id: leopardwm_platform_win32::MonitorId,
+        ws_idx: usize,
     ) -> bool {
         let Some(intent) = self.pending_last_window_departure else {
             return false;
@@ -1666,9 +1667,10 @@ impl AppState {
             return false;
         }
         // Exact sampled replacement: no-later Focused is suppressed. Direct
-        // Destroyed/Hidden with no sample binds the first no-later same-monitor
-        // managed HWND. Newer ticks, a later different HWND, and eventless-prune
-        // None do not infer.
+        // Destroyed/Hidden with no sample binds the first no-later managed HWND
+        // on another workspace of the same monitor. Same-workspace activations,
+        // newer ticks, a later different HWND, and eventless-prune None do not
+        // infer.
         if !event_time_is_no_later_than(event_time_ms, intent.armed_at_event_time_ms) {
             self.pending_last_window_departure = None;
             return false;
@@ -1679,10 +1681,11 @@ impl AppState {
         if intent.replacement_hwnd.is_none()
             && intent.origin == LastWindowDepartureOrigin::DirectDestroyedOrHidden
             && monitor_id == intent.monitor
+            && ws_idx != intent.workspace
         {
-            if let Some(pending) = self.pending_last_window_departure.as_mut() {
-                pending.replacement_hwnd = Some(hwnd);
-            }
+            let mut pending = intent;
+            pending.replacement_hwnd = Some(hwnd);
+            self.pending_last_window_departure = Some(pending);
             return true;
         }
         self.pending_last_window_departure = None;
@@ -1790,7 +1793,12 @@ impl AppState {
             if self.should_suppress_workspace_switch_focus(hwnd, event_time_ms) {
                 return;
             }
-            if self.should_suppress_last_window_departure_focus(hwnd, event_time_ms, monitor_id) {
+            if self.should_suppress_last_window_departure_focus(
+                hwnd,
+                event_time_ms,
+                monitor_id,
+                ws_idx,
+            ) {
                 return;
             }
             self.follow_workspace_without_stealing_focus(monitor_id, ws_idx);
