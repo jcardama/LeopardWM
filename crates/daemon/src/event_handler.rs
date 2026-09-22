@@ -976,6 +976,23 @@ impl AppState {
 
     /// Shared handler for destroyed and hidden window events.
     fn on_window_destroyed_or_hidden(&mut self, hwnd: u64, is_hidden_event: bool) {
+        if !is_hidden_event && self.destroyed_names_current_lifetime(hwnd) {
+            debug!(
+                "Ignoring stale Destroyed for live hwnd {} (current lifetime still present)",
+                hwnd
+            );
+            self.on_temporary_ignore_destroyed(hwnd);
+            return;
+        }
+        self.depart_destroyed_or_hidden_window(hwnd, is_hidden_event);
+    }
+
+    /// Membership removal, cache scrub, layout, and focus departure.
+    ///
+    /// Created calls this when a managed lifetime was replaced, so the missing
+    /// Destroyed runs before admission. The stale-lifetime guard stays on the
+    /// event entry and does not apply here.
+    pub(crate) fn depart_destroyed_or_hidden_window(&mut self, hwnd: u64, is_hidden_event: bool) {
         let event_name = if is_hidden_event {
             "hidden"
         } else {
@@ -986,14 +1003,6 @@ impl AppState {
         // is cloaked, so only a real destroy (not a spurious Hidden
         // from cloaking) should clear its designation.
         if !is_hidden_event {
-            if self.destroyed_names_current_lifetime(hwnd) {
-                debug!(
-                    "Ignoring stale Destroyed for live hwnd {} (current lifetime still present)",
-                    hwnd
-                );
-                self.on_temporary_ignore_destroyed(hwnd);
-                return;
-            }
             self.scratchpad_on_window_destroyed(hwnd);
             self.sticky_on_window_destroyed(hwnd);
             self.on_temporary_ignore_destroyed(hwnd);

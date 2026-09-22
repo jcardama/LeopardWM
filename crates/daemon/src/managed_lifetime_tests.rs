@@ -1,5 +1,8 @@
 use crate::event_handler::{AdmissionKind, AdmitOutcome};
-use crate::state::{AppState, MoveOrigin, StashedMonitorLayout, DRAG_PLACEHOLDER_HWND};
+use crate::state::{
+    AppState, DragPreviewMode, DragState, MoveOrigin, StashedMonitorLayout,
+    TestApplyPlacementsBehavior, DRAG_PLACEHOLDER_HWND,
+};
 use crate::temporary_ignore::IdentityReadError;
 use leopardwm_core_layout::Rect;
 use leopardwm_ipc::{IpcCommand, IpcResponse};
@@ -436,4 +439,136 @@ fn managed_lifetime_record_skips_drag_placeholder() {
     state.record_managed_lifetime(DRAG_PLACEHOLDER_HWND);
     assert!(state.managed_lifetime_tokens.is_empty());
     assert!(state.injected_managed_tokens.is_empty());
+}
+
+fn ignore_managed_class(state: &mut AppState) {
+    state.config.window_rules.push(crate::config::WindowRule {
+        match_class: Some("ManagedClass".into()),
+        action: crate::config::WindowAction::Ignore,
+        ..Default::default()
+    });
+    state.compiled_rules = state.config.compile_window_rules();
+}
+
+fn enable_scripted_layout(state: &mut AppState) {
+    state.paused = false;
+    state.reduce_motion = true;
+    // Admission while paused still starts a transition, and apply_layout
+    // returns before the placement worker while one is active.
+    state.layout_transition = None;
+    state.injected_apply_placements_behavior =
+        Some(TestApplyPlacementsBehavior::SleepAndSucceed(Duration::ZERO));
+}
+
+fn placement_batches(state: &AppState) -> Vec<Vec<u64>> {
+    state
+        .injected_apply_placements_batches
+        .lock()
+        .unwrap()
+        .clone()
+}
+
+/// Peer 20 stays managed. Hwnd 10's managed property is already gone, and a
+/// persistent Ignore rule makes the replacement fail admission.
+fn replaced_ignored_peer_state() -> AppState {
+    let mut state = state();
+    admit(&mut state, 20);
+    admit(&mut state, 10);
+    seed_recycled_lifetime_caches(&mut state, 10);
+    simulate_missing_managed_token(&mut state, 10);
+    ignore_managed_class(&mut state);
+    enable_scripted_layout(&mut state);
+    state
+}
+
+fn assert_failed_replacement_departed(state: &AppState) {
+    assert_eq!(membership_count(state, 10), 0);
+    assert_eq!(state.find_window_workspace(20), Some((1, 0)));
+    assert!(!state.managed_lifetime_tokens.contains_key(&10));
+    assert_recycled_lifetime_caches_cleared(state, 10);
+    assert!(state.drag_state.is_none());
+    let batches = placement_batches(state);
+    assert!(
+        batches
+            .iter()
+            .any(|batch| batch.contains(&20) && !batch.contains(&10)),
+        "peer 20 should be reflowed without the departed hwnd, got {batches:?}"
+    );
+}
+
+#[test]
+fn created_before_destroy_failed_admission_matches_destroy_then_create() {
+    let mut created_first = replaced_ignored_peer_state();
+    created_first.handle_window_event(WindowEvent::Created(10));
+    assert_failed_replacement_departed(&created_first);
+
+    let mut destroyed_first = replaced_ignored_peer_state();
+    destroyed_first.handle_window_event(WindowEvent::Destroyed(10));
+    destroyed_first.handle_window_event(WindowEvent::Created(10));
+    assert_failed_replacement_departed(&destroyed_first);
+
+    assert_eq!(
+        placement_batches(&created_first),
+        placement_batches(&destroyed_first)
+    );
+    assert_eq!(
+        created_first.find_window_workspace(10),
+        destroyed_first.find_window_workspace(10)
+    );
+    assert_eq!(
+        created_first.managed_lifetime_tokens.contains_key(&10),
+        destroyed_first.managed_lifetime_tokens.contains_key(&10)
+    );
+}
+
+fn removed_tiled_drag(hwnd: u64) -> DragState {
+    DragState {
+        hwnd,
+        is_tiled: true,
+        source_monitor: 1,
+        source_workspace_idx: 0,
+        source_window_slot: 0,
+        current_column_index: 0,
+        last_drop_target: None,
+        last_hint_update: None,
+        removed_from_source: true,
+        preview_mode: DragPreviewMode::None,
+        target_column_peers: Vec::new(),
+        source_column_peers: Vec::new(),
+    }
+}
+
+#[test]
+fn created_before_destroy_cancels_tiled_drag_source_and_keeps_replacement() {
+    let mut state = state();
+    let old_token = admit(&mut state, 10);
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .remove_window(10)
+        .unwrap();
+    assert!(state.find_window_workspace(10).is_none());
+    assert!(state.managed_lifetime_tokens.contains_key(&10));
+    state.drag_state = Some(removed_tiled_drag(10));
+    simulate_missing_managed_token(&mut state, 10);
+
+    state.handle_window_event(WindowEvent::Created(10));
+
+    assert!(state.drag_state.is_none());
+    assert_eq!(membership_count(&state, 10), 1);
+    assert_eq!(state.find_window_workspace(10), Some((1, 0)));
+    let new_token = recorded_token(&state, 10);
+    assert_ne!(new_token, old_token);
+    state
+        .tab_title_overrides
+        .insert(10, "replacement".to_string());
+
+    state.handle_window_event(WindowEvent::Destroyed(10));
+
+    assert_eq!(membership_count(&state, 10), 1);
+    assert_eq!(state.managed_lifetime_tokens.get(&10), Some(&new_token));
+    assert_eq!(
+        state.tab_title_overrides.get(&10).map(String::as_str),
+        Some("replacement")
+    );
 }

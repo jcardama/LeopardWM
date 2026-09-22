@@ -71,30 +71,21 @@ impl AppState {
     }
 
     /// `true` when admission must stop because this HWND is still the recorded window.
-    /// A replaced lifetime is retired so the caller can admit the new window.
+    ///
+    /// A replaced member or tiled drag source gets the full Destroyed departure
+    /// first, including layout and focus, so a later admission failure does not
+    /// leave the old lifetime half-removed. Admission then continues.
     pub(crate) fn duplicate_managed_admission(&mut self, hwnd: u64) -> bool {
-        if self.find_window_workspace(hwnd).is_none() {
+        if !self.is_managed_member(hwnd) {
             return false;
         }
-        if self.managed_lifetime_replaced(hwnd) {
-            debug!("Retiring recycled managed hwnd {hwnd} so the replacement can be admitted");
-            self.retire_replaced_managed_ownership(hwnd);
-            false
-        } else {
+        if !self.managed_lifetime_replaced(hwnd) {
             debug!("Window {hwnd} already managed, ignoring create event");
-            true
+            return true;
         }
-    }
-
-    /// Drop recycled ownership without focus-departure, last-window, or layout apply.
-    pub(crate) fn retire_replaced_managed_ownership(&mut self, hwnd: u64) {
-        self.cancel_matching_unfinished_move_size_ui(hwnd);
-        self.remove_managed_membership(hwnd);
-        self.forget_managed_metadata(hwnd);
-        self.forget_recycled_temporary_ignore_caches(hwnd);
-        self.elevation_blocked.remove(&hwnd);
-        self.release_departing_hwnd_ghost(hwnd);
-        self.managed_lifetime_tokens.remove(&hwnd);
+        debug!("Departing recycled managed hwnd {hwnd} so the replacement can be admitted");
+        self.depart_destroyed_or_hidden_window(hwnd, false);
+        false
     }
 
     fn is_managed_member(&self, hwnd: u64) -> bool {
