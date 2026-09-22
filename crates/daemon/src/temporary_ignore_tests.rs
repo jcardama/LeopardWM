@@ -2,9 +2,9 @@ use crate::config::{self, Config};
 use crate::event_handler::AdmitOutcome;
 use crate::layout_apply::LayoutApplyOutcome;
 use crate::state::{
-    AppState, DragHintAction, DragPreviewMode, DragState, MoveOrigin, ResizeAnimationRequest,
-    StashedMonitorLayout, TestApplyPlacementsBehavior, TestApplyPlacementsOutcome,
-    TestApplyPlacementsStep,
+    AppState, DragHintAction, DragPreviewMode, DragState, MoveOrigin, RecentlyHiddenEntry,
+    ResizeAnimationRequest, StashedMonitorLayout, TestApplyPlacementsBehavior,
+    TestApplyPlacementsOutcome, TestApplyPlacementsStep,
 };
 use crate::temporary_ignore::{IdentityReadError, IdleLayoutReapply};
 use leopardwm_core_layout::{Rect, Visibility};
@@ -770,7 +770,13 @@ fn failed_resume_does_not_suppress_snap_after_paused_readmit() {
 fn recently_hidden_recovery_does_not_readmit_ignored_window() {
     let mut state = managed_state();
     ignore_foreground(&mut state, 10);
-    state.recently_hidden_hwnds.insert(10, Instant::now());
+    state.recently_hidden_hwnds.insert(
+        10,
+        RecentlyHiddenEntry {
+            hidden_at: Instant::now(),
+            managed_token: None,
+        },
+    );
     state.handle_window_event(WindowEvent::Focused(10, 0));
     assert!(state.find_window_workspace(10).is_none());
     assert!(state.temporary_ignores.contains_key(&10));

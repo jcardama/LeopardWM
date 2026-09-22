@@ -780,3 +780,136 @@ fn stashed_scratchpad_cloak_hidden_then_recycled_create_admits_replacement() {
     assert_eq!(state.managed_lifetime_tokens.get(&10), Some(&new_token));
     assert!(state.scratchpad.is_none());
 }
+
+#[test]
+fn enumerate_after_recycle_retires_old_membership_then_admits_once() {
+    let mut state = state();
+    let old_token = admit(&mut state, 10);
+    let kept_token = admit(&mut state, 20);
+    state.injected_live_hwnds.insert(20);
+    seed_recycled_lifetime_caches(&mut state, 10);
+    state.hidden_column_widths.insert(10, (Instant::now(), 400));
+    simulate_missing_managed_token(&mut state, 10);
+    state.injected_enumerated_windows = Some(vec![
+        info(10, "Managed", "ManagedClass", 2010),
+        info(20, "Managed", "ManagedClass", 2010),
+    ]);
+
+    let added = state.enumerate_and_add_windows().unwrap();
+
+    assert_eq!(added, 1);
+    assert_eq!(membership_count(&state, 10), 1);
+    assert_recycled_lifetime_caches_cleared(&state, 10);
+    assert!(!state.hidden_column_widths.contains_key(&10));
+    let new_token = recorded_token(&state, 10);
+    assert_ne!(new_token, old_token);
+    assert_eq!(state.managed_lifetime_tokens.get(&20), Some(&kept_token));
+    assert_eq!(membership_count(&state, 20), 1);
+
+    let added_again = state.enumerate_and_add_windows().unwrap();
+    assert_eq!(added_again, 0);
+    assert_eq!(membership_count(&state, 10), 1);
+    assert_eq!(recorded_token(&state, 10), new_token);
+    assert_eq!(state.managed_lifetime_tokens.get(&20), Some(&kept_token));
+}
+
+#[test]
+fn destroyed_then_recycled_popup_is_not_suppressed() {
+    let mut state = state();
+    admit(&mut state, 10);
+
+    state.handle_window_event(WindowEvent::Destroyed(10));
+
+    assert!(
+        !state.recently_hidden_hwnds.contains_key(&10),
+        "a real Destroyed must not leave a suppression entry"
+    );
+    simulate_missing_managed_token(&mut state, 10);
+
+    assert_eq!(
+        state.try_admit_window(10, AdmissionKind::Automatic),
+        AdmitOutcome::Admitted
+    );
+    assert_eq!(membership_count(&state, 10), 1);
+    assert!(!state.recently_hidden_hwnds.contains_key(&10));
+}
+
+#[test]
+fn same_lifetime_hidden_popup_stays_suppressed() {
+    let mut state = state();
+    let token = admit(&mut state, 10);
+    state.injected_live_hwnds.insert(10);
+
+    state.handle_window_event(WindowEvent::Hidden(10));
+
+    assert_eq!(
+        state
+            .recently_hidden_hwnds
+            .get(&10)
+            .map(|entry| entry.managed_token),
+        Some(Some(token))
+    );
+    assert_eq!(
+        state.try_admit_window(10, AdmissionKind::Automatic),
+        AdmitOutcome::TransientSuppressed
+    );
+    assert_eq!(membership_count(&state, 10), 0);
+    assert!(state.recently_hidden_hwnds.contains_key(&10));
+}
+
+#[test]
+fn hidden_then_recycled_missing_token_is_admitted() {
+    let mut state = state();
+    admit(&mut state, 10);
+    state.injected_live_hwnds.insert(10);
+    state.handle_window_event(WindowEvent::Hidden(10));
+    assert!(state
+        .recently_hidden_hwnds
+        .get(&10)
+        .unwrap()
+        .managed_token
+        .is_some());
+    simulate_missing_managed_token(&mut state, 10);
+
+    assert_eq!(
+        state.try_admit_window(10, AdmissionKind::Automatic),
+        AdmitOutcome::Admitted
+    );
+    assert!(!state.recently_hidden_hwnds.contains_key(&10));
+    assert_eq!(membership_count(&state, 10), 1);
+}
+
+#[test]
+fn hidden_then_recycled_different_token_is_admitted() {
+    let mut state = state();
+    let token = admit(&mut state, 10);
+    state.injected_live_hwnds.insert(10);
+    state.handle_window_event(WindowEvent::Hidden(10));
+    state
+        .injected_managed_tokens
+        .insert(10, token.wrapping_add(1));
+
+    assert_eq!(
+        state.try_admit_window(10, AdmissionKind::Automatic),
+        AdmitOutcome::Admitted
+    );
+    assert!(!state.recently_hidden_hwnds.contains_key(&10));
+    assert_eq!(membership_count(&state, 10), 1);
+    assert_ne!(recorded_token(&state, 10), token);
+}
+
+#[test]
+fn reapply_ignore_drops_managed_lifetime_record() {
+    let mut state = state();
+    admit(&mut state, 10);
+    let kept = admit(&mut state, 20);
+    state.injected_window_info.get_mut(&20).unwrap().class_name = "OtherClass".into();
+    ignore_managed_class(&mut state);
+
+    state.reapply_window_rules();
+
+    assert_eq!(membership_count(&state, 10), 0);
+    assert!(!state.managed_lifetime_tokens.contains_key(&10));
+    assert_eq!(membership_count(&state, 20), 1);
+    assert_eq!(state.managed_lifetime_tokens.get(&20), Some(&kept));
+}

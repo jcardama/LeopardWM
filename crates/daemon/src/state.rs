@@ -150,6 +150,17 @@ pub(crate) const CROSSFADE_BARRIER_MAX_AGE: Duration = Duration::from_secs(2);
 pub(crate) const TRANSIENT_WINDOW_THRESHOLD: Duration = Duration::from_secs(30);
 /// How long transient window HWNDs stay in the suppression list before expiring.
 pub(crate) const RECENTLY_HIDDEN_TTL: Duration = Duration::from_secs(300);
+
+/// A short-lived Hidden of a managed window.
+///
+/// `managed_token` is the managed property read at hide time. `None` means that
+/// stamp was not readable, so the entry cannot tell a recycled handle from the
+/// window that was hidden. A real Destroyed does not create an entry.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RecentlyHiddenEntry {
+    pub(crate) hidden_at: std::time::Instant,
+    pub(crate) managed_token: Option<u64>,
+}
 /// After "Edit Config" is clicked, how long to watch for the editor window (a
 /// single-instance editor like VS Code may raise an existing window on another
 /// workspace) so it can be pulled to the active workspace. Generous because a
@@ -557,10 +568,11 @@ pub(crate) struct AppState {
     pub(crate) pending_layout_apply_timeout_report: Option<LayoutApplyTimeoutReport>,
     /// Daemon start time for uptime reporting.
     pub(crate) start_time: std::time::Instant,
-    /// HWNDs of transient windows (managed briefly then hidden), used to suppress
-    /// re-creation of Electron popup windows (Beeper, Slack) that rapidly
-    /// show/hide the same HWND.  Entries older than 5 minutes are lazily evicted.
-    pub(crate) recently_hidden_hwnds: HashMap<u64, std::time::Instant>,
+    /// HWNDs hidden while managed only briefly, used to suppress re-creation of
+    /// Electron popup windows that show and hide the same HWND. The stored token
+    /// distinguishes that window from a later occupant of the handle. Entries
+    /// older than 5 minutes are lazily evicted.
+    pub(crate) recently_hidden_hwnds: HashMap<u64, RecentlyHiddenEntry>,
     /// Armed when "Edit Config" is clicked in the tray: `(armed_at, filename)`.
     /// A single-instance editor may raise an existing window on another
     /// workspace; within `EDIT_CONFIG_PULL_TTL` a window whose title contains

@@ -12585,9 +12585,13 @@ fn test_recovery_arm_preserves_recently_hidden_entry_on_lookup_failure() {
     // next legitimate recreate of the same HWND slips through the filter.
     let mut state = AppState::new_with_config(test_config(), test_monitors());
     let hwnd = 9999u64;
-    state
-        .recently_hidden_hwnds
-        .insert(hwnd, std::time::Instant::now());
+    state.recently_hidden_hwnds.insert(
+        hwnd,
+        crate::state::RecentlyHiddenEntry {
+            hidden_at: std::time::Instant::now(),
+            managed_token: None,
+        },
+    );
     // No injected_window_info -> lookup_window_info returns None.
     state.handle_window_event(WindowEvent::Focused(hwnd, 0));
     assert!(

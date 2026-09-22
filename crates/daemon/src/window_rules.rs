@@ -114,6 +114,7 @@ impl AppState {
                         }
                         self.window_managed_at.remove(&wid);
                         self.window_last_maximized_at.remove(&wid);
+                        self.managed_lifetime_tokens.remove(&wid);
                         info!("Rule change: unmanaged window {} (ignore)", wid);
                     }
                 }
@@ -129,6 +130,10 @@ impl AppState {
         let mut added = 0;
 
         for win_info in windows {
+            // Recycle departs before the ignore gate and rules, matching
+            // admission. The replacement is then evaluated like any new window.
+            self.depart_replaced_managed_lifetime(win_info.hwnd);
+
             if matches!(
                 self.temporary_ignore_gate(win_info.hwnd),
                 crate::temporary_ignore::IgnoreGate::Block

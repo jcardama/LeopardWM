@@ -3,8 +3,8 @@
 use crate::config;
 use crate::state::{
     AppState, ApplicationFullscreenState, DragHintAction, DragState, ElevationBlockedRecord,
-    LastWindowDepartureOrigin, PendingLastWindowDeparture, EDIT_CONFIG_PULL_TTL,
-    FALLBACK_VIEWPORT_HEIGHT, FALLBACK_VIEWPORT_WIDTH, RECENTLY_HIDDEN_TTL,
+    LastWindowDepartureOrigin, PendingLastWindowDeparture, RecentlyHiddenEntry,
+    EDIT_CONFIG_PULL_TTL, FALLBACK_VIEWPORT_HEIGHT, FALLBACK_VIEWPORT_WIDTH, RECENTLY_HIDDEN_TTL,
     TRANSIENT_WINDOW_THRESHOLD,
 };
 use leopardwm_core_layout::{Rect, Workspace};
@@ -564,6 +564,60 @@ impl AppState {
         let _ = self.try_admit_window(hwnd, AdmissionKind::Automatic);
     }
 
+    /// Popup-shaped recreation of the same hidden lifetime, still inside the TTL.
+    ///
+    /// A different managed token drops the entry and is not suppressed: the HWND
+    /// was recycled. A stored token of `None` cannot tell lifetimes apart and
+    /// keeps the old suppression. A window that is not popup-shaped also drops
+    /// the entry, as before.
+    fn suppressed_transient_popup(&mut self, hwnd: u64) -> bool {
+        let Some(entry) = self.recently_hidden_hwnds.get(&hwnd).copied() else {
+            return false;
+        };
+        if entry.hidden_at.elapsed() >= RECENTLY_HIDDEN_TTL {
+            return false;
+        }
+        if !self.recently_hidden_names_current_lifetime(entry.managed_token, hwnd) {
+            self.recently_hidden_hwnds.remove(&hwnd);
+            return false;
+        }
+        // Only suppress genuinely popup-shaped re-creations (the Electron
+        // notification toasts this guard exists for). A real window the
+        // user dismissed quickly (e.g. Edge's download popup) keeps a
+        // caption/minimize box; suppressing it would leave it floating,
+        // untracked and overlaying the layout, for the whole TTL. Tests
+        // inject synthetic HWNDs with no real window style, so the shape
+        // check is production-only and suppression stays unconditional
+        // under cfg(test).
+        #[cfg(not(test))]
+        let is_popup = leopardwm_platform_win32::is_frameless_popup(hwnd);
+        #[cfg(test)]
+        let is_popup = true;
+        if is_popup {
+            debug!(
+                "Ignoring transient re-created popup {} (hidden {}ms ago)",
+                hwnd,
+                entry.hidden_at.elapsed().as_millis()
+            );
+            return true;
+        }
+        self.recently_hidden_hwnds.remove(&hwnd);
+        false
+    }
+
+    /// The suppression entry still names this HWND. A recycled handle drops it
+    /// and is not recovered as the window that was hidden.
+    fn same_lifetime_recently_hidden(&mut self, hwnd: u64) -> bool {
+        let Some(entry) = self.recently_hidden_hwnds.get(&hwnd).copied() else {
+            return false;
+        };
+        if self.recently_hidden_names_current_lifetime(entry.managed_token, hwnd) {
+            return true;
+        }
+        self.recently_hidden_hwnds.remove(&hwnd);
+        false
+    }
+
     pub(crate) fn try_admit_window(&mut self, hwnd: u64, kind: AdmissionKind) -> AdmitOutcome {
         // Recycle departs before suppression and the ignore gate. A cloak Hidden
         // can mark this HWND transient, and that entry must not reject the replacement.
@@ -573,36 +627,12 @@ impl AppState {
 
         // Suppress transient windows that rapidly show/hide the same HWND
         // (e.g., Electron notification popups from Beeper, Slack).
-        if kind == AdmissionKind::Automatic {
-            if let Some(&hidden_at) = self.recently_hidden_hwnds.get(&hwnd) {
-                if hidden_at.elapsed() < RECENTLY_HIDDEN_TTL {
-                    // Only suppress genuinely popup-shaped re-creations (the Electron
-                    // notification toasts this guard exists for). A real window the
-                    // user dismissed quickly (e.g. Edge's download popup) keeps a
-                    // caption/minimize box; suppressing it would leave it floating,
-                    // untracked and overlaying the layout, for the whole TTL. Tests
-                    // inject synthetic HWNDs with no real window style, so the shape
-                    // check is production-only and suppression stays unconditional
-                    // under cfg(test).
-                    #[cfg(not(test))]
-                    let is_popup = leopardwm_platform_win32::is_frameless_popup(hwnd);
-                    #[cfg(test)]
-                    let is_popup = true;
-                    if is_popup {
-                        debug!(
-                            "Ignoring transient re-created popup {} (hidden {}ms ago)",
-                            hwnd,
-                            hidden_at.elapsed().as_millis()
-                        );
-                        return AdmitOutcome::TransientSuppressed;
-                    }
-                    self.recently_hidden_hwnds.remove(&hwnd);
-                }
-            }
+        if kind == AdmissionKind::Automatic && self.suppressed_transient_popup(hwnd) {
+            return AdmitOutcome::TransientSuppressed;
         }
         // Lazily evict expired entries on the Created path too
         self.recently_hidden_hwnds
-            .retain(|_, t| t.elapsed() < RECENTLY_HIDDEN_TTL);
+            .retain(|_, entry| entry.hidden_at.elapsed() < RECENTLY_HIDDEN_TTL);
 
         if kind == AdmissionKind::Automatic
             && self.temporary_ignore_gate(hwnd) == crate::temporary_ignore::IgnoreGate::Block
@@ -1107,9 +1137,8 @@ impl AppState {
         self.tab_title_overrides.remove(&hwnd);
         self.window_last_maximized_at.remove(&hwnd);
 
-        // Only mark as transient (suppress future re-creation) if the
-        // window was managed briefly. Long-lived windows (e.g., close-to-tray
-        // apps) should be allowed to re-tile when restored.
+        // A short-lived Hidden suppresses a later popup on this HWND.
+        // Long-lived windows (e.g., close-to-tray apps) are allowed to re-tile.
         // Cloaking a stashed scratchpad can emit Hidden while it is still the
         // same window. A shown scratchpad is an ordinary floating member, and
         // a real Destroyed still drops the record.
@@ -1118,26 +1147,39 @@ impl AppState {
         if !stashed_scratchpad_hidden {
             self.managed_lifetime_tokens.remove(&hwnd);
         }
-        if let Some(managed_at) = self.window_managed_at.remove(&hwnd) {
-            if managed_at.elapsed() < TRANSIENT_WINDOW_THRESHOLD {
-                debug!(
-                    "Marking window {} as transient (managed {}ms)",
-                    hwnd,
-                    managed_at.elapsed().as_millis()
-                );
-                self.recently_hidden_hwnds
-                    .insert(hwnd, std::time::Instant::now());
-            } else {
-                debug!(
-                    "Window {} was managed {}s, not marking as transient",
-                    hwnd,
-                    managed_at.elapsed().as_secs()
-                );
+        // Only a short-lived Hidden marks the HWND transient. A real Destroyed
+        // ends that lifetime: it must not create an entry, and it drops one a
+        // prior Hidden left behind so a recycled popup is not suppressed.
+        let managed_at = self.window_managed_at.remove(&hwnd);
+        if is_hidden_event {
+            if let Some(managed_at) = managed_at {
+                if managed_at.elapsed() < TRANSIENT_WINDOW_THRESHOLD {
+                    debug!(
+                        "Marking window {} as transient (managed {}ms)",
+                        hwnd,
+                        managed_at.elapsed().as_millis()
+                    );
+                    self.recently_hidden_hwnds.insert(
+                        hwnd,
+                        RecentlyHiddenEntry {
+                            hidden_at: std::time::Instant::now(),
+                            managed_token: self.readable_managed_token(hwnd),
+                        },
+                    );
+                } else {
+                    debug!(
+                        "Window {} was managed {}s, not marking as transient",
+                        hwnd,
+                        managed_at.elapsed().as_secs()
+                    );
+                }
             }
+        } else {
+            self.recently_hidden_hwnds.remove(&hwnd);
         }
         // Lazily evict stale entries
         self.recently_hidden_hwnds
-            .retain(|_, t| t.elapsed() < RECENTLY_HIDDEN_TTL);
+            .retain(|_, entry| entry.hidden_at.elapsed() < RECENTLY_HIDDEN_TTL);
 
         // Clear stale focus reference before sampling replacement evidence.
         let was_tracked_focus = self.previous_focused_hwnd == Some(hwnd);
@@ -1934,12 +1976,13 @@ impl AppState {
         // app), re-add it now. A user focusing a window proves it's
         // not a transient popup.
         //
-        // Peek first, remove only on commit. If lookup_window_info
+        // A recycled handle drops the entry and is not recovered.
+        // Otherwise peek first, remove only on commit. If lookup_window_info
         // transiently fails or the rule says Ignore, leaving the
         // entry intact lets a subsequent Focused event retry the
         // recovery (or the TTL filter at the top of this handler
         // ages it out).
-        if self.recently_hidden_hwnds.contains_key(&hwnd) {
+        if self.same_lifetime_recently_hidden(hwnd) {
             if let Some(win_info) = self.lookup_window_info(hwnd) {
                 let executable = get_process_executable(win_info.process_id).unwrap_or_default();
                 let action =

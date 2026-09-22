@@ -76,6 +76,23 @@ impl AppState {
         self.hwnd_lifetime_is_currently_live(hwnd)
     }
 
+    /// Depart a managed member whose recorded lifetime is no longer on the HWND.
+    ///
+    /// Returns true when this call ran the full Destroyed departure. Admission
+    /// and enumeration then evaluate the replacement as a new window.
+    pub(crate) fn depart_replaced_managed_lifetime(&mut self, hwnd: u64) -> bool {
+        if !self.is_managed_member(hwnd) || !self.managed_lifetime_replaced(hwnd) {
+            return false;
+        }
+        debug!("Departing recycled managed hwnd {hwnd} so the replacement can be admitted");
+        self.depart_destroyed_or_hidden_window(hwnd, false);
+        // Drop the entry this departure, or an earlier cloak Hidden, recorded
+        // so it cannot reject the replacement. Created checks suppression after
+        // this helper; enumeration does not.
+        self.recently_hidden_hwnds.remove(&hwnd);
+        true
+    }
+
     /// `true` when admission must stop because this HWND is still the recorded window.
     ///
     /// A replaced member, tiled drag source, or stashed scratchpad gets the
@@ -83,19 +100,43 @@ impl AppState {
     /// admission failure does not leave the old lifetime half-removed. Admission
     /// then continues.
     pub(crate) fn duplicate_managed_admission(&mut self, hwnd: u64) -> bool {
+        if self.depart_replaced_managed_lifetime(hwnd) {
+            return false;
+        }
         if !self.is_managed_member(hwnd) {
             return false;
         }
-        if !self.managed_lifetime_replaced(hwnd) {
-            debug!("Window {hwnd} already managed, ignoring create event");
+        debug!("Window {hwnd} already managed, ignoring create event");
+        true
+    }
+
+    /// Managed stamp to store on a Hidden suppression entry.
+    ///
+    /// Only `Ok(Some)` distinguishes a later lifetime. A missing property, a
+    /// dead window, or a transient read cannot, so those stay legacy `None`.
+    pub(crate) fn readable_managed_token(&self, hwnd: u64) -> Option<u64> {
+        self.read_managed_identity(hwnd).ok().flatten()
+    }
+
+    /// Whether a suppression entry still names `hwnd`'s current lifetime.
+    ///
+    /// A stored `None` cannot distinguish and suppresses. A stored token
+    /// suppresses only when the current managed token equals it. A live window
+    /// whose property is missing or different is a new lifetime. A transient
+    /// or gone read is not a new token, so it keeps suppression.
+    pub(crate) fn recently_hidden_names_current_lifetime(
+        &self,
+        stored: Option<u64>,
+        hwnd: u64,
+    ) -> bool {
+        let Some(stored) = stored else {
             return true;
+        };
+        match self.read_managed_identity(hwnd) {
+            Ok(Some(current)) => current == stored,
+            Ok(None) => false,
+            Err(_) => true,
         }
-        debug!("Departing recycled managed hwnd {hwnd} so the replacement can be admitted");
-        self.depart_destroyed_or_hidden_window(hwnd, false);
-        // Suppression runs after this check. Drop the entry this departure, or
-        // an earlier cloak Hidden, recorded so it cannot reject the replacement.
-        self.recently_hidden_hwnds.remove(&hwnd);
-        false
     }
 
     fn is_managed_member(&self, hwnd: u64) -> bool {
