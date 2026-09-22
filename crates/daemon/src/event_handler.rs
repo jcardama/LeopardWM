@@ -565,6 +565,12 @@ impl AppState {
     }
 
     pub(crate) fn try_admit_window(&mut self, hwnd: u64, kind: AdmissionKind) -> AdmitOutcome {
+        // Recycle departs before suppression and the ignore gate. A cloak Hidden
+        // can mark this HWND transient, and that entry must not reject the replacement.
+        if self.duplicate_managed_admission(hwnd) {
+            return AdmitOutcome::AlreadyManaged;
+        }
+
         // Suppress transient windows that rapidly show/hide the same HWND
         // (e.g., Electron notification popups from Beeper, Slack).
         if kind == AdmissionKind::Automatic {
@@ -602,10 +608,6 @@ impl AppState {
             && self.temporary_ignore_gate(hwnd) == crate::temporary_ignore::IgnoreGate::Block
         {
             return AdmitOutcome::GatedIgnored;
-        }
-
-        if self.duplicate_managed_admission(hwnd) {
-            return AdmitOutcome::AlreadyManaged;
         }
 
         // Try to get window info for filtering and monitor assignment
@@ -1108,11 +1110,12 @@ impl AppState {
         // Only mark as transient (suppress future re-creation) if the
         // window was managed briefly. Long-lived windows (e.g., close-to-tray
         // apps) should be allowed to re-tile when restored.
-        // Cloaking a designated scratchpad can emit Hidden while it is still
-        // the same window. A real Destroyed still drops the record.
-        let designated_scratchpad_hidden =
-            is_hidden_event && self.scratchpad.map(|pad| pad.window_id) == Some(hwnd);
-        if !designated_scratchpad_hidden {
+        // Cloaking a stashed scratchpad can emit Hidden while it is still the
+        // same window. A shown scratchpad is an ordinary floating member, and
+        // a real Destroyed still drops the record.
+        let stashed_scratchpad_hidden = is_hidden_event
+            && crate::managed_lifetime::is_stashed_scratchpad(self.scratchpad, hwnd);
+        if !stashed_scratchpad_hidden {
             self.managed_lifetime_tokens.remove(&hwnd);
         }
         if let Some(managed_at) = self.window_managed_at.remove(&hwnd) {

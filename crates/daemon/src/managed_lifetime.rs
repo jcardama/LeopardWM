@@ -4,11 +4,17 @@
 //! membership only when the managed property still matches the token recorded
 //! for that admission.
 
-use crate::state::{AppState, DRAG_PLACEHOLDER_HWND};
+use crate::state::{AppState, ScratchpadState, DRAG_PLACEHOLDER_HWND};
 use crate::temporary_ignore::IdentityReadError;
 #[cfg(not(test))]
 use leopardwm_platform_win32::Win32Error;
 use tracing::debug;
+
+/// A stashed scratchpad is managed ownership outside every workspace. A shown
+/// scratchpad is an ordinary floating member and must not keep that ownership.
+pub(crate) fn is_stashed_scratchpad(scratchpad: Option<ScratchpadState>, hwnd: u64) -> bool {
+    scratchpad.is_some_and(|pad| !pad.shown && pad.window_id == hwnd)
+}
 
 impl AppState {
     /// Stamp and record a managed lifetime. Stamp failure logs and leaves no record.
@@ -72,7 +78,7 @@ impl AppState {
 
     /// `true` when admission must stop because this HWND is still the recorded window.
     ///
-    /// A replaced member, tiled drag source, or designated scratchpad gets the
+    /// A replaced member, tiled drag source, or stashed scratchpad gets the
     /// full Destroyed departure first, including layout and focus, so a later
     /// admission failure does not leave the old lifetime half-removed. Admission
     /// then continues.
@@ -86,8 +92,8 @@ impl AppState {
         }
         debug!("Departing recycled managed hwnd {hwnd} so the replacement can be admitted");
         self.depart_destroyed_or_hidden_window(hwnd, false);
-        // This Created already passed transient suppression. A short-lived old
-        // lifetime must not leave a suppression entry for the replacement.
+        // Suppression runs after this check. Drop the entry this departure, or
+        // an earlier cloak Hidden, recorded so it cannot reject the replacement.
         self.recently_hidden_hwnds.remove(&hwnd);
         false
     }
@@ -98,7 +104,7 @@ impl AppState {
                 .drag_state
                 .as_ref()
                 .is_some_and(|drag| drag.hwnd == hwnd && drag.is_tiled)
-            || self.scratchpad.map(|pad| pad.window_id) == Some(hwnd)
+            || is_stashed_scratchpad(self.scratchpad, hwnd)
     }
 
     fn stamp_managed_identity(&mut self, hwnd: u64) -> Result<u64, String> {

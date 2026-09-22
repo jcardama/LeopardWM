@@ -718,3 +718,65 @@ fn rapid_recycles_are_not_transient_suppressed_by_the_departed_lifetime() {
     assert_ne!(third_token, second_token);
     assert_ne!(third_token, first_token);
 }
+
+#[test]
+fn shown_scratchpad_hidden_then_created_readmits() {
+    let mut state = state();
+    let old_token = admit(&mut state, 10);
+    stash_admitted_scratchpad(&mut state, 10);
+    state.scratchpad_toggle();
+    let shown = state.scratchpad.expect("shown scratchpad stays designated");
+    assert!(shown.shown);
+    assert_eq!(shown.window_id, 10);
+    assert!(state.focused_workspace().unwrap().is_floating(10));
+    // Long-lived, so Hidden does not suppress the same HWND's Created.
+    backdate_admission(&mut state, 10);
+
+    state.handle_window_event(WindowEvent::Hidden(10));
+
+    assert_eq!(membership_count(&state, 10), 0);
+    assert!(!state.managed_lifetime_tokens.contains_key(&10));
+    assert_eq!(state.scratchpad.map(|pad| pad.window_id), Some(10));
+    assert!(state.scratchpad.is_some_and(|pad| pad.shown));
+
+    assert_eq!(
+        state.try_admit_window(10, AdmissionKind::Automatic),
+        AdmitOutcome::Admitted
+    );
+    assert_eq!(membership_count(&state, 10), 1);
+    assert_eq!(state.find_window_workspace(10), Some((1, 0)));
+    assert_ne!(recorded_token(&state, 10), old_token);
+    assert_eq!(state.scratchpad.map(|pad| pad.window_id), Some(10));
+    assert!(state.scratchpad.is_some_and(|pad| pad.shown));
+}
+
+#[test]
+fn stashed_scratchpad_cloak_hidden_then_recycled_create_admits_replacement() {
+    let mut state = state();
+    let old_token = admit(&mut state, 10);
+    stash_admitted_scratchpad(&mut state, 10);
+
+    state.handle_window_event(WindowEvent::Hidden(10));
+
+    assert!(state.recently_hidden_hwnds.contains_key(&10));
+    assert_eq!(state.scratchpad.map(|pad| pad.window_id), Some(10));
+    assert_eq!(state.managed_lifetime_tokens.get(&10), Some(&old_token));
+    assert_eq!(membership_count(&state, 10), 0);
+    simulate_missing_managed_token(&mut state, 10);
+
+    assert_eq!(
+        state.try_admit_window(10, AdmissionKind::Automatic),
+        AdmitOutcome::Admitted
+    );
+    assert!(state.scratchpad.is_none());
+    assert!(!state.recently_hidden_hwnds.contains_key(&10));
+    assert_eq!(membership_count(&state, 10), 1);
+    let new_token = recorded_token(&state, 10);
+    assert_ne!(new_token, old_token);
+
+    state.handle_window_event(WindowEvent::Destroyed(10));
+
+    assert_eq!(membership_count(&state, 10), 1);
+    assert_eq!(state.managed_lifetime_tokens.get(&10), Some(&new_token));
+    assert!(state.scratchpad.is_none());
+}

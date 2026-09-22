@@ -605,7 +605,7 @@ impl AppState {
                     .drag_state
                     .as_ref()
                     .is_some_and(|drag| drag.is_tiled && drag.hwnd == *hwnd)
-                || self.scratchpad.map(|pad| pad.window_id) == Some(*hwnd)
+                || crate::managed_lifetime::is_stashed_scratchpad(self.scratchpad, *hwnd)
         });
     }
 
