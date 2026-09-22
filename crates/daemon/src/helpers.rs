@@ -22,6 +22,16 @@ pub(crate) enum StalePruneLayout {
     Failed(anyhow::Error),
 }
 
+/// Set only for a prune reached from `Focused`. Refresh and direct test prunes
+/// pass `None` and keep execution-time foreground sampling.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct FocusedPruneContext {
+    /// `previous_focused_hwnd` captured before stale cleanup.
+    pub(crate) tracked: Option<u64>,
+    /// WinEvent time of the Focused event that reached this prune.
+    pub(crate) event_time_ms: u32,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TaskbarButtonAction {
     Show,
@@ -360,13 +370,28 @@ impl AppState {
     /// Some apps (e.g., Electron close-to-tray) hide windows without firing
     /// Win32 destroy/hide events. This reconciliation pass detects and removes them.
     ///
-    /// Skipped in test builds because test window IDs are not real Win32 handles.
-    /// Distinguishes no apply, successful apply, and failed apply so callers
-    /// do not treat a logged apply error as success.
+    /// Standalone entry used by Refresh. Focus handling passes attribution
+    /// context through `prune_stale_windows_with`. Test builds do not query
+    /// Win32: an empty injected stale list is a no-op, and a non-empty list is
+    /// consumed only when this prune runs. Distinguishes no apply, successful
+    /// apply, and failed apply so callers do not treat a logged apply error
+    /// as success.
     pub(crate) fn prune_stale_windows(&mut self) -> StalePruneLayout {
+        self.prune_stale_windows_with(None)
+    }
+
+    pub(crate) fn prune_stale_windows_with(
+        &mut self,
+        focused_prune: Option<FocusedPruneContext>,
+    ) -> StalePruneLayout {
         #[cfg(test)]
         {
-            StalePruneLayout::Unchanged
+            let stale = std::mem::take(&mut self.injected_stale_hwnds);
+            if stale.is_empty() {
+                StalePruneLayout::Unchanged
+            } else {
+                self.finish_stale_window_prune(&stale, focused_prune)
+            }
         }
 
         #[cfg(not(test))]
@@ -399,17 +424,30 @@ impl AppState {
                     }
                 }
             }
-            self.finish_stale_window_prune(&stale)
+            self.finish_stale_window_prune(&stale, focused_prune)
         }
     }
 
-    fn finish_stale_window_prune(&mut self, stale: &[u64]) -> StalePruneLayout {
+    fn finish_stale_window_prune(
+        &mut self,
+        stale: &[u64],
+        focused_prune: Option<FocusedPruneContext>,
+    ) -> StalePruneLayout {
         if stale.is_empty() {
             self.evict_unmanaged_window_metadata();
             return StalePruneLayout::Unchanged;
         }
 
         let selected_was_occupied = !self.selected_workspace_is_genuinely_empty();
+        let selected = (
+            self.focused_monitor,
+            self.active_workspace_idx(self.focused_monitor),
+        );
+        let stale_homes: Vec<(u64, Option<(MonitorId, usize)>)> = stale
+            .iter()
+            .copied()
+            .map(|wid| (wid, self.find_window_workspace(wid)))
+            .collect();
 
         let snapshot = self.snapshot_layout();
         let mut layout_changed = false;
@@ -442,15 +480,31 @@ impl AppState {
         };
         if selected_was_occupied && self.selected_workspace_is_genuinely_empty() {
             self.clear_logical_focus_for_empty_selection();
-            let replacement = self.departing_foreground_evidence().and_then(
-                |(foreground, valid)| match foreground {
-                    Some(id) if id != 0 && valid && !stale.contains(&id) => Some(id),
-                    _ => None,
-                },
-            );
+            let sample_replacement = match focused_prune {
+                None => true,
+                Some(focus) => focus.tracked.is_some_and(|tracked| {
+                    stale_homes
+                        .iter()
+                        .any(|&(wid, home)| wid == tracked && home == Some(selected))
+                }),
+            };
+            let replacement = if sample_replacement {
+                self.departing_foreground_evidence().and_then(
+                    |(foreground, valid)| match foreground {
+                        Some(id) if id != 0 && valid && !stale.contains(&id) => Some(id),
+                        _ => None,
+                    },
+                )
+            } else {
+                None
+            };
+            let armed_at = match focused_prune {
+                Some(focus) => focus.event_time_ms,
+                None => self.event_time_now_ms(),
+            };
             self.arm_pending_last_window_departure(
                 replacement,
-                self.event_time_now_ms(),
+                armed_at,
                 LastWindowDepartureOrigin::EventlessPrune,
             );
         } else if layout_changed || focus_changed {
@@ -544,7 +598,7 @@ impl AppState {
 
     #[cfg(test)]
     pub(crate) fn prune_stale_windows_for_test(&mut self, stale: &[u64]) -> StalePruneLayout {
-        self.finish_stale_window_prune(stale)
+        self.finish_stale_window_prune(stale, None)
     }
 
     /// Find which workspace contains a window.

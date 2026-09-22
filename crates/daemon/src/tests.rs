@@ -6392,6 +6392,206 @@ fn test_last_window_eventless_none_does_not_infer_replacement() {
     assert_eq!(state.pending_last_window_departure, None);
 }
 
+fn last_window_focus_prune_state() -> AppState {
+    let mut state = last_window_cross_workspace_state();
+    state.last_prune_at = None;
+    state.injected_event_time_ms = Some(5_000);
+    state.injected_stale_hwnds = vec![100];
+    state
+}
+
+#[test]
+fn test_last_window_focus_prune_close_to_tray_suppresses_sampled_activation() {
+    let mut state = last_window_focus_prune_state();
+    let mon = state.focused_monitor;
+    assert_eq!(state.previous_focused_hwnd, Some(100));
+
+    state.handle_window_event(WindowEvent::Focused(200, 1_000));
+
+    assert_eq!(state.active_workspace_idx(mon), 0);
+    assert_eq!(state.focused_monitor, mon);
+    assert_eq!(state.previous_focused_hwnd, None);
+    assert!(
+        !state.workspaces[&mon][0].contains_window(100),
+        "close-to-tray prune must remove the tracked window"
+    );
+    assert!(crate::event_handler::workspace_is_genuinely_empty(
+        &state.workspaces[&mon][0]
+    ));
+    let intent = state.pending_last_window_departure.unwrap();
+    assert_eq!(intent.replacement_hwnd, Some(200));
+    assert_eq!(intent.armed_at_event_time_ms, 1_000);
+    assert_eq!(intent.origin, LastWindowDepartureOrigin::EventlessPrune);
+    assert!(state.injected_stale_hwnds.is_empty());
+}
+
+#[test]
+fn test_last_window_focus_prune_background_disappearance_follows() {
+    for tracked in [None, Some(999)] {
+        let mut state = last_window_focus_prune_state();
+        let mon = state.focused_monitor;
+        state.previous_focused_hwnd = tracked;
+
+        state.handle_window_event(WindowEvent::Focused(200, 1_000));
+
+        assert!(
+            !state.workspaces[&mon][0].contains_window(100),
+            "background disappearance must still remove the stale window"
+        );
+        assert!(crate::event_handler::workspace_is_genuinely_empty(
+            &state.workspaces[&mon][0]
+        ));
+        assert_eq!(state.active_workspace_idx(mon), 1);
+        assert_eq!(state.focused_monitor, mon);
+        assert_eq!(state.previous_focused_hwnd, Some(200));
+        assert_eq!(state.pending_last_window_departure, None);
+        assert!(state.injected_stale_hwnds.is_empty());
+    }
+}
+
+#[test]
+fn test_last_window_throttled_unmanaged_focus_then_user_activation_follows() {
+    let mut state = last_window_cross_workspace_state();
+    let mon = state.focused_monitor;
+    state.injected_stale_hwnds = vec![100];
+    // Known to event validation, but not managed and not a console/tray restore,
+    // so focus clears tracking without consuming a throttled prune.
+    state
+        .injected_window_info
+        .insert(999, make_test_window_info(999));
+
+    state.handle_window_event(WindowEvent::Focused(999, 1_000));
+
+    assert_eq!(state.previous_focused_hwnd, None);
+    assert_eq!(state.injected_stale_hwnds, vec![100]);
+    assert!(state.workspaces[&mon][0].contains_window(100));
+    assert_eq!(state.active_workspace_idx(mon), 0);
+    assert_eq!(state.pending_last_window_departure, None);
+
+    state.last_prune_at = None;
+    state.injected_event_time_ms = Some(5_000);
+    state.handle_window_event(WindowEvent::Focused(200, 1_000));
+
+    assert!(
+        !state.workspaces[&mon][0].contains_window(100),
+        "the deferred prune must remove the vanished window"
+    );
+    assert!(crate::event_handler::workspace_is_genuinely_empty(
+        &state.workspaces[&mon][0]
+    ));
+    assert_eq!(state.active_workspace_idx(mon), 1);
+    assert_eq!(state.previous_focused_hwnd, Some(200));
+    assert_eq!(state.pending_last_window_departure, None);
+    assert!(state.injected_stale_hwnds.is_empty());
+}
+
+#[test]
+fn test_last_window_focus_prune_newer_than_trigger_follows_despite_handler_delay() {
+    let mut state = last_window_focus_prune_state();
+    let mon = state.focused_monitor;
+
+    state.handle_window_event(WindowEvent::Focused(200, 1_000));
+    assert_eq!(state.active_workspace_idx(mon), 0);
+    assert_eq!(state.previous_focused_hwnd, None);
+    let intent = state.pending_last_window_departure.unwrap();
+    assert_eq!(intent.replacement_hwnd, Some(200));
+    assert_eq!(intent.armed_at_event_time_ms, 1_000);
+    assert_ne!(intent.armed_at_event_time_ms, 5_000);
+
+    state.handle_window_event(WindowEvent::Focused(200, 1_000));
+    assert_eq!(state.active_workspace_idx(mon), 0);
+    assert_eq!(state.previous_focused_hwnd, None);
+    assert_eq!(
+        state
+            .pending_last_window_departure
+            .unwrap()
+            .armed_at_event_time_ms,
+        1_000
+    );
+
+    state.handle_window_event(WindowEvent::Focused(200, 1_001));
+    assert_eq!(state.active_workspace_idx(mon), 1);
+    assert_eq!(state.previous_focused_hwnd, Some(200));
+    assert_eq!(state.pending_last_window_departure, None);
+}
+
+#[test]
+fn test_last_window_focus_prune_other_monitor_tracked_stale_does_not_attribute() {
+    let mut state = AppState::new_with_config(test_config(), two_monitors());
+    state.reduce_motion = false;
+    state.last_prune_at = None;
+    state.injected_event_time_ms = Some(5_000);
+    for hwnd in [100, 200, 300] {
+        state
+            .injected_window_info
+            .insert(hwnd, make_test_window_info(hwnd));
+    }
+    state.handle_window_event(WindowEvent::Created(100));
+    let mon = state.focused_monitor;
+    state.ensure_workspace_exists(mon, 1);
+    state.workspaces.get_mut(&mon).unwrap()[1]
+        .insert_window(200, Some(800))
+        .unwrap();
+    state.workspaces.get_mut(&2).unwrap()[0]
+        .insert_window(300, Some(800))
+        .unwrap();
+    state.previous_focused_hwnd = Some(300);
+    state.injected_foreground_hwnd = Some(Some(200));
+    state.injected_stale_hwnds = vec![100, 300];
+
+    state.handle_window_event(WindowEvent::Focused(200, 1_000));
+
+    assert!(
+        !state.workspaces[&mon][0].contains_window(100),
+        "the selected workspace's own stale window must still be removed"
+    );
+    assert!(crate::event_handler::workspace_is_genuinely_empty(
+        &state.workspaces[&mon][0]
+    ));
+    assert!(!state.workspaces[&2][0].contains_window(300));
+    assert_eq!(state.focused_monitor, mon);
+    assert_eq!(state.active_workspace_idx(mon), 1);
+    assert_eq!(state.previous_focused_hwnd, Some(200));
+    assert_eq!(state.pending_last_window_departure, None);
+    assert!(state.injected_stale_hwnds.is_empty());
+}
+
+#[test]
+fn test_last_window_focus_prune_occupied_workspace_does_not_arm() {
+    let mut state = last_window_focus_prune_state();
+    let mon = state.focused_monitor;
+    state
+        .injected_window_info
+        .insert(150, make_test_window_info(150));
+    state.workspaces.get_mut(&mon).unwrap()[0]
+        .insert_window(150, Some(800))
+        .unwrap();
+
+    state.handle_window_event(WindowEvent::Focused(200, 1_000));
+
+    assert!(!state.workspaces[&mon][0].contains_window(100));
+    assert!(state.workspaces[&mon][0].contains_window(150));
+    assert_eq!(state.pending_last_window_departure, None);
+    assert_eq!(state.active_workspace_idx(mon), 1);
+    assert_eq!(state.previous_focused_hwnd, Some(200));
+    assert!(state.injected_stale_hwnds.is_empty());
+}
+
+#[test]
+fn test_last_window_same_hwnd_focus_does_not_consume_stale_injection() {
+    let mut state = last_window_focus_prune_state();
+    let mon = state.focused_monitor;
+    state.previous_focused_hwnd = Some(200);
+
+    state.handle_window_event(WindowEvent::Focused(200, 1_000));
+
+    assert_eq!(state.injected_stale_hwnds, vec![100]);
+    assert!(state.workspaces[&mon][0].contains_window(100));
+    assert_eq!(state.active_workspace_idx(mon), 0);
+    assert_eq!(state.previous_focused_hwnd, Some(200));
+    assert_eq!(state.pending_last_window_departure, None);
+}
+
 #[test]
 fn test_workspace_is_genuinely_empty_ignores_minimized_only_vacancy() {
     use crate::event_handler::workspace_is_genuinely_empty;

@@ -8,6 +8,8 @@ All notable changes to LeopardWM will be documented in this file.
 
 - **Closing the last window keeps the empty workspace when the replacement HWND is not yet sampled.**
   If Destroyed or Hidden empties the selected workspace while the departing window is still the foreground, the first no-later managed activation on another workspace of that monitor is bound as the close-time replacement and does not switch workspaces. A later tick, a different window after that bind, an explicit workspace switch, and eventless pruning are unchanged.
+- **A deliberate activation after an app silently disappears is no longer swallowed.**
+  When focus handling discovers that the last window on the selected workspace vanished without an event, the activation is treated as automatic only if that vanished window was the tracked focus; activations strictly newer than the triggering event still follow. Close-to-tray autoactivation keeps the empty workspace.
 
 ## 0.2.10
 

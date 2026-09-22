@@ -727,6 +727,10 @@ pub(crate) struct AppState {
     /// Test-only GetTickCount stand-in for last-window departure arming.
     #[cfg(test)]
     pub(crate) injected_event_time_ms: Option<u32>,
+    /// Stale HWNDs consumed by the next prune that actually runs. Empty is a
+    /// no-op; a throttled or same-HWND focus leaves the list pending.
+    #[cfg(test)]
+    pub(crate) injected_stale_hwnds: Vec<u64>,
     /// Optional test-only behavior override for placement application.
     #[cfg(test)]
     pub(crate) injected_apply_placements_behavior: Option<TestApplyPlacementsBehavior>,
@@ -825,17 +829,20 @@ pub(crate) enum LastWindowDepartureOrigin {
 /// Evidence that the focused monitor's selected workspace became empty
 /// because its last tiled and floating window departed.
 ///
-/// An exact replacement HWND sampled at handler execution is treated as
-/// attributable auto-activation while this guard is fresh. A strictly newer
-/// activation (a different HWND, or the same HWND with a later WinEvent time)
-/// wins. `armed_at_event_time_ms` is handler execution time in GetTickCount's
-/// wrapping domain, not a true departure timestamp: a user activation that
-/// occurred before the handler ran may compare as no-later and stay
-/// suppressed. If the departing window still appears live or stale-window
-/// pruning is throttled, follow-focus cannot attribute the sequence.
-/// Eventless disappearance can arm this guard while handling the first
-/// cross-workspace Focused event, so that activation may be consumed and
-/// need to be repeated.
+/// An exact replacement HWND is attributable auto-activation while this guard
+/// is fresh. A strictly newer activation (a different HWND, or the same HWND
+/// with a later WinEvent time) wins. Direct Destroyed/Hidden and standalone
+/// pruning stamp `armed_at_event_time_ms` with handler execution time, so an
+/// activation that occurred before the handler ran may compare as no-later and
+/// stay suppressed. If the departing window still appears live or pruning is
+/// throttled, follow-focus cannot attribute the sequence.
+///
+/// A prune reached from `Focused(X, t)` stamps `t`. It samples a replacement
+/// only when the tracked focus HWND was stale and was removed from the
+/// workspace that became empty. Otherwise it arms `EventlessPrune` with
+/// replacement `None`, which does not infer, so that activation follows. If
+/// tracking still names the vanished window and no focus event intervened, a
+/// delayed deliberate activation is indistinguishable from auto-activation.
 ///
 /// DirectDestroyedOrHidden with no sampled replacement binds the first
 /// no-later managed Focused on another workspace of the same monitor, then
@@ -1127,6 +1134,8 @@ impl AppState {
             departing_foreground_evidence_reads: 0,
             #[cfg(test)]
             injected_event_time_ms: None,
+            #[cfg(test)]
+            injected_stale_hwnds: Vec::new(),
             #[cfg(test)]
             injected_apply_placements_behavior: None,
             #[cfg(test)]

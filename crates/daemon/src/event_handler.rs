@@ -1760,7 +1760,11 @@ impl AppState {
         {
             self.last_prune_at = Some(now);
             let pre_count = self.all_managed_window_ids().len();
-            let prune = self.prune_stale_windows();
+            let tracked = self.previous_focused_hwnd;
+            let prune = self.prune_stale_windows_with(Some(crate::helpers::FocusedPruneContext {
+                tracked,
+                event_time_ms,
+            }));
             let pruned = pre_count - self.all_managed_window_ids().len();
             match prune {
                 crate::helpers::StalePruneLayout::Applied => {}
