@@ -433,7 +433,7 @@ impl AppState {
             .is_none_or(|control| control.wait_for_barrier(std::time::Duration::from_millis(1)))
     }
 
-    fn remove_managed_membership(&mut self, hwnd: u64) -> bool {
+    pub(crate) fn remove_managed_membership(&mut self, hwnd: u64) -> bool {
         let Some((monitor_id, ws_idx)) = self.find_window_workspace(hwnd) else {
             return false;
         };
@@ -454,9 +454,10 @@ impl AppState {
         was_tiled
     }
 
-    fn forget_managed_metadata(&mut self, hwnd: u64) {
+    pub(crate) fn forget_managed_metadata(&mut self, hwnd: u64) {
         self.snap_disabled_hwnds.remove(&hwnd);
         self.window_managed_at.remove(&hwnd);
+        self.managed_lifetime_tokens.remove(&hwnd);
         self.window_last_maximized_at.remove(&hwnd);
         self.application_fullscreen.remove(&hwnd);
         self.last_placed_layout_rects.remove(&hwnd);
@@ -508,7 +509,7 @@ impl AppState {
         self.remove_temporary_ignore_if_token(hwnd, token);
     }
 
-    fn forget_recycled_temporary_ignore_caches(&mut self, hwnd: u64) {
+    pub(crate) fn forget_recycled_temporary_ignore_caches(&mut self, hwnd: u64) {
         self.overview_icon_cache.remove(&hwnd);
         self.hidden_column_widths.remove(&hwnd);
         self.move_origins.remove(&hwnd);

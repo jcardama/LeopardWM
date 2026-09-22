@@ -174,7 +174,9 @@ impl AppState {
 
             // Skip windows already managed on any workspace (including inactive ones)
             // to prevent duplicates during config reload re-enumeration.
+            // Persisted restores are already members here and have no record yet.
             if self.find_window_workspace(win_info.hwnd).is_some() {
+                self.record_managed_lifetime_if_unrecorded(win_info.hwnd);
                 continue;
             }
 
@@ -240,6 +242,7 @@ impl AppState {
                             Ok(()) => {
                                 self.window_managed_at
                                     .insert(win_info.hwnd, std::time::Instant::now());
+                                self.record_managed_lifetime(win_info.hwnd);
                                 info!(
                                     "Added floating window: {} ({}) to monitor {} - {}x{}",
                                     win_info.title,
@@ -260,6 +263,7 @@ impl AppState {
                             Ok(()) => {
                                 self.window_managed_at
                                     .insert(win_info.hwnd, std::time::Instant::now());
+                                self.record_managed_lifetime(win_info.hwnd);
                                 self.disable_snap_for_window(win_info.hwnd);
                                 info!(
                                     "Added tiled window: {} ({}) to monitor {} - {}x{}",

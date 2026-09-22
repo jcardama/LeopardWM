@@ -87,7 +87,8 @@ pub use visibility::{
     uncloak_all_visible_windows,
 };
 pub use window_identity::{
-    clear_window_lifetime_token, read_window_lifetime_token, stamp_window_lifetime_token,
+    clear_window_lifetime_token, read_managed_lifetime_token, read_window_lifetime_token,
+    stamp_managed_lifetime_token, stamp_window_lifetime_token,
 };
 pub use window_query::{
     cursor_is_over_window, get_cursor_pos, get_window_chrome_rect, get_window_corner_radius,

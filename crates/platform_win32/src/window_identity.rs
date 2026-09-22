@@ -1,9 +1,13 @@
-//! HWND lifetime identity via a daemon-owned window property.
+//! HWND lifetime identity via daemon-owned window properties.
 //!
 //! Windows removes window properties when the HWND is destroyed, so a stored
 //! token can distinguish a live stamped lifetime from a recycled handle that
 //! reused the same numeric HWND (even with the same PID and class) before a
 //! delayed Destroyed event is processed.
+//!
+//! Ignore and managed lifetimes use separate properties and never read or
+//! write each other. Managed tokens are not cleared on shutdown: they are
+//! session-only and are consulted only when this session recorded one.
 
 use crate::types::Win32Error;
 use crate::window_id_to_hwnd;
@@ -16,7 +20,8 @@ use windows::Win32::Foundation::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{GetPropW, IsWindow, SetPropW};
 
-const TOKEN_PROPERTY: windows::core::PCWSTR = w!("LeopardWMIgnoreToken");
+const IGNORE_TOKEN_PROPERTY: windows::core::PCWSTR = w!("LeopardWMIgnoreToken");
+const MANAGED_TOKEN_PROPERTY: windows::core::PCWSTR = w!("LeopardWMManagedToken");
 
 static NEXT_TOKEN: AtomicU64 = AtomicU64::new(1);
 
@@ -103,20 +108,21 @@ fn remove_lifetime_token_prop(hwnd: HWND) -> (HANDLE, u32) {
     unsafe {
         let previous_error = GetLastError();
         SetLastError(WIN32_ERROR(0));
-        let handle = RemovePropW(hwnd, TOKEN_PROPERTY);
+        let handle = RemovePropW(hwnd, IGNORE_TOKEN_PROPERTY);
         let last_error = GetLastError().0;
         SetLastError(previous_error);
         (handle, last_error)
     }
 }
 
-/// Stamp a unique lifetime token on `window_id`. The OS clears the property
-/// when that window is destroyed.
-pub fn stamp_window_lifetime_token(window_id: WindowId) -> Result<u64, Win32Error> {
+fn stamp_lifetime_token(
+    window_id: WindowId,
+    property: windows::core::PCWSTR,
+) -> Result<u64, Win32Error> {
     let hwnd = require_live_hwnd(window_id)?;
     let token = mint_token();
     unsafe {
-        SetPropW(hwnd, TOKEN_PROPERTY, Some(handle_from_token(token))).map_err(|error| {
+        SetPropW(hwnd, property, Some(handle_from_token(token))).map_err(|error| {
             Win32Error::SetPositionFailed(format!(
                 "SetPropW failed for window {window_id}: {error}"
             ))
@@ -125,15 +131,42 @@ pub fn stamp_window_lifetime_token(window_id: WindowId) -> Result<u64, Win32Erro
     Ok(token)
 }
 
-/// Read the lifetime token currently stored on `window_id`, if any.
+fn read_lifetime_token(
+    window_id: WindowId,
+    property: windows::core::PCWSTR,
+) -> Result<Option<u64>, Win32Error> {
+    let hwnd = require_live_hwnd(window_id)?;
+    let handle = unsafe { GetPropW(hwnd, property) };
+    Ok(token_from_handle(handle))
+}
+
+/// Stamp a unique ignore-lifetime token on `window_id`. The OS clears the
+/// property when that window is destroyed.
+pub fn stamp_window_lifetime_token(window_id: WindowId) -> Result<u64, Win32Error> {
+    stamp_lifetime_token(window_id, IGNORE_TOKEN_PROPERTY)
+}
+
+/// Read the ignore-lifetime token currently stored on `window_id`, if any.
 ///
 /// Liveness is `IsWindow`. `GetPropW` returns the stored handle, or NULL if
 /// the property is absent. That is not a documented `GetLastError` or UIPI
 /// failure path; missing is `Ok(None)`.
 pub fn read_window_lifetime_token(window_id: WindowId) -> Result<Option<u64>, Win32Error> {
-    let hwnd = require_live_hwnd(window_id)?;
-    let handle = unsafe { GetPropW(hwnd, TOKEN_PROPERTY) };
-    Ok(token_from_handle(handle))
+    read_lifetime_token(window_id, IGNORE_TOKEN_PROPERTY)
+}
+
+/// Stamp a unique managed-lifetime token on `window_id`. Does not touch the
+/// ignore property. The OS clears the property when that window is destroyed.
+pub fn stamp_managed_lifetime_token(window_id: WindowId) -> Result<u64, Win32Error> {
+    stamp_lifetime_token(window_id, MANAGED_TOKEN_PROPERTY)
+}
+
+/// Read the managed-lifetime token currently stored on `window_id`, if any.
+///
+/// Same liveness and missing-property rules as [`read_window_lifetime_token`].
+/// Does not read the ignore property.
+pub fn read_managed_lifetime_token(window_id: WindowId) -> Result<Option<u64>, Win32Error> {
+    read_lifetime_token(window_id, MANAGED_TOKEN_PROPERTY)
 }
 
 /// Remove the lifetime token from `window_id`. Missing properties succeed.
@@ -187,6 +220,30 @@ mod tests {
     #[test]
     fn clear_rejects_invalid_hwnd_without_foreign_window() {
         let error = clear_window_lifetime_token(u64::MAX).unwrap_err();
+        assert!(matches!(error, Win32Error::WindowNotFound(id) if id == u64::MAX));
+    }
+
+    #[test]
+    fn managed_stamp_rejects_null_hwnd_without_foreign_window() {
+        let error = stamp_managed_lifetime_token(0).unwrap_err();
+        assert!(matches!(error, Win32Error::WindowNotFound(0)));
+    }
+
+    #[test]
+    fn managed_read_rejects_null_hwnd_without_foreign_window() {
+        let error = read_managed_lifetime_token(0).unwrap_err();
+        assert!(matches!(error, Win32Error::WindowNotFound(0)));
+    }
+
+    #[test]
+    fn managed_stamp_rejects_invalid_hwnd_without_foreign_window() {
+        let error = stamp_managed_lifetime_token(u64::MAX).unwrap_err();
+        assert!(matches!(error, Win32Error::WindowNotFound(id) if id == u64::MAX));
+    }
+
+    #[test]
+    fn managed_read_rejects_invalid_hwnd_without_foreign_window() {
+        let error = read_managed_lifetime_token(u64::MAX).unwrap_err();
         assert!(matches!(error, Win32Error::WindowNotFound(id) if id == u64::MAX));
     }
 

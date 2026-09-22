@@ -6,6 +6,8 @@ All notable changes to LeopardWM will be documented in this file.
 
 ### Fixes
 
+- **A recycled window handle no longer inherits a closed window's place in the layout.**
+  Delayed close events for a reused handle retire the old window's membership and cached state; a replacement already admitted keeps its own. Temporarily ignored windows are unchanged.
 - **Closing the last window keeps the empty workspace when the replacement HWND is not yet sampled.**
   If Destroyed or Hidden empties the selected workspace while the departing window is still the foreground, the first no-later managed activation on another workspace of that monitor is bound as the close-time replacement and does not switch workspaces. A later tick, a different window after that bind, an explicit workspace switch, and eventless pruning are unchanged.
 - **A deliberate activation after an app silently disappears is no longer swallowed.**

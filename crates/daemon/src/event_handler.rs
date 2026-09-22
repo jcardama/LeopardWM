@@ -604,8 +604,7 @@ impl AppState {
             return AdmitOutcome::GatedIgnored;
         }
 
-        if self.find_window_workspace(hwnd).is_some() {
-            debug!("Window {} already managed, ignoring create event", hwnd);
+        if self.duplicate_managed_admission(hwnd) {
             return AdmitOutcome::AlreadyManaged;
         }
 
@@ -893,6 +892,8 @@ impl AppState {
                     } else if kind == AdmissionKind::ExplicitReadmit {
                         workspace.ensure_focused_visible_animated(viewport_width);
                     }
+                    // After the workspace borrow's last use: stamping needs `&mut self`.
+                    self.record_managed_lifetime(hwnd);
                     if opens_in_background {
                         // Target workspace is not active: hide the window and
                         // remove its taskbar button until that workspace is
@@ -985,7 +986,7 @@ impl AppState {
         // is cloaked, so only a real destroy (not a spurious Hidden
         // from cloaking) should clear its designation.
         if !is_hidden_event {
-            if self.hwnd_lifetime_is_currently_live(hwnd) {
+            if self.destroyed_names_current_lifetime(hwnd) {
                 debug!(
                     "Ignoring stale Destroyed for live hwnd {} (current lifetime still present)",
                     hwnd
@@ -1096,6 +1097,7 @@ impl AppState {
         // Only mark as transient (suppress future re-creation) if the
         // window was managed briefly. Long-lived windows (e.g., close-to-tray
         // apps) should be allowed to re-tile when restored.
+        self.managed_lifetime_tokens.remove(&hwnd);
         if let Some(managed_at) = self.window_managed_at.remove(&hwnd) {
             if managed_at.elapsed() < TRANSIENT_WINDOW_THRESHOLD {
                 debug!(

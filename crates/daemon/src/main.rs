@@ -24,6 +24,9 @@ mod helpers;
 mod hotkey_resolution;
 mod ipc_server;
 mod layout_apply;
+mod managed_lifetime;
+#[cfg(test)]
+mod managed_lifetime_tests;
 mod monitors;
 mod notify;
 mod overview;

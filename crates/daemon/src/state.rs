@@ -576,6 +576,10 @@ pub(crate) struct AppState {
     /// Session-only temporary ignore set. Keyed by HWND with a lifetime token
     /// that distinguishes recycled handles. Never persisted.
     pub(crate) temporary_ignores: HashMap<u64, crate::temporary_ignore::TemporaryIgnoreEntry>,
+    /// Session-only managed-lifetime tokens, keyed by HWND. Stamped when a
+    /// window enters management so a recycled handle is not treated as the
+    /// lifetime that was admitted. Never persisted.
+    pub(crate) managed_lifetime_tokens: HashMap<u64, u64>,
     /// Column width a tiled window had when it was hidden, keyed by HWND, so a
     /// window that disappears and reappears (e.g. a third-party virtual-desktop
     /// tool hiding/showing windows on switch) re-tiles at its prior width
@@ -689,6 +693,8 @@ pub(crate) struct AppState {
     pub(crate) injected_next_foreground_hwnd: Option<Option<u64>>,
     #[cfg(test)]
     pub(crate) injected_lifetime_tokens: HashMap<u64, u64>,
+    #[cfg(test)]
+    pub(crate) injected_managed_tokens: HashMap<u64, u64>,
     #[cfg(test)]
     pub(crate) injected_live_hwnds: HashSet<u64>,
     #[cfg(test)]
@@ -1073,6 +1079,7 @@ impl AppState {
             pending_edit_config_pull: None,
             elevation_blocked: HashMap::new(),
             temporary_ignores: HashMap::new(),
+            managed_lifetime_tokens: HashMap::new(),
             hidden_column_widths: HashMap::new(),
             move_origins: HashMap::new(),
             stashed_monitor_layouts: HashMap::new(),
@@ -1104,6 +1111,8 @@ impl AppState {
             injected_next_foreground_hwnd: None,
             #[cfg(test)]
             injected_lifetime_tokens: HashMap::new(),
+            #[cfg(test)]
+            injected_managed_tokens: HashMap::new(),
             #[cfg(test)]
             injected_live_hwnds: HashSet::new(),
             #[cfg(test)]

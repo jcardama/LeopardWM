@@ -583,6 +583,7 @@ impl AppState {
         if self.window_managed_at.is_empty()
             && self.window_last_maximized_at.is_empty()
             && self.application_fullscreen.is_empty()
+            && self.managed_lifetime_tokens.is_empty()
         {
             return;
         }
@@ -597,6 +598,14 @@ impl AppState {
             .retain(|hwnd, _| managed.contains(hwnd));
         self.application_fullscreen
             .retain(|hwnd, _| managed.contains(hwnd));
+        // A tiled drag can leave its workspace while the HWND is still managed.
+        self.managed_lifetime_tokens.retain(|hwnd, _| {
+            managed.contains(hwnd)
+                || self
+                    .drag_state
+                    .as_ref()
+                    .is_some_and(|drag| drag.is_tiled && drag.hwnd == *hwnd)
+        });
     }
 
     fn cleanup_stale_managed_window(
@@ -610,6 +619,7 @@ impl AppState {
         {
             self.pending_workspace_switch_focus = None;
         }
+        self.managed_lifetime_tokens.remove(&wid);
         let cancel = self.cancel_matching_unfinished_move_size_ui(wid);
         self.release_departing_hwnd_ghost(wid);
         let mut layout_changed = cancel.needs_layout();
