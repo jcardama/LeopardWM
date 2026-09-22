@@ -1018,6 +1018,9 @@ impl AppState {
             // Forget an elevation-blocked window once it's truly gone, so a
             // recycled HWND for a normal window isn't wrongly skipped.
             self.elevation_blocked.remove(&hwnd);
+            // Hidden keeps a remembered width for a later show. Destroy must
+            // not, or the next occupant of this HWND inherits it.
+            self.hidden_column_widths.remove(&hwnd);
             // Drop any remembered move-back origin so a recycled HWND doesn't
             // inherit a stale column restore.
             self.move_origins.remove(&hwnd);

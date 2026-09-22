@@ -164,11 +164,35 @@ fn simulate_missing_managed_token(state: &mut AppState, hwnd: u64) {
     state.injected_live_hwnds.insert(hwnd);
 }
 
+fn focused_column_width(state: &AppState, hwnd: u64) -> i32 {
+    let workspace = state
+        .focused_workspace()
+        .unwrap_or_else(|| panic!("hwnd {hwnd} should be on the focused workspace"));
+    let (column, _) = workspace
+        .find_window_location(hwnd)
+        .unwrap_or_else(|| panic!("hwnd {hwnd} should occupy a column"));
+    workspace.columns()[column].width()
+}
+
+fn assert_replacement_uses_default_column_width(state: &AppState, hwnd: u64) {
+    let width = focused_column_width(state, hwnd);
+    let expected = state
+        .focused_workspace()
+        .unwrap_or_else(|| panic!("hwnd {hwnd} should be on the focused workspace"))
+        .default_column_width();
+    assert_ne!(
+        width, 400,
+        "hwnd {hwnd} inherited a destroyed window's width"
+    );
+    assert_eq!(width, expected);
+}
+
 #[test]
 fn recycled_managed_hwnd_destroyed_before_create_drops_old_lifetime() {
     let mut state = state();
     let old_token = admit(&mut state, 10);
     seed_recycled_lifetime_caches(&mut state, 10);
+    state.hidden_column_widths.insert(10, (Instant::now(), 400));
     backdate_admission(&mut state, 10);
     simulate_missing_managed_token(&mut state, 10);
 
@@ -185,6 +209,7 @@ fn recycled_managed_hwnd_destroyed_before_create_drops_old_lifetime() {
     let new_token = recorded_token(&state, 10);
     assert_ne!(new_token, old_token);
     assert_recycled_lifetime_caches_cleared(&state, 10);
+    assert_replacement_uses_default_column_width(&state, 10);
 }
 
 #[test]
@@ -208,6 +233,7 @@ fn recycled_managed_hwnd_created_before_destroy_keeps_replacement() {
     assert_eq!(state.find_window_workspace(10), Some((1, 0)));
     assert_recycled_lifetime_caches_cleared(&state, 10);
     assert!(!state.hidden_column_widths.contains_key(&10));
+    assert_replacement_uses_default_column_width(&state, 10);
     assert!(!state.elevation_blocked.contains_key(&10));
     let new_token = recorded_token(&state, 10);
     assert_ne!(new_token, old_token);
