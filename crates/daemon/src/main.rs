@@ -2411,6 +2411,42 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
     }
 }
 
+/// Silent close-to-tray disappearance fires no WinEvent. While tracking still
+/// names that window, the next Focused is indistinguishable from
+/// auto-activation, so this tick prunes a dead tracked focus on its own.
+fn spawn_focus_liveness_ticker(event_tx: &mpsc::Sender<DaemonEvent>) {
+    let tx = event_tx.clone();
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(Duration::from_millis(500));
+        ticker.tick().await;
+        loop {
+            ticker.tick().await;
+            if tx.send(DaemonEvent::FocusLivenessCheck).await.is_err() {
+                break;
+            }
+        }
+    });
+}
+
+/// Prune a tracked focus window that vanished without a WinEvent, and start
+/// the animation worker when that prune changes the layout.
+async fn handle_focus_liveness_check(ctx: &mut EventLoopCtx<'_>) {
+    let mut state = ctx.state.lock().await;
+    if !state.check_tracked_focus_liveness() {
+        return;
+    }
+    if state.overview_open {
+        state.refresh_overview_model();
+    }
+    if state.is_animating() && !*ctx.animation_active {
+        state.tick_animations(0);
+        if let Ok(true) = state.send_animation_frame(ctx.animation_worker) {
+            *ctx.animation_active = true;
+            *ctx.last_frame_instant = Some(std::time::Instant::now());
+        }
+    }
+}
+
 /// Refresh tab-strip overlays so background icon-only changes stay fresh.
 async fn handle_tab_strip_icon_poll(state: &Arc<Mutex<AppState>>) {
     // Single lock: check-and-refresh atomically so the state
@@ -3556,6 +3592,8 @@ async fn main() -> Result<()> {
         });
     }
 
+    spawn_focus_liveness_ticker(&event_tx);
+
     // Settings window forwarding channel + handle
     let (settings_sync_tx, settings_sync_rx) = std::sync::mpsc::channel();
     match spawn_forwarding_thread(
@@ -3677,6 +3715,9 @@ async fn main() -> Result<()> {
             }
             DaemonEvent::TabStripIconPoll => {
                 handle_tab_strip_icon_poll(&state).await;
+            }
+            DaemonEvent::FocusLivenessCheck => {
+                handle_focus_liveness_check(&mut ctx).await;
             }
             DaemonEvent::PersistStateNow => {
                 handle_persist_state_now(&state).await;

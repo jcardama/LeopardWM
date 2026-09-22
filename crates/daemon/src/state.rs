@@ -840,9 +840,11 @@ pub(crate) enum LastWindowDepartureOrigin {
 /// A prune reached from `Focused(X, t)` stamps `t`. It samples a replacement
 /// only when the tracked focus HWND was stale and was removed from the
 /// workspace that became empty. Otherwise it arms `EventlessPrune` with
-/// replacement `None`, which does not infer, so that activation follows. If
-/// tracking still names the vanished window and no focus event intervened, a
-/// delayed deliberate activation is indistinguishable from auto-activation.
+/// replacement `None`, which does not infer, so that activation follows. A
+/// tracked window that vanishes with no event is rechecked about every 500 ms
+/// and, if gone, cleared by standalone pruning at execution time. If it
+/// vanishes silently and a deliberate activation arrives before the next
+/// check, that activation can still be treated as auto-activation.
 ///
 /// DirectDestroyedOrHidden with no sampled replacement binds the first
 /// no-later managed Focused on another workspace of the same monitor, then

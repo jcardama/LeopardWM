@@ -370,14 +370,80 @@ impl AppState {
     /// Some apps (e.g., Electron close-to-tray) hide windows without firing
     /// Win32 destroy/hide events. This reconciliation pass detects and removes them.
     ///
-    /// Standalone entry used by Refresh. Focus handling passes attribution
-    /// context through `prune_stale_windows_with`. Test builds do not query
-    /// Win32: an empty injected stale list is a no-op, and a non-empty list is
-    /// consumed only when this prune runs. Distinguishes no apply, successful
-    /// apply, and failed apply so callers do not treat a logged apply error
-    /// as success.
+    /// Standalone entry used by Refresh and the tracked-focus liveness tick.
+    /// Focus handling passes attribution context through
+    /// `prune_stale_windows_with`. Test builds do not query Win32: an empty
+    /// injected stale list is a no-op, and a non-empty list is consumed only
+    /// when this prune runs. Distinguishes no apply, successful apply, and
+    /// failed apply so callers do not treat a logged apply error as success.
     pub(crate) fn prune_stale_windows(&mut self) -> StalePruneLayout {
         self.prune_stale_windows_with(None)
+    }
+
+    /// Drop a tracked focus window that vanished without Destroyed or Hidden.
+    ///
+    /// No WinEvent covers that disappearance. The daemon tick calls this so the
+    /// empty workspace is discovered on its own; a later activation is then
+    /// newer than the prune instead of being attributed as auto-activation.
+    /// Returns whether the prune changed managed state. An alive tracked window
+    /// costs one liveness check and does not scan the other windows.
+    pub(crate) fn check_tracked_focus_liveness(&mut self) -> bool {
+        if self.paused {
+            return false;
+        }
+        let Some(tracked) = self.previous_focused_hwnd else {
+            return false;
+        };
+        let Some((monitor_id, ws_idx)) = self.find_window_workspace(tracked) else {
+            return false;
+        };
+        let minimized = self
+            .workspaces
+            .get(&monitor_id)
+            .and_then(|workspaces| workspaces.get(ws_idx))
+            .is_some_and(|workspace| workspace.is_minimized(tracked));
+        if !self.tracked_focus_is_gone_or_unmanageable(tracked, minimized) {
+            return false;
+        }
+
+        let now = std::time::Instant::now();
+        let pre_count = self.all_managed_window_ids().len();
+        let prune = self.prune_stale_windows();
+        let pruned = pre_count - self.all_managed_window_ids().len();
+        let changed = pruned > 0 || !matches!(prune, StalePruneLayout::Unchanged);
+        match prune {
+            StalePruneLayout::Applied => {}
+            StalePruneLayout::Failed(e) => {
+                warn!(
+                    "Failed to apply layout after pruning {} stale window(s): {}",
+                    pruned, e
+                );
+            }
+            StalePruneLayout::Unchanged if pruned > 0 => {
+                if let Err(e) = self.apply_layout() {
+                    warn!(
+                        "Failed to apply layout after pruning {} stale window(s): {}",
+                        pruned, e
+                    );
+                }
+            }
+            StalePruneLayout::Unchanged => {}
+        }
+        self.last_prune_at = Some(now);
+        changed
+    }
+
+    #[cfg(test)]
+    fn tracked_focus_is_gone_or_unmanageable(&self, tracked: u64, minimized: bool) -> bool {
+        !minimized && self.injected_stale_hwnds.contains(&tracked)
+    }
+
+    #[cfg(not(test))]
+    fn tracked_focus_is_gone_or_unmanageable(&self, tracked: u64, minimized: bool) -> bool {
+        let alive_visible = is_window_alive_and_visible(tracked);
+        let gone = !alive_visible && !minimized;
+        let unmanageable = alive_visible && is_excluded_tool_window_hwnd(tracked);
+        gone || unmanageable
     }
 
     pub(crate) fn prune_stale_windows_with(
