@@ -598,3 +598,123 @@ fn created_before_destroy_cancels_tiled_drag_source_and_keeps_replacement() {
         Some("replacement")
     );
 }
+
+fn stash_admitted_scratchpad(state: &mut AppState, hwnd: u64) {
+    state.scratchpad_stash();
+    let pad = state
+        .scratchpad
+        .unwrap_or_else(|| panic!("hwnd {hwnd} should be the designated scratchpad"));
+    assert_eq!(pad.window_id, hwnd);
+    assert!(!pad.shown);
+    assert!(state.find_window_workspace(hwnd).is_none());
+    assert!(state.managed_lifetime_tokens.contains_key(&hwnd));
+}
+
+#[test]
+fn stashed_scratchpad_destroyed_before_create_admits_replacement() {
+    let mut state = state();
+    let old_token = admit(&mut state, 10);
+    stash_admitted_scratchpad(&mut state, 10);
+    backdate_admission(&mut state, 10);
+    simulate_missing_managed_token(&mut state, 10);
+
+    state.handle_window_event(WindowEvent::Destroyed(10));
+
+    assert!(state.scratchpad.is_none());
+    assert_eq!(membership_count(&state, 10), 0);
+    assert!(!state.managed_lifetime_tokens.contains_key(&10));
+
+    state.handle_window_event(WindowEvent::Created(10));
+
+    assert!(state.scratchpad.is_none());
+    assert_eq!(membership_count(&state, 10), 1);
+    assert_eq!(state.find_window_workspace(10), Some((1, 0)));
+    assert_ne!(recorded_token(&state, 10), old_token);
+}
+
+#[test]
+fn stashed_scratchpad_created_before_destroy_keeps_replacement() {
+    let mut state = state();
+    let old_token = admit(&mut state, 10);
+    stash_admitted_scratchpad(&mut state, 10);
+    simulate_missing_managed_token(&mut state, 10);
+
+    state.handle_window_event(WindowEvent::Created(10));
+
+    assert!(state.scratchpad.is_none());
+    assert_eq!(membership_count(&state, 10), 1);
+    assert!(!state.recently_hidden_hwnds.contains_key(&10));
+    let new_token = recorded_token(&state, 10);
+    assert_ne!(new_token, old_token);
+    state
+        .tab_title_overrides
+        .insert(10, "replacement".to_string());
+
+    state.handle_window_event(WindowEvent::Destroyed(10));
+
+    assert_eq!(membership_count(&state, 10), 1);
+    assert_eq!(state.managed_lifetime_tokens.get(&10), Some(&new_token));
+    assert_eq!(
+        state.tab_title_overrides.get(&10).map(String::as_str),
+        Some("replacement")
+    );
+}
+
+#[test]
+fn stashed_scratchpad_matching_token_survives_destroy_and_cloak_hidden() {
+    let mut state = state();
+    let token = admit(&mut state, 10);
+    stash_admitted_scratchpad(&mut state, 10);
+    state.prune_stale_windows_for_test(&[]);
+    assert_eq!(state.managed_lifetime_tokens.get(&10), Some(&token));
+    state.injected_live_hwnds.insert(10);
+    backdate_admission(&mut state, 10);
+
+    state.handle_window_event(WindowEvent::Destroyed(10));
+
+    assert_eq!(state.scratchpad.map(|pad| pad.window_id), Some(10));
+    assert_eq!(state.managed_lifetime_tokens.get(&10), Some(&token));
+    assert_eq!(membership_count(&state, 10), 0);
+
+    state.handle_window_event(WindowEvent::Hidden(10));
+
+    assert_eq!(state.scratchpad.map(|pad| pad.window_id), Some(10));
+    assert_eq!(state.managed_lifetime_tokens.get(&10), Some(&token));
+    assert!(!state.recently_hidden_hwnds.contains_key(&10));
+    assert_eq!(membership_count(&state, 10), 0);
+
+    assert_eq!(
+        state.try_admit_window(10, AdmissionKind::Automatic),
+        AdmitOutcome::AlreadyManaged
+    );
+    assert_eq!(membership_count(&state, 10), 0);
+    assert_eq!(state.scratchpad.map(|pad| pad.window_id), Some(10));
+    assert_eq!(state.managed_lifetime_tokens.get(&10), Some(&token));
+}
+
+#[test]
+fn rapid_recycles_are_not_transient_suppressed_by_the_departed_lifetime() {
+    let mut state = state();
+    let first_token = admit(&mut state, 10);
+    simulate_missing_managed_token(&mut state, 10);
+
+    assert_eq!(
+        state.try_admit_window(10, AdmissionKind::Automatic),
+        AdmitOutcome::Admitted
+    );
+    assert!(!state.recently_hidden_hwnds.contains_key(&10));
+    let second_token = recorded_token(&state, 10);
+    assert_ne!(second_token, first_token);
+
+    simulate_missing_managed_token(&mut state, 10);
+
+    assert_eq!(
+        state.try_admit_window(10, AdmissionKind::Automatic),
+        AdmitOutcome::Admitted
+    );
+    assert!(!state.recently_hidden_hwnds.contains_key(&10));
+    assert_eq!(membership_count(&state, 10), 1);
+    let third_token = recorded_token(&state, 10);
+    assert_ne!(third_token, second_token);
+    assert_ne!(third_token, first_token);
+}

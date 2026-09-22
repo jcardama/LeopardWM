@@ -892,7 +892,6 @@ impl AppState {
                     } else if kind == AdmissionKind::ExplicitReadmit {
                         workspace.ensure_focused_visible_animated(viewport_width);
                     }
-                    // After the workspace borrow's last use: stamping needs `&mut self`.
                     self.record_managed_lifetime(hwnd);
                     if opens_in_background {
                         // Target workspace is not active: hide the window and
@@ -1109,7 +1108,13 @@ impl AppState {
         // Only mark as transient (suppress future re-creation) if the
         // window was managed briefly. Long-lived windows (e.g., close-to-tray
         // apps) should be allowed to re-tile when restored.
-        self.managed_lifetime_tokens.remove(&hwnd);
+        // Cloaking a designated scratchpad can emit Hidden while it is still
+        // the same window. A real Destroyed still drops the record.
+        let designated_scratchpad_hidden =
+            is_hidden_event && self.scratchpad.map(|pad| pad.window_id) == Some(hwnd);
+        if !designated_scratchpad_hidden {
+            self.managed_lifetime_tokens.remove(&hwnd);
+        }
         if let Some(managed_at) = self.window_managed_at.remove(&hwnd) {
             if managed_at.elapsed() < TRANSIENT_WINDOW_THRESHOLD {
                 debug!(

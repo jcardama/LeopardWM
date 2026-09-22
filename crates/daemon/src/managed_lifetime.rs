@@ -72,9 +72,10 @@ impl AppState {
 
     /// `true` when admission must stop because this HWND is still the recorded window.
     ///
-    /// A replaced member or tiled drag source gets the full Destroyed departure
-    /// first, including layout and focus, so a later admission failure does not
-    /// leave the old lifetime half-removed. Admission then continues.
+    /// A replaced member, tiled drag source, or designated scratchpad gets the
+    /// full Destroyed departure first, including layout and focus, so a later
+    /// admission failure does not leave the old lifetime half-removed. Admission
+    /// then continues.
     pub(crate) fn duplicate_managed_admission(&mut self, hwnd: u64) -> bool {
         if !self.is_managed_member(hwnd) {
             return false;
@@ -85,6 +86,9 @@ impl AppState {
         }
         debug!("Departing recycled managed hwnd {hwnd} so the replacement can be admitted");
         self.depart_destroyed_or_hidden_window(hwnd, false);
+        // This Created already passed transient suppression. A short-lived old
+        // lifetime must not leave a suppression entry for the replacement.
+        self.recently_hidden_hwnds.remove(&hwnd);
         false
     }
 
@@ -94,6 +98,7 @@ impl AppState {
                 .drag_state
                 .as_ref()
                 .is_some_and(|drag| drag.hwnd == hwnd && drag.is_tiled)
+            || self.scratchpad.map(|pad| pad.window_id) == Some(hwnd)
     }
 
     fn stamp_managed_identity(&mut self, hwnd: u64) -> Result<u64, String> {

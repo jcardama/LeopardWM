@@ -598,13 +598,14 @@ impl AppState {
             .retain(|hwnd, _| managed.contains(hwnd));
         self.application_fullscreen
             .retain(|hwnd, _| managed.contains(hwnd));
-        // A tiled drag can leave its workspace while the HWND is still managed.
+        // A tiled drag or stashed scratchpad leaves its workspace while still managed.
         self.managed_lifetime_tokens.retain(|hwnd, _| {
             managed.contains(hwnd)
                 || self
                     .drag_state
                     .as_ref()
                     .is_some_and(|drag| drag.is_tiled && drag.hwnd == *hwnd)
+                || self.scratchpad.map(|pad| pad.window_id) == Some(*hwnd)
         });
     }
 
