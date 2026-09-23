@@ -3,10 +3,11 @@
 use crate::config;
 use crate::state::{
     AppState, ApplicationFullscreenState, DragHintAction, DragState, ElevationBlockedRecord,
-    LastWindowDepartureOrigin, PendingLastWindowDeparture, RecentlyHiddenEntry,
+    HiddenColumnWidth, LastWindowDepartureOrigin, PendingLastWindowDeparture, RecentlyHiddenEntry,
     EDIT_CONFIG_PULL_TTL, FALLBACK_VIEWPORT_HEIGHT, FALLBACK_VIEWPORT_WIDTH, RECENTLY_HIDDEN_TTL,
     TRANSIENT_WINDOW_THRESHOLD,
 };
+use crate::ui_sync::DepartureCause;
 use leopardwm_core_layout::{Rect, Workspace};
 #[cfg(not(test))]
 use leopardwm_platform_win32::enumerate_monitors;
@@ -427,11 +428,17 @@ impl AppState {
 
     /// Handle a window-created event: rules, monitor/workspace placement, insertion.
     /// Take the column width remembered for a hidden window that is now
-    /// reappearing, if it hasn't expired. Removing it keeps the map bounded.
+    /// reappearing, if it hasn't expired and still names this lifetime.
+    /// A recycled handle drops the entry. Removing it keeps the map bounded.
     pub(crate) fn take_remembered_column_width(&mut self, hwnd: u64) -> Option<i32> {
         self.hidden_column_widths
-            .retain(|_, (t, _)| t.elapsed() < RECENTLY_HIDDEN_TTL);
-        self.hidden_column_widths.remove(&hwnd).map(|(_, w)| w)
+            .retain(|_, entry| entry.hidden_at.elapsed() < RECENTLY_HIDDEN_TTL);
+        let entry = self.hidden_column_widths.remove(&hwnd)?;
+        if self.recently_hidden_names_current_lifetime(entry.managed_token, hwnd) {
+            Some(entry.width)
+        } else {
+            None
+        }
     }
 
     /// Update the session elevation-block record for `hwnd` given the live
@@ -1015,15 +1022,21 @@ impl AppState {
             self.on_temporary_ignore_destroyed(hwnd);
             return;
         }
-        self.depart_destroyed_or_hidden_window(hwnd, is_hidden_event);
+        self.depart_destroyed_or_hidden_window(hwnd, is_hidden_event, DepartureCause::Event);
     }
 
     /// Membership removal, cache scrub, layout, and focus departure.
     ///
     /// Created calls this when a managed lifetime was replaced, so the missing
     /// Destroyed runs before admission. The stale-lifetime guard stays on the
-    /// event entry and does not apply here.
-    pub(crate) fn depart_destroyed_or_hidden_window(&mut self, hwnd: u64, is_hidden_event: bool) {
+    /// event entry and does not apply here. A replaced lifetime must not treat
+    /// the HWND now in the foreground as the window that just left.
+    pub(crate) fn depart_destroyed_or_hidden_window(
+        &mut self,
+        hwnd: u64,
+        is_hidden_event: bool,
+        cause: DepartureCause,
+    ) {
         let event_name = if is_hidden_event {
             "hidden"
         } else {
@@ -1189,7 +1202,7 @@ impl AppState {
             let monitor = self.focused_monitor as i64;
             self.broadcast_focused_window_if_changed(monitor, None);
         }
-        let decision = self.departing_focus_decision_for(hwnd, was_tracked_focus);
+        let decision = self.departing_focus_decision_for(hwnd, was_tracked_focus, cause);
 
         let mut was_tiled = false;
         if let Some((monitor_id, ws_idx)) = self.find_window_workspace(hwnd) {
@@ -1229,12 +1242,18 @@ impl AppState {
             }
             if was_tiled {
                 if let Some(w) = hidden_width {
-                    self.hidden_column_widths
-                        .insert(hwnd, (std::time::Instant::now(), w));
+                    self.hidden_column_widths.insert(
+                        hwnd,
+                        HiddenColumnWidth {
+                            hidden_at: std::time::Instant::now(),
+                            width: w,
+                            managed_token: self.readable_managed_token(hwnd),
+                        },
+                    );
                 }
             }
             self.hidden_column_widths
-                .retain(|_, (t, _)| t.elapsed() < RECENTLY_HIDDEN_TTL);
+                .retain(|_, entry| entry.hidden_at.elapsed() < RECENTLY_HIDDEN_TTL);
             // Restore WS_MAXIMIZEBOX (no-op if not tracked)
             self.restore_snap_for_window(hwnd);
         } else if cancel.removed_from_source {
@@ -1310,6 +1329,7 @@ impl AppState {
         &mut self,
         hwnd: u64,
         was_tracked_focus: bool,
+        cause: DepartureCause,
     ) -> crate::ui_sync::DepartingFocusDecision {
         let Some((foreground, foreground_is_valid)) = self.departing_foreground_evidence() else {
             return crate::ui_sync::DepartingFocusDecision {
@@ -1318,6 +1338,16 @@ impl AppState {
                 replacement_hwnd: None,
             };
         };
+        // Foreground evidence naming this HWND is the live replacement, not the
+        // window that just left. Do not recover onto another managed window,
+        // and do not bind the handle as a last-window replacement.
+        if cause == DepartureCause::ReplacedLifetime && foreground == Some(hwnd) {
+            return crate::ui_sync::DepartingFocusDecision {
+                recover: false,
+                suppress_landing_resync: true,
+                replacement_hwnd: None,
+            };
+        }
         crate::ui_sync::departing_focus_decision(
             was_tracked_focus,
             hwnd,

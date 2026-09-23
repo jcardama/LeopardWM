@@ -85,7 +85,11 @@ impl AppState {
             return false;
         }
         debug!("Departing recycled managed hwnd {hwnd} so the replacement can be admitted");
-        self.depart_destroyed_or_hidden_window(hwnd, false);
+        self.depart_destroyed_or_hidden_window(
+            hwnd,
+            false,
+            crate::ui_sync::DepartureCause::ReplacedLifetime,
+        );
         // Drop the entry this departure, or an earlier cloak Hidden, recorded
         // so it cannot reject the replacement. Created checks suppression after
         // this helper; enumeration does not.

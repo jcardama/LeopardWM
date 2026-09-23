@@ -161,6 +161,17 @@ pub(crate) struct RecentlyHiddenEntry {
     pub(crate) hidden_at: std::time::Instant,
     pub(crate) managed_token: Option<u64>,
 }
+
+/// Column width remembered at Hidden, with the managed token read then.
+///
+/// `None` cannot tell a recycled handle from the hidden window, matching
+/// [`RecentlyHiddenEntry`].
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct HiddenColumnWidth {
+    pub(crate) hidden_at: std::time::Instant,
+    pub(crate) width: i32,
+    pub(crate) managed_token: Option<u64>,
+}
 /// After "Edit Config" is clicked, how long to watch for the editor window (a
 /// single-instance editor like VS Code may raise an existing window on another
 /// workspace) so it can be pulled to the active workspace. Generous because a
@@ -595,8 +606,9 @@ pub(crate) struct AppState {
     /// Column width a tiled window had when it was hidden, keyed by HWND, so a
     /// window that disappears and reappears (e.g. a third-party virtual-desktop
     /// tool hiding/showing windows on switch) re-tiles at its prior width
-    /// instead of resetting to default. Entries expire after RECENTLY_HIDDEN_TTL.
-    pub(crate) hidden_column_widths: HashMap<u64, (std::time::Instant, i32)>,
+    /// instead of resetting to default. The stored token keeps a recycled handle
+    /// from inheriting that width. Entries expire after RECENTLY_HIDDEN_TTL.
+    pub(crate) hidden_column_widths: HashMap<u64, HiddenColumnWidth>,
     /// Where each tiled window last sat before being moved to another workspace,
     /// keyed by HWND. Moving the window back to that workspace restores it to the
     /// original column instead of right of focus. Cleared when consumed or when

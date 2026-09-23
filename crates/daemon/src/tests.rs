@@ -12110,7 +12110,10 @@ fn test_hidden_window_restores_column_width_on_reshow() {
     state.handle_window_event(WindowEvent::Hidden(300));
     assert_eq!(state.focused_workspace().unwrap().window_count(), 0);
     assert_eq!(
-        state.hidden_column_widths.get(&300).map(|(_, w)| *w),
+        state
+            .hidden_column_widths
+            .get(&300)
+            .map(|entry| entry.width),
         Some(width_before),
         "hidden window's column width is remembered"
     );
@@ -12133,9 +12136,14 @@ fn test_hidden_window_restores_column_width_on_reshow() {
 #[test]
 fn test_take_remembered_column_width_consumes_entry() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
-    state
-        .hidden_column_widths
-        .insert(100, (std::time::Instant::now(), 555));
+    state.hidden_column_widths.insert(
+        100,
+        crate::state::HiddenColumnWidth {
+            hidden_at: std::time::Instant::now(),
+            width: 555,
+            managed_token: None,
+        },
+    );
     assert_eq!(state.take_remembered_column_width(100), Some(555));
     assert!(
         !state.hidden_column_widths.contains_key(&100),

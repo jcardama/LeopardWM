@@ -11,6 +11,14 @@ pub(crate) struct DepartingFocusDecision {
     pub replacement_hwnd: Option<u64>,
 }
 
+/// Why a window is leaving management. A replaced lifetime is not an OS
+/// Destroyed or Hidden: the HWND in the foreground is already the new window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DepartureCause {
+    Event,
+    ReplacedLifetime,
+}
+
 pub(crate) fn departing_focus_decision(
     was_tracked_focus: bool,
     departing_hwnd: u64,

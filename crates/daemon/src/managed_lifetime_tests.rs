@@ -5,7 +5,7 @@ use crate::state::{
 };
 use crate::temporary_ignore::IdentityReadError;
 use leopardwm_core_layout::Rect;
-use leopardwm_ipc::{IpcCommand, IpcResponse};
+use leopardwm_ipc::{IpcCommand, IpcEvent, IpcResponse};
 use leopardwm_platform_win32::{ManageBlock, MonitorInfo, WindowEvent, WindowInfo};
 use std::time::{Duration, Instant};
 
@@ -192,7 +192,14 @@ fn recycled_managed_hwnd_destroyed_before_create_drops_old_lifetime() {
     let mut state = state();
     let old_token = admit(&mut state, 10);
     seed_recycled_lifetime_caches(&mut state, 10);
-    state.hidden_column_widths.insert(10, (Instant::now(), 400));
+    state.hidden_column_widths.insert(
+        10,
+        crate::state::HiddenColumnWidth {
+            hidden_at: Instant::now(),
+            width: 400,
+            managed_token: None,
+        },
+    );
     backdate_admission(&mut state, 10);
     simulate_missing_managed_token(&mut state, 10);
 
@@ -217,7 +224,14 @@ fn recycled_managed_hwnd_created_before_destroy_keeps_replacement() {
     let mut state = state();
     let old_token = admit(&mut state, 10);
     seed_recycled_lifetime_caches(&mut state, 10);
-    state.hidden_column_widths.insert(10, (Instant::now(), 400));
+    state.hidden_column_widths.insert(
+        10,
+        crate::state::HiddenColumnWidth {
+            hidden_at: Instant::now(),
+            width: 400,
+            managed_token: None,
+        },
+    );
     state.elevation_blocked.insert(
         10,
         crate::state::ElevationBlockedRecord {
@@ -788,7 +802,14 @@ fn enumerate_after_recycle_retires_old_membership_then_admits_once() {
     let kept_token = admit(&mut state, 20);
     state.injected_live_hwnds.insert(20);
     seed_recycled_lifetime_caches(&mut state, 10);
-    state.hidden_column_widths.insert(10, (Instant::now(), 400));
+    state.hidden_column_widths.insert(
+        10,
+        crate::state::HiddenColumnWidth {
+            hidden_at: Instant::now(),
+            width: 400,
+            managed_token: None,
+        },
+    );
     simulate_missing_managed_token(&mut state, 10);
     state.injected_enumerated_windows = Some(vec![
         info(10, "Managed", "ManagedClass", 2010),
@@ -912,4 +933,148 @@ fn reapply_ignore_drops_managed_lifetime_record() {
     assert!(!state.managed_lifetime_tokens.contains_key(&10));
     assert_eq!(membership_count(&state, 20), 1);
     assert_eq!(state.managed_lifetime_tokens.get(&20), Some(&kept));
+}
+
+fn assert_no_focus_event_for(rx: &mut tokio::sync::broadcast::Receiver<IpcEvent>, other: u64) {
+    while let Ok(event) = rx.try_recv() {
+        if let IpcEvent::FocusedWindowChanged { hwnd, .. } = event {
+            assert_ne!(hwnd, Some(other), "foreground must not move to {other}");
+        }
+    }
+}
+
+fn track_foreground(state: &mut AppState, hwnd: u64) {
+    state.previous_focused_hwnd = Some(hwnd);
+    set_foreground(state, hwnd);
+}
+
+#[test]
+fn created_recycle_does_not_transfer_foreground_to_other_window() {
+    let mut state = state();
+    admit(&mut state, 10);
+    admit(&mut state, 20);
+    track_foreground(&mut state, 10);
+    simulate_missing_managed_token(&mut state, 10);
+    let mut rx = state.event_broadcaster.subscribe();
+
+    assert_eq!(
+        state.try_admit_window(10, AdmissionKind::Automatic),
+        AdmitOutcome::Admitted
+    );
+
+    assert_eq!(membership_count(&state, 10), 1);
+    assert_eq!(membership_count(&state, 20), 1);
+    assert_ne!(state.previous_focused_hwnd, Some(20));
+    assert!(state.pending_last_window_departure.is_none());
+    assert_no_focus_event_for(&mut rx, 20);
+}
+
+#[test]
+fn enumerate_recycle_does_not_transfer_foreground_to_other_window() {
+    let mut state = state();
+    admit(&mut state, 10);
+    admit(&mut state, 20);
+    track_foreground(&mut state, 10);
+    simulate_missing_managed_token(&mut state, 10);
+    state.injected_enumerated_windows = Some(vec![
+        info(10, "Managed", "ManagedClass", 2010),
+        info(20, "Managed", "ManagedClass", 2010),
+    ]);
+    let mut rx = state.event_broadcaster.subscribe();
+
+    let added = state.enumerate_and_add_windows().unwrap();
+
+    assert_eq!(added, 1);
+    assert_eq!(membership_count(&state, 10), 1);
+    assert_eq!(membership_count(&state, 20), 1);
+    assert_ne!(state.previous_focused_hwnd, Some(20));
+    assert!(state.pending_last_window_departure.is_none());
+    assert_no_focus_event_for(&mut rx, 20);
+}
+
+#[test]
+fn hidden_then_recycled_missing_token_uses_default_column_width() {
+    let mut state = state();
+    let token = admit(&mut state, 10);
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .resize_focused_column(400);
+    state.injected_live_hwnds.insert(10);
+    backdate_admission(&mut state, 10);
+
+    state.handle_window_event(WindowEvent::Hidden(10));
+
+    assert_eq!(
+        state
+            .hidden_column_widths
+            .get(&10)
+            .map(|entry| entry.managed_token),
+        Some(Some(token))
+    );
+    simulate_missing_managed_token(&mut state, 10);
+
+    assert_eq!(
+        state.try_admit_window(10, AdmissionKind::Automatic),
+        AdmitOutcome::Admitted
+    );
+    assert_replacement_uses_default_column_width(&state, 10);
+    assert!(!state.hidden_column_widths.contains_key(&10));
+}
+
+#[test]
+fn hidden_then_recycled_different_token_uses_default_column_width() {
+    let mut state = state();
+    let token = admit(&mut state, 10);
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .resize_focused_column(400);
+    state.injected_live_hwnds.insert(10);
+    backdate_admission(&mut state, 10);
+    state.handle_window_event(WindowEvent::Hidden(10));
+    state
+        .injected_managed_tokens
+        .insert(10, token.wrapping_add(1));
+
+    assert_eq!(
+        state.try_admit_window(10, AdmissionKind::Automatic),
+        AdmitOutcome::Admitted
+    );
+    assert_replacement_uses_default_column_width(&state, 10);
+    assert!(!state.hidden_column_widths.contains_key(&10));
+}
+
+#[test]
+fn same_lifetime_hidden_restores_column_width() {
+    let mut state = state();
+    let token = admit(&mut state, 10);
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .resize_focused_column(400);
+    let width = focused_column_width(&state, 10);
+    assert_ne!(
+        width,
+        state.focused_workspace().unwrap().default_column_width()
+    );
+    state.injected_live_hwnds.insert(10);
+    backdate_admission(&mut state, 10);
+
+    state.handle_window_event(WindowEvent::Hidden(10));
+
+    assert_eq!(
+        state
+            .hidden_column_widths
+            .get(&10)
+            .map(|entry| (entry.width, entry.managed_token)),
+        Some((width, Some(token)))
+    );
+
+    assert_eq!(
+        state.try_admit_window(10, AdmissionKind::Automatic),
+        AdmitOutcome::Admitted
+    );
+    assert_eq!(focused_column_width(&state, 10), width);
+    assert!(!state.hidden_column_widths.contains_key(&10));
 }
