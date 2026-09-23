@@ -307,8 +307,8 @@ fn released_state_admits_created_windows_once_and_refreshes_while_paused() {
         },
     );
 
-    state.handle_window_event(WindowEvent::Created(40));
-    state.handle_window_event(WindowEvent::Created(40));
+    state.handle_window_event(WindowEvent::Created(40, 0));
+    state.handle_window_event(WindowEvent::Created(40, 0));
     assert!(state.paused);
     assert!(state.all_managed_window_ids().contains(&40));
     assert_eq!(

@@ -18,13 +18,26 @@ pub(crate) fn is_stashed_scratchpad(scratchpad: Option<ScratchpadState>, hwnd: u
 
 impl AppState {
     /// Stamp and record a managed lifetime. Stamp failure logs and leaves no record.
-    pub(crate) fn record_managed_lifetime(&mut self, hwnd: u64) {
+    ///
+    /// `admitted_at_event_ms` is the triggering Create/Show time. `None` (enumeration,
+    /// readmit, or any other eventless admission) records no Hidden-guard time and
+    /// drops one left by an older lifetime.
+    pub(crate) fn record_managed_lifetime(&mut self, hwnd: u64, admitted_at_event_ms: Option<u32>) {
         if hwnd == DRAG_PLACEHOLDER_HWND {
             return;
         }
         match self.stamp_managed_identity(hwnd) {
             Ok(token) => {
                 self.managed_lifetime_tokens.insert(hwnd, token);
+                match admitted_at_event_ms {
+                    Some(event_time_ms) => {
+                        self.managed_lifetime_admitted_at_event_ms
+                            .insert(hwnd, event_time_ms);
+                    }
+                    None => {
+                        self.managed_lifetime_admitted_at_event_ms.remove(&hwnd);
+                    }
+                }
             }
             Err(error) => {
                 debug!("Failed to stamp managed lifetime for {hwnd}: {error}");
@@ -38,7 +51,7 @@ impl AppState {
         if self.managed_lifetime_tokens.contains_key(&hwnd) {
             return;
         }
-        self.record_managed_lifetime(hwnd);
+        self.record_managed_lifetime(hwnd, None);
     }
 
     /// The recorded managed lifetime is not the one on the HWND now.
@@ -114,12 +127,40 @@ impl AppState {
         true
     }
 
-    /// Managed stamp to store on a Hidden suppression entry.
+    /// Live managed stamp, if the property can be read.
     ///
-    /// Only `Ok(Some)` distinguishes a later lifetime. A missing property, a
-    /// dead window, or a transient read cannot, so those stay legacy `None`.
+    /// `None` is a missing property or a failed read, not a recorded lifetime.
+    /// Callers that store a Hidden entry fall back to the departing recorded
+    /// token. Legacy `None` is only when this session never recorded one.
     pub(crate) fn readable_managed_token(&self, hwnd: u64) -> Option<u64> {
         self.read_managed_identity(hwnd).ok().flatten()
+    }
+
+    /// Token to store on a Hidden entry: the live property, else the record just departed.
+    pub(crate) fn managed_token_for_hidden_record(
+        &self,
+        hwnd: u64,
+        recorded: Option<u64>,
+    ) -> Option<u64> {
+        self.readable_managed_token(hwnd).or(recorded)
+    }
+
+    /// Drop the recorded lifetime and its admission time together.
+    pub(crate) fn take_managed_lifetime_token(&mut self, hwnd: u64) -> Option<u64> {
+        self.managed_lifetime_admitted_at_event_ms.remove(&hwnd);
+        self.managed_lifetime_tokens.remove(&hwnd)
+    }
+
+    /// Create/Show time of the lifetime that currently owns `hwnd`, if one was recorded.
+    ///
+    /// No recorded time means the stale-Hidden guard does not apply.
+    pub(crate) fn admitted_event_time_ms_if_current_member(&self, hwnd: u64) -> Option<u32> {
+        if !self.is_managed_member(hwnd) {
+            return None;
+        }
+        self.managed_lifetime_admitted_at_event_ms
+            .get(&hwnd)
+            .copied()
     }
 
     /// Whether a suppression entry still names `hwnd`'s current lifetime.

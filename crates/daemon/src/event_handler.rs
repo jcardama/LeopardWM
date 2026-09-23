@@ -351,9 +351,9 @@ impl AppState {
     pub(crate) fn handle_window_event(&mut self, event: WindowEvent) {
         // Get window_id from event for validation (DisplayChange and MouseEnterWindow have no validation needed)
         let window_id = match &event {
-            WindowEvent::Created(id)
+            WindowEvent::Created(id, _)
             | WindowEvent::Destroyed(id)
-            | WindowEvent::Hidden(id)
+            | WindowEvent::Hidden(id, _)
             | WindowEvent::Focused(id, _)
             | WindowEvent::Minimized(id)
             | WindowEvent::Restored(id)
@@ -373,7 +373,7 @@ impl AppState {
         //   - Windows we already know about (managed or injected in tests)
         //   - DisplayChange / MouseEnterWindow (no window to validate)
         if let Some(wid) = window_id {
-            if !matches!(event, WindowEvent::Destroyed(_) | WindowEvent::Hidden(_))
+            if !matches!(event, WindowEvent::Destroyed(_) | WindowEvent::Hidden(_, _))
                 && !self.is_known_window(wid)
                 && !leopardwm_platform_win32::is_valid_window(wid)
             {
@@ -383,9 +383,13 @@ impl AppState {
         }
 
         match event {
-            WindowEvent::Created(hwnd) => self.on_window_created(hwnd),
-            WindowEvent::Destroyed(hwnd) => self.on_window_destroyed_or_hidden(hwnd, false),
-            WindowEvent::Hidden(hwnd) => self.on_window_destroyed_or_hidden(hwnd, true),
+            WindowEvent::Created(hwnd, event_time_ms) => {
+                self.on_window_created(hwnd, event_time_ms)
+            }
+            WindowEvent::Destroyed(hwnd) => self.on_window_destroyed_or_hidden(hwnd, None),
+            WindowEvent::Hidden(hwnd, event_time_ms) => {
+                self.on_window_destroyed_or_hidden(hwnd, Some(event_time_ms))
+            }
             WindowEvent::Focused(hwnd, event_time_ms) => {
                 self.on_window_focused(hwnd, event_time_ms)
             }
@@ -567,15 +571,25 @@ impl AppState {
         }
     }
 
-    fn on_window_created(&mut self, hwnd: u64) {
+    fn on_window_created(&mut self, hwnd: u64, event_time_ms: u32) {
+        let _ = self.try_admit_window_at(hwnd, AdmissionKind::Automatic, Some(event_time_ms));
+    }
+
+    /// Focus recovery and an unmanaged restore are not Create/Show events.
+    /// They still admit, but a later Hidden must depart: no guard time is recorded.
+    fn admit_created_without_event_time(&mut self, hwnd: u64) {
+        if !self.is_known_window(hwnd) && !leopardwm_platform_win32::is_valid_window(hwnd) {
+            debug!("Ignoring event for invalid window {}", hwnd);
+            return;
+        }
         let _ = self.try_admit_window(hwnd, AdmissionKind::Automatic);
     }
 
     /// Popup-shaped recreation of the same hidden lifetime, still inside the TTL.
     ///
     /// A different managed token drops the entry and is not suppressed: the HWND
-    /// was recycled. A stored token of `None` cannot tell lifetimes apart and
-    /// keeps the old suppression. A window that is not popup-shaped also drops
+    /// was recycled. A stored `None` means no lifetime was recorded and keeps
+    /// the old suppression. A window that is not popup-shaped also drops
     /// the entry, as before.
     fn suppressed_transient_popup(&mut self, hwnd: u64) -> bool {
         let Some(entry) = self.recently_hidden_hwnds.get(&hwnd).copied() else {
@@ -626,11 +640,20 @@ impl AppState {
     }
 
     pub(crate) fn try_admit_window(&mut self, hwnd: u64, kind: AdmissionKind) -> AdmitOutcome {
+        self.try_admit_window_at(hwnd, kind, None)
+    }
+
+    fn try_admit_window_at(
+        &mut self,
+        hwnd: u64,
+        kind: AdmissionKind,
+        admitted_at_event_ms: Option<u32>,
+    ) -> AdmitOutcome {
         // Depart before the body. Its own duplicate check then sees a non-member
         // and does not sample foreground a second time. Reconcile only a real
         // replaced departure: an ordinary Created must not touch tracked focus.
         let replaced = self.depart_replaced_managed_lifetime(hwnd);
-        let outcome = self.admit_window_after_replaced_departure(hwnd, kind);
+        let outcome = self.admit_window_after_replaced_departure(hwnd, kind, admitted_at_event_ms);
         if replaced {
             self.reconcile_replaced_lifetime_admission(hwnd);
         }
@@ -641,6 +664,7 @@ impl AppState {
         &mut self,
         hwnd: u64,
         kind: AdmissionKind,
+        admitted_at_event_ms: Option<u32>,
     ) -> AdmitOutcome {
         // Recycle departs before suppression and the ignore gate. A cloak Hidden
         // can mark this HWND transient, and that entry must not reject the replacement.
@@ -947,11 +971,12 @@ impl AppState {
                     } else if kind == AdmissionKind::ExplicitReadmit {
                         workspace.ensure_focused_visible_animated(viewport_width);
                     }
-                    self.record_managed_lifetime(hwnd);
+                    self.record_managed_lifetime(hwnd, admitted_at_event_ms);
                     if opens_in_background {
                         // Target workspace is not active: hide the window and
                         // remove its taskbar button until that workspace is
                         // switched to.
+                        #[cfg(not(test))]
                         let _ = leopardwm_platform_win32::move_window_offscreen(hwnd);
                         leopardwm_platform_win32::taskbar::taskbar_hide(hwnd);
                     }
@@ -1029,7 +1054,10 @@ impl AppState {
     }
 
     /// Shared handler for destroyed and hidden window events.
-    fn on_window_destroyed_or_hidden(&mut self, hwnd: u64, is_hidden_event: bool) {
+    ///
+    /// `hidden_at_ms` is the WinEvent time for Hidden and `None` for Destroyed.
+    fn on_window_destroyed_or_hidden(&mut self, hwnd: u64, hidden_at_ms: Option<u32>) {
+        let is_hidden_event = hidden_at_ms.is_some();
         if !is_hidden_event && self.destroyed_names_current_lifetime(hwnd) {
             debug!(
                 "Ignoring stale Destroyed for live hwnd {} (current lifetime still present)",
@@ -1037,6 +1065,19 @@ impl AppState {
             );
             self.on_temporary_ignore_destroyed(hwnd);
             return;
+        }
+        // A Hidden strictly earlier than this member's Create/Show time names an
+        // older lifetime. Eventless admissions record no time, so Hidden departs.
+        if let Some(event_time_ms) = hidden_at_ms {
+            if let Some(admitted_at_ms) = self.admitted_event_time_ms_if_current_member(hwnd) {
+                if !event_time_is_no_later_than(admitted_at_ms, event_time_ms) {
+                    debug!(
+                        "Ignoring stale Hidden for hwnd {} (event {} before admission {})",
+                        hwnd, event_time_ms, admitted_at_ms
+                    );
+                    return;
+                }
+            }
         }
         self.depart_destroyed_or_hidden_window(hwnd, is_hidden_event, DepartureCause::Event);
     }
@@ -1175,9 +1216,11 @@ impl AppState {
         // a real Destroyed still drops the record.
         let stashed_scratchpad_hidden = is_hidden_event
             && crate::managed_lifetime::is_stashed_scratchpad(self.scratchpad, hwnd);
-        if !stashed_scratchpad_hidden {
-            self.managed_lifetime_tokens.remove(&hwnd);
-        }
+        let recorded_lifetime = if stashed_scratchpad_hidden {
+            self.managed_lifetime_tokens.get(&hwnd).copied()
+        } else {
+            self.take_managed_lifetime_token(hwnd)
+        };
         // Only a short-lived Hidden marks the HWND transient. A real Destroyed
         // ends that lifetime: it must not create an entry, and it drops one a
         // prior Hidden left behind so a recycled popup is not suppressed.
@@ -1194,7 +1237,8 @@ impl AppState {
                         hwnd,
                         RecentlyHiddenEntry {
                             hidden_at: std::time::Instant::now(),
-                            managed_token: self.readable_managed_token(hwnd),
+                            managed_token: self
+                                .managed_token_for_hidden_record(hwnd, recorded_lifetime),
                         },
                     );
                 } else {
@@ -1267,7 +1311,8 @@ impl AppState {
                         HiddenColumnWidth {
                             hidden_at: std::time::Instant::now(),
                             width: w,
-                            managed_token: self.readable_managed_token(hwnd),
+                            managed_token: self
+                                .managed_token_for_hidden_record(hwnd, recorded_lifetime),
                         },
                     );
                 }
@@ -1569,6 +1614,7 @@ impl AppState {
         if let Some(ref transition) = self.layout_transition {
             for wid in transition.exit_rects.keys() {
                 if !self.is_application_fullscreen(*wid) {
+                    #[cfg(not(test))]
                     let _ = leopardwm_platform_win32::move_window_offscreen(*wid);
                 }
             }
@@ -1666,6 +1712,7 @@ impl AppState {
         } else {
             for (wid, _) in &old_placements {
                 if !self.is_application_fullscreen(*wid) {
+                    #[cfg(not(test))]
                     let _ = leopardwm_platform_win32::move_window_offscreen(*wid);
                 }
             }
@@ -2077,7 +2124,7 @@ impl AppState {
                     // dispatch) so the Created handler doesn't
                     // re-suppress on this same recovery path.
                     self.recently_hidden_hwnds.remove(&hwnd);
-                    self.handle_window_event(WindowEvent::Created(hwnd));
+                    self.admit_created_without_event_time(hwnd);
                     // Update tiled focus to match OS — the user just
                     // focused this window. focus_window may fail for
                     // floating windows, which is fine.
@@ -2125,7 +2172,7 @@ impl AppState {
                             "Recovering console-host window with real title: {} ({}) - user focused it",
                             win_info.title, win_info.class_name
                         );
-                        self.handle_window_event(WindowEvent::Created(hwnd));
+                        self.admit_created_without_event_time(hwnd);
                         let recovery_monitor =
                             if let Some((mid, widx)) = self.find_window_workspace(hwnd) {
                                 if let Some(ws) =
@@ -2296,7 +2343,7 @@ impl AppState {
                 "Window {} restored (unmanaged) — re-dispatching as Created",
                 hwnd
             );
-            self.handle_window_event(WindowEvent::Created(hwnd));
+            self.admit_created_without_event_time(hwnd);
         }
     }
 
@@ -2662,6 +2709,7 @@ impl AppState {
                 }
             }
             ApplicationFullscreenExitRoute::InactivePark => {
+                #[cfg(not(test))]
                 let _ = leopardwm_platform_win32::move_window_offscreen(hwnd);
                 leopardwm_platform_win32::taskbar::taskbar_hide(hwnd);
             }

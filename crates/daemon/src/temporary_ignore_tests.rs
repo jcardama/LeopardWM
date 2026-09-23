@@ -296,10 +296,10 @@ fn ignored_window_stays_out_through_lifecycle_and_release() {
         Some((1010, "TiledClass"))
     );
 
-    state.handle_window_event(WindowEvent::Created(10));
-    state.handle_window_event(WindowEvent::Created(10));
+    state.handle_window_event(WindowEvent::Created(10, 0));
+    state.handle_window_event(WindowEvent::Created(10, 0));
     state.handle_window_event(WindowEvent::Focused(10, 0));
-    state.handle_window_event(WindowEvent::Hidden(10));
+    state.handle_window_event(WindowEvent::Hidden(10, 0));
     state.handle_window_event(WindowEvent::Minimized(10));
     assert!(state.find_window_workspace(10).is_none());
     assert!(state.temporary_ignores.contains_key(&10));
@@ -350,7 +350,7 @@ fn hwnd_reuse_and_delayed_destroy_preserve_new_lifetime() {
     let old_token = state.temporary_ignores.get(&10).unwrap().token;
 
     state.injected_lifetime_tokens.insert(10, old_token + 99);
-    state.handle_window_event(WindowEvent::Created(10));
+    state.handle_window_event(WindowEvent::Created(10, 0));
     assert!(state.find_window_workspace(10).is_some());
     assert!(!state.temporary_ignores.contains_key(&10));
 
@@ -379,7 +379,7 @@ fn stale_identity_is_pruned_and_failed_read_stays_closed() {
     ignore_foreground(&mut state, 10);
     state.injected_identity_read_error =
         Some(IdentityReadError::Transient("identity api failed".into()));
-    state.handle_window_event(WindowEvent::Created(10));
+    state.handle_window_event(WindowEvent::Created(10, 0));
     assert!(state.find_window_workspace(10).is_none());
     assert!(state.temporary_ignores.contains_key(&10));
 }
@@ -438,7 +438,7 @@ fn explicit_readmit_overrides_workspace_routing_without_focus_switch() {
         }],
     );
     inject(&mut state, 40, "Routed", "RoutedClass", 1040);
-    state.handle_window_event(WindowEvent::Created(40));
+    state.handle_window_event(WindowEvent::Created(40, 0));
     assert_eq!(state.find_window_workspace(40), Some((1, 4)));
     assert_eq!(state.active_workspace_idx(1), 0);
     let focused_monitor = state.focused_monitor;
@@ -460,7 +460,7 @@ fn explicit_readmit_overrides_workspace_routing_without_focus_switch() {
         state.focused_workspace().unwrap().focused_window(),
         Some(40)
     );
-    state.handle_window_event(WindowEvent::Created(40));
+    state.handle_window_event(WindowEvent::Created(40, 0));
     assert_eq!(
         state
             .all_managed_window_ids()
@@ -788,7 +788,7 @@ fn delayed_destroy_skips_cleanup_for_reused_managed_and_ignored_hwnd() {
     ignore_foreground(&mut state, 10);
     let old_token = state.temporary_ignores.get(&10).unwrap().token;
     state.injected_lifetime_tokens.insert(10, old_token + 99);
-    state.handle_window_event(WindowEvent::Created(10));
+    state.handle_window_event(WindowEvent::Created(10, 0));
     assert!(state.find_window_workspace(10).is_some());
     state.tab_title_overrides.insert(10, "replacement".into());
     state.handle_window_event(WindowEvent::Destroyed(10));
@@ -827,7 +827,7 @@ fn injected_live_unmarked_hwnd_skips_delayed_destroy_cleanup() {
     ignore_foreground(&mut state, 10);
     state.injected_lifetime_tokens.remove(&10);
     state.injected_live_hwnds.insert(10);
-    state.handle_window_event(WindowEvent::Created(10));
+    state.handle_window_event(WindowEvent::Created(10, 0));
     assert_eq!(state.find_window_workspace(10), Some((1, 0)));
     state.tab_title_overrides.insert(10, "replacement".into());
     state.handle_window_event(WindowEvent::Destroyed(10));
@@ -888,7 +888,7 @@ fn unmanage_clears_owned_tab_title_and_survives_hwnd_reuse() {
 
     let old_token = state.temporary_ignores.get(&10).unwrap().token;
     state.injected_lifetime_tokens.insert(10, old_token + 7);
-    state.handle_window_event(WindowEvent::Created(10));
+    state.handle_window_event(WindowEvent::Created(10, 0));
     assert!(state.find_window_workspace(10).is_some());
     assert!(!state.temporary_ignores.contains_key(&10));
 }
@@ -1224,7 +1224,7 @@ fn reused_ignored_hwnd_clears_old_caches_before_preserving_new_lifetime() {
     seed_recycled_lifetime_caches(&mut state, 10);
 
     state.injected_lifetime_tokens.insert(10, old_token + 1);
-    state.handle_window_event(WindowEvent::Created(10));
+    state.handle_window_event(WindowEvent::Created(10, 0));
 
     assert_eq!(state.find_window_workspace(10), Some((1, 0)));
     assert!(!state.temporary_ignores.contains_key(&10));
@@ -1248,7 +1248,7 @@ fn delayed_destroy_before_created_retires_old_ignored_lifetime_caches() {
 
     assert!(!state.temporary_ignores.contains_key(&10));
     assert_recycled_lifetime_caches_cleared(&state, 10);
-    state.handle_window_event(WindowEvent::Created(10));
+    state.handle_window_event(WindowEvent::Created(10, 0));
     assert_eq!(state.find_window_workspace(10), Some((1, 0)));
 
     state.overview_icon_cache.insert(10, Some(0x5678));
@@ -1271,7 +1271,7 @@ fn explicit_mismatch_retires_old_caches_before_automatic_admission() {
     assert!(message.contains("not the ignored lifetime"));
     assert!(!state.temporary_ignores.contains_key(&10));
     assert_recycled_lifetime_caches_cleared(&state, 10);
-    state.handle_window_event(WindowEvent::Created(10));
+    state.handle_window_event(WindowEvent::Created(10, 0));
     assert_eq!(state.find_window_workspace(10), Some((1, 0)));
 
     state.overview_icon_cache.insert(10, Some(0x5678));

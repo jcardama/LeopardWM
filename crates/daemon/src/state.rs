@@ -153,19 +153,19 @@ pub(crate) const RECENTLY_HIDDEN_TTL: Duration = Duration::from_secs(300);
 
 /// A short-lived Hidden of a managed window.
 ///
-/// `managed_token` is the managed property read at hide time. `None` means that
-/// stamp was not readable, so the entry cannot tell a recycled handle from the
-/// window that was hidden. A real Destroyed does not create an entry.
+/// `managed_token` is the live property, or the departing recorded token when
+/// that read cannot supply one. `None` means this session never recorded a
+/// token. A real Destroyed does not create an entry.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RecentlyHiddenEntry {
     pub(crate) hidden_at: std::time::Instant,
     pub(crate) managed_token: Option<u64>,
 }
 
-/// Column width remembered at Hidden, with the managed token read then.
-///
-/// `None` cannot tell a recycled handle from the hidden window, matching
+/// Column width remembered at Hidden, with the same token as
 /// [`RecentlyHiddenEntry`].
+///
+/// `None` means this session never recorded a token.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct HiddenColumnWidth {
     pub(crate) hidden_at: std::time::Instant,
@@ -603,6 +603,10 @@ pub(crate) struct AppState {
     /// window enters management so a recycled handle is not treated as the
     /// lifetime that was admitted. Never persisted.
     pub(crate) managed_lifetime_tokens: HashMap<u64, u64>,
+    /// Create/Show WinEvent time for the lifetime in `managed_lifetime_tokens`.
+    /// Absent for admissions that had no window event. A Hidden strictly earlier
+    /// than this time belongs to an older lifetime.
+    pub(crate) managed_lifetime_admitted_at_event_ms: HashMap<u64, u32>,
     /// Column width a tiled window had when it was hidden, keyed by HWND, so a
     /// window that disappears and reappears (e.g. a third-party virtual-desktop
     /// tool hiding/showing windows on switch) re-tiles at its prior width
@@ -757,6 +761,10 @@ pub(crate) struct AppState {
     /// Test-only GetTickCount stand-in for last-window departure arming.
     #[cfg(test)]
     pub(crate) injected_event_time_ms: Option<u32>,
+    /// Lets a test park real probe windows. Default tests leave this off so a
+    /// synthetic HWND never reaches `SetWindowPos`.
+    #[cfg(test)]
+    pub(crate) injected_native_offscreen_enabled: bool,
     /// Stale HWNDs consumed by the next prune that actually runs. Empty is a
     /// no-op; a throttled or same-HWND focus leaves the list pending.
     #[cfg(test)]
@@ -1104,6 +1112,7 @@ impl AppState {
             elevation_blocked: HashMap::new(),
             temporary_ignores: HashMap::new(),
             managed_lifetime_tokens: HashMap::new(),
+            managed_lifetime_admitted_at_event_ms: HashMap::new(),
             hidden_column_widths: HashMap::new(),
             move_origins: HashMap::new(),
             stashed_monitor_layouts: HashMap::new(),
@@ -1169,6 +1178,8 @@ impl AppState {
             departing_foreground_evidence_reads: 0,
             #[cfg(test)]
             injected_event_time_ms: None,
+            #[cfg(test)]
+            injected_native_offscreen_enabled: false,
             #[cfg(test)]
             injected_stale_hwnds: Vec::new(),
             #[cfg(test)]

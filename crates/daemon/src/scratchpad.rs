@@ -364,6 +364,7 @@ impl AppState {
         frame_insets: Option<FrameInsets>,
     ) {
         self.detach_window_from_workspace(wid);
+        #[cfg(not(test))]
         leopardwm_platform_win32::dwm_uncloak_window(wid);
         let reinserted = self
             .focused_workspace_mut()
@@ -399,8 +400,11 @@ impl AppState {
     /// re-homes any off-screen window.
     fn hide_window_to_holding(&mut self, wid: u64) {
         self.detach_window_from_workspace(wid);
-        leopardwm_platform_win32::dwm_cloak_window(wid);
-        let _ = leopardwm_platform_win32::move_window_offscreen(wid);
+        #[cfg(not(test))]
+        {
+            leopardwm_platform_win32::dwm_cloak_window(wid);
+            let _ = leopardwm_platform_win32::move_window_offscreen(wid);
+        }
     }
 
     /// Add `wid` as a floating window on the active workspace, uncloak it,
@@ -414,6 +418,7 @@ impl AppState {
             return false;
         }
         self.detach_window_from_workspace(wid);
+        #[cfg(not(test))]
         leopardwm_platform_win32::dwm_uncloak_window(wid);
         let floated = self
             .focused_workspace_mut()

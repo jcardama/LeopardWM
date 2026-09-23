@@ -12,7 +12,7 @@ use leopardwm_ipc::{
 };
 use leopardwm_platform_win32::{
     enumerate_windows, get_process_executable, monitor_above, monitor_below, monitor_to_left,
-    monitor_to_right, move_window_offscreen, ManageBlock, MonitorId, MonitorInfo,
+    monitor_to_right, ManageBlock, MonitorId, MonitorInfo,
 };
 use std::collections::HashMap;
 use tracing::{debug, info};
@@ -1168,6 +1168,7 @@ impl AppState {
         if let Some(ref transition) = self.layout_transition {
             for wid in transition.exit_rects.keys() {
                 if !self.is_application_fullscreen(*wid) {
+                    #[cfg(not(test))]
                     let _ = leopardwm_platform_win32::move_window_offscreen(*wid);
                 }
             }
@@ -1279,7 +1280,8 @@ impl AppState {
         } else {
             for (wid, _) in &old_placements {
                 if !self.is_application_fullscreen(*wid) {
-                    let _ = move_window_offscreen(*wid);
+                    #[cfg(not(test))]
+                    let _ = leopardwm_platform_win32::move_window_offscreen(*wid);
                 }
             }
         }
@@ -1558,7 +1560,8 @@ impl AppState {
             let _ = leopardwm_platform_win32::snapshot::snapshot_capture(focused_hwnd);
         }
         if !self.is_application_fullscreen(focused_hwnd) {
-            let _ = move_window_offscreen(focused_hwnd);
+            #[cfg(not(test))]
+            let _ = leopardwm_platform_win32::move_window_offscreen(focused_hwnd);
         }
 
         // Ensure the source workspace scrolls to show its new focused window

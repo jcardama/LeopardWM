@@ -114,7 +114,7 @@ impl AppState {
                         }
                         self.window_managed_at.remove(&wid);
                         self.window_last_maximized_at.remove(&wid);
-                        self.managed_lifetime_tokens.remove(&wid);
+                        self.take_managed_lifetime_token(wid);
                         info!("Rule change: unmanaged window {} (ignore)", wid);
                     }
                 }
@@ -255,7 +255,7 @@ impl AppState {
                             Ok(()) => {
                                 self.window_managed_at
                                     .insert(win_info.hwnd, std::time::Instant::now());
-                                self.record_managed_lifetime(win_info.hwnd);
+                                self.record_managed_lifetime(win_info.hwnd, None);
                                 info!(
                                     "Added floating window: {} ({}) to monitor {} - {}x{}",
                                     win_info.title,
@@ -276,7 +276,7 @@ impl AppState {
                             Ok(()) => {
                                 self.window_managed_at
                                     .insert(win_info.hwnd, std::time::Instant::now());
-                                self.record_managed_lifetime(win_info.hwnd);
+                                self.record_managed_lifetime(win_info.hwnd, None);
                                 self.disable_snap_for_window(win_info.hwnd);
                                 info!(
                                     "Added tiled window: {} ({}) to monitor {} - {}x{}",

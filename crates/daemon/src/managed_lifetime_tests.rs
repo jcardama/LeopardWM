@@ -209,7 +209,7 @@ fn recycled_managed_hwnd_destroyed_before_create_drops_old_lifetime() {
     assert!(!state.managed_lifetime_tokens.contains_key(&10));
     assert_recycled_lifetime_caches_cleared(&state, 10);
 
-    state.handle_window_event(WindowEvent::Created(10));
+    state.handle_window_event(WindowEvent::Created(10, 0));
 
     assert_eq!(state.find_window_workspace(10), Some((1, 0)));
     assert_eq!(membership_count(&state, 10), 1);
@@ -241,7 +241,7 @@ fn recycled_managed_hwnd_created_before_destroy_keeps_replacement() {
     );
     simulate_missing_managed_token(&mut state, 10);
 
-    state.handle_window_event(WindowEvent::Created(10));
+    state.handle_window_event(WindowEvent::Created(10, 0));
 
     assert_eq!(membership_count(&state, 10), 1);
     assert_eq!(state.find_window_workspace(10), Some((1, 0)));
@@ -299,7 +299,7 @@ fn different_stamped_managed_token_is_a_replacement() {
     created.injected_live_hwnds.insert(10);
     created.injected_managed_tokens.insert(10, stamped);
 
-    created.handle_window_event(WindowEvent::Created(10));
+    created.handle_window_event(WindowEvent::Created(10, 0));
 
     assert_eq!(membership_count(&created, 10), 1);
     assert_recycled_lifetime_caches_cleared(&created, 10);
@@ -370,7 +370,7 @@ fn non_replacement_reads_do_not_retire_on_create() {
     let mut gone = state();
     let token = admit(&mut gone, 10);
     gone.injected_identity_read_error = Some(IdentityReadError::Gone);
-    gone.handle_window_event(WindowEvent::Created(10));
+    gone.handle_window_event(WindowEvent::Created(10, 0));
     assert_eq!(gone.find_window_workspace(10), Some((1, 0)));
     assert_eq!(membership_count(&gone, 10), 1);
     assert_eq!(gone.managed_lifetime_tokens.get(&10), Some(&token));
@@ -379,7 +379,7 @@ fn non_replacement_reads_do_not_retire_on_create() {
     let token = admit(&mut transient, 10);
     transient.injected_identity_read_error =
         Some(IdentityReadError::Transient("identity api failed".into()));
-    transient.handle_window_event(WindowEvent::Created(10));
+    transient.handle_window_event(WindowEvent::Created(10, 0));
     assert_eq!(transient.find_window_workspace(10), Some((1, 0)));
     assert_eq!(membership_count(&transient, 10), 1);
     assert_eq!(transient.managed_lifetime_tokens.get(&10), Some(&token));
@@ -448,7 +448,7 @@ fn readmit_records_managed_lifetime_independent_of_ignore_token() {
     );
     assert_recycled_lifetime_caches_cleared(&state, 10);
 
-    state.handle_window_event(WindowEvent::Created(10));
+    state.handle_window_event(WindowEvent::Created(10, 0));
     assert_eq!(membership_count(&state, 10), 1);
     assert_ne!(recorded_token(&state, 10), token);
 }
@@ -476,7 +476,7 @@ fn unrecorded_live_member_keeps_legacy_destroy_skip() {
 #[test]
 fn managed_lifetime_record_skips_drag_placeholder() {
     let mut state = state();
-    state.record_managed_lifetime(DRAG_PLACEHOLDER_HWND);
+    state.record_managed_lifetime(DRAG_PLACEHOLDER_HWND, None);
     assert!(state.managed_lifetime_tokens.is_empty());
     assert!(state.injected_managed_tokens.is_empty());
 }
@@ -539,12 +539,12 @@ fn assert_failed_replacement_departed(state: &AppState) {
 #[test]
 fn created_before_destroy_failed_admission_matches_destroy_then_create() {
     let mut created_first = replaced_ignored_peer_state();
-    created_first.handle_window_event(WindowEvent::Created(10));
+    created_first.handle_window_event(WindowEvent::Created(10, 0));
     assert_failed_replacement_departed(&created_first);
 
     let mut destroyed_first = replaced_ignored_peer_state();
     destroyed_first.handle_window_event(WindowEvent::Destroyed(10));
-    destroyed_first.handle_window_event(WindowEvent::Created(10));
+    destroyed_first.handle_window_event(WindowEvent::Created(10, 0));
     assert_failed_replacement_departed(&destroyed_first);
 
     assert_eq!(
@@ -592,7 +592,7 @@ fn created_before_destroy_cancels_tiled_drag_source_and_keeps_replacement() {
     state.drag_state = Some(removed_tiled_drag(10));
     simulate_missing_managed_token(&mut state, 10);
 
-    state.handle_window_event(WindowEvent::Created(10));
+    state.handle_window_event(WindowEvent::Created(10, 0));
 
     assert!(state.drag_state.is_none());
     assert_eq!(membership_count(&state, 10), 1);
@@ -638,7 +638,7 @@ fn stashed_scratchpad_destroyed_before_create_admits_replacement() {
     assert_eq!(membership_count(&state, 10), 0);
     assert!(!state.managed_lifetime_tokens.contains_key(&10));
 
-    state.handle_window_event(WindowEvent::Created(10));
+    state.handle_window_event(WindowEvent::Created(10, 0));
 
     assert!(state.scratchpad.is_none());
     assert_eq!(membership_count(&state, 10), 1);
@@ -653,7 +653,7 @@ fn stashed_scratchpad_created_before_destroy_keeps_replacement() {
     stash_admitted_scratchpad(&mut state, 10);
     simulate_missing_managed_token(&mut state, 10);
 
-    state.handle_window_event(WindowEvent::Created(10));
+    state.handle_window_event(WindowEvent::Created(10, 0));
 
     assert!(state.scratchpad.is_none());
     assert_eq!(membership_count(&state, 10), 1);
@@ -690,7 +690,7 @@ fn stashed_scratchpad_matching_token_survives_destroy_and_cloak_hidden() {
     assert_eq!(state.managed_lifetime_tokens.get(&10), Some(&token));
     assert_eq!(membership_count(&state, 10), 0);
 
-    state.handle_window_event(WindowEvent::Hidden(10));
+    state.handle_window_event(WindowEvent::Hidden(10, 0));
 
     assert_eq!(state.scratchpad.map(|pad| pad.window_id), Some(10));
     assert_eq!(state.managed_lifetime_tokens.get(&10), Some(&token));
@@ -704,6 +704,117 @@ fn stashed_scratchpad_matching_token_survives_destroy_and_cloak_hidden() {
     assert_eq!(membership_count(&state, 10), 0);
     assert_eq!(state.scratchpad.map(|pad| pad.window_id), Some(10));
     assert_eq!(state.managed_lifetime_tokens.get(&10), Some(&token));
+}
+
+#[test]
+fn stale_hidden_from_previous_lifetime_keeps_invisible_replacement() {
+    let mut state = state();
+    // Later than both Create/Show times, so a processing-time guard would also
+    // ignore this Hidden. The following test is what rejects that clock.
+    state.injected_event_time_ms = Some(5_000);
+    inject(&mut state, 10, "Managed", "ManagedClass", 2010);
+    state.handle_window_event(WindowEvent::Created(10, 1_000));
+    let old_token = recorded_token(&state, 10);
+    simulate_missing_managed_token(&mut state, 10);
+    state.handle_window_event(WindowEvent::Created(10, 2_000));
+    let new_token = recorded_token(&state, 10);
+    assert_ne!(new_token, old_token);
+    assert!(!state.injected_visible_hwnds.contains(&10));
+
+    state.handle_window_event(WindowEvent::Hidden(10, 1_000));
+
+    assert_eq!(membership_count(&state, 10), 1);
+    assert_eq!(state.find_window_workspace(10), Some((1, 0)));
+    assert_eq!(state.managed_lifetime_tokens.get(&10), Some(&new_token));
+    assert_eq!(
+        state.managed_lifetime_admitted_at_event_ms.get(&10),
+        Some(&2_000)
+    );
+}
+
+#[test]
+fn hidden_after_its_create_time_departs_even_if_processed_later() {
+    let mut state = state();
+    state.injected_event_time_ms = Some(10_000);
+    inject(&mut state, 10, "Managed", "ManagedClass", 2010);
+    state.handle_window_event(WindowEvent::Created(10, 100));
+    assert_eq!(
+        state.managed_lifetime_admitted_at_event_ms.get(&10),
+        Some(&100)
+    );
+    assert!(!state.injected_visible_hwnds.contains(&10));
+
+    state.handle_window_event(WindowEvent::Hidden(10, 105));
+
+    assert_eq!(membership_count(&state, 10), 0);
+    assert!(!state.managed_lifetime_tokens.contains_key(&10));
+    assert!(state.recently_hidden_hwnds.contains_key(&10));
+}
+
+#[test]
+fn eventless_admission_records_no_guard_time_so_hidden_departs() {
+    let mut state = state();
+    state.injected_event_time_ms = Some(5_000);
+    admit(&mut state, 10);
+    assert!(!state
+        .managed_lifetime_admitted_at_event_ms
+        .contains_key(&10));
+
+    state.handle_window_event(WindowEvent::Hidden(10, 1_500));
+
+    assert_eq!(membership_count(&state, 10), 0);
+    assert!(!state.managed_lifetime_tokens.contains_key(&10));
+    assert!(!state
+        .managed_lifetime_admitted_at_event_ms
+        .contains_key(&10));
+}
+
+#[test]
+fn hidden_after_hwnd_gone_records_departing_token_so_recycle_is_not_suppressed() {
+    let mut state = state();
+    let token = admit(&mut state, 10);
+    assert!(!state.injected_live_hwnds.contains(&10));
+
+    state.handle_window_event(WindowEvent::Hidden(10, 0));
+
+    assert_eq!(
+        state
+            .recently_hidden_hwnds
+            .get(&10)
+            .map(|entry| entry.managed_token),
+        Some(Some(token))
+    );
+    assert_eq!(
+        state
+            .hidden_column_widths
+            .get(&10)
+            .map(|entry| entry.managed_token),
+        Some(Some(token))
+    );
+
+    state.injected_live_hwnds.insert(10);
+    state
+        .injected_managed_tokens
+        .insert(10, token.wrapping_add(1));
+    assert_eq!(
+        state.try_admit_window(10, AdmissionKind::Automatic),
+        AdmitOutcome::Admitted
+    );
+}
+
+#[test]
+fn hidden_after_hwnd_gone_still_suppresses_same_lifetime_recreation() {
+    let mut state = state();
+    let token = admit(&mut state, 10);
+
+    state.handle_window_event(WindowEvent::Hidden(10, 0));
+
+    state.injected_live_hwnds.insert(10);
+    assert_eq!(state.injected_managed_tokens.get(&10), Some(&token));
+    assert_eq!(
+        state.try_admit_window(10, AdmissionKind::Automatic),
+        AdmitOutcome::TransientSuppressed
+    );
 }
 
 #[test]
@@ -746,7 +857,7 @@ fn shown_scratchpad_hidden_then_created_readmits() {
     // Long-lived, so Hidden does not suppress the same HWND's Created.
     backdate_admission(&mut state, 10);
 
-    state.handle_window_event(WindowEvent::Hidden(10));
+    state.handle_window_event(WindowEvent::Hidden(10, 0));
 
     assert_eq!(membership_count(&state, 10), 0);
     assert!(!state.managed_lifetime_tokens.contains_key(&10));
@@ -770,7 +881,7 @@ fn stashed_scratchpad_cloak_hidden_then_recycled_create_admits_replacement() {
     let old_token = admit(&mut state, 10);
     stash_admitted_scratchpad(&mut state, 10);
 
-    state.handle_window_event(WindowEvent::Hidden(10));
+    state.handle_window_event(WindowEvent::Hidden(10, 0));
 
     assert!(state.recently_hidden_hwnds.contains_key(&10));
     assert_eq!(state.scratchpad.map(|pad| pad.window_id), Some(10));
@@ -861,7 +972,7 @@ fn same_lifetime_hidden_popup_stays_suppressed() {
     let token = admit(&mut state, 10);
     state.injected_live_hwnds.insert(10);
 
-    state.handle_window_event(WindowEvent::Hidden(10));
+    state.handle_window_event(WindowEvent::Hidden(10, 0));
 
     assert_eq!(
         state
@@ -883,7 +994,7 @@ fn hidden_then_recycled_missing_token_is_admitted() {
     let mut state = state();
     admit(&mut state, 10);
     state.injected_live_hwnds.insert(10);
-    state.handle_window_event(WindowEvent::Hidden(10));
+    state.handle_window_event(WindowEvent::Hidden(10, 0));
     assert!(state
         .recently_hidden_hwnds
         .get(&10)
@@ -905,7 +1016,7 @@ fn hidden_then_recycled_different_token_is_admitted() {
     let mut state = state();
     let token = admit(&mut state, 10);
     state.injected_live_hwnds.insert(10);
-    state.handle_window_event(WindowEvent::Hidden(10));
+    state.handle_window_event(WindowEvent::Hidden(10, 0));
     state
         .injected_managed_tokens
         .insert(10, token.wrapping_add(1));
@@ -1003,7 +1114,7 @@ fn hidden_then_recycled_missing_token_uses_default_column_width() {
     state.injected_live_hwnds.insert(10);
     backdate_admission(&mut state, 10);
 
-    state.handle_window_event(WindowEvent::Hidden(10));
+    state.handle_window_event(WindowEvent::Hidden(10, 0));
 
     assert_eq!(
         state
@@ -1032,7 +1143,7 @@ fn hidden_then_recycled_different_token_uses_default_column_width() {
         .resize_focused_column(400);
     state.injected_live_hwnds.insert(10);
     backdate_admission(&mut state, 10);
-    state.handle_window_event(WindowEvent::Hidden(10));
+    state.handle_window_event(WindowEvent::Hidden(10, 0));
     state
         .injected_managed_tokens
         .insert(10, token.wrapping_add(1));
@@ -1061,7 +1172,7 @@ fn same_lifetime_hidden_restores_column_width() {
     state.injected_live_hwnds.insert(10);
     backdate_admission(&mut state, 10);
 
-    state.handle_window_event(WindowEvent::Hidden(10));
+    state.handle_window_event(WindowEvent::Hidden(10, 0));
 
     assert_eq!(
         state

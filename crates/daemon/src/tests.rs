@@ -2963,7 +2963,7 @@ fn test_elevation_block_hidden_retained_destroyed_cleared() {
         ElevationCheck::BlockedNew
     );
 
-    state.handle_window_event(WindowEvent::Hidden(hwnd));
+    state.handle_window_event(WindowEvent::Hidden(hwnd, 0));
     assert!(state.elevation_blocked.contains_key(&hwnd));
 
     state.handle_window_event(WindowEvent::Destroyed(hwnd));
@@ -3486,7 +3486,7 @@ fn test_hidden_still_visible_skips_departure_cleanup() {
     state.previous_focused_hwnd = Some(100);
     state.injected_visible_hwnds.insert(100);
 
-    state.handle_window_event(WindowEvent::Hidden(100));
+    state.handle_window_event(WindowEvent::Hidden(100, 0));
 
     assert!(state.focused_workspace().unwrap().contains_window(100));
     assert_eq!(state.previous_focused_hwnd, Some(100));
@@ -4620,14 +4620,14 @@ fn two_managed_windows() -> AppState {
         state
             .injected_window_info
             .insert(hwnd, make_test_window_info(hwnd));
-        state.handle_window_event(WindowEvent::Created(hwnd));
+        state.handle_window_event(WindowEvent::Created(hwnd, 0));
     }
     state
 }
 
 #[test]
 fn test_matching_resize_departure_cancels_preview_without_completing() {
-    for event in [WindowEvent::Destroyed(100), WindowEvent::Hidden(100)] {
+    for event in [WindowEvent::Destroyed(100), WindowEvent::Hidden(100, 0)] {
         let mut state = two_managed_windows();
         seed_resize_session(&mut state, 100);
 
@@ -4642,7 +4642,7 @@ fn test_matching_resize_departure_cancels_preview_without_completing() {
 
 #[test]
 fn test_matching_drag_departure_clears_session_and_placeholder() {
-    for event in [WindowEvent::Destroyed(100), WindowEvent::Hidden(100)] {
+    for event in [WindowEvent::Destroyed(100), WindowEvent::Hidden(100, 0)] {
         let mut state = two_managed_windows();
         seed_drag_session(&mut state, 100);
         assert!(state
@@ -4679,7 +4679,7 @@ fn test_unmatched_peer_resize_and_drag_sessions_survive_departure() {
 
     let mut state = two_managed_windows();
     seed_drag_session(&mut state, 200);
-    state.handle_window_event(WindowEvent::Hidden(100));
+    state.handle_window_event(WindowEvent::Hidden(100, 0));
     assert_eq!(state.drag_state.as_ref().map(|d| d.hwnd), Some(200));
     assert!(state
         .focused_workspace()
@@ -4695,7 +4695,7 @@ fn test_visible_hidden_suppression_preserves_resize_and_drag_sessions() {
     seed_drag_session(&mut state, 200);
     state.injected_visible_hwnds.insert(100);
 
-    state.handle_window_event(WindowEvent::Hidden(100));
+    state.handle_window_event(WindowEvent::Hidden(100, 0));
 
     assert_eq!(state.resize_hwnd, Some(100));
     assert!(state.resize_preview_display_rect.is_some());
@@ -4724,7 +4724,7 @@ fn test_visible_hidden_suppression_preserves_resize_and_drag_sessions() {
         drag.removed_from_source,
     );
 
-    state.handle_window_event(WindowEvent::Hidden(100));
+    state.handle_window_event(WindowEvent::Hidden(100, 0));
 
     let drag = state.drag_state.as_ref().expect("active drag survives");
     assert_eq!(
@@ -4841,7 +4841,7 @@ fn test_stale_prune_releases_only_target_ghost_and_keeps_peer_barrier() {
 
 #[test]
 fn test_matching_resize_departure_preserves_peer_drag_hint() {
-    for event in [WindowEvent::Destroyed(100), WindowEvent::Hidden(100)] {
+    for event in [WindowEvent::Destroyed(100), WindowEvent::Hidden(100, 0)] {
         let mut state = two_managed_windows();
         seed_resize_session(&mut state, 100);
         seed_drag_session(&mut state, 200);
@@ -4864,7 +4864,7 @@ fn test_matching_resize_departure_preserves_peer_drag_hint() {
 
 #[test]
 fn test_matching_drag_departure_preserves_peer_resize_preview_and_hint() {
-    for event in [WindowEvent::Destroyed(100), WindowEvent::Hidden(100)] {
+    for event in [WindowEvent::Destroyed(100), WindowEvent::Hidden(100, 0)] {
         let mut state = two_managed_windows();
         seed_drag_session(&mut state, 100);
         seed_resize_session(&mut state, 200);
@@ -4963,7 +4963,7 @@ fn test_departure_hides_border_when_no_replacement_window() {
     state
         .injected_window_info
         .insert(100, make_test_window_info(100));
-    state.handle_window_event(WindowEvent::Created(100));
+    state.handle_window_event(WindowEvent::Created(100, 0));
     seed_resize_session(&mut state, 100);
     state.previous_focused_hwnd = Some(100);
     state.injected_foreground_hwnd = Some(Some(999));
@@ -4980,7 +4980,7 @@ fn test_departure_hides_border_when_no_replacement_window() {
 #[test]
 fn test_removed_from_source_drag_departure_applies_peer_layout() {
     for (event, visible) in [
-        (WindowEvent::Hidden(100), false),
+        (WindowEvent::Hidden(100, 0), false),
         (WindowEvent::Destroyed(100), true),
     ] {
         let mut state = two_managed_windows();
@@ -5088,7 +5088,7 @@ fn test_batch_prune_applies_and_reconciles_once() {
     state
         .injected_window_info
         .insert(300, make_test_window_info(300));
-    state.handle_window_event(WindowEvent::Created(300));
+    state.handle_window_event(WindowEvent::Created(300, 0));
     state.previous_focused_hwnd = Some(100);
     let hides_before = state.border_hide_count.load(Ordering::Relaxed);
 
@@ -5246,7 +5246,7 @@ fn test_reconcile_hides_border_for_unmanaged_replacement_despite_tracked_peer() 
 
 #[test]
 fn test_departing_hwnd_releases_own_ghost_and_keeps_peers() {
-    for event in [WindowEvent::Destroyed(100), WindowEvent::Hidden(100)] {
+    for event in [WindowEvent::Destroyed(100), WindowEvent::Hidden(100, 0)] {
         let mut state = departing_ghost_fixture();
         // Keep the in-flight peer transition so this asserts departure
         // cleanup, not start_layout_transition's existing abort-on-new.
@@ -5455,7 +5455,7 @@ fn test_departing_focus_recovery_does_not_steal_valid_foreground() {
         state
             .injected_window_info
             .insert(hwnd, make_test_window_info(hwnd));
-        state.handle_window_event(WindowEvent::Created(hwnd));
+        state.handle_window_event(WindowEvent::Created(hwnd, 0));
     }
     state.previous_focused_hwnd = Some(100);
     state.injected_foreground_hwnd = Some(Some(200));
@@ -5561,7 +5561,7 @@ fn test_managed_replacement_parks_old_workspace_peer() {
     state
         .injected_window_info
         .insert(300, make_test_window_info(300));
-    state.handle_window_event(WindowEvent::Created(300));
+    state.handle_window_event(WindowEvent::Created(300, 0));
     state.reduce_motion = false;
     let mon = state.focused_monitor;
     state.ensure_workspace_exists(mon, 1);
@@ -5615,7 +5615,7 @@ fn test_last_window_replacement_does_not_follow_other_monitor() {
     state
         .injected_window_info
         .insert(100, make_test_window_info(100));
-    state.handle_window_event(WindowEvent::Created(100));
+    state.handle_window_event(WindowEvent::Created(100, 0));
     state
         .injected_window_info
         .insert(200, make_test_window_info(200));
@@ -5663,7 +5663,7 @@ fn last_window_cross_workspace_state() -> AppState {
             .injected_window_info
             .insert(hwnd, make_test_window_info(hwnd));
     }
-    state.handle_window_event(WindowEvent::Created(100));
+    state.handle_window_event(WindowEvent::Created(100, 0));
     let mon = state.focused_monitor;
     state.ensure_workspace_exists(mon, 1);
     state.workspaces.get_mut(&mon).unwrap()[1]
@@ -5719,8 +5719,8 @@ fn last_window_rule_slot_unsampled_state() -> AppState {
     state.injected_window_info.insert(100, discord);
     state.injected_window_info.insert(200, steam);
 
-    state.handle_window_event(WindowEvent::Created(200));
-    state.handle_window_event(WindowEvent::Created(100));
+    state.handle_window_event(WindowEvent::Created(200, 0));
+    state.handle_window_event(WindowEvent::Created(100, 0));
 
     let mon = state.focused_monitor;
     assert!(
@@ -5745,7 +5745,7 @@ fn last_window_rule_slot_unsampled_state() -> AppState {
 
 #[test]
 fn test_last_window_hidden_or_destroyed_preserves_empty_selection() {
-    for event in [WindowEvent::Destroyed(100), WindowEvent::Hidden(100)] {
+    for event in [WindowEvent::Destroyed(100), WindowEvent::Hidden(100, 1_000)] {
         let mut state = last_window_cross_workspace_state();
         let mon = state.focused_monitor;
         state.handle_window_event(event);
@@ -5763,7 +5763,7 @@ fn test_last_window_spurious_hidden_does_not_empty_or_arm() {
     let mut state = last_window_cross_workspace_state();
     let mon = state.focused_monitor;
     state.injected_visible_hwnds.insert(100);
-    state.handle_window_event(WindowEvent::Hidden(100));
+    state.handle_window_event(WindowEvent::Hidden(100, 1_000));
     assert!(state.workspaces[&mon][0].contains_window(100));
     assert_eq!(state.active_workspace_idx(mon), 0);
     assert_eq!(state.previous_focused_hwnd, Some(100));
@@ -5854,7 +5854,7 @@ fn test_last_window_clears_stale_logical_focus_on_direct_and_prune() {
                     state.handle_window_event(WindowEvent::Destroyed(100));
                 }
                 Departure::Hidden => {
-                    state.handle_window_event(WindowEvent::Hidden(100));
+                    state.handle_window_event(WindowEvent::Hidden(100, 1_000));
                 }
                 Departure::Prune => {
                     state.prune_stale_windows_for_test(&[100]);
@@ -5918,7 +5918,7 @@ fn test_last_window_empty_reconciles_tab_strips_without_global_hide() {
                 .injected_window_info
                 .insert(hwnd, make_test_window_info(hwnd));
         }
-        state.handle_window_event(WindowEvent::Created(100));
+        state.handle_window_event(WindowEvent::Created(100, 0));
         {
             let ws = &mut state.workspaces.get_mut(&2).unwrap()[0];
             ws.insert_window(200, Some(800)).unwrap();
@@ -6022,7 +6022,7 @@ fn test_last_window_all_empty_admits_next_app_on_preserved_workspace() {
     state
         .injected_window_info
         .insert(100, make_test_window_info(100));
-    state.handle_window_event(WindowEvent::Created(100));
+    state.handle_window_event(WindowEvent::Created(100, 0));
     state.previous_focused_hwnd = Some(100);
     state.injected_foreground_hwnd = Some(None);
     let mon = state.focused_monitor;
@@ -6037,7 +6037,7 @@ fn test_last_window_all_empty_admits_next_app_on_preserved_workspace() {
     state
         .injected_window_info
         .insert(300, make_test_window_info(300));
-    state.handle_window_event(WindowEvent::Created(300));
+    state.handle_window_event(WindowEvent::Created(300, 0));
     assert!(state.workspaces[&mon][0].contains_window(300));
     assert_eq!(state.active_workspace_idx(mon), 0);
 }
@@ -6132,7 +6132,7 @@ fn test_last_window_departure_guard_equality_wrap_and_expiry() {
 
 #[test]
 fn test_last_window_rule_slot_unsampled_auto_activation_preserves_empty_selection() {
-    for event in [WindowEvent::Destroyed(100), WindowEvent::Hidden(100)] {
+    for event in [WindowEvent::Destroyed(100), WindowEvent::Hidden(100, 1_000)] {
         let mut state = last_window_rule_slot_unsampled_state();
         let mon = state.focused_monitor;
 
@@ -6189,7 +6189,7 @@ fn test_last_window_unsampled_same_workspace_created_focus_is_adopted() {
     state
         .injected_window_info
         .insert(300, make_test_window_info(300));
-    state.handle_window_event(WindowEvent::Created(300));
+    state.handle_window_event(WindowEvent::Created(300, 0));
     assert!(state.workspaces[&mon][0].contains_window(300));
     assert_eq!(state.active_workspace_idx(mon), 0);
     assert_eq!(state.previous_focused_hwnd, None);
@@ -6290,7 +6290,7 @@ fn test_last_window_unsampled_different_monitor_activation_follows() {
             .injected_window_info
             .insert(hwnd, make_test_window_info(hwnd));
     }
-    state.handle_window_event(WindowEvent::Created(100));
+    state.handle_window_event(WindowEvent::Created(100, 0));
     state.workspaces.get_mut(&2).unwrap()[0]
         .insert_window(200, Some(800))
         .unwrap();
@@ -6526,7 +6526,7 @@ fn test_last_window_focus_prune_other_monitor_tracked_stale_does_not_attribute()
             .injected_window_info
             .insert(hwnd, make_test_window_info(hwnd));
     }
-    state.handle_window_event(WindowEvent::Created(100));
+    state.handle_window_event(WindowEvent::Created(100, 0));
     let mon = state.focused_monitor;
     state.ensure_workspace_exists(mon, 1);
     state.workspaces.get_mut(&mon).unwrap()[1]
@@ -6780,7 +6780,7 @@ fn test_departing_focus_recovery_does_not_steal_unmanaged_foreground() {
         state
             .injected_window_info
             .insert(hwnd, make_test_window_info(hwnd));
-        state.handle_window_event(WindowEvent::Created(hwnd));
+        state.handle_window_event(WindowEvent::Created(hwnd, 0));
     }
     state.previous_focused_hwnd = Some(100);
     state.injected_foreground_hwnd = Some(Some(999));
@@ -6807,7 +6807,7 @@ fn test_departing_focus_recovery_runs_when_foreground_is_departed() {
         state
             .injected_window_info
             .insert(hwnd, make_test_window_info(hwnd));
-        state.handle_window_event(WindowEvent::Created(hwnd));
+        state.handle_window_event(WindowEvent::Created(hwnd, 0));
     }
     state
         .focused_workspace_mut()
@@ -6834,7 +6834,7 @@ fn test_departing_focus_recovery_runs_when_foreground_is_null_or_invalid() {
             state
                 .injected_window_info
                 .insert(hwnd, make_test_window_info(hwnd));
-            state.handle_window_event(WindowEvent::Created(hwnd));
+            state.handle_window_event(WindowEvent::Created(hwnd, 0));
         }
         state
             .focused_workspace_mut()
@@ -6862,7 +6862,7 @@ fn test_unfocused_managed_departure_does_not_recover_on_null_foreground() {
             state
                 .injected_window_info
                 .insert(hwnd, make_test_window_info(hwnd));
-            state.handle_window_event(WindowEvent::Created(hwnd));
+            state.handle_window_event(WindowEvent::Created(hwnd, 0));
         }
         state.previous_focused_hwnd = Some(200);
         state.injected_foreground_hwnd = Some(foreground);
@@ -6877,14 +6877,14 @@ fn test_unfocused_managed_departure_does_not_recover_on_null_foreground() {
 
 #[test]
 fn test_unmanaged_departure_does_not_recover_on_null_foreground() {
-    for event in [WindowEvent::Destroyed(999), WindowEvent::Hidden(999)] {
+    for event in [WindowEvent::Destroyed(999), WindowEvent::Hidden(999, 0)] {
         for foreground in [None, Some(0)] {
             let mut state = AppState::new_with_config(test_config(), test_monitors());
             for hwnd in [100, 200] {
                 state
                     .injected_window_info
                     .insert(hwnd, make_test_window_info(hwnd));
-                state.handle_window_event(WindowEvent::Created(hwnd));
+                state.handle_window_event(WindowEvent::Created(hwnd, 0));
             }
             state.previous_focused_hwnd = Some(200);
             state.injected_foreground_hwnd = Some(foreground);
@@ -6906,7 +6906,7 @@ fn departing_tiled_state(previous_focus: Option<u64>, foreground: Option<u64>) -
         state
             .injected_window_info
             .insert(hwnd, make_test_window_info(hwnd));
-        state.handle_window_event(WindowEvent::Created(hwnd));
+        state.handle_window_event(WindowEvent::Created(hwnd, 0));
     }
     state.previous_focused_hwnd = previous_focus;
     state.injected_foreground_hwnd = Some(foreground);
@@ -7167,7 +7167,7 @@ fn test_tear_off_event_order_does_not_leave_stale_focus_or_ghost() {
         state
             .injected_window_info
             .insert(hwnd, make_test_window_info(hwnd));
-        state.handle_window_event(WindowEvent::Created(hwnd));
+        state.handle_window_event(WindowEvent::Created(hwnd, 0));
     }
     state
         .focused_workspace_mut()
@@ -7179,7 +7179,7 @@ fn test_tear_off_event_order_does_not_leave_stale_focus_or_ghost() {
     state
         .injected_window_info
         .insert(300, make_test_window_info(300));
-    state.handle_window_event(WindowEvent::Created(300));
+    state.handle_window_event(WindowEvent::Created(300, 0));
     state.handle_window_event(WindowEvent::Focused(300, 0));
     assert_eq!(state.previous_focused_hwnd, Some(300));
     assert!(state.focused_workspace().unwrap().contains_window(100));
@@ -10833,7 +10833,7 @@ fn test_created_event_with_injected_window_info() {
     assert_eq!(state.focused_workspace().unwrap().window_count(), 0);
 
     // Fire Created event -- handler should use injected info
-    state.handle_window_event(WindowEvent::Created(100));
+    state.handle_window_event(WindowEvent::Created(100, 0));
 
     // After: window should be tiled in the workspace
     let ws = state.focused_workspace().unwrap();
@@ -10853,7 +10853,7 @@ fn test_created_event_uses_opening_monitor() {
     info.rect = Rect::new(2200, 100, 800, 600);
     state.injected_window_info.insert(100, info);
 
-    state.handle_window_event(WindowEvent::Created(100));
+    state.handle_window_event(WindowEvent::Created(100, 0));
 
     let opening_monitor = 2;
     let opening_workspace = state.active_workspace_idx(opening_monitor);
@@ -10880,7 +10880,7 @@ fn test_created_event_off_monitor_uses_focused_monitor() {
     info.rect = Rect::new(5000, 4000, 800, 600);
     state.injected_window_info.insert(100, info);
 
-    state.handle_window_event(WindowEvent::Created(100));
+    state.handle_window_event(WindowEvent::Created(100, 0));
 
     let focused_workspace = state.active_workspace_idx(2);
     assert!(
@@ -10908,7 +10908,7 @@ fn test_created_event_applies_rule_column_width_fraction() {
         .injected_window_info
         .insert(100, make_test_window_info(100));
 
-    state.handle_window_event(WindowEvent::Created(100));
+    state.handle_window_event(WindowEvent::Created(100, 0));
 
     let ws = state.focused_workspace().unwrap();
     assert_eq!(ws.window_count(), 1);
@@ -10929,7 +10929,7 @@ fn test_created_event_focus_new_windows_false_preserves_focus() {
     state
         .injected_window_info
         .insert(100, make_test_window_info(100));
-    state.handle_window_event(WindowEvent::Created(100));
+    state.handle_window_event(WindowEvent::Created(100, 0));
     assert_eq!(
         state.focused_workspace().unwrap().focused_window(),
         Some(100),
@@ -10940,7 +10940,7 @@ fn test_created_event_focus_new_windows_false_preserves_focus() {
     state
         .injected_window_info
         .insert(200, make_test_window_info(200));
-    state.handle_window_event(WindowEvent::Created(200));
+    state.handle_window_event(WindowEvent::Created(200, 0));
 
     let ws = state.focused_workspace().unwrap();
     assert_eq!(ws.window_count(), 2);
@@ -10974,7 +10974,7 @@ fn test_pull_window_to_workspace() {
         state
             .injected_window_info
             .insert(h, make_test_window_info(h));
-        state.handle_window_event(WindowEvent::Created(h));
+        state.handle_window_event(WindowEvent::Created(h, 0));
     }
     // Move the focused window (200) to workspace 2 (index 1).
     state.handle_command(IpcCommand::MoveToWorkspace { index: 2 });
@@ -11285,7 +11285,7 @@ fn switch_to_empty_workspace_with_pending_focus() -> AppState {
     state
         .injected_window_info
         .insert(100, make_test_window_info(100));
-    state.handle_window_event(WindowEvent::Created(100));
+    state.handle_window_event(WindowEvent::Created(100, 0));
     state.previous_focused_hwnd = Some(100);
     assert!(matches!(
         state.handle_command(IpcCommand::SwitchWorkspace { index: 2 }),
@@ -11327,7 +11327,7 @@ fn test_workspace_switch_suppresses_old_focus_events_without_mutation() {
     state
         .injected_window_info
         .insert(200, make_test_window_info(200));
-    state.handle_window_event(WindowEvent::Created(200));
+    state.handle_window_event(WindowEvent::Created(200, 0));
     assert!(state.workspaces[&monitor][intent.destination_workspace].contains_window(200));
 }
 
@@ -11516,12 +11516,12 @@ fn test_workspace_switch_does_not_arm_for_unmanaged_source_and_removal_clears_in
     assert_eq!(destroyed.pending_workspace_switch_focus, None);
 
     let mut hidden = switch_to_empty_workspace_with_pending_focus();
-    hidden.handle_window_event(WindowEvent::Hidden(100));
+    hidden.handle_window_event(WindowEvent::Hidden(100, 0));
     assert_eq!(hidden.pending_workspace_switch_focus, None);
 
     let mut spurious_hidden = switch_to_empty_workspace_with_pending_focus();
     spurious_hidden.injected_visible_hwnds.insert(100);
-    spurious_hidden.handle_window_event(WindowEvent::Hidden(100));
+    spurious_hidden.handle_window_event(WindowEvent::Hidden(100, 0));
     assert!(spurious_hidden.pending_workspace_switch_focus.is_some());
 
     let mut pruned = switch_to_empty_workspace_with_pending_focus();
@@ -11546,7 +11546,7 @@ fn test_move_to_workspace_relative_wraps_around() {
     state
         .injected_window_info
         .insert(100, make_test_window_info(100));
-    state.handle_window_event(WindowEvent::Created(100));
+    state.handle_window_event(WindowEvent::Created(100, 0));
     state.handle_command(IpcCommand::MoveToWorkspacePrev);
     assert!(
         state.workspaces[&mon][8].contains_window(100),
@@ -11564,7 +11564,7 @@ fn test_move_to_workspace_relative_wraps_around() {
     state
         .injected_window_info
         .insert(200, make_test_window_info(200));
-    state.handle_window_event(WindowEvent::Created(200));
+    state.handle_window_event(WindowEvent::Created(200, 0));
     state.handle_command(IpcCommand::MoveToWorkspaceNext);
     assert!(
         state.workspaces[&mon][0].contains_window(200),
@@ -11579,7 +11579,7 @@ fn test_edge_wrap_focus_switches_workspace_only_when_enabled() {
     state
         .injected_window_info
         .insert(100, make_test_window_info(100));
-    state.handle_window_event(WindowEvent::Created(100));
+    state.handle_window_event(WindowEvent::Created(100, 0));
 
     // A single-window column is at both the top and bottom edge. With edge-wrap
     // disabled (default), FocusDown at the edge stays on the current workspace.
@@ -11608,7 +11608,7 @@ fn test_edge_wrap_move_crosses_window_to_adjacent_workspace() {
     state
         .injected_window_info
         .insert(100, make_test_window_info(100));
-    state.handle_window_event(WindowEvent::Created(100));
+    state.handle_window_event(WindowEvent::Created(100, 0));
 
     // MoveWindowDown at the bottom edge moves the window to the next workspace.
     state.handle_command(IpcCommand::MoveWindowDown);
@@ -11638,7 +11638,7 @@ fn test_move_to_workspace_preserves_column_width() {
         state
             .injected_window_info
             .insert(h, make_test_window_info(h));
-        state.handle_window_event(WindowEvent::Created(h));
+        state.handle_window_event(WindowEvent::Created(h, 0));
     }
     // Give the two columns DIFFERENT non-default widths (default is 800), so the
     // assertion proves the moved window keeps *its own* column's width, not a
@@ -11691,7 +11691,7 @@ fn test_move_to_workspace_restores_original_column() {
         state
             .injected_window_info
             .insert(h, make_test_window_info(h));
-        state.handle_window_event(WindowEvent::Created(h));
+        state.handle_window_event(WindowEvent::Created(h, 0));
     }
     state
         .injected_window_info
@@ -11747,7 +11747,7 @@ fn test_pull_clears_move_origin() {
         state
             .injected_window_info
             .insert(h, make_test_window_info(h));
-        state.handle_window_event(WindowEvent::Created(h));
+        state.handle_window_event(WindowEvent::Created(h, 0));
     }
     // Move 200 to workspace 2: an origin (ws1) is recorded for it.
     state.handle_command(IpcCommand::MoveToWorkspace { index: 2 });
@@ -11770,18 +11770,18 @@ fn test_try_edit_config_pull_matches_editor_by_title() {
     state
         .injected_window_info
         .insert(100, make_test_window_info(100));
-    state.handle_window_event(WindowEvent::Created(100));
+    state.handle_window_event(WindowEvent::Created(100, 0));
 
     // A non-editor window and the editor window, both moved to workspace 2.
     state
         .injected_window_info
         .insert(300, make_test_window_info(300));
-    state.handle_window_event(WindowEvent::Created(300));
+    state.handle_window_event(WindowEvent::Created(300, 0));
     state.handle_command(IpcCommand::MoveToWorkspace { index: 2 });
     let mut editor = make_test_window_info(200);
     editor.title = "config.toml - leopardwm - Visual Studio Code".to_string();
     state.injected_window_info.insert(200, editor);
-    state.handle_window_event(WindowEvent::Created(200));
+    state.handle_window_event(WindowEvent::Created(200, 0));
     state.handle_command(IpcCommand::MoveToWorkspace { index: 2 });
     assert!(state.workspaces[&mon][1].contains_window(200));
     assert!(state.workspaces[&mon][1].contains_window(300));
@@ -11819,7 +11819,7 @@ fn test_created_event_on_other_monitor_ignores_fullscreen_on_focused_monitor() {
     info.rect = Rect::new(2200, 100, 800, 600);
     state.injected_window_info.insert(200, info);
 
-    state.handle_window_event(WindowEvent::Created(200));
+    state.handle_window_event(WindowEvent::Created(200, 0));
 
     assert!(
         state.workspaces[&2][state.active_workspace_idx(2)].contains_window(200),
@@ -11862,7 +11862,7 @@ fn test_created_event_preserves_fullscreen_on_opening_monitor_without_focus() {
     info.rect = Rect::new(2200, 100, 800, 600);
     state.injected_window_info.insert(300, info);
 
-    state.handle_window_event(WindowEvent::Created(300));
+    state.handle_window_event(WindowEvent::Created(300, 0));
 
     assert!(
         state.workspaces[&2][state.active_workspace_idx(2)].contains_window(300),
@@ -11901,7 +11901,7 @@ fn test_new_window_while_fullscreen_keeps_fullscreen_focused() {
     state
         .injected_window_info
         .insert(100, make_test_window_info(100));
-    state.handle_window_event(WindowEvent::Created(100));
+    state.handle_window_event(WindowEvent::Created(100, 0));
 
     // Fullscreen the first window.
     let mid = state.focused_monitor;
@@ -11921,7 +11921,7 @@ fn test_new_window_while_fullscreen_keeps_fullscreen_focused() {
     state
         .injected_window_info
         .insert(200, make_test_window_info(200));
-    state.handle_window_event(WindowEvent::Created(200));
+    state.handle_window_event(WindowEvent::Created(200, 0));
 
     let ws = state.focused_workspace().unwrap();
     assert!(ws.contains_window(200), "new window joins the layout");
@@ -11949,11 +11949,11 @@ fn test_created_event_duplicate_is_ignored() {
     state
         .injected_window_info
         .insert(100, make_test_window_info(100));
-    state.handle_window_event(WindowEvent::Created(100));
+    state.handle_window_event(WindowEvent::Created(100, 0));
     assert_eq!(state.focused_workspace().unwrap().window_count(), 1);
 
     // Second Created event for same window should be ignored
-    state.handle_window_event(WindowEvent::Created(100));
+    state.handle_window_event(WindowEvent::Created(100, 0));
     assert_eq!(
         state.focused_workspace().unwrap().window_count(),
         1,
@@ -11973,15 +11973,15 @@ fn test_recently_hidden_hwnd_suppresses_recreation() {
         .insert(200, make_test_window_info(200));
 
     // Add window 200
-    state.handle_window_event(WindowEvent::Created(200));
+    state.handle_window_event(WindowEvent::Created(200, 0));
     assert_eq!(state.focused_workspace().unwrap().window_count(), 1);
 
     // Hide window 200 -- records it in recently_hidden_hwnds
-    state.handle_window_event(WindowEvent::Hidden(200));
+    state.handle_window_event(WindowEvent::Hidden(200, 0));
     assert_eq!(state.focused_workspace().unwrap().window_count(), 0);
 
     // Re-create window 200 -- should be suppressed (recently hidden)
-    state.handle_window_event(WindowEvent::Created(200));
+    state.handle_window_event(WindowEvent::Created(200, 0));
     assert_eq!(
         state.focused_workspace().unwrap().window_count(),
         0,
@@ -11989,7 +11989,7 @@ fn test_recently_hidden_hwnd_suppresses_recreation() {
     );
 
     // A different window (100) should still be addable
-    state.handle_window_event(WindowEvent::Created(100));
+    state.handle_window_event(WindowEvent::Created(100, 0));
     assert_eq!(
         state.focused_workspace().unwrap().window_count(),
         1,
@@ -11999,14 +11999,14 @@ fn test_recently_hidden_hwnd_suppresses_recreation() {
 
 #[test]
 fn test_destroyed_or_hidden_focused_window_clears_focus_and_recovers() {
-    for event in [WindowEvent::Destroyed(100), WindowEvent::Hidden(100)] {
+    for event in [WindowEvent::Destroyed(100), WindowEvent::Hidden(100, 0)] {
         let mut state = AppState::new_with_config(test_config(), test_monitors());
         let monitor = state.focused_monitor;
         for hwnd in [100, 200] {
             state
                 .injected_window_info
                 .insert(hwnd, make_test_window_info(hwnd));
-            state.handle_window_event(WindowEvent::Created(hwnd));
+            state.handle_window_event(WindowEvent::Created(hwnd, 0));
         }
         state
             .focused_workspace_mut()
@@ -12054,14 +12054,14 @@ fn test_destroyed_or_hidden_focused_window_clears_focus_and_recovers() {
 
 #[test]
 fn test_destroyed_or_hidden_unfocused_window_preserves_focus() {
-    for event in [WindowEvent::Destroyed(100), WindowEvent::Hidden(100)] {
+    for event in [WindowEvent::Destroyed(100), WindowEvent::Hidden(100, 0)] {
         let mut state = AppState::new_with_config(test_config(), test_monitors());
         let monitor = state.focused_monitor;
         for hwnd in [100, 200] {
             state
                 .injected_window_info
                 .insert(hwnd, make_test_window_info(hwnd));
-            state.handle_window_event(WindowEvent::Created(hwnd));
+            state.handle_window_event(WindowEvent::Created(hwnd, 0));
         }
         state.previous_focused_hwnd = Some(200);
         state.last_broadcast_focused = Some((monitor as i64, Some(200)));
@@ -12092,7 +12092,7 @@ fn test_hidden_window_restores_column_width_on_reshow() {
         .insert(300, make_test_window_info(300));
 
     // Create it, then give it a distinct (non-default) column width.
-    state.handle_window_event(WindowEvent::Created(300));
+    state.handle_window_event(WindowEvent::Created(300, 0));
     state
         .focused_workspace_mut()
         .unwrap()
@@ -12107,7 +12107,7 @@ fn test_hidden_window_restores_column_width_on_reshow() {
     );
 
     // Hide -> the column width is remembered.
-    state.handle_window_event(WindowEvent::Hidden(300));
+    state.handle_window_event(WindowEvent::Hidden(300, 0));
     assert_eq!(state.focused_workspace().unwrap().window_count(), 0);
     assert_eq!(
         state
@@ -12119,7 +12119,7 @@ fn test_hidden_window_restores_column_width_on_reshow() {
     );
 
     // Reshow -> re-tiled at the remembered width, not the default.
-    state.handle_window_event(WindowEvent::Created(300));
+    state.handle_window_event(WindowEvent::Created(300, 0));
     let ws = state.focused_workspace().unwrap();
     assert_eq!(ws.window_count(), 1, "window re-tiled on reshow");
     assert_eq!(
@@ -14290,6 +14290,7 @@ fn test_initial_layout_parks_restored_inactive_windows() {
         tab_title_overrides: HashMap::new(),
     };
     let mut state = structure_restore_state();
+    state.injected_native_offscreen_enabled = true;
     state.config.behavior.disable_snap_layouts = false;
     state.restore_workspace_structure(&snapshot);
     state.restore_state(&snapshot);
@@ -14369,6 +14370,7 @@ fn test_display_reconcile_parks_restored_inactive_windows() {
     let expected_parked = HashSet::from([inactive_tiled.id(), inactive_floating.id()]);
 
     let mut state = AppState::new_with_config(test_config(), two_monitors());
+    state.injected_native_offscreen_enabled = true;
     state.workspaces.get_mut(&1).unwrap()[0]
         .insert_window(active_primary.id(), Some(640))
         .unwrap();
@@ -14577,6 +14579,7 @@ fn test_resume_parks_inactive_windows_and_syncs_taskbar() {
     let expected_parked = HashSet::from([inactive_tiled.id(), inactive_floating.id()]);
 
     let mut state = park_probe_state();
+    state.injected_native_offscreen_enabled = true;
     state.paused = true;
     state.workspaces.get_mut(&1).unwrap()[0]
         .insert_window(active.id(), Some(640))
@@ -14673,6 +14676,7 @@ fn test_display_change_event_parks_inactive_windows_and_syncs_taskbar() {
     let before_unmanaged = unmanaged.rect();
 
     let mut state = park_probe_state();
+    state.injected_native_offscreen_enabled = true;
     state.injected_display_monitors = Some(two_monitors());
     state.workspaces.get_mut(&1).unwrap()[0]
         .insert_window(active.id(), Some(640))

@@ -457,7 +457,7 @@ impl AppState {
     fn forget_managed_metadata(&mut self, hwnd: u64) {
         self.snap_disabled_hwnds.remove(&hwnd);
         self.window_managed_at.remove(&hwnd);
-        self.managed_lifetime_tokens.remove(&hwnd);
+        self.take_managed_lifetime_token(hwnd);
         self.window_last_maximized_at.remove(&hwnd);
         self.application_fullscreen.remove(&hwnd);
         self.last_placed_layout_rects.remove(&hwnd);

@@ -38,12 +38,14 @@ const WM_QUIT_WINEVENT_THREAD: u32 = WM_USER + 3;
 /// Window event types that the daemon needs to handle.
 #[derive(Debug, Clone)]
 pub enum WindowEvent {
-    /// A new window was created.
-    Created(WindowId),
+    /// A new window was created or shown, with the WinEvent timestamp in
+    /// GetTickCount's domain.
+    Created(WindowId, u32),
     /// A window was destroyed.
     Destroyed(WindowId),
-    /// A window was hidden (e.g., close-to-tray apps using ShowWindow(SW_HIDE)).
-    Hidden(WindowId),
+    /// A window was hidden (e.g., close-to-tray apps using ShowWindow(SW_HIDE)),
+    /// with the WinEvent timestamp in GetTickCount's domain.
+    Hidden(WindowId, u32),
     /// A window received focus, with the WinEvent timestamp in GetTickCount's domain.
     Focused(WindowId, u32),
     /// A window was minimized.
@@ -354,9 +356,9 @@ fn win_event_callback_inner(
 
     // Map event to our WindowEvent type
     let window_event = match event {
-        EVENT_OBJECT_CREATE | EVENT_OBJECT_SHOW => WindowEvent::Created(window_id),
+        EVENT_OBJECT_CREATE | EVENT_OBJECT_SHOW => WindowEvent::Created(window_id, dwms_event_time),
         EVENT_OBJECT_DESTROY => WindowEvent::Destroyed(window_id),
-        EVENT_OBJECT_HIDE => WindowEvent::Hidden(window_id),
+        EVENT_OBJECT_HIDE => WindowEvent::Hidden(window_id, dwms_event_time),
         EVENT_SYSTEM_FOREGROUND => focused_window_event(window_id, dwms_event_time),
         EVENT_OBJECT_FOCUS => {
             // Only emit Focused for EVENT_OBJECT_FOCUS if the window is actually

@@ -1666,7 +1666,7 @@ mod tests {
 
         // Hidden (window may live on, e.g. close-to-tray): icon kept —
         // the shared HICON stays valid while the window exists.
-        state.handle_window_event(WindowEvent::Hidden(102));
+        state.handle_window_event(WindowEvent::Hidden(102, 0));
         assert_eq!(state.overview_icon_cache.get(&102), Some(&Some(0x5678)));
 
         // Real destroy: the HICON dies with the window; a recycled HWND
