@@ -128,11 +128,14 @@ impl AppState {
         let windows = self.windows_for_enumeration()?;
         let monitors: Vec<_> = self.monitors.values().cloned().collect();
         let mut added = 0;
+        let mut replaced = Vec::new();
 
         for win_info in windows {
             // Recycle departs before the ignore gate and rules, matching
             // admission. The replacement is then evaluated like any new window.
-            self.depart_replaced_managed_lifetime(win_info.hwnd);
+            if self.depart_replaced_managed_lifetime(win_info.hwnd) {
+                replaced.push(win_info.hwnd);
+            }
 
             if matches!(
                 self.temporary_ignore_gate(win_info.hwnd),
@@ -288,6 +291,10 @@ impl AppState {
                     config::WindowAction::Ignore => unreachable!(), // Handled above
                 }
             }
+        }
+
+        for hwnd in replaced {
+            self.clear_tracked_focus_if_unmanaged(hwnd);
         }
 
         Ok(added)

@@ -626,6 +626,18 @@ impl AppState {
     }
 
     pub(crate) fn try_admit_window(&mut self, hwnd: u64, kind: AdmissionKind) -> AdmitOutcome {
+        let outcome = self.admit_window_after_replaced_departure(hwnd, kind);
+        // A same-HWND foreground keeps tracked focus across the departure. Drop it
+        // only when the replacement was not admitted.
+        self.clear_tracked_focus_if_unmanaged(hwnd);
+        outcome
+    }
+
+    fn admit_window_after_replaced_departure(
+        &mut self,
+        hwnd: u64,
+        kind: AdmissionKind,
+    ) -> AdmitOutcome {
         // Recycle departs before suppression and the ignore gate. A cloak Hidden
         // can mark this HWND transient, and that entry must not reject the replacement.
         if self.duplicate_managed_admission(hwnd) {
@@ -1194,15 +1206,18 @@ impl AppState {
         self.recently_hidden_hwnds
             .retain(|_, entry| entry.hidden_at.elapsed() < RECENTLY_HIDDEN_TTL);
 
-        // Clear stale focus reference before sampling replacement evidence.
+        // Sample before clearing. A replaced lifetime whose foreground is this
+        // HWND is the live window: keep tracked focus, the border, and the
+        // focused-window broadcast so enumeration can re-admit without restoring them.
         let was_tracked_focus = self.previous_focused_hwnd == Some(hwnd);
-        if was_tracked_focus {
+        let (decision, same_hwnd_foreground) =
+            self.departing_focus_decision_for(hwnd, was_tracked_focus, cause);
+        if was_tracked_focus && !same_hwnd_foreground {
             self.hide_border();
             self.previous_focused_hwnd = None;
             let monitor = self.focused_monitor as i64;
             self.broadcast_focused_window_if_changed(monitor, None);
         }
-        let decision = self.departing_focus_decision_for(hwnd, was_tracked_focus, cause);
 
         let mut was_tiled = false;
         if let Some((monitor_id, ws_idx)) = self.find_window_workspace(hwnd) {
@@ -1296,14 +1311,20 @@ impl AppState {
         });
         if emptied_selected {
             // Empty selection: clear logical focus/border even when tracking
-            // already names the replacement or another HWND. The same-HWND
-            // Focused early-return would otherwise bypass the guard.
-            self.clear_logical_focus_for_empty_selection();
-            self.arm_pending_last_window_departure(
-                decision.replacement_hwnd,
-                self.event_time_now_ms(),
-                LastWindowDepartureOrigin::DirectDestroyedOrHidden,
-            );
+            // already names another HWND. The same-HWND Focused early-return
+            // would otherwise bypass the guard. A replaced lifetime is not a
+            // close, so it must not arm that guard. When the foreground is this
+            // HWND, the same handle is about to be re-admitted and keeps focus.
+            if !same_hwnd_foreground {
+                self.clear_logical_focus_for_empty_selection();
+            }
+            if cause != DepartureCause::ReplacedLifetime {
+                self.arm_pending_last_window_departure(
+                    decision.replacement_hwnd,
+                    self.event_time_now_ms(),
+                    LastWindowDepartureOrigin::DirectDestroyedOrHidden,
+                );
+            }
         } else if decision.recover {
             self.sync_foreground_window();
         } else if was_tracked_focus {
@@ -1325,34 +1346,44 @@ impl AppState {
         leopardwm_platform_win32::is_window_visible(hwnd)
     }
 
+    /// The bool is true when replaced-lifetime foreground evidence names `hwnd`.
     fn departing_focus_decision_for(
         &mut self,
         hwnd: u64,
         was_tracked_focus: bool,
         cause: DepartureCause,
-    ) -> crate::ui_sync::DepartingFocusDecision {
+    ) -> (crate::ui_sync::DepartingFocusDecision, bool) {
         let Some((foreground, foreground_is_valid)) = self.departing_foreground_evidence() else {
-            return crate::ui_sync::DepartingFocusDecision {
-                recover: false,
-                suppress_landing_resync: false,
-                replacement_hwnd: None,
-            };
+            return (
+                crate::ui_sync::DepartingFocusDecision {
+                    recover: false,
+                    suppress_landing_resync: false,
+                    replacement_hwnd: None,
+                },
+                false,
+            );
         };
         // Foreground evidence naming this HWND is the live replacement, not the
         // window that just left. Do not recover onto another managed window,
         // and do not bind the handle as a last-window replacement.
         if cause == DepartureCause::ReplacedLifetime && foreground == Some(hwnd) {
-            return crate::ui_sync::DepartingFocusDecision {
-                recover: false,
-                suppress_landing_resync: true,
-                replacement_hwnd: None,
-            };
+            return (
+                crate::ui_sync::DepartingFocusDecision {
+                    recover: false,
+                    suppress_landing_resync: true,
+                    replacement_hwnd: None,
+                },
+                true,
+            );
         }
-        crate::ui_sync::departing_focus_decision(
-            was_tracked_focus,
-            hwnd,
-            foreground,
-            foreground_is_valid,
+        (
+            crate::ui_sync::departing_focus_decision(
+                was_tracked_focus,
+                hwnd,
+                foreground,
+                foreground_is_valid,
+            ),
+            false,
         )
     }
 
@@ -1723,6 +1754,22 @@ impl AppState {
         self.previous_focused_hwnd = None;
         self.hide_border();
         self.update_tab_strip();
+        let monitor = self.focused_monitor as i64;
+        self.broadcast_focused_window_if_changed(monitor, None);
+    }
+
+    /// A replaced-lifetime departure may keep tracked focus on `hwnd` until
+    /// admission puts that handle back. If it does not, the handle is not a member.
+    pub(crate) fn clear_tracked_focus_if_unmanaged(&mut self, hwnd: u64) {
+        if self.previous_focused_hwnd != Some(hwnd) || self.find_window_workspace(hwnd).is_some() {
+            return;
+        }
+        if self.selected_workspace_is_genuinely_empty() {
+            self.clear_logical_focus_for_empty_selection();
+            return;
+        }
+        self.hide_border();
+        self.previous_focused_hwnd = None;
         let monitor = self.focused_monitor as i64;
         self.broadcast_focused_window_if_changed(monitor, None);
     }

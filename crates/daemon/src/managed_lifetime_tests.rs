@@ -1078,3 +1078,106 @@ fn same_lifetime_hidden_restores_column_width() {
     assert_eq!(focused_column_width(&state, 10), width);
     assert!(!state.hidden_column_widths.contains_key(&10));
 }
+
+fn border_was_shown_or_not_hidden(
+    state: &AppState,
+    hides_before: usize,
+    shows_before: usize,
+) -> bool {
+    let hides = state
+        .border_hide_count
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let shows = state
+        .border_show_count
+        .load(std::sync::atomic::Ordering::Relaxed);
+    shows > shows_before || hides == hides_before
+}
+
+#[test]
+fn replaced_lifetime_emptying_selected_does_not_suppress_later_workspace_focus() {
+    let mut state = state();
+    admit(&mut state, 10);
+    state.ensure_workspace_exists(1, 1);
+    inject(&mut state, 20, "Other", "OtherClass", 2020);
+    state.workspaces.get_mut(&1).unwrap()[1]
+        .insert_window(20, None)
+        .unwrap();
+    track_foreground(&mut state, 10);
+    simulate_missing_managed_token(&mut state, 10);
+    state.injected_event_time_ms = Some(1_000);
+
+    assert_eq!(
+        state.try_admit_window(10, AdmissionKind::Automatic),
+        AdmitOutcome::Admitted
+    );
+
+    assert_eq!(membership_count(&state, 10), 1);
+    assert_eq!(state.active_workspace_idx(1), 0);
+    assert!(state.pending_last_window_departure.is_none());
+
+    state.last_prune_at = Some(Instant::now());
+    state.handle_window_event(WindowEvent::Focused(20, 1_000));
+
+    assert_eq!(state.active_workspace_idx(1), 1);
+    assert_eq!(state.previous_focused_hwnd, Some(20));
+    assert!(state.workspaces.get(&1).unwrap()[1].contains_window(20));
+    assert!(state.pending_last_window_departure.is_none());
+}
+
+#[test]
+fn enumerate_recycle_keeps_tracked_foreground_focus_and_border() {
+    let mut state = state();
+    admit(&mut state, 10);
+    admit(&mut state, 20);
+    track_foreground(&mut state, 10);
+    simulate_missing_managed_token(&mut state, 10);
+    state.injected_enumerated_windows = Some(vec![
+        info(10, "Managed", "ManagedClass", 2010),
+        info(20, "Managed", "ManagedClass", 2010),
+    ]);
+    let hides_before = state
+        .border_hide_count
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let shows_before = state
+        .border_show_count
+        .load(std::sync::atomic::Ordering::Relaxed);
+
+    let added = state.enumerate_and_add_windows().unwrap();
+
+    assert_eq!(added, 1);
+    assert_eq!(membership_count(&state, 10), 1);
+    assert_eq!(state.previous_focused_hwnd, Some(10));
+    assert!(border_was_shown_or_not_hidden(
+        &state,
+        hides_before,
+        shows_before
+    ));
+}
+
+#[test]
+fn created_recycle_keeps_tracked_foreground_focus_and_border() {
+    let mut state = state();
+    admit(&mut state, 10);
+    admit(&mut state, 20);
+    track_foreground(&mut state, 10);
+    simulate_missing_managed_token(&mut state, 10);
+    let hides_before = state
+        .border_hide_count
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let shows_before = state
+        .border_show_count
+        .load(std::sync::atomic::Ordering::Relaxed);
+
+    assert_eq!(
+        state.try_admit_window(10, AdmissionKind::Automatic),
+        AdmitOutcome::Admitted
+    );
+
+    assert_eq!(membership_count(&state, 10), 1);
+    assert_eq!(state.previous_focused_hwnd, Some(10));
+    assert!(border_was_shown_or_not_hidden(
+        &state,
+        hides_before,
+        shows_before
+    ));
+}
