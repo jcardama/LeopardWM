@@ -128,13 +128,18 @@ impl AppState {
         let windows = self.windows_for_enumeration()?;
         let monitors: Vec<_> = self.monitors.values().cloned().collect();
         let mut added = 0;
-        let mut replaced = Vec::new();
+        // Reconcile the previous replaced HWND before this iteration departs,
+        // including when that window was skipped by the ignore gate or a rule.
+        let mut pending_replaced: Option<u64> = None;
 
         for win_info in windows {
+            if let Some(hwnd) = pending_replaced.take() {
+                self.reconcile_replaced_lifetime_admission(hwnd);
+            }
             // Recycle departs before the ignore gate and rules, matching
             // admission. The replacement is then evaluated like any new window.
             if self.depart_replaced_managed_lifetime(win_info.hwnd) {
-                replaced.push(win_info.hwnd);
+                pending_replaced = Some(win_info.hwnd);
             }
 
             if matches!(
@@ -293,8 +298,8 @@ impl AppState {
             }
         }
 
-        for hwnd in replaced {
-            self.clear_tracked_focus_if_unmanaged(hwnd);
+        if let Some(hwnd) = pending_replaced {
+            self.reconcile_replaced_lifetime_admission(hwnd);
         }
 
         Ok(added)

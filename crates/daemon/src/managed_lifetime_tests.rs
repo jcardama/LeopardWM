@@ -1079,18 +1079,23 @@ fn same_lifetime_hidden_restores_column_width() {
     assert!(!state.hidden_column_widths.contains_key(&10));
 }
 
-fn border_was_shown_or_not_hidden(
-    state: &AppState,
-    hides_before: usize,
-    shows_before: usize,
-) -> bool {
-    let hides = state
-        .border_hide_count
-        .load(std::sync::atomic::Ordering::Relaxed);
-    let shows = state
-        .border_show_count
-        .load(std::sync::atomic::Ordering::Relaxed);
-    shows > shows_before || hides == hides_before
+fn border_counts(state: &AppState) -> (usize, usize, u64) {
+    use std::sync::atomic::Ordering::Relaxed;
+    (
+        state.border_hide_count.load(Relaxed),
+        state.border_show_count.load(Relaxed),
+        state.last_border_show_hwnd.load(Relaxed),
+    )
+}
+
+fn park_managed_class_on_workspace(state: &mut AppState, workspace: u8) {
+    state.config.window_rules.push(crate::config::WindowRule {
+        match_class: Some("ManagedClass".into()),
+        action: crate::config::WindowAction::Tile,
+        open_on_workspace: Some(workspace),
+        ..Default::default()
+    });
+    state.compiled_rules = state.config.compile_window_rules();
 }
 
 #[test]
@@ -1124,8 +1129,19 @@ fn replaced_lifetime_emptying_selected_does_not_suppress_later_workspace_focus()
     assert!(state.pending_last_window_departure.is_none());
 }
 
+fn assert_foreground_recycle_adopted(state: &AppState, hwnd: u64, shows_before: usize) {
+    use std::sync::atomic::Ordering::Relaxed;
+    assert_eq!(state.previous_focused_hwnd, Some(hwnd));
+    assert!(
+        state.border_show_count.load(Relaxed) > shows_before,
+        "border should be shown for the admitted foreground hwnd"
+    );
+    assert_eq!(state.last_border_show_hwnd.load(Relaxed), hwnd);
+    assert!(state.pending_last_window_departure.is_none());
+}
+
 #[test]
-fn enumerate_recycle_keeps_tracked_foreground_focus_and_border() {
+fn enumerate_recycle_adopts_foreground_hwnd_on_selected_workspace() {
     let mut state = state();
     admit(&mut state, 10);
     admit(&mut state, 20);
@@ -1135,38 +1151,27 @@ fn enumerate_recycle_keeps_tracked_foreground_focus_and_border() {
         info(10, "Managed", "ManagedClass", 2010),
         info(20, "Managed", "ManagedClass", 2010),
     ]);
-    let hides_before = state
-        .border_hide_count
-        .load(std::sync::atomic::Ordering::Relaxed);
-    let shows_before = state
-        .border_show_count
-        .load(std::sync::atomic::Ordering::Relaxed);
+    let (_, shows_before, _) = border_counts(&state);
+    let mut rx = state.event_broadcaster.subscribe();
 
     let added = state.enumerate_and_add_windows().unwrap();
 
     assert_eq!(added, 1);
     assert_eq!(membership_count(&state, 10), 1);
-    assert_eq!(state.previous_focused_hwnd, Some(10));
-    assert!(border_was_shown_or_not_hidden(
-        &state,
-        hides_before,
-        shows_before
-    ));
+    assert_eq!(state.find_window_workspace(10), Some((1, 0)));
+    assert_foreground_recycle_adopted(&state, 10, shows_before);
+    assert_no_focus_event_for(&mut rx, 20);
 }
 
 #[test]
-fn created_recycle_keeps_tracked_foreground_focus_and_border() {
+fn created_recycle_adopts_foreground_hwnd_on_selected_workspace() {
     let mut state = state();
     admit(&mut state, 10);
     admit(&mut state, 20);
     track_foreground(&mut state, 10);
     simulate_missing_managed_token(&mut state, 10);
-    let hides_before = state
-        .border_hide_count
-        .load(std::sync::atomic::Ordering::Relaxed);
-    let shows_before = state
-        .border_show_count
-        .load(std::sync::atomic::Ordering::Relaxed);
+    let (_, shows_before, _) = border_counts(&state);
+    let mut rx = state.event_broadcaster.subscribe();
 
     assert_eq!(
         state.try_admit_window(10, AdmissionKind::Automatic),
@@ -1174,10 +1179,119 @@ fn created_recycle_keeps_tracked_foreground_focus_and_border() {
     );
 
     assert_eq!(membership_count(&state, 10), 1);
-    assert_eq!(state.previous_focused_hwnd, Some(10));
-    assert!(border_was_shown_or_not_hidden(
-        &state,
-        hides_before,
-        shows_before
+    assert_eq!(state.find_window_workspace(10), Some((1, 0)));
+    assert_foreground_recycle_adopted(&state, 10, shows_before);
+    assert_no_focus_event_for(&mut rx, 20);
+}
+
+#[test]
+fn parked_replacement_does_not_keep_focus_or_border() {
+    let mut state = state();
+    admit(&mut state, 10);
+    track_foreground(&mut state, 10);
+    simulate_missing_managed_token(&mut state, 10);
+    park_managed_class_on_workspace(&mut state, 2);
+    state
+        .last_border_show_hwnd
+        .store(0, std::sync::atomic::Ordering::Relaxed);
+    let (hides_before, shows_before, _) = border_counts(&state);
+
+    assert_eq!(
+        state.try_admit_window(10, AdmissionKind::Automatic),
+        AdmitOutcome::Admitted
+    );
+
+    assert_eq!(state.find_window_workspace(10), Some((1, 1)));
+    assert_eq!(state.active_workspace_idx(1), 0);
+    assert!(crate::event_handler::workspace_is_genuinely_empty(
+        &state.workspaces.get(&1).unwrap()[0]
     ));
+    assert_ne!(state.previous_focused_hwnd, Some(10));
+    assert_eq!(state.previous_focused_hwnd, None);
+    assert!(state.pending_last_window_departure.is_none());
+    let (hides, shows, shown) = border_counts(&state);
+    assert!(
+        hides > hides_before,
+        "parked replacement should hide the border"
+    );
+    assert_eq!(shows, shows_before);
+    assert_eq!(shown, 0);
+}
+
+#[test]
+fn persistent_ignore_created_leaves_unmanaged_tracked_focus() {
+    let mut state = state();
+    admit(&mut state, 20);
+    inject(&mut state, 10, "Managed", "ManagedClass", 2010);
+    ignore_managed_class(&mut state);
+    state.previous_focused_hwnd = Some(10);
+    state
+        .last_border_show_hwnd
+        .store(10, std::sync::atomic::Ordering::Relaxed);
+    let (hides_before, shows_before, shown_before) = border_counts(&state);
+
+    assert_eq!(
+        state.try_admit_window(10, AdmissionKind::Automatic),
+        AdmitOutcome::PersistentIgnore
+    );
+
+    assert_eq!(membership_count(&state, 10), 0);
+    assert_eq!(membership_count(&state, 20), 1);
+    assert_eq!(state.previous_focused_hwnd, Some(10));
+    assert_eq!(
+        border_counts(&state),
+        (hides_before, shows_before, shown_before)
+    );
+}
+
+#[test]
+fn created_recycle_focus_new_windows_false_landing_does_not_sync_other_window() {
+    let mut state = state();
+    admit(&mut state, 10);
+    admit(&mut state, 20);
+    state.config.behavior.focus_new_windows = false;
+    state.paused = false;
+    state.reduce_motion = false;
+    track_foreground(&mut state, 10);
+    simulate_missing_managed_token(&mut state, 10);
+    let mut rx = state.event_broadcaster.subscribe();
+
+    assert_eq!(
+        state.try_admit_window(10, AdmissionKind::Automatic),
+        AdmitOutcome::Admitted
+    );
+
+    assert_eq!(state.previous_focused_hwnd, Some(10));
+    assert_eq!(state.find_window_workspace(10), Some((1, 0)));
+    assert!(
+        state
+            .layout_transition
+            .as_ref()
+            .is_some_and(|transition| transition.suppress_landing_focus_resync),
+        "foreground recycle must suppress landing resync"
+    );
+    let (_, shows_before_land, _) = border_counts(&state);
+    while rx.try_recv().is_ok() {}
+
+    let duration = state
+        .layout_transition
+        .as_ref()
+        .map(|transition| transition.duration_ms)
+        .unwrap();
+    assert!(state.tick_animations(duration));
+    assert!(state.layout_transition.is_none());
+    assert!(state.pending_suppress_landing_focus_resync);
+    state.sync_foreground_after_animation_landing();
+
+    assert!(!state.pending_suppress_landing_focus_resync);
+    assert_eq!(state.previous_focused_hwnd, Some(10));
+    assert_ne!(state.previous_focused_hwnd, Some(20));
+    let (_, shows_after_land, shown) = border_counts(&state);
+    assert_eq!(
+        shows_after_land, shows_before_land,
+        "landing must not sync the border onto another window"
+    );
+    assert_eq!(shown, 10);
+    assert_no_focus_event_for(&mut rx, 20);
+    assert!(state.pending_last_window_departure.is_none());
 }
