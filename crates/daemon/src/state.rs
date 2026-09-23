@@ -287,6 +287,10 @@ pub(crate) struct LayoutTransition {
     /// declined recovery cannot steal a valid replacement at landing, and so
     /// a later unrelated transition cannot inherit the skip.
     pub(crate) suppress_landing_focus_resync: bool,
+    /// Explicit workspace-switch commands hide the focus border until the
+    /// slide completes. Focus-follow switches leave this false so adoption
+    /// can show the replacement immediately and later frames can track it.
+    pub(crate) defer_focus_border: bool,
 }
 
 /// Owns a registered DWM thumbnail handle for a single window across a

@@ -1277,6 +1277,12 @@ impl AppState {
         if animating {
             let duration = self.config.animation.workspace_switch_duration_ms;
             self.start_workspace_switch_transition(start_rects, exit_rects, duration);
+            if let Some(transition) = self.layout_transition.as_mut() {
+                transition.defer_focus_border = true;
+            }
+            // The previous workspace's border would otherwise stay put while
+            // both workspaces slide. The incoming border waits until completion.
+            self.hide_border();
         } else {
             for (wid, _) in &old_placements {
                 if !self.is_application_fullscreen(*wid) {

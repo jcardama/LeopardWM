@@ -2731,6 +2731,7 @@ fn test_current_maximize_hold_cleans_only_target_ghost_state() {
         easing: leopardwm_core_layout::Easing::default(),
         ghosted_wids: HashSet::from([100, 200]),
         suppress_landing_focus_resync: false,
+        defer_focus_border: false,
     });
     state.ghost_handles.insert(
         100,
@@ -2796,6 +2797,7 @@ fn test_application_fullscreen_entry_removes_only_its_ghost_transition_state() {
         easing: leopardwm_core_layout::Easing::default(),
         ghosted_wids,
         suppress_landing_focus_resync: false,
+        defer_focus_border: false,
     });
     state.ghost_handles.insert(
         100,
@@ -3010,6 +3012,7 @@ fn test_partition_for_animation_routes_ghosted_wids_to_ghost_stream() {
         easing: leopardwm_core_layout::Easing::default(),
         ghosted_wids,
         suppress_landing_focus_resync: false,
+        defer_focus_border: false,
     };
 
     // GhostEntry with handle_isize=0 has a no-op Drop, so it's safe to
@@ -3193,6 +3196,7 @@ fn test_partition_for_animation_missing_handle_drops_placement() {
         easing: leopardwm_core_layout::Easing::default(),
         ghosted_wids,
         suppress_landing_focus_resync: false,
+        defer_focus_border: false,
     };
 
     let placements = vec![WindowPlacement {
@@ -3442,6 +3446,7 @@ fn departing_ghost_fixture() -> AppState {
         easing: leopardwm_core_layout::Easing::default(),
         ghosted_wids: HashSet::from([100, 200]),
         suppress_landing_focus_resync: false,
+        defer_focus_border: false,
     });
     state.ghost_handles.insert(
         100,
@@ -10634,6 +10639,7 @@ fn test_protected_only_animation_frame_dispatches_and_settles_transition() {
         easing: leopardwm_core_layout::Easing::default(),
         ghosted_wids: HashSet::new(),
         suppress_landing_focus_resync: false,
+        defer_focus_border: false,
     });
 
     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(4);
@@ -11075,6 +11081,239 @@ fn test_workspace_numeric_switch_retains_raw_index_animation_direction() {
         IpcCommand::SwitchWorkspace { index: 1 },
         -1,
     );
+}
+
+/// 50% + 25% + 25% fills one viewport, so returning to it must not scroll.
+fn set_focused_column_fraction(
+    workspace: &mut Workspace,
+    hwnd: u64,
+    fraction: f64,
+    viewport_width: i32,
+) {
+    workspace
+        .focus_window(hwnd)
+        .unwrap_or_else(|e| panic!("focus {hwnd}: {e}"));
+    workspace.set_focused_column_width_fraction(fraction, viewport_width);
+}
+
+struct IncomingSwitchProbe {
+    report: String,
+    border_shown_during_transition: bool,
+    focus_disturbed_layout: bool,
+    border_missing_after_completion: bool,
+    completion_rect_mismatch: bool,
+}
+
+fn probe_incoming_focus_during_switch(
+    state: &mut AppState,
+    monitor: leopardwm_platform_win32::MonitorId,
+    command_index: u8,
+    workspace_idx: usize,
+    focused_hwnd: u64,
+) -> IncomingSwitchProbe {
+    let shows_before = state.border_show_count.load(Ordering::Relaxed);
+    let hides_before = state.border_hide_count.load(Ordering::Relaxed);
+    assert!(
+        matches!(
+            state.handle_command(IpcCommand::SwitchWorkspace {
+                index: command_index
+            }),
+            IpcResponse::Ok
+        ),
+        "switch to workspace {command_index} failed"
+    );
+    let transition_active = state.layout_transition.is_some();
+    let shows_after_switch = state.border_show_count.load(Ordering::Relaxed);
+    let viewport = state.layout_viewport(monitor);
+    let workspace = &state.workspaces[&monitor][workspace_idx];
+    let scroll_before_focus = workspace.scroll_offset();
+    let effective_before_focus = workspace.effective_scroll_offset();
+    let animating_before_focus = workspace.is_animating();
+    let placements_before_focus: Vec<_> = workspace
+        .compute_placements_animated(viewport)
+        .into_iter()
+        .map(|placement| (placement.window_id, placement.rect))
+        .collect();
+    let final_rect = placements_before_focus
+        .iter()
+        .find(|(id, _)| *id == focused_hwnd)
+        .map(|(_, rect)| *rect);
+    let interpolated_rect = state.compute_window_layout_rect(focused_hwnd);
+    let previous_before_focus = state.previous_focused_hwnd;
+    let pending_switch_focus = state.pending_workspace_switch_focus.is_some();
+    let input_age = leopardwm_platform_win32::ms_since_last_user_input();
+
+    state.last_prune_at = Some(std::time::Instant::now());
+    state.handle_window_event(WindowEvent::Focused(
+        focused_hwnd,
+        leopardwm_platform_win32::current_event_time_ms(),
+    ));
+
+    let shows_after_focus = state.border_show_count.load(Ordering::Relaxed);
+    let hides_after_focus = state.border_hide_count.load(Ordering::Relaxed);
+    let workspace = &state.workspaces[&monitor][workspace_idx];
+    let scroll_after_focus = workspace.scroll_offset();
+    let effective_after_focus = workspace.effective_scroll_offset();
+    let animating_after_focus = workspace.is_animating();
+    let placements_after_focus: Vec<_> = workspace
+        .compute_placements_animated(viewport)
+        .into_iter()
+        .map(|placement| (placement.window_id, placement.rect))
+        .collect();
+    let transition_after_focus = state.layout_transition.is_some();
+    let focused_after = workspace.focused_window();
+
+    let duration = state
+        .layout_transition
+        .as_ref()
+        .map(|transition| transition.duration_ms)
+        .unwrap_or(0);
+    let _ = state.tick_animations(duration.saturating_add(1));
+    let shows_after_complete = state.border_show_count.load(Ordering::Relaxed);
+    let last_show = state.last_border_show_hwnd.load(Ordering::Relaxed);
+    let transition_after_complete = state.layout_transition.is_some();
+    let rect_after_complete = state.compute_window_layout_rect(focused_hwnd);
+    let scroll_after_complete = state.workspaces[&monitor][workspace_idx].scroll_offset();
+    let animating_after_complete = state.workspaces[&monitor][workspace_idx].is_animating();
+
+    let border_shown_during_transition = shows_after_focus != shows_before;
+    let focus_disturbed_layout = scroll_after_focus != scroll_before_focus
+        || effective_after_focus != effective_before_focus
+        || animating_after_focus != animating_before_focus
+        || placements_after_focus != placements_before_focus;
+    let border_missing_after_completion =
+        shows_after_complete != shows_after_focus.saturating_add(1) || last_show != focused_hwnd;
+    let completion_rect_mismatch = rect_after_complete != final_rect || transition_after_complete;
+
+    let report = format!(
+        "switch->{command_index} hwnd={focused_hwnd} transition_active={transition_active} \
+         pending_switch_focus={pending_switch_focus} previous_before={previous_before_focus:?} \
+         input_age={input_age:?} shows before/switch/focus/complete={shows_before}/{shows_after_switch}/{shows_after_focus}/{shows_after_complete} \
+         hides before/focus={hides_before}/{hides_after_focus} last_show={last_show} \
+         scroll before/focus/effective/complete={scroll_before_focus}/{scroll_after_focus}/{effective_after_focus}/{scroll_after_complete} \
+         animating before/focus/complete={animating_before_focus}/{animating_after_focus}/{animating_after_complete} \
+         focused_after={focused_after:?} previous_after={:?} transition_after_focus={transition_after_focus} \
+         transition_after_complete={transition_after_complete} interpolated={interpolated_rect:?} \
+         final={final_rect:?} rect_after_complete={rect_after_complete:?} \
+         placements_changed={}",
+        state.previous_focused_hwnd,
+        placements_after_focus != placements_before_focus
+    );
+
+    IncomingSwitchProbe {
+        report,
+        border_shown_during_transition,
+        focus_disturbed_layout,
+        border_missing_after_completion,
+        completion_rect_mismatch,
+    }
+}
+
+#[test]
+fn test_workspace_switch_defers_incoming_focus_border_and_does_not_rescroll() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.reduce_motion = false;
+    state.config.animation.workspace_switch_duration_ms = 200;
+    let monitor = state.focused_monitor;
+    let viewport_width = state.viewport_width_for(monitor);
+    state.workspaces.get_mut(&monitor).unwrap()[0].set_reduce_motion(false);
+
+    for hwnd in [101_u64, 102, 103] {
+        state.workspaces.get_mut(&monitor).unwrap()[0]
+            .insert_window(hwnd, None)
+            .unwrap_or_else(|e| panic!("insert {hwnd}: {e}"));
+    }
+    {
+        let workspace = &mut state.workspaces.get_mut(&monitor).unwrap()[0];
+        set_focused_column_fraction(workspace, 101, 0.5, viewport_width);
+        set_focused_column_fraction(workspace, 102, 0.25, viewport_width);
+        set_focused_column_fraction(workspace, 103, 0.25, viewport_width);
+        set_focused_column_fraction(workspace, 101, 0.5, viewport_width);
+    }
+    state.ensure_workspace_exists(monitor, 1);
+    state.workspaces.get_mut(&monitor).unwrap()[1]
+        .insert_window(201, None)
+        .unwrap();
+    state.workspaces.get_mut(&monitor).unwrap()[1]
+        .set_focused_column_width_fraction(1.0, viewport_width);
+    state.workspaces.get_mut(&monitor).unwrap()[1].set_reduce_motion(false);
+
+    let home = &state.workspaces[&monitor][0];
+    let widths: Vec<i32> = home.columns().iter().map(|column| column.width()).collect();
+    assert_eq!(widths.len(), 3, "ws1 has three columns");
+    assert_eq!(widths[1], widths[2], "the side columns are equal");
+    assert!(
+        widths[0] > widths[1],
+        "focused column is the wide one: {widths:?}"
+    );
+    assert!(
+        home.total_width() <= home.visible_width(viewport_width),
+        "ws1 fits the viewport without scrolling: total {} visible {}",
+        home.total_width(),
+        home.visible_width(viewport_width)
+    );
+    assert_eq!(home.scroll_offset(), 0.0);
+    assert_eq!(home.focused_window(), Some(101));
+    assert!(!home.is_animating());
+    assert_eq!(state.workspaces[&monitor][1].columns().len(), 1);
+    assert_eq!(state.workspaces[&monitor][1].focused_window(), Some(201));
+    assert!(state.workspaces[&monitor][1].columns()[0].width() > widths[0]);
+
+    // The user is on ws1, focused on the half-width column.
+    state.previous_focused_hwnd = Some(101);
+    state.active_workspace.insert(monitor, 0);
+
+    let to_single = probe_incoming_focus_during_switch(&mut state, monitor, 2, 1, 201);
+    let back_home = probe_incoming_focus_during_switch(&mut state, monitor, 1, 0, 101);
+    let failed = to_single.border_shown_during_transition
+        || to_single.focus_disturbed_layout
+        || to_single.border_missing_after_completion
+        || to_single.completion_rect_mismatch
+        || back_home.border_shown_during_transition
+        || back_home.focus_disturbed_layout
+        || back_home.border_missing_after_completion
+        || back_home.completion_rect_mismatch;
+    assert!(
+        !failed,
+        "incoming focus during a workspace switch must not show the border or change scroll, \
+         and completion must show the border on the final rect\nws1->ws2: {}\nws2->ws1: {}",
+        to_single.report, back_home.report
+    );
+}
+
+#[test]
+fn test_reduced_motion_workspace_switch_shows_border_immediately_without_scroll() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.reduce_motion = true;
+    let monitor = state.focused_monitor;
+    let viewport_width = state.viewport_width_for(monitor);
+    state.workspaces.get_mut(&monitor).unwrap()[0].set_reduce_motion(true);
+    state.workspaces.get_mut(&monitor).unwrap()[0]
+        .insert_window(101, None)
+        .unwrap();
+    state.ensure_workspace_exists(monitor, 1);
+    state.workspaces.get_mut(&monitor).unwrap()[1].set_reduce_motion(true);
+    state.workspaces.get_mut(&monitor).unwrap()[1]
+        .insert_window(201, None)
+        .unwrap();
+    state.workspaces.get_mut(&monitor).unwrap()[1]
+        .set_focused_column_width_fraction(1.0, viewport_width);
+    state.previous_focused_hwnd = Some(101);
+    state.active_workspace.insert(monitor, 0);
+    let shows_before = state.border_show_count.load(Ordering::Relaxed);
+    let scroll_before = state.workspaces[&monitor][1].scroll_offset();
+
+    assert!(matches!(
+        state.handle_command(IpcCommand::SwitchWorkspace { index: 2 }),
+        IpcResponse::Ok
+    ));
+
+    assert!(state.layout_transition.is_none());
+    assert!(state.border_show_count.load(Ordering::Relaxed) > shows_before);
+    assert_eq!(state.last_border_show_hwnd.load(Ordering::Relaxed), 201);
+    assert_eq!(state.workspaces[&monitor][1].scroll_offset(), scroll_before);
+    assert!(!state.workspaces[&monitor][1].is_animating());
+    assert_eq!(state.previous_focused_hwnd, Some(201));
 }
 
 #[test]

@@ -97,6 +97,16 @@ impl AppState {
     /// During an active tiled drag, the border is hidden so it doesn't follow
     /// the OS-dragged window — the ghost overlay provides visual feedback instead.
     pub(crate) fn show_border(&self, hwnd: u64) {
+        // An explicit workspace switch paints this border on the interpolated
+        // rect, which is still sliding onto the monitor. The completion tick
+        // shows it after clearing the transition.
+        if self
+            .layout_transition
+            .as_ref()
+            .is_some_and(|transition| transition.defer_focus_border)
+        {
+            return;
+        }
         #[cfg(test)]
         {
             self.border_show_count
@@ -275,7 +285,8 @@ impl AppState {
     /// border jumps to the FINAL post-transition rect on frame 1 of a
     /// workspace switch / move-to-column / expel / drag merge while the
     /// windows are still sliding to it (border leads windows by the entire
-    /// transition duration).
+    /// transition duration). An explicit workspace-switch command defers the
+    /// border until that slide completes.
     pub(crate) fn compute_window_layout_rect(
         &self,
         hwnd: u64,

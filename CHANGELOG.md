@@ -6,6 +6,7 @@ All notable changes to LeopardWM will be documented in this file.
 
 ### Fixes
 
+- **The focus border no longer appears while an explicit workspace switch is still sliding.** The border hides when the switch starts and appears on the focused window once the slide finishes.
 - **A recycled window handle no longer inherits a closed window's place in the layout.**
   Delayed close events for a reused handle retire the old window's membership and cached state, including a stashed scratchpad; a replacement already admitted keeps its own. A delayed hide from an older lifetime does not remove a replacement that Windows reported opening on that handle, including when the replacement is not visible. Temporarily ignored windows are unchanged. A window reusing a closed window's handle is no longer mistaken for that window's quick-closing popup, and does not pull focus onto another window or keep the closed window's column width. When the hidden window is already gone, the hide keeps the lifetime it recorded, so a new popup on the reused handle is tiled instead of suppressed and does not keep the hidden column width. A foreground replacement on the selected workspace is focused again after admission, without moving focus to another window. One parked on another workspace does not keep focus or the border. Emptying the workspace for a replaced lifetime does not bind or swallow a later focus on another workspace.
 - **Closing the last window keeps the empty workspace when the replacement HWND is not yet sampled.**

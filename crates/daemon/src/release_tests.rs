@@ -261,6 +261,7 @@ fn release_aborts_transitions_but_preserves_crossfade_acknowledgement_ownership(
         easing: leopardwm_core_layout::Easing::default(),
         ghosted_wids: HashSet::new(),
         suppress_landing_focus_resync: true,
+        defer_focus_border: false,
     });
     state.active_crossfade = Some(CrossfadeState { epoch: 7 });
     state

@@ -45,6 +45,10 @@ impl AppState {
         if scroll_anims_settled {
             self.sync_taskbar_buttons();
         }
+        let deferred_focus_border = self
+            .layout_transition
+            .as_ref()
+            .is_some_and(|transition| transition.defer_focus_border);
         let transition_complete = self
             .layout_transition
             .as_mut()
@@ -58,6 +62,14 @@ impl AppState {
             // The slide is done; cloak any settled off-workspace windows
             // that were skipped while animating so their taskbar buttons go.
             self.sync_taskbar_buttons();
+            // An explicit switch hid the border for the slide. Show it only
+            // after the transition is cleared, for whoever is focused now.
+            // `show_border` hides again when that window is parked or gone.
+            if deferred_focus_border {
+                if let Some(hwnd) = self.previous_focused_hwnd {
+                    self.show_border(hwnd);
+                }
+            }
             // Signal one more frame so entering windows land at their
             // exact final positions (previous frame had t < 1.0).
             still_animating = true;
@@ -163,6 +175,7 @@ impl AppState {
             easing: self.config.animation.easing,
             ghosted_wids,
             suppress_landing_focus_resync: false,
+            defer_focus_border: false,
         });
     }
 
@@ -209,6 +222,7 @@ impl AppState {
             easing: self.config.animation.easing,
             ghosted_wids: std::collections::HashSet::new(),
             suppress_landing_focus_resync: false,
+            defer_focus_border: false,
         });
     }
 
