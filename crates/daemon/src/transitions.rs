@@ -199,10 +199,10 @@ impl AppState {
             return;
         }
         self.abort_active_ghost_transition();
-        // Same carry as an ordinary replacement. An explicit switch sets the
-        // flag again after this returns; a focus-follow switch must not drop
-        // a deferral it interrupted.
-        let defer_focus_border = self.clear_layout_transition();
+        // Clear without painting. Do not carry the deferral: a focus-follow
+        // switch shows the new window's border immediately. An explicit
+        // switch sets the flag after this returns.
+        self.clear_layout_transition();
         let exit_provenance = exit_rects
             .keys()
             .filter_map(|window_id| {
@@ -227,7 +227,7 @@ impl AppState {
             easing: self.config.animation.easing,
             ghosted_wids: std::collections::HashSet::new(),
             suppress_landing_focus_resync: false,
-            defer_focus_border,
+            defer_focus_border: false,
         });
     }
 

@@ -11465,6 +11465,61 @@ fn test_abort_deferred_workspace_switch_shows_focus_border() {
 }
 
 #[test]
+fn test_focus_follow_during_deferred_switch_shows_border_immediately() {
+    let (mut state, monitor, _) = deferred_switch_onto_three_columns();
+    state.ensure_workspace_exists(monitor, 2);
+    state.workspaces.get_mut(&monitor).unwrap()[2].set_reduce_motion(false);
+    state.workspaces.get_mut(&monitor).unwrap()[2]
+        .insert_window(301, None)
+        .unwrap();
+    let shows_before_focus = state.border_show_count.load(Ordering::Relaxed);
+    let hides_before_focus = state.border_hide_count.load(Ordering::Relaxed);
+
+    state.last_prune_at = Some(std::time::Instant::now());
+    state.handle_window_event(WindowEvent::Focused(
+        301,
+        leopardwm_platform_win32::current_event_time_ms(),
+    ));
+
+    assert_eq!(state.active_workspace_idx(monitor), 2);
+    assert_eq!(state.previous_focused_hwnd, Some(301));
+    assert!(
+        state
+            .layout_transition
+            .as_ref()
+            .is_some_and(|transition| !transition.defer_focus_border),
+        "a focus-follow switch must not keep the interrupted explicit switch's deferral"
+    );
+    assert!(
+        state.border_show_count.load(Ordering::Relaxed) > shows_before_focus,
+        "the newly focused window's border is shown while its slide is still active"
+    );
+    assert_eq!(state.last_border_show_hwnd.load(Ordering::Relaxed), 301);
+    let viewport = state.layout_viewport(monitor);
+    let final_rect = state.workspaces[&monitor][2]
+        .compute_placements_animated(viewport)
+        .into_iter()
+        .find(|placement| placement.window_id == 301)
+        .map(|placement| placement.rect)
+        .expect("window 301 has no placement");
+    let duration = state
+        .layout_transition
+        .as_ref()
+        .map(|transition| transition.duration_ms)
+        .unwrap_or(0);
+    let _ = state.tick_animations(duration.saturating_add(1));
+
+    assert!(state.layout_transition.is_none());
+    assert_eq!(state.last_border_show_hwnd.load(Ordering::Relaxed), 301);
+    assert_eq!(
+        state.border_hide_count.load(Ordering::Relaxed),
+        hides_before_focus,
+        "completion must not hide the border the focus-follow already showed"
+    );
+    assert_eq!(state.compute_window_layout_rect(301), Some(final_rect));
+}
+
+#[test]
 fn test_workspace_activation_repairs_cleared_minimum_before_snapshot() {
     for (deferred, sticky) in [(false, false), (true, false), (true, true)] {
         let mut state = AppState::new_with_config(test_config(), test_monitors());
