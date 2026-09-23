@@ -1619,8 +1619,9 @@ impl AppState {
                 }
             }
         }
+        // See the explicit-switch path: a replacement slide must carry the
+        // deferred border instead of painting it on the way out.
         self.abort_active_ghost_transition();
-        self.abort_layout_transition();
 
         let slide_height = self
             .monitors
@@ -1710,6 +1711,7 @@ impl AppState {
             let duration = self.config.animation.workspace_switch_duration_ms;
             self.start_workspace_switch_transition(start_rects, exit_rects, duration);
         } else {
+            self.abort_layout_transition();
             for (wid, _) in &old_placements {
                 if !self.is_application_fullscreen(*wid) {
                     #[cfg(not(test))]

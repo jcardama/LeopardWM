@@ -1173,8 +1173,9 @@ impl AppState {
                 }
             }
         }
+        // The slide installed below carries a deferred focus border.
+        // Aborting here would paint it before that slide exists.
         self.abort_active_ghost_transition();
-        self.abort_layout_transition();
 
         let slide_height = self
             .monitors
@@ -1284,6 +1285,9 @@ impl AppState {
             // both workspaces slide. The incoming border waits until completion.
             self.hide_border();
         } else {
+            // No replacement slide. A deferred border lands now; a
+            // non-deferred transition only clears.
+            self.abort_layout_transition();
             for (wid, _) in &old_placements {
                 if !self.is_application_fullscreen(*wid) {
                     #[cfg(not(test))]

@@ -11316,6 +11316,154 @@ fn test_reduced_motion_workspace_switch_shows_border_immediately_without_scroll(
     assert_eq!(state.previous_focused_hwnd, Some(201));
 }
 
+/// Animated explicit switch onto a three-column workspace. The slide is still
+/// active and the focus border is deferred when this returns.
+fn deferred_switch_onto_three_columns() -> (AppState, leopardwm_platform_win32::MonitorId, u64) {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.reduce_motion = false;
+    state.config.animation.workspace_switch_duration_ms = 200;
+    let monitor = state.focused_monitor;
+    state.workspaces.get_mut(&monitor).unwrap()[0].set_reduce_motion(false);
+    state.workspaces.get_mut(&monitor).unwrap()[0]
+        .insert_window(101, None)
+        .unwrap();
+    state.ensure_workspace_exists(monitor, 1);
+    {
+        let workspace = &mut state.workspaces.get_mut(&monitor).unwrap()[1];
+        workspace.set_reduce_motion(false);
+        for hwnd in [201_u64, 202, 203] {
+            workspace
+                .insert_window(hwnd, None)
+                .unwrap_or_else(|e| panic!("insert {hwnd}: {e}"));
+        }
+        workspace
+            .focus_window(201)
+            .unwrap_or_else(|e| panic!("focus 201: {e}"));
+    }
+    assert_eq!(state.workspaces[&monitor][1].columns().len(), 3);
+    assert_eq!(state.workspaces[&monitor][1].focused_column_index(), 0);
+
+    state.previous_focused_hwnd = Some(101);
+    state.active_workspace.insert(monitor, 0);
+    assert!(matches!(
+        state.handle_command(IpcCommand::SwitchWorkspace { index: 2 }),
+        IpcResponse::Ok
+    ));
+    assert!(
+        state
+            .layout_transition
+            .as_ref()
+            .is_some_and(|transition| transition.defer_focus_border),
+        "the explicit switch must be in flight and deferring the border"
+    );
+    assert_eq!(state.previous_focused_hwnd, Some(201));
+    assert_eq!(state.workspaces[&monitor][1].focused_window(), Some(201));
+    (state, monitor, 201)
+}
+
+fn placement_rect(
+    state: &AppState,
+    monitor: leopardwm_platform_win32::MonitorId,
+    hwnd: u64,
+) -> leopardwm_core_layout::Rect {
+    let viewport = state.layout_viewport(monitor);
+    state.workspaces[&monitor][1]
+        .compute_placements_animated(viewport)
+        .into_iter()
+        .find(|placement| placement.window_id == hwnd)
+        .map(|placement| placement.rect)
+        .unwrap_or_else(|| panic!("window {hwnd} has no placement"))
+}
+
+#[test]
+fn test_move_column_right_during_workspace_switch_keeps_focus_border_deferred() {
+    let (mut state, monitor, focused_hwnd) = deferred_switch_onto_three_columns();
+    let shows_before_move = state.border_show_count.load(Ordering::Relaxed);
+    let rect_before_move = placement_rect(&state, monitor, focused_hwnd);
+
+    assert!(matches!(
+        state.handle_command(IpcCommand::MoveColumnRight),
+        IpcResponse::Ok
+    ));
+
+    assert_eq!(
+        state.workspaces[&monitor][1].focused_column_index(),
+        1,
+        "the focused column moved right"
+    );
+    assert_eq!(
+        state.workspaces[&monitor][1].focused_window(),
+        Some(focused_hwnd)
+    );
+    let final_rect = placement_rect(&state, monitor, focused_hwnd);
+    assert_ne!(
+        final_rect, rect_before_move,
+        "the replacement must land on a different rect than the interrupted switch"
+    );
+    assert!(
+        state
+            .layout_transition
+            .as_ref()
+            .is_some_and(|transition| transition.defer_focus_border),
+        "replacing the switch must keep deferring the border, not drop it"
+    );
+    // Animation frames call show_border on the interpolated rect. While the
+    // carried deferral is set, that call must not paint.
+    state.show_border(focused_hwnd);
+    assert_eq!(
+        state.border_show_count.load(Ordering::Relaxed),
+        shows_before_move,
+        "the border must stay hidden for the whole replacement"
+    );
+
+    let duration = state
+        .layout_transition
+        .as_ref()
+        .map(|transition| transition.duration_ms)
+        .unwrap_or(0);
+    let _ = state.tick_animations(duration.saturating_add(1));
+
+    assert!(state.layout_transition.is_none());
+    assert_eq!(
+        state.border_show_count.load(Ordering::Relaxed),
+        shows_before_move.saturating_add(1),
+        "completion of the replacement shows the border once"
+    );
+    assert_eq!(
+        state.last_border_show_hwnd.load(Ordering::Relaxed),
+        focused_hwnd
+    );
+    assert_eq!(
+        state.compute_window_layout_rect(focused_hwnd),
+        Some(final_rect),
+        "the border is shown at the post-move rect, not an intermediate one"
+    );
+}
+
+#[test]
+fn test_abort_deferred_workspace_switch_shows_focus_border() {
+    let (mut state, monitor, focused_hwnd) = deferred_switch_onto_three_columns();
+    let shows_before_abort = state.border_show_count.load(Ordering::Relaxed);
+    let final_rect = placement_rect(&state, monitor, focused_hwnd);
+
+    state.abort_layout_transition();
+
+    assert!(state.layout_transition.is_none());
+    assert_eq!(
+        state.border_show_count.load(Ordering::Relaxed),
+        shows_before_abort.saturating_add(1),
+        "aborting a deferred slide must show the border; it does not finish through tick_animations"
+    );
+    assert_eq!(
+        state.last_border_show_hwnd.load(Ordering::Relaxed),
+        focused_hwnd
+    );
+    assert_eq!(
+        state.compute_window_layout_rect(focused_hwnd),
+        Some(final_rect)
+    );
+}
+
 #[test]
 fn test_workspace_activation_repairs_cleared_minimum_before_snapshot() {
     for (deferred, sticky) in [(false, false), (true, false), (true, true)] {

@@ -165,7 +165,9 @@ impl AppState {
 
         // Start with one frame (~16ms) already elapsed so the first
         // apply_layout/send_animation_frame shows visible movement.
-        self.abort_layout_transition();
+        // Carry a deferred focus border onto the replacement. Aborting
+        // would paint it on the rect this transition is about to leave.
+        let defer_focus_border = self.clear_layout_transition();
         self.layout_transition = Some(LayoutTransition {
             start_rects,
             exit_rects: HashMap::new(),
@@ -175,7 +177,7 @@ impl AppState {
             easing: self.config.animation.easing,
             ghosted_wids,
             suppress_landing_focus_resync: false,
-            defer_focus_border: false,
+            defer_focus_border,
         });
     }
 
@@ -197,7 +199,10 @@ impl AppState {
             return;
         }
         self.abort_active_ghost_transition();
-        self.abort_layout_transition();
+        // Same carry as an ordinary replacement. An explicit switch sets the
+        // flag again after this returns; a focus-follow switch must not drop
+        // a deferral it interrupted.
+        let defer_focus_border = self.clear_layout_transition();
         let exit_provenance = exit_rects
             .keys()
             .filter_map(|window_id| {
@@ -222,13 +227,35 @@ impl AppState {
             easing: self.config.animation.easing,
             ghosted_wids: std::collections::HashSet::new(),
             suppress_landing_focus_resync: false,
-            defer_focus_border: false,
+            defer_focus_border,
         });
     }
 
-    pub(crate) fn abort_layout_transition(&mut self) {
+    /// Drop the in-flight layout transition without touching the focus border.
+    /// Returns whether that transition was still deferring the border.
+    fn clear_layout_transition(&mut self) -> bool {
+        let deferred = self
+            .layout_transition
+            .as_ref()
+            .is_some_and(|transition| transition.defer_focus_border);
         self.layout_transition = None;
         self.pending_suppress_landing_focus_resync = false;
+        deferred
+    }
+
+    fn reconcile_deferred_focus_border(&mut self) {
+        if let Some(hwnd) = self.previous_focused_hwnd {
+            self.show_border(hwnd);
+        }
+    }
+
+    pub(crate) fn abort_layout_transition(&mut self) {
+        if self.clear_layout_transition() {
+            // The slide will not finish through tick_animations, so the
+            // deferred border has to land now. show_border hides it again
+            // when that window is parked or gone.
+            self.reconcile_deferred_focus_border();
+        }
     }
 
     fn complete_layout_transition(&mut self) {
