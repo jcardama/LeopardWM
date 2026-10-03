@@ -13275,6 +13275,54 @@ fn test_edge_wrap_focus_switches_workspace_only_when_enabled() {
 }
 
 #[test]
+fn test_edge_wrap_focus_crosses_empty_workspaces() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    let mon = state.focused_monitor;
+
+    state.handle_command(IpcCommand::FocusDown);
+    assert_eq!(state.active_workspace_idx(mon), 0);
+
+    state.config.behavior.workspace_edge_wrap = true;
+    state.handle_command(IpcCommand::FocusDown);
+    assert_eq!(state.active_workspace_idx(mon), 1);
+    state.handle_command(IpcCommand::FocusDown);
+    assert_eq!(state.active_workspace_idx(mon), 2);
+    state.handle_command(IpcCommand::FocusUp);
+    assert_eq!(state.active_workspace_idx(mon), 1);
+    state.handle_command(IpcCommand::FocusUp);
+    assert_eq!(state.active_workspace_idx(mon), 0);
+    state.handle_command(IpcCommand::FocusUp);
+    assert_eq!(state.active_workspace_idx(mon), 8);
+}
+
+#[test]
+fn test_edge_wrap_focus_stays_in_column_before_bottom_edge() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    let mon = state.focused_monitor;
+    for id in [100, 200] {
+        state
+            .injected_window_info
+            .insert(id, make_test_window_info(id));
+    }
+    state.handle_window_event(WindowEvent::Created(100, 0));
+    let ws = &mut state.workspaces.get_mut(&mon).unwrap()[0];
+    ws.insert_window_in_column(200, 0).unwrap();
+    ws.focus_up();
+    assert_eq!(ws.focused_window(), Some(100));
+
+    state.config.behavior.workspace_edge_wrap = true;
+    state.handle_command(IpcCommand::FocusDown);
+    assert_eq!(state.active_workspace_idx(mon), 0);
+    assert_eq!(
+        state.focused_workspace().unwrap().focused_window(),
+        Some(200)
+    );
+
+    state.handle_command(IpcCommand::FocusDown);
+    assert_eq!(state.active_workspace_idx(mon), 1);
+}
+
+#[test]
 fn test_edge_wrap_move_crosses_window_to_adjacent_workspace() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
     state.config.behavior.workspace_edge_wrap = true;
