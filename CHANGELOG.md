@@ -8,6 +8,10 @@ All notable changes to LeopardWM will be documented in this file.
 
 - **With `workspace_edge_wrap` on, vertical focus now leaves an empty workspace.** An empty workspace counts as a column edge, so `focus_up` and `focus_down` (including three-finger swipes mapped to them) move to the adjacent workspace instead of doing nothing. Moving windows up or down is unchanged. Contributed by @c3us-dev. (#133)
 
+### Internal
+
+- **Lockfile dependency updates:** thiserror 2.0.21.
+
 ## 0.2.13
 
 ### Fixes
