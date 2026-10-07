@@ -2,6 +2,12 @@
 
 All notable changes to LeopardWM will be documented in this file.
 
+## 0.3.1
+
+### Fixes
+
+- **The tab bar now shows the configured colours.** Red and blue were swapped in the tab bar background, active tab and tab icons. (#140)
+
 ## 0.3.0
 
 ### Features

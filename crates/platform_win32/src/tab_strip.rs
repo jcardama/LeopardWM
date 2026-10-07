@@ -897,9 +897,9 @@ pub(crate) fn aa_fill_rounded(
         .min((right - left) / 2)
         .min((bottom - top) / 2)
         .max(0);
-    let src_b = (color_bgra & 0xFF) as f32;
+    let src_b = ((color_bgra >> 16) & 0xFF) as f32;
     let src_g = ((color_bgra >> 8) & 0xFF) as f32;
-    let src_r = ((color_bgra >> 16) & 0xFF) as f32;
+    let src_r = (color_bgra & 0xFF) as f32;
 
     let y_start = top.max(0);
     let y_end = bottom.min(bmp_h);
@@ -1066,9 +1066,9 @@ pub(crate) fn aa_fill_line_stroke(
     let by_min = ((y1.min(y2) - pad).floor() as i32).max(0);
     let by_max = ((y1.max(y2) + pad).ceil() as i32).min(bmp_h);
 
-    let src_b = (color_bgra & 0xFF) as f32;
+    let src_b = ((color_bgra >> 16) & 0xFF) as f32;
     let src_g = ((color_bgra >> 8) & 0xFF) as f32;
-    let src_r = ((color_bgra >> 16) & 0xFF) as f32;
+    let src_r = (color_bgra & 0xFF) as f32;
 
     for y in by_min..by_max {
         for x in bx_min..bx_max {
@@ -1647,8 +1647,8 @@ fn is_dark_mode() -> bool {
         .unwrap_or(false)
 }
 
-/// `GetSysColor` returns a `COLORREF` packed as `0x00BBGGRR`. Our pixel
-/// buffer uses the same BGR layout, so the value passes through.
+/// `GetSysColor` returns a `COLORREF` packed as `0x00BBGGRR`, matching
+/// the color contract used by GDI and our pixel rasterizers.
 unsafe fn sys_color_bgr(idx: windows::Win32::Graphics::Gdi::SYS_COLOR_INDEX) -> u32 {
     windows::Win32::Graphics::Gdi::GetSysColor(idx)
 }
@@ -2329,9 +2329,9 @@ pub(crate) unsafe fn create_glyph_bitmap_at_size(glyph: u16, color_bgr: u32, siz
     let pixels = std::slice::from_raw_parts_mut(bits as *mut u8, (size * size * 4) as usize);
     pixels.fill(0);
 
-    let src_b = color_bgr & 0xFF;
+    let src_b = (color_bgr >> 16) & 0xFF;
     let src_g = (color_bgr >> 8) & 0xFF;
-    let src_r = (color_bgr >> 16) & 0xFF;
+    let src_r = color_bgr & 0xFF;
     let divisor = (SS * SS) as u32;
     for dy in 0..size {
         for dx in 0..size {
@@ -2875,3 +2875,63 @@ unsafe extern "system" fn tab_strip_wnd_proc(
 // constant in our crate's import surface, so we name it locally.
 // `CreateFontW` expects u32 for `ipitchandfamily`.
 pub(crate) const FONT_PIPELINE_DEFAULT_PITCH_AND_FAMILY: u32 = 0; // DEFAULT_PITCH | FF_DONTCARE
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const BLUE_COLORREF: u32 = 0x00FF0000;
+
+    #[test]
+    fn rounded_fill_preserves_colorref_channels() {
+        let mut pixels = [0u8; 4 * 4 * 4];
+        aa_fill_rounded(&mut pixels, 4, 4, 0, 0, 4, 4, 1, BLUE_COLORREF);
+        assert_eq!(&pixels[20..24], &[255, 0, 0, 255]);
+        for pixel in pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|pixel| pixel[3] > 0)
+        {
+            assert_eq!(&pixel[..3], &[255, 0, 0]);
+        }
+    }
+
+    #[test]
+    fn line_stroke_preserves_colorref_channels() {
+        let mut pixels = [0u8; 4 * 4 * 4];
+        aa_fill_line_stroke(&mut pixels, 4, 4, 0.5, 1.5, 3.5, 1.5, 0.75, BLUE_COLORREF);
+        assert_eq!(&pixels[20..24], &[255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn glyph_bitmap_preserves_colorref_channels() {
+        use windows::Win32::Graphics::Gdi::{GetObjectW, BITMAP};
+
+        let pixels = unsafe {
+            let bitmap = create_glyph_bitmap_at_size(0xE73E, BLUE_COLORREF, 16);
+            assert!(!bitmap.is_invalid());
+            let mut info = BITMAP::default();
+            let got = GetObjectW(
+                bitmap.into(),
+                std::mem::size_of::<BITMAP>() as i32,
+                Some(&mut info as *mut _ as *mut c_void),
+            );
+            if got == 0 || info.bmBits.is_null() {
+                let _ = DeleteObject(bitmap.into());
+                panic!("glyph bitmap must expose its DIB pixels");
+            }
+            let pixels = std::slice::from_raw_parts(
+                info.bmBits as *const u8,
+                (info.bmWidthBytes * info.bmHeight) as usize,
+            )
+            .to_vec();
+            let _ = DeleteObject(bitmap.into());
+            pixels
+        };
+        assert!(pixels.as_chunks::<4>().0.iter().any(|pixel| pixel[3] > 0));
+        for pixel in pixels.as_chunks::<4>().0.iter() {
+            assert_eq!(pixel, &[pixel[3], 0, 0, pixel[3]]);
+        }
+    }
+}
