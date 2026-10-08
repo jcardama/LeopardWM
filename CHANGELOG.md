@@ -7,6 +7,7 @@ All notable changes to LeopardWM will be documented in this file.
 ### Fixes
 
 - **The tab bar now shows the configured colours.** Red and blue were swapped in the tab bar background, active tab and tab icons. (#140)
+- **Empty workspaces no longer leave a blank entry in Alt+Tab.** LeopardWM's invisible focus window, which keeps new apps on the empty workspace, is now hidden from Alt+Tab. (#136)
 
 ## 0.3.0
 

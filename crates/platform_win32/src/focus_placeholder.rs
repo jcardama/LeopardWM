@@ -4,7 +4,9 @@ use crate::Win32Error;
 use leopardwm_core_layout::{Rect, WindowId};
 use std::ffi::c_void;
 use std::sync::mpsc;
+use windows::core::BOOL;
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_CLOAK};
 use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClassNameW,
@@ -140,6 +142,20 @@ impl FocusPlaceholder {
                     let _ = UnregisterClassW(class_name_ptr, None);
                     let _ = UnregisterClassW(owner_class_name_ptr, None);
                     return;
+                }
+
+                // Cloak before showing so the shell never presents this focus target.
+                // Keep its styles and Win32 visibility unchanged for foreground restoration.
+                let cloaked = BOOL::from(true);
+                if let Err(error) = DwmSetWindowAttribute(
+                    placeholder,
+                    DWMWA_CLOAK,
+                    &cloaked as *const _ as _,
+                    std::mem::size_of::<BOOL>() as u32,
+                ) {
+                    tracing::warn!(
+                        "Failed to cloak focus placeholder; preserving empty-workspace focus without Alt+Tab suppression: {error}"
+                    );
                 }
 
                 let thread_id = GetCurrentThreadId();
