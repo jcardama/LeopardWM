@@ -28,6 +28,11 @@ intentionally disabled or otherwise unbound catalog action remains present with
 an empty binding list. A valid non-catalog command uses a generated label and
 the `Other` group so custom bindings never disappear from the query.
 
+`focus_next`, `focus_prev`, `scroll_left`, and `scroll_right` are catalog actions
+with no default keyboard binding. They appear in Settings hotkey and gesture
+menus and in the hotkeys query even when unbound; Shortcut Guide exports them
+only when an effective keyboard binding exists.
+
 Entries are validated on both dimensions, so one config entry can report both
 an unknown action and an invalid chord. F13-F24 terminal triggers that are also
 used as modifiers elsewhere are reported as non-executable, matching the

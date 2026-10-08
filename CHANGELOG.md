@@ -8,6 +8,8 @@ All notable changes to LeopardWM will be documented in this file.
 
 - **The tab bar now shows the configured colours.** Red and blue were swapped in the tab bar background, active tab and tab icons. (#140)
 - **Empty workspaces no longer leave a blank entry in Alt+Tab.** LeopardWM's invisible focus window, which keeps new apps on the empty workspace, is now hidden from Alt+Tab. (#136)
+- **Settings now offers all supported gesture commands.** Next and previous window focus and 100 px viewport scrolling are available in the gesture menus, including the default modifier-plus-wheel bindings. (#142)
+- **Turning gestures on or off now takes effect without restarting.** Settings saves and config reloads install or stop gesture detection immediately. Changing native three-finger swipe detection still requires a restart. (#142)
 
 ## 0.3.0
 

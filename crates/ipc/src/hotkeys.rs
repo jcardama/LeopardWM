@@ -44,6 +44,8 @@ pub fn hotkey_catalog() -> Vec<HotkeyAction> {
         action("focus_right", Some("Ctrl+Alt+L"), "Focus right", "Focus"),
         action("focus_up", Some("Ctrl+Alt+K"), "Focus up", "Focus"),
         action("focus_down", Some("Ctrl+Alt+J"), "Focus down", "Focus"),
+        action("focus_next", None, "Focus next window", "Focus"),
+        action("focus_prev", None, "Focus previous window", "Focus"),
         action(
             "focus_start",
             Some("Ctrl+Alt+Home"),
@@ -226,6 +228,18 @@ pub fn hotkey_catalog() -> Vec<HotkeyAction> {
             "Maximize column",
             "Column layout",
         ),
+        action(
+            "scroll_left",
+            None,
+            "Scroll viewport left by 100 px",
+            "Column layout",
+        ),
+        action(
+            "scroll_right",
+            None,
+            "Scroll viewport right by 100 px",
+            "Column layout",
+        ),
         action("close_window", Some("Ctrl+Alt+W"), "Close window", "Window"),
         action(
             "toggle_floating",
@@ -354,8 +368,8 @@ pub fn default_bindings_map() -> HashMap<String, String> {
 }
 
 /// Map a normalized (lowercase, underscored) action id to its `IpcCommand`.
-/// Covers every catalog id plus non-catalog command aliases (gestures,
-/// renames, deprecated width presets) accepted in config files.
+/// Covers every catalog id plus non-catalog command aliases (renames,
+/// deprecated width presets) accepted in config files.
 pub fn command_for_action(id: &str) -> Option<crate::IpcCommand> {
     use crate::IpcCommand;
 
@@ -485,6 +499,21 @@ mod tests {
     }
 
     #[test]
+    fn test_gesture_actions_are_catalogued_without_default_bindings() {
+        let catalog = hotkey_catalog();
+        for (id, expected) in [
+            ("focus_next", IpcCommand::FocusNext),
+            ("focus_prev", IpcCommand::FocusPrev),
+            ("scroll_left", IpcCommand::Scroll { delta: -100.0 }),
+            ("scroll_right", IpcCommand::Scroll { delta: 100.0 }),
+        ] {
+            let action = catalog.iter().find(|action| action.id == id).expect(id);
+            assert!(action.default_key.is_none(), "{id} must remain unbound");
+            assert_eq!(command_for_action(id), Some(expected));
+        }
+    }
+
+    #[test]
     fn test_catalog_has_no_duplicate_ids_or_keys() {
         let catalog = hotkey_catalog();
         let mut ids = std::collections::HashSet::new();
@@ -520,7 +549,7 @@ mod tests {
     fn test_default_bindings_match_frozen_expected_set() {
         // Golden set: the complete key-chord -> action map the catalog must
         // produce. Guards against transcription drift (a typo would keep the
-        // count at 59 but change a binding). Update deliberately when the
+        // count unchanged but change a binding). Update deliberately when the
         // intended defaults change.
         let expected: &[(&str, &str)] = &[
             ("Ctrl+Alt+H", "focus_left"),

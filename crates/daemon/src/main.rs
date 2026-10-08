@@ -756,6 +756,7 @@ struct EventLoopCtx<'a> {
     idle_layout_reapply_timer: &'a mut Option<tokio::task::JoinHandle<()>>,
     display_change_apply_retry_timer: &'a mut Option<(u64, tokio::task::JoinHandle<()>)>,
     mouse_hook_handle: &'a mut Option<MouseHookHandle>,
+    gestures: &'a mut GestureRuntime,
 }
 
 async fn sync_pending_layout_apply_timeout_ui(
@@ -1443,37 +1444,109 @@ fn sync_mouse_hook(
     }
 }
 
-/// Register gesture detection (if enabled).
-fn setup_gestures(
-    config: &Config,
-    event_tx: &mpsc::Sender<DaemonEvent>,
-    thread_handles: &mut Vec<std::thread::JoinHandle<()>>,
-) -> (
-    Option<leopardwm_platform_win32::GestureHandle>,
-    leopardwm_ipc::NativeSwipeStatus,
+#[derive(Debug, PartialEq, Eq)]
+enum GestureHookChange {
+    Install,
+    Stop,
+    None,
+}
+
+fn gesture_hook_change(old_enabled: bool, new_enabled: bool) -> GestureHookChange {
+    match (old_enabled, new_enabled) {
+        (false, true) => GestureHookChange::Install,
+        (true, false) => GestureHookChange::Stop,
+        _ => GestureHookChange::None,
+    }
+}
+
+fn forward_gestures(
+    receiver: std::sync::mpsc::Receiver<GestureEvent>,
+    sender: mpsc::Sender<DaemonEvent>,
+    cancel: Arc<std::sync::atomic::AtomicBool>,
 ) {
-    let (handle, registration_error, raw_input_error) = if config.gestures.enabled {
-        // Set scroll modifier before registering the hook
+    use std::sync::atomic::Ordering;
+    while let Ok(event) = receiver.recv() {
+        let mut event = DaemonEvent::Gesture(event);
+        loop {
+            if cancel.load(Ordering::Acquire) {
+                return;
+            }
+            match sender.try_send(event) {
+                Ok(()) => break,
+                Err(mpsc::error::TrySendError::Closed(_)) => return,
+                Err(mpsc::error::TrySendError::Full(pending)) => {
+                    event = pending;
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
+        }
+    }
+}
+
+struct GestureRuntime {
+    enabled: bool,
+    startup_raw_input: bool,
+    handle: Option<leopardwm_platform_win32::GestureHandle>,
+    forwarder: Option<std::thread::JoinHandle<()>>,
+    cancel: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl GestureRuntime {
+    fn sync(
+        &mut self,
+        config: &Config,
+        event_tx: &mpsc::Sender<DaemonEvent>,
+    ) -> Option<leopardwm_ipc::NativeSwipeStatus> {
+        let change = gesture_hook_change(self.enabled, config.gestures.enabled);
+        self.enabled = config.gestures.enabled;
+        match change {
+            GestureHookChange::Install => Some(self.install(config, event_tx)),
+            GestureHookChange::Stop => {
+                self.stop();
+                Some(crate::state::derive_native_swipe_status(
+                    self.startup_raw_input,
+                    false,
+                    None,
+                    None,
+                ))
+            }
+            GestureHookChange::None => None,
+        }
+    }
+
+    fn install(
+        &mut self,
+        config: &Config,
+        event_tx: &mpsc::Sender<DaemonEvent>,
+    ) -> leopardwm_ipc::NativeSwipeStatus {
         leopardwm_platform_win32::set_scroll_modifier(&config.hotkeys.scroll_modifier);
         leopardwm_platform_win32::set_wheel_swipes(config.gestures.wheel_swipes);
-
-        match register_gestures_with_raw_input(config.gestures.raw_input) {
-            Ok((handle, gesture_receiver, raw_input_error)) => {
+        self.cancel
+            .store(false, std::sync::atomic::Ordering::Release);
+        let result = register_gestures_with_raw_input(self.startup_raw_input).and_then(
+            |(handle, receiver, raw_input_error)| {
+                let sender = event_tx.clone();
+                let cancel = self.cancel.clone();
+                let forwarder = std::thread::Builder::new()
+                    .name("gesture-fwd".into())
+                    .spawn(move || {
+                        forward_gestures(receiver, sender, cancel);
+                    })
+                    .map_err(|e| {
+                        leopardwm_platform_win32::Win32Error::HookInstallFailed(format!(
+                            "Failed to spawn gesture forwarding thread: {e}"
+                        ))
+                    })?;
+                self.handle = Some(handle);
+                self.forwarder = Some(forwarder);
+                Ok(raw_input_error)
+            },
+        );
+        let (registration_error, raw_input_error) = match result {
+            Ok(raw_input_error) => {
                 info!("Gesture detection enabled");
                 leopardwm_platform_win32::emit_gesture_registration("registered");
-
-                // Spawn thread to forward gesture events
-                match spawn_forwarding_thread(
-                    "gesture-fwd",
-                    gesture_receiver,
-                    event_tx.clone(),
-                    DaemonEvent::Gesture,
-                ) {
-                    Ok(handle) => thread_handles.push(handle),
-                    Err(e) => warn!("{}", e),
-                }
-
-                (Some(handle), None, raw_input_error)
+                (None, raw_input_error)
             }
             Err(e) => {
                 warn!(
@@ -1481,21 +1554,52 @@ fn setup_gestures(
                     e
                 );
                 leopardwm_platform_win32::emit_gesture_registration("failed");
-                (None, Some(e.to_string()), None)
+                (Some(e.to_string()), None)
             }
+        };
+        crate::state::derive_native_swipe_status(
+            self.startup_raw_input,
+            true,
+            registration_error.as_deref(),
+            raw_input_error.as_deref(),
+        )
+    }
+
+    fn stop(&mut self) {
+        self.cancel
+            .store(true, std::sync::atomic::Ordering::Release);
+        self.handle = None;
+        if let Some(forwarder) = self.forwarder.take() {
+            let _ = forwarder.join();
         }
-    } else {
+    }
+}
+
+impl Drop for GestureRuntime {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+async fn setup_gestures(
+    config: &Config,
+    event_tx: &mpsc::Sender<DaemonEvent>,
+    state: &Arc<Mutex<AppState>>,
+) -> GestureRuntime {
+    let mut gestures = GestureRuntime {
+        enabled: false,
+        startup_raw_input: config.gestures.raw_input,
+        handle: None,
+        forwarder: None,
+        cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    };
+    let status = gestures.sync(config, event_tx).unwrap_or_else(|| {
         info!("Gesture detection disabled by config (gestures.enabled = false)");
         leopardwm_platform_win32::emit_gesture_registration("disabled");
-        (None, None, None)
-    };
-    let status = crate::state::derive_native_swipe_status(
-        config.gestures.raw_input,
-        config.gestures.enabled,
-        registration_error.as_deref(),
-        raw_input_error.as_deref(),
-    );
-    (handle, status)
+        crate::state::derive_native_swipe_status(config.gestures.raw_input, false, None, None)
+    });
+    state.lock().await.native_swipes = status;
+    gestures
 }
 
 /// Initialize the system tray icon and bridge its events into the event loop.
@@ -2111,6 +2215,10 @@ async fn handle_gesture_event(ctx: &mut EventLoopCtx<'_>, gesture_event: Gesture
         let state = ctx.state.lock().await;
         state.config.gestures.clone()
     };
+
+    if !gesture_config.enabled {
+        return false;
+    }
 
     let cmd_str = match gesture_event {
         GestureEvent::SwipeLeft => &gesture_config.swipe_left,
@@ -3602,6 +3710,9 @@ async fn finish_daemon_event(ctx: &mut EventLoopCtx<'_>) {
     sync_pending_layout_apply_timeout_ui(ctx.state, ctx.tray_manager, &*ctx.hotkey_state).await;
     let (should_arm_idle_reapply, display_retry_generation) = {
         let mut state = ctx.state.lock().await;
+        if let Some(status) = ctx.gestures.sync(&state.config, ctx.event_tx) {
+            state.native_swipes = status;
+        }
         let timer_needed = state.idle_layout_reapply_timer_needed();
         let retry_generation = state
             .display_change_apply_retry
@@ -3725,8 +3836,7 @@ async fn main() -> Result<()> {
     let mut mouse_hook_handle = setup_mouse_hook(&config, &event_tx, &mut thread_handles);
 
     // Register gesture detection (if enabled)
-    let (_gesture_handle, native_swipes) = setup_gestures(&config, &event_tx, &mut thread_handles);
-    state.lock().await.native_swipes = native_swipes;
+    let mut gestures = setup_gestures(&config, &event_tx, &state).await;
 
     // Initialize overlay for snap hints and drag ghost preview.
     // Always created — snap_hints.enabled only gates resize-hint visibility,
@@ -3871,6 +3981,7 @@ async fn main() -> Result<()> {
         idle_layout_reapply_timer: &mut idle_layout_reapply_timer,
         display_change_apply_retry_timer: &mut display_change_apply_retry_timer,
         mouse_hook_handle: &mut mouse_hook_handle,
+        gestures: &mut gestures,
     };
 
     // Main event loop
@@ -4005,6 +4116,7 @@ async fn main() -> Result<()> {
     // Stop the update-checker worker so it doesn't hold up shutdown.
     update_check_cancel.store(true, std::sync::atomic::Ordering::SeqCst);
     abort_event_timers(&mut ctx);
+    ctx.gestures.stop();
     stop_animation_worker_and_run_recovery(animation_worker, &state, event_rx).await;
     quit_fallback.complete();
 

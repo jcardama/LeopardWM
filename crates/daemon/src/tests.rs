@@ -8872,6 +8872,41 @@ fn test_shutdown_mode_for_command_maps_shutdown_variants() {
 }
 
 #[test]
+fn test_gesture_hook_changes_only_when_enabled_changes() {
+    for (old, new, expected) in [
+        (false, false, GestureHookChange::None),
+        (false, true, GestureHookChange::Install),
+        (true, false, GestureHookChange::Stop),
+        (true, true, GestureHookChange::None),
+    ] {
+        assert_eq!(gesture_hook_change(old, new), expected);
+    }
+}
+
+#[test]
+fn test_gesture_forwarder_cancels_with_full_daemon_channel() {
+    let (event_tx, mut event_rx) = mpsc::channel(1);
+    event_tx
+        .try_send(DaemonEvent::Gesture(GestureEvent::ScrollUp))
+        .unwrap();
+    let (gesture_tx, gesture_rx) = std::sync::mpsc::channel();
+    gesture_tx.send(GestureEvent::ScrollDown).unwrap();
+    let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let forward_cancel = cancel.clone();
+    let mut forwarder = Some(std::thread::spawn(move || {
+        forward_gestures(gesture_rx, event_tx, forward_cancel);
+    }));
+    cancel.store(true, Ordering::Release);
+    drop(gesture_tx);
+    assert!(join_with_timeout(&mut forwarder, Duration::from_secs(1)));
+    assert!(matches!(
+        event_rx.try_recv(),
+        Ok(DaemonEvent::Gesture(GestureEvent::ScrollUp))
+    ));
+    assert!(event_rx.try_recv().is_err());
+}
+
+#[test]
 fn test_gesture_command_classification_distinguishes_no_action_and_unknown() {
     assert!(matches!(
         classify_gesture_command(""),
@@ -9092,7 +9127,7 @@ fn test_cmd_query_hotkeys_appends_valid_non_catalog_actions() {
     config
         .hotkeys
         .bindings
-        .insert("Ctrl+Alt+N".to_string(), "focus_next".to_string());
+        .insert("Ctrl+Alt+N".to_string(), "width_third".to_string());
 
     let mut state = AppState::new_with_config(config, test_monitors());
     let IpcResponse::HotkeyList {
@@ -9103,8 +9138,8 @@ fn test_cmd_query_hotkeys_appends_valid_non_catalog_actions() {
     };
 
     let extra = hotkeys.last().unwrap();
-    assert_eq!(extra.action_id, "focus_next");
-    assert_eq!(extra.label, "Focus next");
+    assert_eq!(extra.action_id, "width_third");
+    assert_eq!(extra.label, "Width third");
     assert_eq!(extra.group, "Other");
     assert_eq!(extra.bindings, vec!["Ctrl+Alt+N"]);
     assert!(extra.enabled);
@@ -20954,6 +20989,13 @@ async fn test_taskbar_buttons_paused_tray_selection_keeps_buttons_shown_until_re
         idle_layout_reapply_timer: &mut None,
         display_change_apply_retry_timer: &mut None,
         mouse_hook_handle: &mut None,
+        gestures: &mut GestureRuntime {
+            enabled: false,
+            startup_raw_input: false,
+            handle: None,
+            forwarder: None,
+            cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        },
     };
     for mode in [
         HideInactiveWorkspaces,

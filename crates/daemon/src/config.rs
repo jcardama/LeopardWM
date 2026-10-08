@@ -769,17 +769,11 @@ impl WindowRule {
 
 /// Hotkey bindings configuration.
 ///
-/// Each key is a hotkey string (e.g., "Win+Alt+H") and each value is a command
-/// (e.g., "focus_left"). Supported commands:
-/// - focus_left, focus_right, focus_up, focus_down
-/// - move_column_left, move_column_right
-/// - focus_monitor_left, focus_monitor_right, focus_monitor_up, focus_monitor_down
-/// - move_to_monitor_left, move_to_monitor_right, move_to_monitor_up, move_to_monitor_down
-/// - resize_grow, resize_shrink (by 50px)
-/// - scroll_left, scroll_right (by 100px)
-/// - refresh, reload
-/// - panic_revert (emergency visibility restore + shutdown)
-/// - toggle_pause (pause/resume tiling)
+/// Each key is a hotkey string (e.g., "Ctrl+Alt+H") and each value is a command
+/// (e.g., "focus_left"). Available actions and labels come from
+/// `leopardwm_ipc::hotkeys::hotkey_catalog`.
+/// Unbound actions include focus_next/focus_prev (linear window navigation)
+/// and scroll_left/scroll_right (move the strip viewport by 100 px).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HotkeyConfig {
@@ -815,7 +809,7 @@ impl Default for HotkeyConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GestureConfig {
-    /// Whether gesture support is enabled.
+    /// Whether gesture support is enabled. Takes effect on config reload.
     #[serde(default = "default_true")]
     pub enabled: bool,
 

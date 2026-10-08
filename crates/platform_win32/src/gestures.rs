@@ -439,26 +439,20 @@ impl Drop for GestureHandle {
             );
         }
         if let Some(thread) = self.thread.take() {
-            // Give the thread a moment to clean up
-            for _ in 0..30 {
-                if thread.is_finished() {
-                    let _ = thread.join();
-                    break;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
+            // The old hook and Raw Input backend must be gone before re-registration.
+            let _ = thread.join();
         }
 
-        // Clear the global sender and state (recover from mutex poisoning)
-        let mut sender = GESTURE_SENDER.lock().unwrap_or_else(recover_poisoned_mutex);
-        *sender = None;
-        drop(sender);
-        let mut state = GESTURE_STATE.lock().unwrap_or_else(recover_poisoned_mutex);
-        *state = None;
+        clear_gesture_state();
 
         tracing::debug!("Gesture detection stopped");
         emit_gesture_registration("stopped");
     }
+}
+
+fn clear_gesture_state() {
+    *GESTURE_SENDER.lock().unwrap_or_else(recover_poisoned_mutex) = None;
+    *GESTURE_STATE.lock().unwrap_or_else(recover_poisoned_mutex) = None;
 }
 
 /// Set the modifier keys required for scroll wheel navigation.
@@ -527,6 +521,14 @@ pub fn register_gestures_with_raw_input(
         *sender = Some(tx);
     }
 
+    let result = start_gesture_thread(raw_input).map(|(handle, error)| (handle, rx, error));
+    if result.is_err() {
+        clear_gesture_state();
+    }
+    result
+}
+
+fn start_gesture_thread(raw_input: bool) -> Result<(GestureHandle, Option<String>), Win32Error> {
     // Initialize accumulator state
     {
         let mut state = GESTURE_STATE.lock().map_err(|_| {
@@ -625,9 +627,20 @@ pub fn register_gestures_with_raw_input(
         })?;
 
     // Wait for initialization
-    let (thread_id, raw_input_error) = init_rx.recv().map_err(|_| {
-        Win32Error::HookInstallFailed("Gesture thread initialization failed".to_string())
-    })??;
+    let initialization = init_rx
+        .recv()
+        .map_err(|_| {
+            Win32Error::HookInstallFailed("Gesture thread initialization failed".to_string())
+        })
+        .and_then(|result| result);
+    let (thread_id, raw_input_error) = match initialization {
+        Ok(result) => result,
+        Err(error) => {
+            let _ = thread.join();
+            RAW_GESTURES_ACTIVE.store(false, Ordering::Release);
+            return Err(error);
+        }
+    };
 
     tracing::info!("Gesture detection registered (low-level mouse hook)");
 
@@ -636,7 +649,6 @@ pub fn register_gestures_with_raw_input(
             thread_id,
             thread: Some(thread),
         },
-        rx,
         raw_input_error,
     ))
 }

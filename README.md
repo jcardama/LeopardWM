@@ -170,6 +170,18 @@ Most hotkeys use `Ctrl+Alt` as the base modifier. Layered pattern: base = focus,
 | `Ctrl+Alt+Shift+R` | Reload config |
 | `Win+Ctrl+Escape` | Emergency restore + panic-revert |
 
+These commands have no default keyboard binding and are also available in the
+Settings gesture menus:
+
+| Command | Action |
+|---|---|
+| `focus_next` / `focus_prev` | Focus the next / previous window across columns, wrapping at strip ends |
+| `scroll_left` / `scroll_right` | Move the strip viewport left / right by 100 px without changing focus |
+
+`scroll_up` and `scroll_down` under `[gestures]` default to `focus_next` and
+`focus_prev`. Hold `[hotkeys].scroll_modifier` (Ctrl+Alt by default) while using
+the mouse wheel to run them.
+
 > The scratchpad and sticky pins are session-scoped: they are keyed by window handle and reset when the daemon restarts.
 
 ## Tabbed columns
@@ -407,7 +419,9 @@ applies live on config reload; wheel events still reach the application, and
 modifier-plus-wheel navigation is unchanged. Non-Precision touchpads that send
 swipes as wheel events lose those swipes with it off. Precision Touchpads can
 keep native swipes with `raw_input = true`. `enabled = false` still disables all
-gesture support.
+gesture support. Changes to `enabled` apply live on Settings save or config
+reload. Re-enabling uses the native Raw Input setting from daemon startup;
+changing `raw_input` still requires a restart.
 
 Failed physical gestures are diagnosed with an opt-in, short capture — not by leaving general logging at TRACE. Capture is **default off**; turning it on does not change gesture behavior.
 
