@@ -2077,7 +2077,7 @@ function loadHotkeysSorted(bindings, scrollModifier, disabled) {
     '<td class="hk-cmd-label" data-i18n="settings.text.scroll_modifier">' + escHtml(t('settings.text.scroll_modifier')) + '</td>' +
     '<td><input type="text" class="hk-key" value="' + escAttr(scrollModifier || 'Ctrl+Alt') + '" data-i18n-placeholder="settings.text.e_g_ctrl_alt" placeholder="' + escAttr(t('settings.text.e_g_ctrl_alt')) + '"></td>' +
     '<td><button class="row-delete" data-i18n-title="settings.text.reset_to_default" title="' + escAttr(t('settings.text.reset_to_default')) + '" onclick="this.closest(\'tr\').querySelector(\'.hk-key\').value=\'Ctrl+Alt\';updateScrollLabels();autoSave(0);">' + resetIcon + '</button></td>';
-  var focusRows = tbody.querySelectorAll('tr[data-cmd="focus_down"]');
+  var focusRows = tbody.querySelectorAll('tr[data-cmd="focus_prev"]');
   var anchor = focusRows.length ? focusRows[0] : null;
   if (anchor && anchor.nextSibling) { tbody.insertBefore(tr, anchor.nextSibling); }
   else { tbody.appendChild(tr); }
@@ -2601,6 +2601,11 @@ mod tests {
             "var key = disabledSet.indexOf(cmd) !== -1 ? '' : (cmdToKey[cmd] || defaultKeyForCmd(cmd));"
         ));
         assert!(SETTINGS_HTML.contains("if (!k && c && defaultKeyForCmd(c)) d.push(c);"));
+    }
+
+    #[test]
+    fn scroll_modifier_row_follows_linear_focus_navigation() {
+        assert!(SETTINGS_HTML.contains("tbody.querySelectorAll('tr[data-cmd=\"focus_prev\"]')"));
     }
 
     #[test]
