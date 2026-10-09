@@ -1404,6 +1404,7 @@ applyLocale(localeStrings, window._language || 'en');
 function refreshLocale(strings, language) {
   if (document.documentElement.lang === language) return;
   applyLocale(strings, language);
+  refreshCommandLabels();
   setCb('cb-appearance-language', language);
   document.querySelectorAll('.combobox').forEach(function(cb) {
     var selected = Array.from(cb.querySelectorAll('.combobox-option')).find(function(option) {
@@ -1748,9 +1749,8 @@ function init(cfg) {
 /* ── Delete icon (X) ─────────────────────────────────────────────────── */
 var deleteIcon = '<svg viewBox="0 0 12 12"><line x1="2" y1="2" x2="10" y2="10"/><line x1="10" y1="2" x2="2" y2="10"/></svg>';
 
-/* Hotkey tables derived from the single catalog the host injects
-   (window._hotkeyCatalog). Names, display order, and reset-to-defaults all
-   stay in sync with the Rust ipc::hotkeys catalog with no duplication. */
+/* The host catalog supplies display order, defaults, and fallback labels.
+   Locales supply translated names; a test keeps English names in sync. */
 var HOTKEY_CATALOG = window._hotkeyCatalog || [];
 var CMD_ORDER = HOTKEY_CATALOG.map(function(a) { return a.id; });
 var CMD_LABELS = {};
@@ -1768,8 +1768,25 @@ function cmdLabel(cmd) {
    parenthetical) is what the hotkeys list shows, with the full text in a tooltip. */
 function cmdShortLabel(cmd) {
   var l = cmdLabel(cmd);
-  var i = l.indexOf(' (');
-  return i === -1 ? l : l.slice(0, i);
+  var i = l.search(/[（(]/);
+  return i === -1 ? l : l.slice(0, i).trimEnd();
+}
+
+function refreshCommandLabels() {
+  document.querySelectorAll('#hotkeys-body tr[data-cmd]').forEach(function(tr) {
+    var fullLabel = cmdLabel(tr.dataset.cmd);
+    var shortLabel = cmdShortLabel(tr.dataset.cmd);
+    var label = tr.querySelector('.hk-cmd-label');
+    label.textContent = shortLabel;
+    if (fullLabel === shortLabel) label.removeAttribute('title');
+    else label.title = fullLabel;
+  });
+  document.querySelectorAll('[id^="cb-gestures-"]').forEach(function(cb) {
+    cb.querySelectorAll('.combobox-option').forEach(function(option) {
+      option.textContent = option.dataset.value === '' ? t('settings.text.no_action') : cmdLabel(option.dataset.value);
+    });
+    cb.querySelector('.combobox-text').textContent = cb.dataset.value === '' ? t('settings.text.no_action') : cmdLabel(cb.dataset.value);
+  });
 }
 
 function updateScrollLabels() {
@@ -2526,6 +2543,7 @@ mod tests {
 
         let payload = serde_json::json!({
             "page": SETTINGS_HTML,
+            "hotkeyCatalog": leopardwm_ipc::hotkeys::hotkey_catalog(),
             "languages": serde_json::from_str::<serde_json::Value>(&crate::locale::languages_json()).unwrap(),
             "english": serde_json::from_str::<serde_json::Value>(&crate::locale::page_json("en")).unwrap(),
             "chinese": serde_json::from_str::<serde_json::Value>(&crate::locale::page_json("zh-CN")).unwrap(),

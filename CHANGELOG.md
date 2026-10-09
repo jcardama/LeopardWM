@@ -6,6 +6,7 @@ All notable changes to LeopardWM will be documented in this file.
 
 ### Fixes
 
+- **Settings now uses a native-speaker-reviewed Simplified Chinese translation, including hotkey and gesture command names.** Contributed by @bd-dxg. (#98, #143)
 - **Scrolling a window off-screen toward a neighbouring monitor no longer triggers a redundant layout update after the animation.**
 - **Scrolling a window into view from the side of a neighbouring monitor no longer drops the animation frame rate.** The focus border is now trimmed at the monitor edge when the scroll lands instead of on every frame.
 - **The tab bar now shows the configured colours.** Red and blue were swapped in the tab bar background, active tab and tab icons. (#140)

@@ -205,6 +205,25 @@ mod tests {
     }
 
     #[test]
+    fn english_hotkey_names_match_the_action_catalog() {
+        let english: BTreeMap<String, String> = toml::from_str(ENGLISH).unwrap();
+        let names = english
+            .into_iter()
+            .filter(|(key, _)| key.starts_with("hotkeys.command."))
+            .collect::<BTreeMap<_, _>>();
+        let expected = leopardwm_ipc::hotkeys::hotkey_catalog()
+            .into_iter()
+            .map(|action| (format!("hotkeys.command.{}", action.id), action.label))
+            .collect::<BTreeMap<_, _>>();
+        for (key, label) in &expected {
+            assert_eq!(names.get(key), Some(label), "en.toml: {key}");
+        }
+        for key in names.keys() {
+            assert!(expected.contains_key(key), "en.toml: orphan key {key}");
+        }
+    }
+
+    #[test]
     fn catalog_guard_names_defective_files_and_keys() {
         let english = BTreeMap::from([
             ("language.name".to_string(), "English".to_string()),

@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
-const { page, english, chinese, languages: bundledLanguages } = JSON.parse(require('node:fs').readFileSync(0, 'utf8'));
+const { page, english, chinese, hotkeyCatalog, languages: bundledLanguages } = JSON.parse(require('node:fs').readFileSync(0, 'utf8'));
 const script = page.split('<script>')[1].split('</script>')[0];
 const languagePopup = {};
 const initialLanguageCombo = { querySelector: () => languagePopup };
@@ -321,3 +321,122 @@ assert.equal(invalid.rows[0].input.value, 'unfinished');
 invalid.flush();
 assert.deepEqual(invalid.saves[0].config.layout.width_presets, [0.5]);
 assert.equal(invalid.saves[0].config.layout.default_width_preset, 1);
+
+function commandFixture() {
+  const rows = [];
+  const combos = [];
+  const fields = {};
+  const doc = {
+    documentElement: { lang: 'en' }, addEventListener() {}, querySelectorAll: () => [],
+    getElementById: () => null, querySelector: () => null
+  };
+  const ctx = vm.createContext({
+    document: doc, window: { _localeStrings: english, _hotkeyCatalog: hotkeyCatalog,
+      ipc: { postMessage() { throw new Error('Language refresh sent IPC'); } } },
+    setTimeout() { throw new Error('Language refresh scheduled a save'); }, clearTimeout() {}
+  });
+  vm.runInContext(script, ctx);
+  const decode = text => text.replace(/&quot;/g, '"').replace(/&gt;/g, '>').replace(/&lt;/g, '<').replace(/&amp;/g, '&');
+  doc.createElement = () => {
+    const label = eventElement();
+    const attributes = new Map();
+    label.setAttribute = (name, value) => attributes.set(name, String(value));
+    label.getAttribute = name => attributes.get(name) ?? null;
+    label.removeAttribute = name => attributes.delete(name);
+    Object.defineProperty(label, 'title', {
+      get: () => label.getAttribute('title') || '',
+      set: value => label.setAttribute('title', value)
+    });
+    const input = eventElement();
+    const note = eventElement();
+    const row = { dataset: {}, label, input, note, querySelectorAll: () => [],
+      querySelector: selector => ({ '.hk-cmd-label': label, '.hk-key': input, '.hk-dup-note': note })[selector] };
+    Object.defineProperty(row, 'innerHTML', { set(markup) {
+      const match = markup.match(/<td class="hk-cmd-label"(?: title="([^"]*)")?>([^<]*)<\/td>/);
+      if (match[1] === undefined) label.removeAttribute('title');
+      else label.title = decode(match[1]);
+      label.textContent = decode(match[2]);
+      input.value = decode(markup.match(/class="hk-key hk-record" value="([^"]*)"/)[1]);
+    } });
+    return row;
+  };
+  fields['hotkeys-body'] = { appendChild: row => rows.push(row) };
+  const presetCombo = eventElement();
+  presetCombo.querySelector = () => eventElement();
+  presetCombo.querySelectorAll = () => [];
+  fields['cb-layout-default_width_preset'] = presetCombo;
+  doc.getElementById = id => fields[id] || null;
+  doc.querySelectorAll = selector => selector === '#hotkeys-body tr[data-cmd]' ? rows
+    : selector === '.combobox' || selector === '[id^="cb-gestures-"]' ? combos : [];
+  function addCombo(id, value) {
+    const cb = eventElement(); cb.dataset.value = value;
+    const trigger = eventElement();
+    const text = eventElement();
+    const popup = eventElement();
+    let options = [];
+    Object.defineProperty(cb, 'innerHTML', { set(markup) {
+      text.textContent = decode(markup.match(/class="combobox-text">([^<]*)/)[1]);
+      options = Array.from(markup.matchAll(/class="combobox-option([^"]*)" data-value="([^"]*)"[^>]*>([^<]*)/g), match => {
+        const option = eventElement(); option.dataset.value = match[2]; option.textContent = decode(match[3]);
+        if (match[1].includes('selected')) option.classList.add('selected');
+        return option;
+      });
+    } });
+    cb.querySelector = selector => selector === '.combobox-trigger' ? trigger
+      : selector === '.combobox-text' ? text : popup;
+    cb.querySelectorAll = () => options;
+    fields[id] = cb; combos.push(cb); ctx.initGestureCombo(id);
+    return { cb, text, options };
+  }
+  return { ctx, rows, combos, addCombo };
+}
+
+for (const [full, short] of [
+  ['Command (detail)', 'Command'], ['Command(detail)', 'Command'],
+  ['命令（详情）', '命令'], ['命令 （详情）', '命令'],
+  ['Command（first） (second)', 'Command'], ['Command without detail', 'Command without detail']
+]) {
+  const fixture = commandFixture();
+  fixture.ctx.localeStrings = { 'hotkeys.command.toggle_new_window_placement': full };
+  fixture.ctx.addHotkeyRow('', 'toggle_new_window_placement');
+  assert.equal(fixture.rows[0].label.textContent, short, full);
+  assert.equal(fixture.rows[0].label.getAttribute('title'), full === short ? null : full, full);
+}
+
+const commands = commandFixture();
+commands.ctx.addHotkeyRow('Ctrl+Alt+H', 'toggle_new_window_placement');
+commands.ctx.addHotkeyRow('Ctrl+Alt+H', 'focus_next');
+commands.ctx.addHotkeyRow('', 'custom_command');
+commands.rows[2].input.value = 'unfinished shortcut';
+commands.rows[1].label.title = 'Previous detail';
+const commandRows = commands.rows.slice();
+const gestureValues = ['toggle_new_window_placement', 'focus_next', '', 'custom_command', 'scroll_left', 'focus_prev'];
+const gestureIds = ['swipe_left', 'swipe_right', 'swipe_up', 'swipe_down', 'scroll_up', 'scroll_down'];
+const gestureCombos = gestureIds.map((id, index) => commands.addCombo('cb-gestures-' + id, gestureValues[index]));
+for (const [strings, language, short, full, next, noAction] of [
+  [chinese, 'zh-CN', '切换新窗口放置方式', '切换新窗口放置方式（新建列／堆叠到列）', '焦点移到下一个窗口', '无操作'],
+  [english, 'en', 'Toggle new-window placement', 'Toggle new-window placement (new column / in column)', 'Focus next window', 'No action']
+]) {
+  commands.ctx.refreshLocale(strings, language);
+  assert.equal(commands.rows.length, commandRows.length);
+  commands.rows.forEach((row, index) => assert.equal(row, commandRows[index]));
+  assert.equal(commands.rows[0].label.textContent, short);
+  assert.equal(commands.rows[0].label.title, full);
+  assert.equal(commands.rows[1].label.textContent, next);
+  assert.equal(commands.rows[1].label.getAttribute('title'), null);
+  assert.equal(commands.rows[2].label.textContent, 'custom_command');
+  assert.deepEqual(commands.rows.map(row => row.input.value), ['Ctrl+Alt+H', 'Ctrl+Alt+H', 'unfinished shortcut']);
+  assert.equal(commands.rows[0].note.textContent, strings['settings.text.also_bound_to_commands'].replace('{commands}', next));
+  assert.equal(commands.rows[1].note.textContent, strings['settings.text.also_bound_to_commands'].replace('{commands}', short));
+  gestureCombos.forEach(({ cb, text, options }, index) => {
+    assert.equal(cb.dataset.value, gestureValues[index]);
+    assert.equal(text.textContent, gestureValues[index] === '' ? noAction
+      : strings['hotkeys.command.' + gestureValues[index]] || gestureValues[index]);
+    assert.deepEqual(cb.querySelectorAll('.combobox-option'), options);
+    assert.deepEqual(options.filter(option => option.classList.contains('selected')).map(option => option.dataset.value),
+      gestureValues[index] === 'custom_command' ? [] : [gestureValues[index]]);
+    assert.deepEqual(options.map(option => option.dataset.value), ['', ...hotkeyCatalog.map(action => action.id)]);
+    options.forEach(option => assert.equal(option.textContent, option.dataset.value === '' ? noAction
+      : strings['hotkeys.command.' + option.dataset.value]));
+  });
+}
