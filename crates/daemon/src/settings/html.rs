@@ -1760,7 +1760,10 @@ HOTKEY_CATALOG.forEach(function(a) {
   if (a.key) { DEFAULT_HOTKEYS[a.key] = a.id; }
 });
 
-function cmdLabel(cmd) { return CMD_LABELS[cmd] || cmd; }
+function cmdLabel(cmd) {
+  var localized = t('hotkeys.command.' + cmd);
+  return localized === ('hotkeys.command.' + cmd) ? (CMD_LABELS[cmd] || cmd) : localized;
+}
 /* The catalog label may carry a " (detail)" suffix; the short form (before the
    parenthetical) is what the hotkeys list shows, with the full text in a tooltip. */
 function cmdShortLabel(cmd) {
