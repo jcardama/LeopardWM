@@ -197,19 +197,11 @@ impl AppState {
                                     return;
                                 }
                                 if let Some(bgr) = self.border_color_bgr() {
-                                    let content =
-                                        self.expected_physical_rect(hwnd).unwrap_or(layout_rect);
-                                    let overlay = crate::physical_placement::expand_border_overlay(
-                                        content,
+                                    if let Some(overlay) = self.compute_tiled_border_overlay_rect(
+                                        hwnd,
+                                        layout_rect,
                                         border_width,
-                                        matches!(
-                                            self.border_position(),
-                                            leopardwm_platform_win32::border::BorderPosition::Outside
-                                        ),
-                                    );
-                                    if let Some(overlay) =
-                                        self.project_decoration_rect(hwnd, overlay)
-                                    {
+                                    ) {
                                         frame.show_final_overlay(
                                             overlay,
                                             border_width,
@@ -253,6 +245,42 @@ impl AppState {
                 }
             }
             frame.hide();
+        }
+    }
+
+    pub(crate) fn compute_tiled_border_overlay_rect(
+        &self,
+        hwnd: u64,
+        layout_rect: leopardwm_core_layout::Rect,
+        border_width: u32,
+    ) -> Option<leopardwm_core_layout::Rect> {
+        let (monitor_id, ws_idx) = self.find_window_workspace(hwnd)?;
+        let workspace = self.workspaces.get(&monitor_id)?.get(ws_idx)?;
+        let animating = workspace.is_animating()
+            || self
+                .layout_transition
+                .as_ref()
+                .and_then(|transition| transition.start_rects.get(&hwnd))
+                .is_some_and(|start| *start != layout_rect);
+        // Skip decoration clipping during motion to keep the bitmap full-sized.
+        // Use the current interpolated rect, not the previous frame's presentation.
+        let content = if animating {
+            layout_rect
+        } else {
+            self.expected_physical_rect(hwnd).unwrap_or(layout_rect)
+        };
+        let overlay = crate::physical_placement::expand_border_overlay(
+            content,
+            border_width,
+            matches!(
+                self.border_position(),
+                leopardwm_platform_win32::border::BorderPosition::Outside
+            ),
+        );
+        if animating {
+            Some(overlay)
+        } else {
+            self.project_decoration_rect(hwnd, overlay)
         }
     }
 
