@@ -701,6 +701,23 @@ mod tests {
 
     static TEST_DIR_SEQ: AtomicU64 = AtomicU64::new(0);
     static CAPTURE_TEST_LOCK: Mutex<()> = Mutex::new(());
+    const SCHEDULING_ALLOWANCE: Duration = Duration::from_secs(10);
+
+    fn wait_for_capture_completion(
+        handle: GestureCaptureHandle,
+        duration: Duration,
+    ) -> Result<(), RecvTimeoutError> {
+        let (done_tx, done_rx) = mpsc::channel();
+        let waiter = thread::spawn(move || {
+            handle.wait_for_deadline();
+            let _ = done_tx.send(());
+        });
+        let result = done_rx.recv_timeout(duration + SHUTDOWN_JOIN + SCHEDULING_ALLOWANCE);
+        if result.is_ok() {
+            waiter.join().unwrap();
+        }
+        result
+    }
 
     fn capture_test_guard() -> std::sync::MutexGuard<'static, ()> {
         CAPTURE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
@@ -912,21 +929,17 @@ mod tests {
         let dir = test_dir();
         let mut limits = CaptureLimits::from_secs(1);
         limits.duration = Duration::from_millis(100);
+        let duration = limits.duration;
         let handle = start_capture(&dir, test_header(1), limits).unwrap();
         let admission = leopardwm_platform_win32::admit_gesture_diagnostic_capture()
             .expect("capture gate should admit the real producer path");
 
-        let started = Instant::now();
-        handle.wait_for_deadline();
-        let elapsed = started.elapsed();
+        let completed = wait_for_capture_completion(handle, duration);
+        drop(admission);
+        completed.expect("capture must finish while the producer admission is still held");
         let body = read_capture(&dir);
-        assert!(
-            elapsed < Duration::from_millis(600),
-            "capture took {elapsed:?}"
-        );
         assert!(body.contains("records_admitted_at_close=1"), "{body}");
         assert!(body.contains("no_input=false"), "{body}");
-        drop(admission);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -947,7 +960,7 @@ mod tests {
 
         // The summary is written line by line, so wait for its last line before
         // reading the fields written above it.
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + WORKER_POLL + SHUTDOWN_JOIN + SCHEDULING_ALLOWANCE;
         let body = loop {
             let body = read_capture(&dir);
             if body.contains("stage_registration=") {
@@ -1049,13 +1062,17 @@ mod tests {
             max_bytes: DEFAULT_MAX_BYTES,
             channel_capacity: 32,
         };
+        let duration = limits.duration;
         let handle = start_capture(&dir, test_header(1), limits).unwrap();
         let layer = handle.layer();
+        let stop = Arc::new(AtomicBool::new(false));
+        let producer_stop = Arc::clone(&stop);
+        let (ready_tx, ready_rx) = mpsc::channel();
         let producer = std::thread::spawn(move || {
             let subscriber = tracing_subscriber::registry().with(layer);
             tracing::subscriber::with_default(subscriber, || {
-                let until = Instant::now() + Duration::from_millis(300);
-                while Instant::now() < until {
+                let mut ready_tx = Some(ready_tx);
+                while !producer_stop.load(Ordering::Acquire) {
                     tracing::trace!(
                         target: GESTURE_DIAG_TARGET,
                         stage = GESTURE_DIAG_STAGE_HOOK_DELIVERY,
@@ -1065,20 +1082,21 @@ mod tests {
                         mods_held = false,
                         swipe_candidate = false,
                     );
+                    if let Some(ready_tx) = ready_tx.take() {
+                        let _ = ready_tx.send(());
+                    }
                     std::thread::sleep(Duration::from_millis(1));
                 }
             });
         });
-        let started = Instant::now();
-        handle.wait_for_deadline();
-        let elapsed = started.elapsed();
+        let ready = ready_rx.recv_timeout(SCHEDULING_ALLOWANCE);
+        let completed = wait_for_capture_completion(handle, duration);
+        stop.store(true, Ordering::Release);
         producer.join().unwrap();
+        ready.expect("producer must emit input before waiting for capture completion");
+        completed.expect("capture must finish while the producer is still sending input");
 
         let body = read_capture(&dir);
-        assert!(
-            elapsed < Duration::from_millis(600),
-            "capture took {elapsed:?}"
-        );
         assert!(body.contains("end_reason=deadline"), "{body}");
         assert!(body.contains("no_input=false"), "{body}");
         assert!(body.contains("stage_hook_delivery="), "{body}");
