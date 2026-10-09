@@ -1007,9 +1007,10 @@ fn offscreen_frame_origin(
     monitor_rects: &[Rect],
 ) -> (i32, i32) {
     if placement.visibility != Visibility::Visible
-        && placement.rect.width == 0
-        && placement.rect.height == 0
+        && ((placement.rect.width == 0 && placement.rect.height == 0)
+            || crate::is_move_offscreen_sentinel_rect(&placement.rect))
     {
+        // Sentinel parking is already in outer-frame space, not visible-frame space.
         return (placement.rect.x, placement.rect.y);
     }
     if placement.visibility != Visibility::OffScreenLeft || actual_size.0 <= frame_rect.width {
@@ -3128,14 +3129,27 @@ mod tests {
     }
 
     #[test]
-    fn test_offscreen_sentinel_stays_recoverable_after_frame_conversion() {
+    fn test_offscreen_sentinel_origin_ignores_frame_insets() {
         let sentinel = crate::MOVE_OFFSCREEN_SENTINEL_COORD;
-        let visible = Rect::new(sentinel, sentinel, 1600, 900);
-        let frame = visible_rect_to_frame_rect(visible, (7, 1, 7, 8), false);
-
-        assert!(crate::is_move_offscreen_sentinel_rect(&frame));
-        assert!(frame.x <= sentinel && frame.y <= sentinel);
-        assert_eq!((frame.width, frame.height), (1614, 909));
+        let monitors = [Rect::new(0, 0, 5120, 1440), Rect::new(5120, 0, 800, 600)];
+        for (x, y) in [(sentinel, sentinel), (-100_000, -100_000)] {
+            for visibility in [Visibility::OffScreenLeft, Visibility::OffScreenRight] {
+                let park = Rect::new(x, y, 2545, 1372);
+                let placement = offscreen_placement(1, park, visibility);
+                for (insets, high_contrast) in [
+                    ((7, 0, 7, 7), false),
+                    ((0, 0, 0, 0), false),
+                    ((7, 1, 7, 8), true),
+                ] {
+                    let frame = visible_rect_to_frame_rect(park, insets, high_contrast);
+                    assert_eq!(
+                        offscreen_frame_origin(&placement, frame, (2559, 1379), &monitors),
+                        (x, y),
+                        "sentinel parking already supplies an outer-frame origin"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
