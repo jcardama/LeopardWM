@@ -322,18 +322,26 @@ invalid.flush();
 assert.deepEqual(invalid.saves[0].config.layout.width_presets, [0.5]);
 assert.equal(invalid.saves[0].config.layout.default_width_preset, 1);
 
-function commandFixture() {
+function commandFixture({ saving = false } = {}) {
   const rows = [];
   const combos = [];
   const fields = {};
+  const saves = [];
+  let saveCallback;
   const doc = {
     documentElement: { lang: 'en' }, addEventListener() {}, querySelectorAll: () => [],
     getElementById: () => null, querySelector: () => null
   };
   const ctx = vm.createContext({
     document: doc, window: { _localeStrings: english, _hotkeyCatalog: hotkeyCatalog,
-      ipc: { postMessage() { throw new Error('Language refresh sent IPC'); } } },
-    setTimeout() { throw new Error('Language refresh scheduled a save'); }, clearTimeout() {}
+      ipc: { postMessage(json) {
+        if (!saving) throw new Error('Language refresh sent IPC');
+        saves.push(JSON.parse(json));
+      } } },
+    setTimeout(callback) {
+      if (!saving) throw new Error('Language refresh scheduled a save');
+      saveCallback = callback;
+    }, clearTimeout() { saveCallback = undefined; }
   });
   vm.runInContext(script, ctx);
   const decode = text => text.replace(/&quot;/g, '"').replace(/&gt;/g, '>').replace(/&lt;/g, '<').replace(/&amp;/g, '&');
@@ -352,21 +360,32 @@ function commandFixture() {
     const row = { dataset: {}, label, input, note, querySelectorAll: () => [],
       querySelector: selector => ({ '.hk-cmd-label': label, '.hk-key': input, '.hk-dup-note': note })[selector] };
     Object.defineProperty(row, 'innerHTML', { set(markup) {
-      const match = markup.match(/<td class="hk-cmd-label"(?: title="([^"]*)")?>([^<]*)<\/td>/);
+      const match = markup.match(/<td class="hk-cmd-label"(?: title="([^"]*)")?[^>]*>([^<]*)<\/td>/);
       if (match[1] === undefined) label.removeAttribute('title');
       else label.title = decode(match[1]);
       label.textContent = decode(match[2]);
-      input.value = decode(markup.match(/class="hk-key hk-record" value="([^"]*)"/)[1]);
+      input.value = decode(markup.match(/class="hk-key(?: hk-record)?" value="([^"]*)"/)[1]);
     } });
+    Object.defineProperty(row, 'nextSibling', { get: () => rows[rows.indexOf(row) + 1] || null });
     return row;
   };
-  fields['hotkeys-body'] = { appendChild: row => rows.push(row) };
+  const tbody = {
+    appendChild: row => rows.push(row),
+    insertBefore: (row, anchor) => rows.splice(rows.indexOf(anchor), 0, row),
+    querySelectorAll: () => rows.filter(row => row.dataset.cmd === 'focus_prev')
+  };
+  Object.defineProperty(tbody, 'innerHTML', { set() { rows.length = 0; } });
+  fields['hotkeys-body'] = tbody;
   const presetCombo = eventElement();
   presetCombo.querySelector = () => eventElement();
   presetCombo.querySelectorAll = () => [];
   fields['cb-layout-default_width_preset'] = presetCombo;
-  doc.getElementById = id => fields[id] || null;
-  doc.querySelectorAll = selector => selector === '#hotkeys-body tr[data-cmd]' ? rows
+  doc.getElementById = id => fields[id] ||
+    (saving && /^(layout|appearance|behavior|gestures|snaphints|animation|workspace-name)-/.test(id) ? eventElement() : null);
+  doc.querySelector = selector => selector === '#hotkeys-body tr[data-special="scroll_modifier"]'
+    ? rows.find(row => row.dataset.special === 'scroll_modifier') : null;
+  doc.querySelectorAll = selector => selector === '#hotkeys-body tr[data-cmd]' ? rows.filter(row => row.dataset.cmd)
+    : selector === '#hotkeys-body tr' ? rows
     : selector === '.combobox' || selector === '[id^="cb-gestures-"]' ? combos : [];
   function addCombo(id, value) {
     const cb = eventElement(); cb.dataset.value = value;
@@ -388,8 +407,67 @@ function commandFixture() {
     fields[id] = cb; combos.push(cb); ctx.initGestureCombo(id);
     return { cb, text, options };
   }
-  return { ctx, rows, combos, addCombo };
+  return { ctx, rows, combos, addCombo, saves, flush() { saveCallback(); } };
 }
+
+const shortcuts = commandFixture({ saving: true });
+const configuredShortcuts = {
+  'Ctrl+Alt+N': 'focus_next', 'Ctrl+Alt+B': 'focus_next',
+  'Ctrl+Alt+F21': 'focus_prev', 'Ctrl+Alt+F22': 'focus_prev',
+  'Ctrl+Alt+H': 'focus_left', 'Ctrl+Alt+F23': 'focus_left',
+  'Ctrl+Alt+F24': 'custom_command', 'Ctrl+Alt+G': 'custom_command'
+};
+shortcuts.ctx.loadHotkeysSorted(configuredShortcuts, 'Ctrl+Shift');
+function savedShortcuts() {
+  shortcuts.ctx.autoSave(0);
+  shortcuts.flush();
+  return shortcuts.saves.at(-1).config.hotkeys;
+}
+let saved = savedShortcuts();
+for (const [key, command] of Object.entries(configuredShortcuts)) {
+  assert.equal(saved[key], command, `Settings save lost ${key} for ${command}`);
+}
+assert.equal(saved.scroll_modifier, 'Ctrl+Shift');
+const rowsFor = command => shortcuts.rows.filter(row => row.dataset.cmd === command);
+const leftRows = rowsFor('focus_left');
+assert.equal(leftRows.length, 2);
+leftRows[1].input.value = '';
+saved = savedShortcuts();
+assert.equal(saved['Ctrl+Alt+H'], 'focus_left');
+assert.ok(!Object.hasOwn(saved, 'Ctrl+Alt+F23'));
+assert.ok(!saved.disabled.includes('focus_left'));
+leftRows[0].input.value = '';
+saved = savedShortcuts();
+assert.equal(saved.disabled.filter(command => command === 'focus_left').length, 1);
+shortcuts.ctx.resetHotkeyRow(leftRows[0]);
+shortcuts.flush();
+assert.equal(shortcuts.saves.at(-1).config.hotkeys['Ctrl+Alt+H'], 'focus_left');
+assert.ok(!shortcuts.saves.at(-1).config.hotkeys.disabled.includes('focus_left'));
+leftRows[1].input.value = 'Ctrl+Alt+F23';
+shortcuts.ctx.resetHotkeyRow(leftRows[1]);
+shortcuts.flush();
+assert.equal(leftRows[1].input.value, '');
+assert.equal(leftRows[0].input.value, 'Ctrl+Alt+H');
+const nextRows = rowsFor('focus_next');
+shortcuts.ctx.resetHotkeyRow(nextRows[1]);
+shortcuts.flush();
+assert.equal(nextRows[1].input.value, '');
+assert.equal(nextRows[0].input.value, 'Ctrl+Alt+N');
+nextRows[1].input.value = 'Ctrl+Alt+H';
+shortcuts.ctx.refreshLocale(chinese, 'zh-CN');
+assert.ok(nextRows.every(row => row.label.textContent === '焦点移到下一个窗口'));
+assert.ok(leftRows[0].note.textContent.includes('焦点移到下一个窗口'));
+assert.ok(nextRows[1].note.textContent.includes(leftRows[0].label.textContent));
+const previousRows = rowsFor('focus_prev');
+assert.equal(previousRows.length, 2);
+assert.equal(shortcuts.rows[shortcuts.rows.indexOf(previousRows[0]) + 1], previousRows[1]);
+assert.equal(shortcuts.rows[shortcuts.rows.indexOf(previousRows[1]) + 1].dataset.special, 'scroll_modifier');
+shortcuts.ctx.loadHotkeysSorted(shortcuts.ctx.DEFAULT_HOTKEYS, 'Ctrl+Alt');
+saved = savedShortcuts();
+assert.deepEqual(saved, { ...shortcuts.ctx.DEFAULT_HOTKEYS, scroll_modifier: 'Ctrl+Alt', disabled: [] });
+shortcuts.ctx.loadHotkeysSorted({}, 'Ctrl+Alt', ['focus_left']);
+assert.equal(rowsFor('focus_left')[0].input.value, '');
+assert.ok(savedShortcuts().disabled.includes('focus_left'));
 
 for (const [full, short] of [
   ['Command (detail)', 'Command'], ['Command(detail)', 'Command'],

@@ -6,6 +6,7 @@ All notable changes to LeopardWM will be documented in this file.
 
 ### Fixes
 
+- **Saving Settings no longer drops extra shortcuts bound to the same command.** Each configured shortcut now has its own row.
 - **Settings now uses a native-speaker-reviewed Simplified Chinese translation, including hotkey and gesture command names.** Contributed by @bd-dxg. (#98, #143)
 - **Scrolling a window off-screen toward a neighbouring monitor no longer triggers a redundant layout update after the animation.**
 - **Scrolling a window into view from the side of a neighbouring monitor no longer drops the animation frame rate.** The focus border is now trimmed at the monitor edge when the scroll lands instead of on every frame.

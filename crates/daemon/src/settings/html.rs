@@ -1983,10 +1983,11 @@ function attachRecorder(input) {
   });
 }
 
-function addHotkeyRow(key, cmd) {
+function addHotkeyRow(key, cmd, extra) {
   var tbody = document.getElementById('hotkeys-body');
   var tr = document.createElement('tr');
   tr.dataset.cmd = cmd;
+  if (extra) tr.dataset.extra = '1';
   /* Long labels carry a "(detail)" suffix; show the short name and move the
      parenthetical into a hover tooltip so the row stays one line. */
   var fullLabel = cmdLabel(cmd);
@@ -2048,8 +2049,8 @@ function defaultKeyForCmd(cmd) {
 }
 
 function resetHotkeyRow(tr) {
-  var defKey = defaultKeyForCmd(tr.dataset.cmd);
-  if (defKey) { tr.querySelector('.hk-key').value = defKey; refreshDuplicateWarnings(); autoSave(0); }
+  var defKey = tr.dataset.extra ? '' : defaultKeyForCmd(tr.dataset.cmd);
+  if (defKey || tr.dataset.extra) { tr.querySelector('.hk-key').value = defKey; refreshDuplicateWarnings(); autoSave(0); }
 }
 
 /* Show a dismissible warning for binds Windows reserves below the keyboard
@@ -2074,14 +2075,13 @@ function loadHotkeysSorted(bindings, scrollModifier, disabled) {
   var tbody = document.getElementById('hotkeys-body');
   tbody.innerHTML = '';
   var disabledSet = disabled || [];
-  /* Build cmd→key map from config */
-  var cmdToKey = {};
-  Object.entries(bindings).forEach(function(e) { cmdToKey[e[1]] = e[0]; });
+  var cmdToKeys = Object.create(null);
+  Object.entries(bindings).forEach(function(e) { (cmdToKeys[e[1]] = cmdToKeys[e[1]] || []).push(e[0]); });
   /* Render in defined order. A command the user disabled stays empty rather
      than falling back to its default. */
   CMD_ORDER.forEach(function(cmd) {
-    var key = disabledSet.indexOf(cmd) !== -1 ? '' : (cmdToKey[cmd] || defaultKeyForCmd(cmd));
-    addHotkeyRow(key, cmd);
+    var keys = cmdToKeys[cmd] || [disabledSet.indexOf(cmd) !== -1 ? '' : defaultKeyForCmd(cmd)];
+    keys.forEach(function(key, index) { addHotkeyRow(key, cmd, index > 0); });
   });
   /* Append any custom commands not in CMD_ORDER */
   Object.entries(bindings).forEach(function(e) {
@@ -2095,7 +2095,7 @@ function loadHotkeysSorted(bindings, scrollModifier, disabled) {
     '<td><input type="text" class="hk-key" value="' + escAttr(scrollModifier || 'Ctrl+Alt') + '" data-i18n-placeholder="settings.text.e_g_ctrl_alt" placeholder="' + escAttr(t('settings.text.e_g_ctrl_alt')) + '"></td>' +
     '<td><button class="row-delete" data-i18n-title="settings.text.reset_to_default" title="' + escAttr(t('settings.text.reset_to_default')) + '" onclick="this.closest(\'tr\').querySelector(\'.hk-key\').value=\'Ctrl+Alt\';updateScrollLabels();autoSave(0);">' + resetIcon + '</button></td>';
   var focusRows = tbody.querySelectorAll('tr[data-cmd="focus_prev"]');
-  var anchor = focusRows.length ? focusRows[0] : null;
+  var anchor = focusRows.length ? focusRows[focusRows.length - 1] : null;
   if (anchor && anchor.nextSibling) { tbody.insertBefore(tr, anchor.nextSibling); }
   else { tbody.appendChild(tr); }
   wrapAllInputs(tr);
@@ -2423,16 +2423,16 @@ function readHotkeys() {
   return b;
 }
 
-/* Commands the user cleared: an empty row whose action has a default. These
-   are recorded so the daemon's defaults-merge won't resurrect the binding. */
+/* Commands with a default and no remaining binding are recorded so the
+   daemon's defaults-merge won't resurrect a binding the user cleared. */
 function readDisabledHotkeys() {
-  var d = [];
+  var bound = Object.create(null);
   document.querySelectorAll('#hotkeys-body tr[data-cmd]').forEach(function(tr) {
     var k = tr.querySelector('.hk-key').value.trim();
     var c = tr.dataset.cmd;
-    if (!k && c && defaultKeyForCmd(c)) d.push(c);
+    if (c) bound[c] = bound[c] || Boolean(k);
   });
-  return d;
+  return Object.keys(bound).filter(function(c) { return !bound[c] && defaultKeyForCmd(c); });
 }
 
 function readScrollModifier() {
@@ -2611,14 +2611,6 @@ mod tests {
         assert!(SETTINGS_HTML.contains("widthPresets = lastValidWidthPresets.slice();"));
         assert!(SETTINGS_HTML.contains("parseInt(cbVal('cb-layout-default_width_preset'), 10)"));
         assert!(SETTINGS_HTML.contains("default_width_preset: defaultWidthPreset"));
-    }
-
-    #[test]
-    fn disabled_hotkeys_survive_settings_saves() {
-        assert!(SETTINGS_HTML.contains(
-            "var key = disabledSet.indexOf(cmd) !== -1 ? '' : (cmdToKey[cmd] || defaultKeyForCmd(cmd));"
-        ));
-        assert!(SETTINGS_HTML.contains("if (!k && c && defaultKeyForCmd(c)) d.push(c);"));
     }
 
     #[test]
