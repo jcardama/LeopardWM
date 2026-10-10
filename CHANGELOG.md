@@ -14,6 +14,7 @@ All notable changes to LeopardWM will be documented in this file.
 - **Empty workspaces no longer leave a blank entry in Alt+Tab.** LeopardWM's invisible focus window, which keeps new apps on the empty workspace, is now hidden from Alt+Tab. (#136)
 - **Settings now offers all supported gesture commands.** Next and previous window focus and 100 px viewport scrolling are available in the gesture menus, including the default modifier-plus-wheel bindings. (#142)
 - **Turning gestures on or off now takes effect without restarting.** Settings saves and config reloads install or stop gesture detection immediately. Changing native three-finger swipe detection still requires a restart. (#142)
+- **The update check now uses rustls 0.23.45.** It fixes a TLS 1.3 handshake validation issue ([GHSA-2mjx-qc3c-rqvc](https://github.com/rustls/rustls/security/advisories/GHSA-2mjx-qc3c-rqvc)).
 
 ## 0.3.0
 
