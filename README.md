@@ -282,7 +282,7 @@ language = "en" # "en" (default) or "zh-CN"
 The open Settings window, tray menu, and daemon notifications use the selected
 language after saving or reloading config; no daemon restart is needed. Unsupported
 values fall back to English with a config warning. There is no automatic OS-language
-selection. Simplified Chinese is a **machine draft pending native-speaker review**.
+selection. Simplified Chinese is a **human-reviewed translation**.
 Locale files are embedded in the daemon, so editing a translation requires a rebuild.
 See the [localization contributor guide](docs/localization.md) for file locations,
 placeholders, validation, and the surfaces that remain English.

@@ -8,15 +8,15 @@ unsupported values become `en` with one config-validation warning. No OS-languag
 detection or `auto` setting is provided. The open Settings window and tray menu
 change language without restarting the daemon.
 
-**Simplified Chinese is a machine draft awaiting native-speaker review.** Its
-catalog header records this status; completeness checks do not establish translation
-quality. Please review terminology, clarity, punctuation, and layout before claiming
-human review.
+**Simplified Chinese is a human-reviewed translation.** Its catalog header records
+this status; completeness checks do not establish translation quality. For future
+languages, label machine drafts honestly and review terminology, clarity,
+punctuation, and layout before claiming human review.
 
 ## Files and lookup
 
 - `crates/daemon/locales/en.toml`: English source of truth.
-- `crates/daemon/locales/zh-CN.toml`: Simplified Chinese machine draft.
+- `crates/daemon/locales/zh-CN.toml`: Human-reviewed Simplified Chinese translation.
 - `crates/daemon/build.rs`: discovers and embeds every `locales/*.toml` file.
 - `crates/daemon/src/locale.rs`: parsing, bundled identifiers/autonyms, English
   fallback, and named-placeholder substitution.
@@ -33,9 +33,15 @@ interpret them as nested tables:
 ```
 
 Keys are stable dotted identifiers grouped by surface (`settings`, `tray`,
-`notification`, `dialog`). Use semantic names such as
+`notification`, `dialog`, `hotkeys`). Use semantic names such as
 `settings.layout.gap.description`; retain existing keys when changing wording.
-Do not put English fallbacks into Rust or JavaScript: add the English entry here.
+Settings hotkey command names and gesture-command choices use
+`hotkeys.command.<id>` keys with English catalog labels as fallback. Translate these
+keys when adding a language. In `en.toml`, their values must match
+`ipc::hotkeys::hotkey_catalog()` labels; the
+`english_hotkey_names_match_the_action_catalog` test enforces this and rejects
+orphan keys. Do not put other English fallbacks into Rust or JavaScript: add the
+English entry here.
 Values are plain text, not HTML. Formatting markup belongs to the page, never to a
 translation. Brand names, author names, URLs, license identifiers, numeric examples,
 and command/key tokens retain their literal identity. The language selector uses
@@ -108,10 +114,9 @@ These remain English in this change:
 - CLI output and help.
 - Logs, including config-validation and locale-loader warnings.
 - IPC/config keys and values, command identifiers, and key-chord tokens.
-- Shared hotkey command labels/descriptions in Settings, including gesture-command
-  choices: they come from `ipc::hotkeys::hotkey_catalog()` shared with CLI, IPC, and
-  PowerToys Shortcut Guide. Page-owned headers, tooltips, warnings, and the
-  no-action choice are localized.
+- Hotkey command labels returned over IPC and used by CLI output and the PowerToys
+  Shortcut Guide export: they come from `ipc::hotkeys::hotkey_catalog()`, not the
+  Settings locale.
 - The watchdog process toast.
 - The installer.
 

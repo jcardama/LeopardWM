@@ -95,7 +95,7 @@ Tests discover every catalog and check flat string TOML, identifiers, a nonempty
 autonym, complete English keys, no orphan keys, and matching placeholder names and
 counts. A translation PR should include the catalog, language identifier, test
 result, and whether a native speaker reviewed it. Do not claim human review for
-machine drafts; native-speaker review of the existing `zh-CN` draft is welcome.
+machine drafts; the bundled `zh-CN` translation is human-reviewed.
 Rebuild to try translations. See [Localization](docs/localization.md) for details
 and the limits of automated checks.
 
