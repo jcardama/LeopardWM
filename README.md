@@ -583,6 +583,12 @@ Thanks to everyone who has helped shape LeopardWM.
 <a href="https://github.com/Mihir-Null" title="Mihir Talati"><img src="https://avatars.githubusercontent.com/u/86654551?v=4&s=96" width="72" alt="Mihir Talati" /></a><br />
 <a href="https://github.com/Mihir-Null"><b>Mihir Talati</b></a> (<a href="https://github.com/Mihir-Null">@Mihir-Null</a>)
 
+<a href="https://github.com/c3us-dev" title="Conner C"><img src="https://avatars.githubusercontent.com/u/209130198?v=4&s=96" width="72" alt="Conner C" /></a><br />
+<a href="https://github.com/c3us-dev"><b>Conner C</b></a> (<a href="https://github.com/c3us-dev">@c3us-dev</a>)
+
+<a href="https://github.com/bd-dxg" title="冰冻大西瓜"><img src="https://avatars.githubusercontent.com/u/34816426?v=4&s=96" width="72" alt="冰冻大西瓜" /></a><br />
+<a href="https://github.com/bd-dxg"><b>冰冻大西瓜</b></a> (<a href="https://github.com/bd-dxg">@bd-dxg</a>)
+
 ## License
 
 [GPL-3.0](LICENSE)
