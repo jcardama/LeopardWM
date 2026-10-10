@@ -261,6 +261,7 @@ pub(crate) fn project_physical_rect(
 /// Both coordinates remain at or beyond the shared MoveOffScreen sentinel, so
 /// no-state recovery retains its narrow ownership test. The caller supplies
 /// visible-to-frame insets because the native move targets the outer frame.
+/// The returned origin is frame-space; dimensions retain the visible size.
 /// If an extreme virtual-desktop geometry cannot be represented, final native
 /// readback leaves the placement unconfirmed instead of treating it as safe.
 pub(crate) fn offscreen_park_rect(
@@ -269,9 +270,11 @@ pub(crate) fn offscreen_park_rect(
     insets: (i32, i32, i32, i32),
 ) -> Rect {
     const SENTINEL: i64 = leopardwm_platform_win32::MOVE_OFFSCREEN_SENTINEL_COORD as i64;
-    let (_, _, right, bottom) = insets;
-    let outer_width = i64::from(window.width.max(1)) + i64::from(right.max(0));
-    let outer_height = i64::from(window.height.max(1)) + i64::from(bottom.max(0));
+    let (left, top, right, bottom) = insets;
+    let outer_width =
+        i64::from(left.max(0)) + i64::from(window.width.max(1)) + i64::from(right.max(0));
+    let outer_height =
+        i64::from(top.max(0)) + i64::from(window.height.max(1)) + i64::from(bottom.max(0));
     let x = monitor_rects
         .iter()
         .map(|monitor| i64::from(monitor.x) - outer_width)
@@ -1889,7 +1892,12 @@ mod tests {
             PhysicalDecision::Parked { rect } => rect,
             other => panic!("expected zero visible slice to park, got {other:?}"),
         };
-        let outer = leopardwm_platform_win32::visible_rect_to_frame_rect(parked, insets, false);
+        let outer = Rect::new(
+            parked.x,
+            parked.y,
+            parked.width + insets.0 + insets.2,
+            parked.height + insets.1 + insets.3,
+        );
         assert!(leopardwm_platform_win32::is_move_offscreen_sentinel_rect(
             &outer
         ));
@@ -1920,8 +1928,7 @@ mod tests {
         assert!(slice.width < window.width);
         let parked = offscreen_park_rect(window, &[owner, neighbor], (7, 1, 7, 8));
         assert_eq!((parked.width, parked.height), (window.width, window.height));
-        let outer =
-            leopardwm_platform_win32::visible_rect_to_frame_rect(parked, (7, 1, 7, 8), false);
+        let outer = Rect::new(parked.x, parked.y, parked.width + 14, parked.height + 9);
         assert!(leopardwm_platform_win32::is_move_offscreen_sentinel_rect(
             &outer
         ));
