@@ -31,8 +31,9 @@ struct BackgroundRejoinActivation {
 pub(crate) struct RecreatedWindowSlot {
     pub(crate) monitor: isize,
     pub(crate) workspace: usize,
-    column: usize,
     row: usize,
+    column: usize,
+    window_slot: usize,
     width: i32,
     sibling: Option<u64>,
     donor: u64,
@@ -46,20 +47,19 @@ impl RecreatedWindowSlot {
         hwnd: u64,
         take_focus: bool,
     ) -> Result<(), LayoutError> {
-        if let Some((column, _)) = self.sibling.and_then(|s| workspace.find_window_location(s)) {
+        if let Some((row, column, _)) = self.sibling.and_then(|s| workspace.find_window_location_rc(s)) {
             let focused = workspace.focused_window();
-            workspace.insert_window_in_column_at(hwnd, column, self.row)?;
+            workspace.insert_window_in_row_column_at(hwnd, row, column, self.window_slot)?;
             if take_focus {
                 workspace.focus_window(hwnd)?;
             } else if let Some(focused) = focused {
-                // In-column insertion shifts the active tab, but not the workspace's focus row.
                 workspace.focus_window(focused)?;
             }
             Ok(())
         } else if take_focus {
-            workspace.insert_window_at_column(hwnd, Some(self.width), self.column)
+            workspace.insert_window_at_row_column(hwnd, self.row, Some(self.width), self.column)
         } else {
-            workspace.insert_window_at_column_no_focus(hwnd, Some(self.width), self.column)
+            workspace.insert_window_at_row_column_no_focus(hwnd, self.row, Some(self.width), self.column)
         }
     }
 }
@@ -172,15 +172,16 @@ impl AppState {
         let identity = self.recreated_window_slots.identities.get(&hwnd)?.clone();
         let (monitor, workspace) = self.find_window_workspace(hwnd)?;
         let ws = self.workspaces.get(&monitor)?.get(workspace)?;
-        let (column, row) = ws.find_window_location(hwnd)?;
-        let col = ws.columns().get(column)?;
+        let (row, column, window_slot) = ws.find_window_location_rc(hwnd)?;
+        let col = ws.rows().get(row).and_then(|r| r.column(column))?;
         Some((
             identity,
             RecreatedWindowSlot {
                 monitor,
                 workspace,
-                column,
                 row,
+                column,
+                window_slot,
                 width: col.width(),
                 sibling: col.windows().iter().copied().find(|&s| s != hwnd),
                 donor: hwnd,

@@ -13,10 +13,10 @@ fn apply_reconciled_geometry(
     source_viewport_width: i32,
     destination_viewport_width: i32,
 ) {
-    for workspace in workspaces {
+    for (ws_idx, workspace) in workspaces.iter_mut().enumerate() {
         let old_gap = workspace.gap();
         let (old_ol, old_or, _, _) = workspace.outer_gaps();
-        params.apply_to(workspace);
+        params.apply_to(workspace, ws_idx);
         if workspace.rescale_column_widths(
             old_gap,
             old_ol,
@@ -224,8 +224,7 @@ impl AppState {
                     params.outer_gap_top,
                     params.outer_gap_bottom,
                 );
-                workspace.set_default_column_width(params.default_column_width);
-                workspace.set_tab_strip_reserve_px(params.tab_strip_reserve_px);
+                params.apply_to(&mut workspace, 0);
                 workspace.set_centering_mode(self.config.layout.centering_mode.into());
                 workspace.set_center_past_edges(self.config.layout.center_past_edges);
                 workspace.set_center_single_column(self.config.layout.center_single_column);

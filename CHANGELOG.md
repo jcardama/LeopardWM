@@ -2,6 +2,17 @@
 
 All notable changes to LeopardWM will be documented in this file.
 
+## [Unreleased]
+
+### Features
+
+- **Multi-row scrolling window strips.** LeopardWM now supports multi-row layouts per workspace, dividing the monitor viewport into 1 to 4 independently scrolling horizontal window strips. Each row maintains its own scrolling offset, column widths, and tabbed columns.
+- **Configurable row split and gap.** Configure row splits and vertical gaps via `[layout.rows]` in `config.toml` (e.g. `split = ["1/2", "1/2"]`, `gap = 8`), or interactively in the Settings GUI.
+- **Cross-row focus and movement.** Navigate between rows using `Ctrl+Alt+PageUp` / `Ctrl+Alt+PageDown` or `lwm focus-row up/down`. Move windows between rows using `Ctrl+Alt+Shift+PageUp` / `Ctrl+Alt+Shift+PageDown` or `lwm move-to-row up/down`. Vertical focus (`Ctrl+Alt+J/K`) seamlessly crosses row boundaries when `[behavior].move_window_across_rows` is enabled (default `true`). Default chords for `move_to_workspace_prev/next` are unbound to make room for row moves.
+- **Row window rules.** Route applications to specific rows on startup via the `row` field in `[[window_rules]]` (1-based index) or from the Settings GUI Window Rules editor.
+- **Settings GUI row controls.** Visual editor in Settings for configuring row count, height splits, intra-row vertical gaps, the `move_window_across_rows` toggle, and row assignment in window rules.
+- **IPC Protocol v5.** Incremented protocol version to 5 with row-aware workspace snapshots (`rows`, `focused_row`, `row_index`), row layout broadcasts, and `FocusRow` / `MoveWindowToRow` commands.
+
 ## 0.3.1
 
 ### Fixes

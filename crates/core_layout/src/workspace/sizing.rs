@@ -33,26 +33,22 @@ impl Workspace {
     // Minimum Width Methods
     // ========================================================================
 
-    /// Record that a window enforces a minimum width (in layout pixels,
-    /// i.e. excluding invisible border insets). The layout engine will
-    /// respect this when computing column placements.
+    /// Record that a window enforces a minimum width (in layout pixels).
     pub fn set_window_min_width(&mut self, window_id: WindowId, min_width: i32) {
         self.window_min_widths.insert(window_id, min_width);
     }
 
-    /// Remove a minimum-width constraint (e.g. when window is removed).
+    /// Remove a minimum-width constraint.
     pub fn clear_window_min_width(&mut self, window_id: WindowId) {
         self.window_min_widths.remove(&window_id);
     }
 
-    /// Clear all minimum-width constraints. Called on display/theme changes
-    /// because the border metrics used to compute them are no longer valid.
+    /// Clear all minimum-width constraints.
     pub fn clear_all_min_widths(&mut self) {
         self.window_min_widths.clear();
     }
 
-    /// Get the effective minimum width for a column, considering all
-    /// non-minimized windows in it that have known min-width constraints.
+    /// Get the effective minimum width for a column.
     pub(crate) fn column_effective_min_width(&self, column: &Column) -> i32 {
         column
             .windows()
@@ -74,31 +70,63 @@ impl Workspace {
     // ========================================================================
 
     /// Record that a window enforces a minimum height (in layout pixels).
-    /// The layout engine will grant at least this much intra-column space
-    /// to the window when computing placements.
     pub fn set_window_min_height(&mut self, window_id: WindowId, min_height: i32) {
         self.window_min_heights.insert(window_id, min_height);
     }
 
-    /// Remove a minimum-height constraint (e.g. when a window is removed
-    /// or a layout operation invalidates prior measurements).
+    /// Remove a minimum-height constraint.
     pub fn clear_window_min_height(&mut self, window_id: WindowId) {
         self.window_min_heights.remove(&window_id);
     }
 
-    /// Clear all minimum-height constraints. Called on display/theme changes
-    /// because the metrics used to compute them are no longer valid.
+    /// Clear all minimum-height constraints.
     pub fn clear_all_min_heights(&mut self) {
         self.window_min_heights.clear();
     }
 
+    /// Get the recorded minimum height for a window, if any.
+    pub fn window_min_height(&self, window_id: WindowId) -> Option<i32> {
+        self.window_min_heights.get(&window_id).copied()
+    }
+
+    /// Take and clear the set of windows whose min-size constraints should be cleared.
+    pub fn take_pending_min_size_clears(&mut self) -> std::collections::HashSet<WindowId> {
+        std::mem::take(&mut self.pending_min_size_clears)
+    }
+
+    /// Clear cached min-sizes for the given windows.
+    pub fn clear_min_sizes_for(&mut self, windows: &std::collections::HashSet<WindowId>) {
+        for wid in windows {
+            self.window_min_widths.remove(wid);
+            self.window_min_heights.remove(wid);
+        }
+    }
+
+    // ========================================================================
+    // Column Width Sizing Methods
+    // ========================================================================
+
+    /// Set a column's width in the focused row directly, clamping to minimum width.
+    pub fn set_column_width(&mut self, column_index: usize, width: i32) -> Result<(), LayoutError> {
+        let fr = self.focused_row;
+        let row = &mut self.rows[fr];
+        row.maximized_column = None;
+        if column_index >= row.columns.len() {
+            return Err(LayoutError::ColumnOutOfBounds(
+                column_index,
+                row.columns.len().saturating_sub(1),
+            ));
+        }
+        row.columns[column_index].set_width(width);
+        for wid in row.columns[column_index].windows() {
+            self.window_min_widths.remove(wid);
+            self.window_min_heights.remove(wid);
+        }
+        Ok(())
+    }
+
     /// Drain the pending_min_size_clears queue and remove corresponding entries
-    /// from window_min_widths / window_min_heights. Called at the start of a
-    /// layout apply pass so column-composition changes only take effect when a
-    /// placement cycle is actually about to run — otherwise a timed-out /
-    /// paused apply cannot strand a column with cleared constraints.
-    ///
-    /// Returns `true` if any constraints were cleared.
+    /// from window_min_widths / window_min_heights.
     pub fn commit_pending_min_size_clears(&mut self) -> bool {
         if self.pending_min_size_clears.is_empty() {
             return false;
@@ -110,42 +138,29 @@ impl Workspace {
         true
     }
 
-    // ========================================================================
-    // Column Width Presets
-    // ========================================================================
-
     /// Maximize the focused column unconditionally (restoring any other
     /// maximized column first). Unlike the toggle, this never un-maximizes
     /// the focused column; used by per-app open rules.
     pub fn maximize_focused_column(&mut self, viewport_width: i32) {
-        if self.maximized_column.is_some() {
+        if self.rows[self.focused_row].maximized_column.is_some() {
             self.toggle_maximize_column(viewport_width);
         }
         self.toggle_maximize_column(viewport_width);
     }
 
-    /// Toggle maximize on the focused column.
-    ///
-    /// If currently maximized (and the sentinel window is still in the same column),
-    /// restores the original width and returns `false`.
-    /// Otherwise, saves the current width and expands the column to fill the
-    /// visible viewport width, returning `true`.
-    ///
-    /// Exits fullscreen first if active (same as toggle_floating).
+    /// Alias for toggle_maximized_column.
     pub fn toggle_maximize_column(&mut self, viewport_width: i32) -> bool {
-        // Exit fullscreen first
-        if let Some(fs_wid) = self.fullscreen_window.take() {
-            self.window_min_widths.remove(&fs_wid);
-            self.window_min_heights.remove(&fs_wid);
-        }
+        self.toggle_maximized_column(viewport_width)
+    }
 
+    /// Toggle maximizing the focused column to fill the viewport width.
+    pub fn toggle_maximized_column(&mut self, viewport_width: i32) -> bool {
+        let fr = self.focused_row;
         let vis_w = self.visible_width(viewport_width);
 
-        // If already maximized, try to restore
-        if let Some(state) = self.maximized_column.take() {
-            // Find the column containing the sentinel window
+        if let Some(state) = self.rows[fr].maximized_column.take() {
             if let Some((col_idx, _)) = self.find_window_location(state.sentinel_window) {
-                if let Some(column) = self.columns.get_mut(col_idx) {
+                if let Some(column) = self.rows[fr].columns.get_mut(col_idx) {
                     column.set_width(state.original_width);
                     column.width_fraction_cache = state.width_fraction_cache;
                 }
@@ -153,18 +168,18 @@ impl Workspace {
             return false;
         }
 
-        // Maximize the focused column
-        if let Some(column) = self.columns.get(self.focused_column) {
+        let row = &mut self.rows[fr];
+        if let Some(column) = row.columns.get(row.focused_column) {
             let original_width = column.width;
             let sentinel_window = match column.windows().first() {
                 Some(&wid) => wid,
                 None => return false,
             };
             let width_fraction_cache = column.width_fraction_cache.clone();
-            if let Some(column) = self.columns.get_mut(self.focused_column) {
+            if let Some(column) = row.columns.get_mut(row.focused_column) {
                 column.set_width(vis_w);
             }
-            self.maximized_column = Some(super::MaximizedColumnState {
+            row.maximized_column = Some(super::MaximizedColumnState {
                 original_width,
                 width_fraction_cache,
                 sentinel_window,
@@ -175,37 +190,32 @@ impl Workspace {
         false
     }
 
-    /// Set the focused column's width as a fraction of the usable viewport width.
-    /// The usable width accounts for outer gaps and inter-column gaps.
-    /// Fraction should be between 0.1 and 1.0.
+    /// Set the focused column's width as a fraction of usable viewport width.
     pub fn set_focused_column_width_fraction(&mut self, fraction: f64, viewport_width: i32) {
-        self.maximized_column = None;
+        let fr = self.focused_row;
+        self.rows[fr].maximized_column = None;
         let fraction = fraction.clamp(0.1, 1.0);
         let base = self.width_base(viewport_width);
         let gap = self.gap.max(0);
         let new_width = (base as f64 * fraction - gap as f64).floor() as i32;
 
-        if let Some(column) = self.columns.get_mut(self.focused_column) {
+        let row = &mut self.rows[fr];
+        if let Some(column) = row.columns.get_mut(row.focused_column) {
             column.set_width(new_width);
         }
     }
 
-    /// Equalize all column widths to share the viewport equally.
-    /// Uses gap-aware formula so equalized columns perfectly fill the viewport.
-    /// Only counts active (non-fully-minimized) columns to match layout calculations.
+    /// Equalize all column widths in the focused row to share the viewport equally.
     pub fn equalize_column_widths(&mut self, viewport_width: i32) {
-        self.maximized_column = None;
-        if self.columns.is_empty() {
+        let fr = self.focused_row;
+        self.rows[fr].maximized_column = None;
+        if self.rows[fr].columns.is_empty() {
             return;
         }
-        // Clear cached min-widths and min-heights — equalize resets all widths,
-        // so constraints will be re-detected from actual window sizes on the
-        // next apply cycle.
         self.window_min_widths.clear();
         self.window_min_heights.clear();
 
-        // Identify which columns are active (have at least one non-minimized window)
-        let active_flags: Vec<bool> = self
+        let active_flags: Vec<bool> = self.rows[fr]
             .columns
             .iter()
             .map(|c| self.is_column_active(c))
@@ -222,24 +232,24 @@ impl Workspace {
         let per_column =
             ((viewport_width - total_gaps).max(MIN_COLUMN_WIDTH * active_count)) / active_count;
 
-        for (col, &is_active) in self.columns.iter_mut().zip(active_flags.iter()) {
+        for (col, &is_active) in self.rows[fr].columns.iter_mut().zip(active_flags.iter()) {
             if is_active {
                 col.set_width(per_column);
             }
         }
-        // Cancel stale animation — it would overwrite the reclamped scroll offset
-        self.active_animation = None;
-        // Reclamp scroll offset — column widths may have shrunk
+        self.rows[fr].active_animation = None;
         let vis_w = self.visible_width(viewport_width);
-        let max_scroll = (self.total_width() - vis_w).max(0);
-        self.scroll_offset =
-            self.clamp_scroll_offset(self.scroll_offset, viewport_width, 0.0, max_scroll as f64);
+        let max_scroll = (self.total_width_for_row(fr) - vis_w).max(0);
+        self.rows[fr].scroll_offset = self.clamp_scroll_offset_for_row(
+            fr,
+            self.rows[fr].scroll_offset,
+            viewport_width,
+            0.0,
+            max_scroll as f64,
+        );
     }
 
     /// Rescale all column widths after viewport or gap values change.
-    /// Reuses the previous rescale's fraction while width and geometry are unchanged;
-    /// otherwise derives it from the current pixel width and old geometry.
-    /// Returns `true` when the effective geometry changed.
     pub fn rescale_column_widths(
         &mut self,
         old_gap: i32,
@@ -263,41 +273,46 @@ impl Workspace {
 
         self.cancel_animation();
 
-        for col in &mut self.columns {
-            let width = Self::rescaled_width(
-                col.width,
-                &mut col.width_fraction_cache,
-                old_gap_c,
-                old_base,
-                new_gap,
-                new_base,
-            );
-            col.set_width(width);
-        }
-        if let Some(state) = &mut self.maximized_column {
-            state.original_width = Self::rescaled_width(
-                state.original_width,
-                &mut state.width_fraction_cache,
-                old_gap_c,
-                old_base,
-                new_gap,
-                new_base,
-            );
+        for row in &mut self.rows {
+            for col in &mut row.columns {
+                let width = Self::rescaled_width(
+                    col.width,
+                    &mut col.width_fraction_cache,
+                    old_gap_c,
+                    old_base,
+                    new_gap,
+                    new_base,
+                );
+                col.set_width(width);
+            }
+            if let Some(state) = &mut row.maximized_column {
+                state.original_width = Self::rescaled_width(
+                    state.original_width,
+                    &mut state.width_fraction_cache,
+                    old_gap_c,
+                    old_base,
+                    new_gap,
+                    new_base,
+                );
+            }
         }
 
         let vis_w = self.visible_width(new_viewport_width);
-        let max_scroll = (self.total_width() - vis_w).max(0) as f64;
-        let min_scroll = if self.center_past_edges {
-            f64::NEG_INFINITY
-        } else {
-            0.0
-        };
-        self.scroll_offset = self.clamp_scroll_offset(
-            self.scroll_offset,
-            new_viewport_width,
-            min_scroll,
-            max_scroll,
-        );
+        for row_idx in 0..self.rows.len() {
+            let max_scroll = (self.total_width_for_row(row_idx) - vis_w).max(0) as f64;
+            let min_scroll = if self.center_past_edges {
+                f64::NEG_INFINITY
+            } else {
+                0.0
+            };
+            self.rows[row_idx].scroll_offset = self.clamp_scroll_offset_for_row(
+                row_idx,
+                self.rows[row_idx].scroll_offset,
+                new_viewport_width,
+                min_scroll,
+                max_scroll,
+            );
+        }
 
         true
     }
@@ -334,10 +349,6 @@ impl Workspace {
     // Width Preset Cycling
     // ========================================================================
 
-    /// Compute the base value for fraction ↔ pixel conversion.
-    /// Formula: `column_width = fraction * base - gap`.
-    /// This is independent of column count. When fractions sum to 1.0,
-    /// the columns plus gaps perfectly fill the viewport.
     fn width_base(&self, viewport_width: i32) -> i32 {
         let outer_left = self.outer_gap_left.max(0);
         let outer_right = self.outer_gap_right.max(0);
@@ -359,19 +370,20 @@ impl Workspace {
         self.cycle_width_impl(presets, viewport_width, PresetCycle::Up);
     }
 
-    /// Cycle the focused column width down through the given presets.
     pub fn cycle_width_down(&mut self, presets: &[f64], viewport_width: i32) {
         self.cycle_width_impl(presets, viewport_width, PresetCycle::Down);
     }
 
     fn cycle_width_impl(&mut self, presets: &[f64], viewport_width: i32, cycle: PresetCycle) {
-        self.maximized_column = None;
+        let fr = self.focused_row;
+        self.rows[fr].maximized_column = None;
         if presets.is_empty() {
             return;
         }
         let base = self.width_base(viewport_width);
         let gap = self.gap.max(0);
-        let Some(column) = self.columns.get(self.focused_column) else {
+        let foc = self.rows[fr].focused_column;
+        let Some(column) = self.rows[fr].columns.get(foc) else {
             return;
         };
         if base <= 0 {
@@ -382,13 +394,10 @@ impl Workspace {
 
         if let Some(frac) = cycle_preset(presets, current_frac, cycle) {
             let new_width = (base as f64 * frac - gap as f64).floor() as i32;
-            self.columns[self.focused_column].set_width(new_width);
+            self.rows[fr].columns[foc].set_width(new_width);
         }
     }
 
-    /// Snap a column's width to the nearest width preset based on the new pixel width
-    /// from a user resize. Respects min-width constraints: if the nearest preset is
-    /// narrower than the column's minimum, the smallest valid preset is used instead.
     pub fn snap_column_width_to_preset(
         &mut self,
         col_idx: usize,
@@ -396,10 +405,11 @@ impl Workspace {
         presets: &[f64],
         viewport_width: i32,
     ) {
+        let fr = self.focused_row;
         if presets.is_empty() {
             return;
         }
-        let Some(column) = self.columns.get(col_idx) else {
+        let Some(column) = self.rows[fr].columns.get(col_idx) else {
             return;
         };
 
@@ -409,17 +419,13 @@ impl Workspace {
             return;
         }
 
-        // Fraction corresponding to the user's resized width
         let current_frac = (new_width + gap) as f64 / base as f64;
-
-        // Min-width constraint for this column
         let min_width = self.column_effective_min_width(column);
         let min_frac = (min_width + gap) as f64 / base as f64;
 
         let mut sorted = presets.to_vec();
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
-        // Find closest preset
         let nearest = sorted
             .iter()
             .min_by(|&&a, &&b| {
@@ -430,7 +436,6 @@ impl Workspace {
             .copied();
 
         if let Some(frac) = nearest {
-            // If nearest is below minimum width, use smallest valid preset
             let final_frac = if frac < min_frac {
                 sorted
                     .iter()
@@ -442,11 +447,10 @@ impl Workspace {
             };
 
             let new_w = (base as f64 * final_frac - gap as f64).floor() as i32;
-            if let Some(column) = self.columns.get_mut(col_idx) {
+            if let Some(column) = self.rows[fr].columns.get_mut(col_idx) {
                 column.set_width(new_w);
             }
-            // Clear cached min-widths and min-heights so constraints are re-detected
-            if let Some(column) = self.columns.get(col_idx) {
+            if let Some(column) = self.rows[fr].columns.get(col_idx) {
                 for wid in column.windows() {
                     self.window_min_widths.remove(wid);
                     self.window_min_heights.remove(wid);
@@ -455,11 +459,6 @@ impl Workspace {
         }
     }
 
-    /// Snap a window's height weight to the nearest height preset based on the
-    /// new pixel height from a user resize. Only meaningful for multi-window columns.
-    /// No-op for Tabbed columns (only one tab is rendered at a time, so
-    /// height_weights have no visible effect — silent mutation here would
-    /// surface as drift the moment the user reverts to Vertical).
     pub fn snap_window_height_to_preset(
         &mut self,
         col_idx: usize,
@@ -468,24 +467,23 @@ impl Workspace {
         presets: &[f64],
         viewport_height: i32,
     ) {
+        let fr = self.focused_row;
         if presets.is_empty() {
             return;
         }
-        let Some(column) = self.columns.get(col_idx) else {
+        let Some(column) = self.rows[fr].columns.get(col_idx) else {
             return;
         };
         if column.len() <= 1 || column.is_tabbed() {
             return;
         }
 
-        // Compute available height (viewport minus outer gaps and window gaps)
         let outer_top = self.outer_gap_top.max(0);
         let outer_bottom = self.outer_gap_bottom.max(0);
         let gap = self.gap.max(0);
         let window_gaps = gap.saturating_mul(column.len() as i32 - 1);
         let available_height = (viewport_height - outer_top - outer_bottom - window_gaps).max(1);
 
-        // Weight corresponding to the user's resized height
         let current_weight = new_height as f64 / available_height as f64;
 
         let mut sorted = presets.to_vec();
@@ -501,7 +499,7 @@ impl Workspace {
             .copied();
 
         if let Some(weight) = nearest {
-            if let Some(column) = self.columns.get_mut(col_idx) {
+            if let Some(column) = self.rows[fr].columns.get_mut(col_idx) {
                 column.set_height_weight(win_idx, weight);
             }
         }
@@ -524,8 +522,6 @@ impl Workspace {
         self.cycle_height_impl(presets, PresetCycle::Up);
     }
 
-    /// Cycle the focused window's height weight down through the given presets.
-    /// No-op for single-window columns.
     pub fn cycle_height_down(&mut self, presets: &[f64]) {
         self.cycle_height_impl(presets, PresetCycle::Down);
     }
@@ -534,14 +530,13 @@ impl Workspace {
         if presets.is_empty() {
             return;
         }
-        let col_idx = self.focused_column;
-        let win_idx = self.focused_window_in_column;
-        let col = match self.columns.get_mut(col_idx) {
+        let fr = self.focused_row;
+        let col_idx = self.rows[fr].focused_column;
+        let win_idx = self.rows[fr].focused_window_in_column;
+        let col = match self.rows[fr].columns.get_mut(col_idx) {
             Some(c) => c,
             None => return,
         };
-        // Tabbed columns: height cycling is meaningless (only the active tab
-        // renders at full column height).
         if col.len() <= 1 || col.is_tabbed() {
             return;
         }
@@ -560,10 +555,10 @@ impl Workspace {
         }
     }
 
-    /// Equalize height weights in the focused column.
-    /// No-op for Tabbed columns (only one tab visible at a time).
     pub fn equalize_focused_column_heights(&mut self) {
-        if let Some(col) = self.columns.get_mut(self.focused_column) {
+        let fr = self.focused_row;
+        let foc = self.rows[fr].focused_column;
+        if let Some(col) = self.rows[fr].columns.get_mut(foc) {
             if col.is_tabbed() {
                 return;
             }
@@ -571,15 +566,12 @@ impl Workspace {
         }
     }
 
-    /// Set scroll offset directly (bypasses clamping).
-    pub fn set_scroll_offset(&mut self, offset: f64) {
-        self.scroll_offset = offset;
-    }
-
-    /// Set all column widths to a uniform value.
+    /// Set all column widths to a uniform value across all rows.
     pub fn set_all_column_widths(&mut self, width: i32) {
-        for col in &mut self.columns {
-            col.set_width(width);
+        for row in &mut self.rows {
+            for col in &mut row.columns {
+                col.set_width(width);
+            }
         }
     }
 
@@ -587,10 +579,9 @@ impl Workspace {
     // Resize Preview
     // ========================================================================
 
-    /// Compute the nearest width preset in pixels for a given column width,
-    /// without mutating any workspace state.
-    fn nearest_preset_width(
+    fn nearest_preset_width_in_row(
         &self,
+        row_idx: usize,
         col_idx: usize,
         current_width: i32,
         presets: &[f64],
@@ -599,7 +590,7 @@ impl Workspace {
         if presets.is_empty() {
             return None;
         }
-        let column = self.columns.get(col_idx)?;
+        let column = self.rows.get(row_idx)?.columns.get(col_idx)?;
         let base = self.width_base(viewport_width);
         let gap = self.gap.max(0);
         if base <= 0 {
@@ -635,28 +626,27 @@ impl Workspace {
         Some((base as f64 * final_frac - gap as f64).floor() as i32)
     }
 
-    /// Compute the nearest height weight preset for a window, without mutating state.
-    /// Returns None for Tabbed columns (height_weights aren't visible there).
-    fn nearest_preset_height_weight(
+    fn nearest_preset_height_weight_in_row(
         &self,
+        row_idx: usize,
         col_idx: usize,
         current_height: i32,
         presets: &[f64],
-        viewport_height: i32,
+        row_height: i32,
     ) -> Option<f64> {
         if presets.is_empty() {
             return None;
         }
-        let column = self.columns.get(col_idx)?;
+        let column = self.rows.get(row_idx)?.columns.get(col_idx)?;
         if column.len() <= 1 || column.is_tabbed() {
             return None;
         }
 
-        let outer_top = self.outer_gap_top.max(0);
-        let outer_bottom = self.outer_gap_bottom.max(0);
+        let outer_top = if row_idx == 0 { self.outer_gap_top.max(0) } else { 0 };
+        let outer_bottom = if row_idx == self.rows.len() - 1 { self.outer_gap_bottom.max(0) } else { 0 };
         let gap = self.gap.max(0);
         let window_gaps = gap.saturating_mul(column.len() as i32 - 1);
-        let available_height = (viewport_height - outer_top - outer_bottom - window_gaps).max(1);
+        let available_height = (row_height - outer_top - outer_bottom - window_gaps).max(1);
 
         let current_weight = current_height as f64 / available_height as f64;
 
@@ -674,8 +664,7 @@ impl Workspace {
     }
 
     /// Compute the placement rect a window would occupy after snapping its
-    /// column width and height to the nearest presets. Used for resize preview
-    /// ghost overlay. Temporarily mutates column state and restores it.
+    /// column width and height to the nearest presets.
     pub fn preview_resize_snap(
         &mut self,
         window_id: WindowId,
@@ -685,40 +674,44 @@ impl Workspace {
         height_presets: &[f64],
         viewport: Rect,
     ) -> Option<Rect> {
-        let (col_idx, win_idx) = self.find_window_location(window_id)?;
+        let (row_idx, col_idx, win_idx) = self.find_window_location_rc(window_id)?;
 
-        // Compute snapped values (read-only)
-        let snapped_width =
-            self.nearest_preset_width(col_idx, current_width, width_presets, viewport.width);
-        let snapped_weight = self.nearest_preset_height_weight(
+        let row_rects = self.row_rects(viewport);
+        let row_h = row_rects.get(row_idx).map(|r| r.height).unwrap_or(viewport.height);
+
+        let snapped_width = self.nearest_preset_width_in_row(
+            row_idx,
+            col_idx,
+            current_width,
+            width_presets,
+            viewport.width,
+        );
+        let snapped_weight = self.nearest_preset_height_weight_in_row(
+            row_idx,
             col_idx,
             current_height,
             height_presets,
-            viewport.height,
+            row_h,
         );
 
-        // Save originals
-        let original_width = self.columns[col_idx].width;
-        let original_weights = self.columns[col_idx].height_weights.clone();
+        let original_width = self.rows[row_idx].columns[col_idx].width;
+        let original_weights = self.rows[row_idx].columns[col_idx].height_weights.clone();
 
-        // Temporarily apply snapped values
         if let Some(w) = snapped_width {
-            self.columns[col_idx].set_width(w);
+            self.rows[row_idx].columns[col_idx].set_width(w);
         }
         if let Some(weight) = snapped_weight {
-            self.columns[col_idx].set_height_weight(win_idx, weight);
+            self.rows[row_idx].columns[col_idx].set_height_weight(win_idx, weight);
         }
 
-        // Compute placements with snapped values
         let placements = self.compute_placements(viewport);
         let rect = placements
             .iter()
             .find(|p| p.window_id == window_id)
             .map(|p| p.rect);
 
-        // Restore originals
-        self.columns[col_idx].width = original_width;
-        self.columns[col_idx].height_weights = original_weights;
+        self.rows[row_idx].columns[col_idx].width = original_width;
+        self.rows[row_idx].columns[col_idx].height_weights = original_weights;
 
         rect
     }

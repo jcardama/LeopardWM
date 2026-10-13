@@ -56,6 +56,7 @@ A few deliberate **non-features**, so you know what you're getting:
 
 ## Features
 
+- **Multi-row scrolling strips** — configure 1 to 4 independent horizontal scrolling rows per workspace with custom height splits and gaps
 - Multi-monitor workspaces with monitor-aware focus and move (9 workspaces per monitor)
 - Global hotkeys with live config reload
 - **PowerToys Shortcut Guide export** — `lwm query hotkeys` lists effective bindings; `lwm export-shortcut-guide` writes a user manifest (stdout, `--output PATH`, or `--install`)
@@ -139,10 +140,12 @@ Most hotkeys use `Ctrl+Alt` as the base modifier. Layered pattern: base = focus,
 | Key | Action |
 |---|---|
 | `Ctrl+Alt+H/L/J/K` | Focus left / right / down / up |
+| `Ctrl+Alt+PageUp` / `PageDown` | Focus row up / down |
 | `Ctrl+Alt+Home` / `End` | Focus start / end of strip |
 | `Ctrl+Alt+Shift+H/L` | Move column left / right |
 | `Ctrl+Alt+Shift+Home` / `End` | Move column to start / end of strip |
 | `Ctrl+Alt+Shift+J/K` | Move window down / up in column |
+| `Ctrl+Alt+Shift+PageUp` / `PageDown` | Move window to row up / down |
 | `Ctrl+Alt+[` / `]` | Move window to left / right column |
 | `Ctrl+Alt+Shift+[` / `]` | Expel window to new column left / right |
 | `Ctrl+Alt+,` / `.` | Consume left / right column's window into the focused column |
@@ -183,6 +186,40 @@ Settings gesture menus:
 the mouse wheel to run them.
 
 > The scratchpad and sticky pins are session-scoped: they are keyed by window handle and reset when the daemon restarts.
+
+## Multi-Row Layout
+
+Configure 1 to 4 independent horizontal scrolling rows per workspace. Each row behaves as its own scrolling strip, with independent horizontal scroll offset, column widths, and tabbed columns.
+
+**Basics**
+- `Ctrl+Alt+PageUp` / `Ctrl+Alt+PageDown` moves focus to the row above / below
+- `Ctrl+Alt+Shift+PageUp` / `Ctrl+Alt+Shift+PageDown` moves the focused window to the row above / below (preserving horizontal column index)
+- Vertical focus (`Ctrl+Alt+J` / `Ctrl+Alt+K`) seamlessly crosses row boundaries when `move_window_across_rows = true` (default)
+- Window rules can direct applications to open in a specific row: `row = 1` (1-based index)
+
+**Configuration**
+
+```toml
+[layout.rows]
+gap = 8                 # vertical gap between rows in pixels (scaled per-monitor with DPI)
+
+# Configure rows per workspace (1 to 4 rows: fractions like "1/2", "1/3", or weights like "1", "2").
+# Workspaces without an explicit entry default to 1 row.
+[[layout.rows.workspaces]]
+workspaces = [1, 2]     # 1 or more workspaces (1-9)
+split = ["1/2", "1/2"]  # 2 equal rows
+
+[[layout.rows.workspaces]]
+workspace = 3           # single workspace
+split = ["1/3", "1/3", "1/3"]  # 3 rows
+
+[behavior]
+move_window_across_rows = true  # wrap/cross rows during vertical navigation
+
+[[window_rules]]
+match_executable = "slack.exe"
+row = 2                 # 1-based row index (1 = top row)
+```
 
 ## Tabbed columns
 
@@ -300,10 +337,12 @@ Most users drive the layout via hotkeys, but every hotkey has a CLI equivalent �
 
 ```bash
 lwm focus left | right | up | down
+lwm focus-row up | down                # focus row above / below
 lwm cycle-width                       # next width preset, wrapping at the end
 lwm cycle-height                      # next height preset, wrapping at the end
 lwm move left | right                  # move focused column
 lwm move-window up | down              # reorder within a column
+lwm move-to-row up | down              # move window to row above / below
 lwm workspace 3                        # switch to workspace 3
 lwm toggle-floating
 lwm toggle-fullscreen

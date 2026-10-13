@@ -711,6 +711,7 @@ mod tests {
                     rect: Rect::new(0, 0, 100, 100),
                     visibility: leopardwm_core_layout::Visibility::Visible,
                     column_index: 0,
+                    row_index: 0,
                 }],
                 ghost_updates: Vec::new(),
                 platform_config: PlatformConfig::default(),

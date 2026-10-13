@@ -28,7 +28,7 @@ Press Ctrl+C to disconnect. The daemon does not need to know who is listening; r
 
 ## Protocol versions and capability checks
 
-The current IPC protocol is v4; the minimum supported version remains v1.
+The current IPC protocol is v5; the minimum supported version remains v1.
 Version 2 added tabbed-column data and commands. Version 3 adds the one-shot
 `QueryHotkeys` command (`{"type":"query_hotkeys"}`) and `HotkeyList` response
 (`status: "hotkey_list"`) with binding records, scroll modifier, and issues.
@@ -38,6 +38,11 @@ an additive v4 command that pauses tiling and cascades every managed window whil
 retaining workspace membership. It has no prompt; a failed recovery or live
 placement outcome returns an error and leaves tiling paused.
 `CycleWidth` (`cycle_width`) and `CycleHeight` (`cycle_height`) are additive v4 commands that cycle to the next larger preset, wrapping to the smallest at the end.
+Version 5 adds multi-row layout support: `FocusRow` (`{"type":"focus_row","direction":"up"|"down"}`)
+and `MoveWindowToRow` (`{"type":"move_window_to_row","direction":"up"|"down"}`) commands,
+row-aware workspace snapshots with `rows` (`Vec<RowSnapshotRecord>`), `focused_row`, and per-window
+`row_index`, and `rows` layout records in `LayoutChanged` events. Legacy `columns` and `focused_column`
+are preserved for backward compatibility reflecting the active row.
 See [the hotkey query contract](shortcut-guide.md#ipc-contract) for ordering,
 collision resolution, and the distinction between configuration and runtime
 registration health.
@@ -119,8 +124,8 @@ A workspace subscription retains the existing `subscribed` response and echoes
 `workspace_state` in `events`. After either response, switch to the event parser:
 
 ```json
-{"type":"workspace_snapshot_begin","protocol_version":4,"session_id":"opaque-daemon-session","revision":42,"focused_monitor_device_name":"\\\\.\\DISPLAY2"}
-{"type":"workspace_snapshot_chunk","revision":42,"records":[{"kind":"monitor","monitor_device_name":"\\\\.\\DISPLAY2","monitor_id":65537,"active_workspace_index":1},{"kind":"workspace","monitor_device_name":"\\\\.\\DISPLAY2","workspace_index":1,"name":"code"},{"kind":"window","monitor_device_name":"\\\\.\\DISPLAY2","workspace_index":1,"hwnd":123456,"is_floating":true,"is_sticky":false}]}
+{"type":"workspace_snapshot_begin","protocol_version":5,"session_id":"opaque-daemon-session","revision":42,"focused_monitor_device_name":"\\\\.\\DISPLAY2"}
+{"type":"workspace_snapshot_chunk","revision":42,"records":[{"kind":"monitor","monitor_device_name":"\\\\.\\DISPLAY2","monitor_id":65537,"active_workspace_index":1},{"kind":"workspace","monitor_device_name":"\\\\.\\DISPLAY2","workspace_index":1,"name":"code","focused_row":0,"rows":[{"row_index":0,"focused_column":0,"columns":[]}]},{"kind":"window","monitor_device_name":"\\\\.\\DISPLAY2","workspace_index":1,"hwnd":123456,"is_floating":true,"is_sticky":false,"row_index":null}]}
 {"type":"workspace_snapshot_end","revision":42}
 ```
 
@@ -131,9 +136,12 @@ The example abbreviates the records. A real snapshot includes:
   transient Win32 HMONITOR value, retained for correlation with older events.
 - Nine `workspace` records per monitor, including empty, lazily unallocated slots.
   Workspace indices are **zero-based**. Names use the existing global
-  `[workspaces].names` configuration; unnamed slots contain `null`.
+  `[workspaces].names` configuration; unnamed slots contain `null`. In IPC v5,
+  workspace records include `focused_row` and `rows` detailing each row's index,
+  focused column, and column layout.
 - One `window` record per managed window in its owning workspace, including
   inactive workspaces, floating windows, minimized windows, and inactive tabs.
+  In IPC v5, tiled windows report their `row_index`.
   Sticky windows report their actual current ownership with `is_sticky: true`;
   consumers must not count them once on every workspace. Hidden scratchpads and
   drag placeholders are excluded; shown scratchpads are ordinary floating members.
@@ -229,6 +237,27 @@ Do not infer workspace-state support from the numeric version alone; require the
   "type": "layout_changed",
   "monitor": 65537,
   "workspace_index": 0,
+  "focused_row": 0,
+  "rows": [
+    {
+      "row_index": 0,
+      "focused_column": 1,
+      "columns": [
+        {
+          "window_ids": [1223496256],
+          "width_px": 1267,
+          "height_weights": [1.0],
+          "mode": { "type": "vertical" }
+        },
+        {
+          "window_ids": [13764602, 1246800],
+          "width_px": 1267,
+          "height_weights": [0.6, 0.4],
+          "mode": { "type": "tabbed", "active_idx": 0 }
+        }
+      ]
+    }
+  ],
   "focused_column": 1,
   "columns": [
     {
@@ -247,7 +276,7 @@ Do not infer workspace-state support from the numeric version alone; require the
 }
 ```
 
-Carries enough column structure to render without a follow-up `QueryWorkspace`.
+Carries enough column structure to render without a follow-up `QueryWorkspace`. In IPC v5, `rows` contains the complete multi-row layout array with `row_index`, while top-level `columns` and `focused_column` reflect the currently focused row for backwards compatibility.
 
 Per-column fields:
 

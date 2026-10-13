@@ -85,6 +85,7 @@ impl AppState {
         );
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn update_drag_hint_at(
         &mut self,
         hwnd: u64,
@@ -129,15 +130,17 @@ impl AppState {
                         (
                             drag.source_monitor,
                             drag.source_workspace_idx,
+                            drag.source_row,
                             drag.current_column_index,
                             drag.source_window_slot,
                             drag.source_column_peers.clone(),
+                            drag.source_column_width,
                         )
                     })
                 });
                 let placeholder_removed = self.clear_drag_placeholder();
                 let restore_happened = restore.is_some();
-                if let Some((source_monitor, source_ws_idx, cached_col, source_slot, peers)) =
+                if let Some((source_monitor, source_ws_idx, source_row, cached_col, source_slot, peers, source_col_width)) =
                     restore
                 {
                     if let Some(ws) = self
@@ -153,25 +156,27 @@ impl AppState {
                         // as a new column instead of landing in an unrelated
                         // one.
                         let cached_col_intact = ws
-                            .column(cached_col)
+                            .rows()
+                            .get(source_row)
+                            .and_then(|r| r.column(cached_col))
                             .is_some_and(|c| peers.iter().any(|&peer| c.contains(peer)));
                         let resolved_col = if cached_col_intact {
                             Some(cached_col)
                         } else {
                             peers
                                 .iter()
-                                .find_map(|&peer| ws.find_window_location(peer).map(|(col, _)| col))
+                                .find_map(|&peer| ws.find_window_location_rc(peer).filter(|(r, _, _)| *r == source_row).map(|(_, col, _)| col))
                         };
                         let inserted = match resolved_col {
                             Some(col) => {
-                                let len = ws.column(col).map(|c| c.len()).unwrap_or(0);
-                                ws.insert_window_in_column_at(hwnd, col, source_slot.min(len))
+                                let len = ws.rows().get(source_row).and_then(|r| r.column(col)).map(|c| c.len()).unwrap_or(0);
+                                ws.insert_window_in_row_column_at(hwnd, source_row, col, source_slot.min(len))
                                     .is_ok()
                             }
-                            None => ws.insert_window(hwnd, None).is_ok(),
+                            None => ws.insert_window_in_row(hwnd, source_row, source_col_width).is_ok(),
                         };
                         if inserted {
-                            let new_col_idx = ws.find_window_location(hwnd).map(|(col, _)| col);
+                            let new_col_idx = ws.find_window_location_rc(hwnd).map(|(_, col, _)| col);
                             if let Some(drag) = self.drag_state.as_mut() {
                                 drag.removed_from_source = false;
                                 if let Some(col) = new_col_idx {
@@ -196,15 +201,31 @@ impl AppState {
             }
 
             // --- Shift+drag: column reorder mode ---
-            // Only live-reorder on the source monitor; cross-monitor happens on drop.
-            if target_monitor_id != source_monitor {
+            // Live-reorder on source monitor within the same row; cross-monitor or cross-row happens on drop.
+            let ws_idx = self.active_workspace_idx(target_monitor_id);
+            let target_row = self
+                .workspaces
+                .get(&target_monitor_id)
+                .and_then(|v| v.get(ws_idx))
+                .map(|ws| {
+                    let viewport = self.layout_viewport(target_monitor_id);
+                    target_row_for_cursor(ws, viewport, cursor_y)
+                })
+                .unwrap_or(0);
+            let source_row = self
+                .drag_state
+                .as_ref()
+                .map(|d| d.source_row)
+                .unwrap_or(0);
+
+            if target_monitor_id != source_monitor || target_row != source_row {
                 if let Some(snapshot) = restoration_snapshot {
                     self.start_layout_transition(snapshot);
                     if let Err(e) = self.apply_layout() {
                         warn!("Failed to restore layout before Shift drag: {}", e);
                     }
                 }
-                self.shift_drag_cross_monitor_hint(cursor_x, target_monitor_id);
+                self.shift_drag_cross_monitor_hint(cursor_x, cursor_y, target_monitor_id);
             } else {
                 // A same-tick source restore above may have re-resolved and
                 // updated `drag.current_column_index` (peer-lifecycle
@@ -220,12 +241,13 @@ impl AppState {
                     cursor_x,
                     source_monitor,
                     source_ws_idx,
+                    source_row,
                     current_col,
                     restoration_snapshot,
                 );
             }
         } else {
-            // --- Default drag: window merge mode with live preview ---
+            // --- Default drag: window merge / new-column mode with live preview ---
             // Source column keeps the dragged window (preserving its space).
             // Target column gets a placeholder so its windows shift to make room.
 
@@ -243,7 +265,8 @@ impl AppState {
                 self.reset_drag_preview_without_target(hwnd);
                 return;
             };
-            let column_bounds = column_bounds_from_placements(workspace, viewport);
+            let target_row = target_row_for_cursor(workspace, viewport, cursor_y);
+            let column_bounds = column_bounds_from_placements_for_row(workspace, viewport, target_row);
 
             // If the cursor is over a visible tab strip, route the drop
             // to that strip's owning column. The strip overhangs the
@@ -259,25 +282,37 @@ impl AppState {
                 .tab_strip_overlays
                 .values()
                 .find_map(|s| s.hit_test_screen(cursor_x, cursor_y));
-            let target_col = match strip_hit {
-                Some(hit) => hit.column_idx,
+            let (target_col, is_new_column) = match strip_hit {
+                Some(hit) => (hit.column_idx, false),
                 None => match compute_target_column_index(&column_bounds, cursor_x) {
-                    Some(idx) => idx,
+                    Some(idx) => (idx, false),
                     None => {
-                        self.reset_drag_preview_without_target(hwnd);
-                        return;
+                        // Across rows, across monitors, or in an empty row, cursor creates a new column.
+                        let source_row = self.drag_state.as_ref().map(|d| d.source_row).unwrap_or(0);
+                        if target_row != source_row || target_monitor_id != source_monitor || column_bounds.is_empty() {
+                            let insert_idx = compute_insertion_index(&column_bounds, cursor_x);
+                            (insert_idx, true)
+                        } else {
+                            self.reset_drag_preview_without_target(hwnd);
+                            return;
+                        }
                     }
                 },
             };
 
             // Determine if the dragged window is in the target column.
-            let is_same_column = workspace
-                .column(target_col)
-                .is_some_and(|c| c.contains(hwnd));
-            let target_is_tabbed = workspace.column(target_col).is_some_and(|c| c.is_tabbed());
+            let target_col_obj = if is_new_column {
+                None
+            } else {
+                workspace
+                    .rows()
+                    .get(target_row)
+                    .and_then(|r| r.column(target_col))
+            };
+            let is_same_column = !is_new_column && target_col_obj.is_some_and(|c| c.contains(hwnd));
+            let target_is_tabbed = !is_new_column && target_col_obj.is_some_and(|c| c.is_tabbed());
             // Same column: N slots (reorder). Different column: N+1 (placeholder added).
-            let n_existing = workspace
-                .column(target_col)
+            let n_existing = target_col_obj
                 .map(|column| {
                     column
                         .windows()
@@ -290,8 +325,7 @@ impl AppState {
             // dragged window and placeholder), so a later drop can re-resolve
             // this column by surviving membership if a peer Hidden/Destroyed
             // event shifts or removes columns before the drop lands.
-            let target_peers: Vec<u64> = workspace
-                .column(target_col)
+            let target_peers: Vec<u64> = target_col_obj
                 .map(|column| {
                     column
                         .windows()
@@ -301,43 +335,40 @@ impl AppState {
                         .collect()
                 })
                 .unwrap_or_default();
-            let n_total = if is_same_column {
-                n_existing
+
+            let (col_rect, window_slot) = if is_new_column {
+                (None, 0)
             } else {
-                n_existing + 1
-            };
-            if n_total == 0 {
-                self.reset_drag_preview_without_target(hwnd);
-                return;
-            }
-            let col_rect = match compute_column_rect(workspace, viewport, target_col) {
-                Some(r) => r,
-                None => {
+                let n_total = if is_same_column {
+                    n_existing
+                } else {
+                    n_existing + 1
+                };
+                if n_total == 0 {
                     self.reset_drag_preview_without_target(hwnd);
                     return;
                 }
-            };
-
-            // Slot selection: Tabbed targets always append to the end
-            // (Chrome new-tab semantics — "the tab I just added goes to
-            // the right"). Strip-hit position is intentionally ignored
-            // for Tabbed targets even when the user happens to drop on
-            // a specific tab; the cursor's column-internal position has
-            // no useful meaning in a Tabbed column where every tab
-            // occupies the same screen rect, and predictability beats
-            // cleverness here. Vertical targets still pick the slot
-            // from the cursor's Y.
-            let window_slot = if target_is_tabbed {
-                n_total.saturating_sub(1)
-            } else {
-                compute_window_slot(&col_rect, n_total, cursor_y)
+                let col_rect = match compute_column_rect(workspace, viewport, target_row, target_col) {
+                    Some(r) => r,
+                    None => {
+                        self.reset_drag_preview_without_target(hwnd);
+                        return;
+                    }
+                };
+                let slot = if target_is_tabbed {
+                    n_total.saturating_sub(1)
+                } else {
+                    compute_window_slot(&col_rect, n_total, cursor_y)
+                };
+                (Some(col_rect), slot)
             };
             let _ = strip_hit;
 
             let drop_target = DropTarget {
                 monitor: target_monitor_id,
+                target_row,
                 insert_index: target_col,
-                window_slot: Some(window_slot),
+                window_slot: if is_new_column { None } else { Some(window_slot) },
             };
             let (drop_target_unchanged, previous_mode) = self
                 .drag_state
@@ -350,25 +381,31 @@ impl AppState {
                 })
                 .unwrap_or((false, DragPreviewMode::None));
             if let Some(drag) = self.drag_state.as_mut() {
+                drag.current_row_index = target_row;
                 drag.last_drop_target = Some(drop_target);
                 drag.target_column_peers = target_peers;
             }
 
-            if !is_same_column && !target_is_tabbed && is_safe_drag_band(&col_rect, cursor_y) {
-                let mut snapshot = self.snapshot_layout();
-                if self.clear_drag_placeholder() {
-                    snapshot.remove(&hwnd);
-                    snapshot.remove(&DRAG_PLACEHOLDER_HWND);
-                    self.start_layout_transition(snapshot);
-                    if let Err(e) = self.apply_layout() {
-                        warn!("Failed to restore layout from drag safe band: {}", e);
+            let source_row = self.drag_state.as_ref().map(|d| d.source_row).unwrap_or(0);
+            if !is_new_column && target_row == source_row && !is_same_column && !target_is_tabbed {
+                if let Some(ref r) = col_rect {
+                    if is_safe_drag_band(r, cursor_y) {
+                        let mut snapshot = self.snapshot_layout();
+                        if self.clear_drag_placeholder() {
+                            snapshot.remove(&hwnd);
+                            snapshot.remove(&DRAG_PLACEHOLDER_HWND);
+                            self.start_layout_transition(snapshot);
+                            if let Err(e) = self.apply_layout() {
+                                warn!("Failed to restore layout from drag safe band: {}", e);
+                            }
+                        }
+                        if let Some(drag) = self.drag_state.as_mut() {
+                            drag.preview_mode = DragPreviewMode::SafeBand;
+                        }
+                        self.pending_drag_hint = Some(DragHintAction::Hide);
+                        return;
                     }
                 }
-                if let Some(drag) = self.drag_state.as_mut() {
-                    drag.preview_mode = DragPreviewMode::SafeBand;
-                }
-                self.pending_drag_hint = Some(DragHintAction::Hide);
-                return;
             }
 
             // Remove any existing placeholder before recomputing the body preview.
@@ -380,11 +417,31 @@ impl AppState {
                         .get_mut(&target_monitor_id)
                         .and_then(|v| v.get_mut(ws_idx))
                     {
-                        let _ = ws.insert_window_in_column_at(
-                            DRAG_PLACEHOLDER_HWND,
-                            target_col,
-                            window_slot,
-                        );
+                        if is_new_column {
+                            let source_col_width = self.drag_state.as_ref().and_then(|d| d.source_column_width);
+                            let row_col_count = ws.rows().get(target_row).map(|r| r.column_count()).unwrap_or(0);
+                            if row_col_count == 0 {
+                                let _ = ws.insert_window_in_row_no_focus(
+                                    DRAG_PLACEHOLDER_HWND,
+                                    target_row,
+                                    source_col_width,
+                                );
+                            } else {
+                                let _ = ws.insert_window_at_row_column_no_focus(
+                                    DRAG_PLACEHOLDER_HWND,
+                                    target_row,
+                                    source_col_width,
+                                    target_col,
+                                );
+                            }
+                        } else {
+                            let _ = ws.insert_window_in_row_column_at(
+                                DRAG_PLACEHOLDER_HWND,
+                                target_row,
+                                target_col,
+                                window_slot,
+                            );
+                        }
                     }
                 }
                 return;
@@ -398,17 +455,18 @@ impl AppState {
                 };
             }
             if is_same_column {
-                self.merge_reorder_same_column(hwnd, target_monitor_id, target_col, window_slot);
+                self.merge_reorder_same_column(hwnd, target_monitor_id, target_row, target_col, window_slot);
             } else {
                 // Different column: remove window from multi-window source so
                 // remaining windows expand, then insert placeholder at target.
                 let snapshot = self.snapshot_layout();
                 self.remove_drag_window_from_source(hwnd, source_monitor, source_ws_idx);
                 let Some(target_is_tabbed_final) = self.insert_drag_placeholder_at_target(
-                    viewport,
                     cursor_x,
+                    target_row,
                     target_col,
                     window_slot,
+                    is_new_column,
                     target_monitor_id,
                 ) else {
                     return;
@@ -429,7 +487,7 @@ impl AppState {
     }
 
     /// Show the column-reorder ghost at the insertion edge on a non-source monitor.
-    fn shift_drag_cross_monitor_hint(&mut self, cursor_x: i32, target_monitor_id: MonitorId) {
+    fn shift_drag_cross_monitor_hint(&mut self, cursor_x: i32, cursor_y: i32, target_monitor_id: MonitorId) {
         // Show ghost at the edge of the target monitor.
         if !self.monitors.contains_key(&target_monitor_id) {
             return;
@@ -443,10 +501,12 @@ impl AppState {
         else {
             return;
         };
-        let column_bounds = column_bounds_from_placements(workspace, viewport);
+        let target_row = target_row_for_cursor(workspace, viewport, cursor_y);
+        let column_bounds = column_bounds_from_placements_for_row(workspace, viewport, target_row);
         let insert_index = compute_insertion_index(&column_bounds, cursor_x);
         let drop_target = DropTarget {
             monitor: target_monitor_id,
+            target_row,
             insert_index,
             window_slot: None,
         };
@@ -457,9 +517,14 @@ impl AppState {
             drag.last_drop_target = Some(drop_target);
         }
         let gap = workspace.gap();
-        let hint_x = compute_insertion_hint_x(&column_bounds, insert_index, gap);
+        let hint_x = if column_bounds.is_empty() {
+            viewport.x + gap
+        } else {
+            compute_insertion_hint_x(&column_bounds, insert_index, gap)
+        };
+        let row_rect = workspace.row_rects(viewport).get(target_row).copied().unwrap_or(viewport);
         self.pending_drag_hint = Some(DragHintAction::ShowGhost {
-            rect: Rect::new(hint_x - 2, viewport.y, 4, viewport.height),
+            rect: Rect::new(hint_x - 2, row_rect.y, 4, row_rect.height),
         });
     }
 
@@ -469,6 +534,7 @@ impl AppState {
         cursor_x: i32,
         source_monitor: MonitorId,
         source_ws_idx: usize,
+        source_row: usize,
         current_col: usize,
         restoration_snapshot: Option<std::collections::HashMap<u64, Rect>>,
     ) {
@@ -484,10 +550,10 @@ impl AppState {
             else {
                 return;
             };
-            let column_bounds = column_bounds_from_placements(workspace, viewport);
+            let column_bounds = column_bounds_from_placements_for_row(workspace, viewport, source_row);
             (
                 compute_target_column_index(&column_bounds, cursor_x),
-                compute_column_rect(workspace, viewport, current_col),
+                compute_column_rect(workspace, viewport, source_row, current_col),
             )
         };
         let Some(target_idx) = target_idx else {
@@ -507,8 +573,8 @@ impl AppState {
 
         if target_idx != current_col {
             debug!(
-                "Live drag reorder: column {} → {} on monitor {}",
-                current_col, target_idx, source_monitor
+                "Live drag reorder: row {} column {} → {} on monitor {}",
+                source_row, current_col, target_idx, source_monitor
             );
             let snapshot = restoration_snapshot.unwrap_or_else(|| self.snapshot_layout());
             if let Some(workspace) = self
@@ -516,7 +582,7 @@ impl AppState {
                 .get_mut(&source_monitor)
                 .and_then(|v| v.get_mut(source_ws_idx))
             {
-                workspace.reorder_column(current_col, target_idx);
+                workspace.reorder_column_in_row(source_row, current_col, target_idx);
             }
             if let Some(ref mut drag) = self.drag_state {
                 drag.current_column_index = target_idx;
@@ -545,7 +611,7 @@ impl AppState {
             Some(ref d) => d.current_column_index,
             None => return,
         };
-        if let Some(rect) = compute_column_rect(workspace, viewport, new_col_idx) {
+        if let Some(rect) = compute_column_rect(workspace, viewport, source_row, new_col_idx) {
             self.pending_drag_hint = Some(DragHintAction::ShowGhost { rect });
         }
     }
@@ -555,6 +621,7 @@ impl AppState {
         &mut self,
         hwnd: u64,
         target_monitor_id: MonitorId,
+        target_row: usize,
         target_col: usize,
         window_slot: usize,
     ) {
@@ -563,9 +630,11 @@ impl AppState {
             .workspaces
             .get(&target_monitor_id)
             .and_then(|v| v.get(ws_idx))
-            .and_then(|ws| ws.find_window_location(hwnd));
+            .and_then(|ws| ws.find_window_location_rc(hwnd));
         let needs_move = match current_location {
-            Some((_, cur_win_idx)) => cur_win_idx != window_slot,
+            Some((cur_row, cur_col, cur_win_idx)) => {
+                cur_row != target_row || cur_col != target_col || cur_win_idx != window_slot
+            }
             None => false,
         };
         if needs_move {
@@ -577,7 +646,7 @@ impl AppState {
                 .and_then(|v| v.get_mut(idx))
             {
                 let _ = ws.remove_window(hwnd);
-                let _ = ws.insert_window_in_column_at(hwnd, target_col, window_slot);
+                let _ = ws.insert_window_in_row_column_at(hwnd, target_row, target_col, window_slot);
             }
             self.start_layout_transition(snapshot);
             if let Err(e) = self.apply_layout() {
@@ -609,8 +678,8 @@ impl AppState {
                 .get(&source_monitor)
                 .and_then(|v| v.get(source_ws_idx))
                 .and_then(|ws| {
-                    let (col, slot) = ws.find_window_location(hwnd)?;
-                    let column = ws.column(col)?;
+                    let (row, col, slot) = ws.find_window_location_rc(hwnd)?;
+                    let column = ws.rows().get(row)?.column(col)?;
                     (column.len() > 1).then(|| {
                         let peers: Vec<u64> = column
                             .windows()
@@ -641,10 +710,11 @@ impl AppState {
     /// Insert the drag placeholder at the target column; returns whether the target is tabbed, or `None` to abort the hint.
     fn insert_drag_placeholder_at_target(
         &mut self,
-        viewport: Rect,
         cursor_x: i32,
+        target_row: usize,
         target_col: usize,
         window_slot: usize,
+        is_new_column: bool,
         target_monitor_id: MonitorId,
     ) -> Option<bool> {
         // Insert placeholder at target to shift target windows.
@@ -655,13 +725,18 @@ impl AppState {
             .is_some_and(|d| d.removed_from_source)
         {
             // Re-derive from updated layout.
+            let viewport = self.layout_viewport(target_monitor_id);
             let tgt_idx = self.active_workspace_idx(target_monitor_id);
             let ws = self
                 .workspaces
                 .get(&target_monitor_id)
                 .and_then(|v| v.get(tgt_idx))?;
-            let bounds = column_bounds_from_placements(ws, viewport);
-            compute_target_column_index(&bounds, cursor_x)?
+            let bounds = column_bounds_from_placements_for_row(ws, viewport, target_row);
+            if is_new_column {
+                compute_insertion_index(&bounds, cursor_x)
+            } else {
+                compute_target_column_index(&bounds, cursor_x)?
+            }
         } else {
             target_col
         };
@@ -672,18 +747,35 @@ impl AppState {
             .get_mut(&target_monitor_id)
             .and_then(|v| v.get_mut(tgt_idx))
         {
-            let it = adj_target_col < ws.column_count()
-                && ws.column(adj_target_col).is_some_and(|c| c.is_tabbed());
-            if adj_target_col < ws.column_count() {
-                let _ = ws.insert_window_in_column_at(
-                    DRAG_PLACEHOLDER_HWND,
-                    adj_target_col,
-                    window_slot,
-                );
+            let source_col_width = self.drag_state.as_ref().and_then(|d| d.source_column_width);
+            let row_col_count = ws.rows().get(target_row).map(|r| r.column_count()).unwrap_or(0);
+            if is_new_column {
+                if row_col_count == 0 {
+                    let _ = ws.insert_window_in_row_no_focus(DRAG_PLACEHOLDER_HWND, target_row, source_col_width);
+                } else {
+                    let _ = ws.insert_window_at_row_column_no_focus(
+                        DRAG_PLACEHOLDER_HWND,
+                        target_row,
+                        source_col_width,
+                        adj_target_col,
+                    );
+                }
+                false
             } else {
-                let _ = ws.insert_window(DRAG_PLACEHOLDER_HWND, None);
+                let it = adj_target_col < row_col_count
+                    && ws.rows().get(target_row).and_then(|r| r.column(adj_target_col)).is_some_and(|c| c.is_tabbed());
+                if adj_target_col < row_col_count {
+                    let _ = ws.insert_window_in_row_column_at(
+                        DRAG_PLACEHOLDER_HWND,
+                        target_row,
+                        adj_target_col,
+                        window_slot,
+                    );
+                } else {
+                    let _ = ws.insert_window_in_row_no_focus(DRAG_PLACEHOLDER_HWND, target_row, source_col_width);
+                }
+                it
             }
-            it
         } else {
             false
         };
@@ -714,10 +806,13 @@ impl AppState {
         } else {
             DRAG_PLACEHOLDER_HWND
         };
-        if let Some((ghost_col, ghost_slot)) = workspace.find_window_location(ghost_id) {
-            if let Some(ghost_col_rect) = compute_column_rect(workspace, viewport, ghost_col) {
-                let ghost_col_is_tabbed =
-                    workspace.column(ghost_col).is_some_and(|c| c.is_tabbed());
+        if let Some((ghost_row, ghost_col, ghost_slot)) = workspace.find_window_location_rc(ghost_id) {
+            if let Some(ghost_col_rect) = compute_column_rect(workspace, viewport, ghost_row, ghost_col) {
+                let ghost_col_is_tabbed = workspace
+                    .rows()
+                    .get(ghost_row)
+                    .and_then(|r| r.column(ghost_col))
+                    .is_some_and(|c| c.is_tabbed());
                 let ghost = if ghost_col_is_tabbed {
                     // Tabbed targets drop-as-tab (Chrome semantics —
                     // always append rightmost), so the ghost should
@@ -733,7 +828,9 @@ impl AppState {
                     // index so the ghost position is correct when
                     // minimized windows precede it.
                     let (ghost_n, visible_slot) = workspace
-                        .column(ghost_col)
+                        .rows()
+                        .get(ghost_row)
+                        .and_then(|r| r.column(ghost_col))
                         .map(|c| {
                             let mut vis_count = 0usize;
                             let mut vis_slot = 0usize;
@@ -786,33 +883,43 @@ impl AppState {
         // recompute if the target identity no longer exists anywhere.
         let cached_target = drag
             .last_drop_target
-            .filter(|target| target.monitor == target_monitor)
-            .and_then(|target| target.window_slot.map(|slot| (target.insert_index, slot)));
-        let resolved_from_cache = cached_target.and_then(|(cached_col, cached_slot)| {
+            .filter(|target| target.monitor == target_monitor);
+        let resolved_from_cache = cached_target.and_then(|target| {
             let ws_idx = self.active_workspace_idx(target_monitor);
             let workspace = self
                 .workspaces
                 .get(&target_monitor)
                 .and_then(|v| v.get(ws_idx))?;
-            let cached_col_intact = workspace.column(cached_col).is_some_and(|c| {
-                drag.target_column_peers
-                    .iter()
-                    .any(|&peer| c.contains(peer))
-            });
-            let resolved_col = if cached_col_intact {
-                Some(cached_col)
-            } else {
-                drag.target_column_peers
-                    .iter()
-                    .find_map(|&peer| workspace.find_window_location(peer).map(|(col, _)| col))
-            };
-            resolved_col.map(|col| {
-                let len = workspace.column(col).map(|c| c.len()).unwrap_or(0);
-                (col, cached_slot.min(len))
-            })
+            match target.window_slot {
+                Some(cached_slot) => {
+                    let cached_col_intact = workspace
+                        .rows()
+                        .get(target.target_row)
+                        .and_then(|r| r.column(target.insert_index))
+                        .is_some_and(|c| {
+                            drag.target_column_peers
+                                .iter()
+                                .any(|&peer| c.contains(peer))
+                        });
+                    let resolved_col = if cached_col_intact {
+                        Some((target.target_row, target.insert_index))
+                    } else {
+                        drag.target_column_peers
+                            .iter()
+                            .find_map(|&peer| workspace.find_window_location_rc(peer).map(|(r, col, _)| (r, col)))
+                    };
+                    resolved_col.map(|(r, col)| {
+                        let len = workspace.rows().get(r).and_then(|row| row.column(col)).map(|c| c.len()).unwrap_or(0);
+                        (r, col, cached_slot.min(len), false)
+                    })
+                }
+                None => {
+                    Some((target.target_row, target.insert_index, 0, true))
+                }
+            }
         });
 
-        let (target_col_idx, window_slot) = if let Some(target) = resolved_from_cache {
+        let (target_row_idx, target_col_idx, window_slot, is_new_column) = if let Some(target) = resolved_from_cache {
             target
         } else {
             let ws_idx = self.active_workspace_idx(target_monitor);
@@ -824,7 +931,6 @@ impl AppState {
                 self.snap_back_tiled(source_monitor, drag.source_workspace_idx);
                 return;
             };
-            let column_bounds = column_bounds_from_placements(workspace, target_viewport);
             let (cursor_x, cursor_y) =
                 leopardwm_platform_win32::get_cursor_pos().unwrap_or_else(|| {
                     (
@@ -832,6 +938,8 @@ impl AppState {
                         win_rect.y + win_rect.height / 2,
                     )
                 });
+            let target_row = target_row_for_cursor(workspace, target_viewport, cursor_y);
+            let column_bounds = column_bounds_from_placements_for_row(workspace, target_viewport, target_row);
 
             // If the drop lands on a visible tab strip, route to that
             // tab's slot in the strip's owning column — overrides the
@@ -841,28 +949,36 @@ impl AppState {
                 .values()
                 .find_map(|s| s.hit_test_screen(cursor_x, cursor_y));
             if let Some(hit) = strip_hit {
-                (hit.column_idx, hit.tab_idx)
+                (target_row, hit.column_idx, hit.tab_idx, false)
             } else {
-                let col_idx = match compute_target_column_index(&column_bounds, cursor_x) {
-                    Some(idx) => idx,
-                    None => {
-                        self.snap_back_tiled(source_monitor, drag.source_workspace_idx);
-                        return;
+                match compute_target_column_index(&column_bounds, cursor_x) {
+                    Some(col_idx) => {
+                        let target_col_obj = workspace.rows().get(target_row).and_then(|r| r.column(col_idx));
+                        let is_same_col = target_col_obj.is_some_and(|c| c.contains(hwnd));
+                        let n_existing = target_col_obj.map(|c| c.len()).unwrap_or(0);
+                        let n_total = if is_same_col {
+                            n_existing
+                        } else {
+                            n_existing + 1
+                        };
+                        let col_rect = compute_column_rect(workspace, target_viewport, target_row, col_idx);
+                        let slot = match col_rect {
+                            Some(ref r) if n_total > 0 => compute_window_slot(r, n_total, cursor_y),
+                            _ => 0,
+                        };
+                        (target_row, col_idx, slot, false)
                     }
-                };
-                let is_same_col = workspace.column(col_idx).is_some_and(|c| c.contains(hwnd));
-                let n_existing = workspace.column(col_idx).map(|c| c.len()).unwrap_or(0);
-                let n_total = if is_same_col {
-                    n_existing
-                } else {
-                    n_existing + 1
-                };
-                let col_rect = compute_column_rect(workspace, target_viewport, col_idx);
-                let slot = match col_rect {
-                    Some(ref r) if n_total > 0 => compute_window_slot(r, n_total, cursor_y),
-                    _ => 0,
-                };
-                (col_idx, slot)
+                    None => {
+                        let source_row = drag.source_row;
+                        if target_row != source_row || target_monitor != source_monitor || column_bounds.is_empty() {
+                            let insert_col = compute_insertion_index(&column_bounds, cursor_x);
+                            (target_row, insert_col, 0, true)
+                        } else {
+                            self.snap_back_tiled(source_monitor, drag.source_workspace_idx);
+                            return;
+                        }
+                    }
+                }
             }
         };
 
@@ -875,24 +991,25 @@ impl AppState {
             self.workspaces
                 .get(&source_monitor)
                 .and_then(|v| v.get(src_ws_idx))
-                .and_then(|ws| ws.find_window_location(hwnd))
-                .map(|(col_idx, _)| {
+                .and_then(|ws| ws.find_window_location_rc(hwnd))
+                .map(|(src_row, col_idx, _)| {
                     let col_len = self
                         .workspaces
                         .get(&source_monitor)
                         .and_then(|v| v.get(src_ws_idx))
-                        .and_then(|ws| ws.column(col_idx))
+                        .and_then(|ws| ws.rows().get(src_row))
+                        .and_then(|r| r.column(col_idx))
                         .map(|c| c.len())
                         .unwrap_or(0);
-                    (col_idx, col_len)
+                    (src_row, col_idx, col_len)
                 })
         } else {
             None
         };
 
         // Single-window column dropped onto itself → snap back, nothing to merge.
-        if let Some((src_col, src_len)) = src_col_info {
-            if target_col_idx == src_col && src_len == 1 {
+        if let Some((src_row, src_col, src_len)) = src_col_info {
+            if !is_new_column && target_row_idx == src_row && target_col_idx == src_col && src_len == 1 {
                 self.snap_back_tiled(source_monitor, drag.source_workspace_idx);
                 return;
             }
@@ -931,9 +1048,9 @@ impl AppState {
         // Adjust target column index if removing from the same monitor shifted indices.
         // If the source column was before the target and was fully removed (single window),
         // all subsequent columns shifted left by 1.
-        let effective_target_col = if let Some((src_col, src_len)) = src_col_info {
-            if src_len == 1 && src_col < target_col_idx {
-                target_col_idx - 1
+        let effective_target_col = if let Some((src_row, src_col, src_len)) = src_col_info {
+            if src_row == target_row_idx && src_len == 1 && src_col < target_col_idx {
+                target_col_idx.saturating_sub(1)
             } else {
                 target_col_idx
             }
@@ -948,8 +1065,14 @@ impl AppState {
             .get_mut(&target_monitor)
             .and_then(|v| v.get_mut(tgt_mut_idx))
         {
-            if workspace.column_count() == 0 {
-                let _ = workspace.insert_window(hwnd, None);
+            let source_col_width = drag.source_column_width;
+            let row_col_count = workspace.rows().get(target_row_idx).map(|r| r.column_count()).unwrap_or(0);
+            if is_new_column || row_col_count == 0 {
+                if row_col_count == 0 {
+                    let _ = workspace.insert_window_in_row(hwnd, target_row_idx, source_col_width);
+                } else {
+                    let _ = workspace.insert_window_at_row_column(hwnd, target_row_idx, source_col_width, effective_target_col);
+                }
             } else {
                 // Chrome semantics: drops into a Tabbed column always
                 // append at the rightmost position, even when the drop
@@ -958,24 +1081,28 @@ impl AppState {
                 // (which returns `hit.tab_idx`) doesn't place new tabs
                 // at the leftmost slot.
                 let target_is_tabbed = workspace
-                    .column(effective_target_col)
+                    .rows()
+                    .get(target_row_idx)
+                    .and_then(|r| r.column(effective_target_col))
                     .is_some_and(|c| c.is_tabbed());
                 let effective_slot = if target_is_tabbed {
                     workspace
-                        .column(effective_target_col)
+                        .rows()
+                        .get(target_row_idx)
+                        .and_then(|r| r.column(effective_target_col))
                         .map(|c| c.len())
                         .unwrap_or(window_slot)
                 } else {
                     window_slot
                 };
                 if let Err(e) =
-                    workspace.insert_window_in_column_at(hwnd, effective_target_col, effective_slot)
+                    workspace.insert_window_in_row_column_at(hwnd, target_row_idx, effective_target_col, effective_slot)
                 {
                     warn!(
-                        "Failed to merge window {} into column {} at slot {}: {}",
-                        hwnd, effective_target_col, effective_slot, e
+                        "Failed to merge window {} into row {} column {} at slot {}: {}",
+                        hwnd, target_row_idx, effective_target_col, effective_slot, e
                     );
-                    let _ = workspace.insert_window(hwnd, None);
+                    let _ = workspace.insert_window_in_row(hwnd, target_row_idx, source_col_width);
                 }
             }
             // Drop activates the inserted window in both Vertical and
@@ -1030,25 +1157,35 @@ impl AppState {
             .workspaces
             .get(&target_monitor)
             .and_then(|v| v.get(tgt_idx))
-            .and_then(|ws| ws.find_window_location(DRAG_PLACEHOLDER_HWND));
+            .and_then(|ws| ws.find_window_location_rc(DRAG_PLACEHOLDER_HWND));
 
-        if let Some((ph_col, ph_slot)) = placeholder_location {
+        if let Some((ph_row, ph_col, ph_slot)) = placeholder_location {
+            // Check if placeholder was inside an existing multi-window column or was its own column.
+            let was_in_existing_column = self
+                .workspaces
+                .get(&target_monitor)
+                .and_then(|v| v.get(tgt_idx))
+                .and_then(|ws| ws.rows().get(ph_row))
+                .and_then(|r| r.column(ph_col))
+                .is_some_and(|c| c.len() > 1);
+
             // Capture source column info BEFORE any removals.
             let src_ws_idx = drag.source_workspace_idx;
             let src_info = if !drag.removed_from_source && target_monitor == source_monitor {
                 self.workspaces
                     .get(&source_monitor)
                     .and_then(|v| v.get(src_ws_idx))
-                    .and_then(|ws| ws.find_window_location(hwnd))
-                    .map(|(col, _)| {
+                    .and_then(|ws| ws.find_window_location_rc(hwnd))
+                    .map(|(src_row, col, _)| {
                         let len = self
                             .workspaces
                             .get(&source_monitor)
                             .and_then(|v| v.get(src_ws_idx))
-                            .and_then(|ws| ws.column(col))
+                            .and_then(|ws| ws.rows().get(src_row))
+                            .and_then(|r| r.column(col))
                             .map(|c| c.len())
                             .unwrap_or(0);
-                        (col, len)
+                        (src_row, col, len)
                     })
             } else {
                 None
@@ -1074,10 +1211,10 @@ impl AppState {
                 }
             }
 
-            // Adjust column index if source column was removed and was before placeholder.
-            let adj_col = if let Some((src_col, src_len)) = src_info {
-                if src_len == 1 && src_col < ph_col {
-                    ph_col - 1
+            // Adjust column index if source column was removed and was in the same row before placeholder.
+            let adj_col = if let Some((src_row, src_col, src_len)) = src_info {
+                if src_row == ph_row && src_len == 1 && src_col < ph_col {
+                    ph_col.saturating_sub(1)
                 } else {
                     ph_col
                 }
@@ -1091,8 +1228,14 @@ impl AppState {
                 .get_mut(&target_monitor)
                 .and_then(|v| v.get_mut(tgt_idx))
             {
-                if ws.column_count() == 0 {
-                    let _ = ws.insert_window(hwnd, None);
+                let source_col_width = drag.source_column_width;
+                let row_col_count = ws.rows().get(ph_row).map(|r| r.column_count()).unwrap_or(0);
+                if !was_in_existing_column || row_col_count == 0 {
+                    if row_col_count == 0 {
+                        let _ = ws.insert_window_in_row(hwnd, ph_row, source_col_width);
+                    } else {
+                        let _ = ws.insert_window_at_row_column(hwnd, ph_row, source_col_width, adj_col);
+                    }
                 } else {
                     // Chrome semantics: Tabbed drops always append to
                     // the rightmost position. The placeholder slot
@@ -1100,18 +1243,18 @@ impl AppState {
                     // be wrong if the cursor wiggled across columns
                     // during the drag — force the end here so the user
                     // sees the new tab where they expect it.
-                    let target_is_tabbed = ws.column(adj_col).is_some_and(|c| c.is_tabbed());
+                    let target_is_tabbed = ws.rows().get(ph_row).and_then(|r| r.column(adj_col)).is_some_and(|c| c.is_tabbed());
                     let effective_slot = if target_is_tabbed {
-                        ws.column(adj_col).map(|c| c.len()).unwrap_or(ph_slot)
+                        ws.rows().get(ph_row).and_then(|r| r.column(adj_col)).map(|c| c.len()).unwrap_or(ph_slot)
                     } else {
                         ph_slot
                     };
-                    if let Err(e) = ws.insert_window_in_column_at(hwnd, adj_col, effective_slot) {
+                    if let Err(e) = ws.insert_window_in_row_column_at(hwnd, ph_row, adj_col, effective_slot) {
                         warn!(
-                            "Failed to place window {} at col {} slot {}: {}",
-                            hwnd, adj_col, effective_slot, e
+                            "Failed to place window {} at row {} col {} slot {}: {}",
+                            hwnd, ph_row, adj_col, effective_slot, e
                         );
-                        let _ = ws.insert_window(hwnd, None);
+                        let _ = ws.insert_window_in_row(hwnd, ph_row, source_col_width);
                     }
                 }
                 // Drop activates the inserted window for both Vertical
@@ -1164,14 +1307,14 @@ impl AppState {
         // Use the workspace index from drag start — it's stable even if
         // active workspace changed during drag.
         let src_idx = drag.source_workspace_idx;
-        let col_idx = match self
+        let (src_row, col_idx) = match self
             .workspaces
             .get(&source_monitor)
             .and_then(|v| v.get(src_idx))
-            .and_then(|ws| ws.find_window_location(hwnd))
-            .map(|(col, _)| col)
+            .and_then(|ws| ws.find_window_location_rc(hwnd))
+            .map(|(row, col, _)| (row, col))
         {
-            Some(idx) => idx,
+            Some(loc) => loc,
             None => {
                 self.snap_back_tiled(source_monitor, drag.source_workspace_idx);
                 return;
@@ -1186,14 +1329,25 @@ impl AppState {
         let target_viewport = self.layout_viewport(target_monitor);
 
         let tgt_idx = self.active_workspace_idx(target_monitor);
-        let target_bounds = self
+        let win_center_x = win_rect.x + win_rect.width / 2;
+        let win_center_y = win_rect.y + win_rect.height / 2;
+
+        let (target_row, insert_idx) = match self
             .workspaces
             .get(&target_monitor)
             .and_then(|v| v.get(tgt_idx))
-            .map(|ws| column_bounds_from_placements(ws, target_viewport))
-            .unwrap_or_default();
-        let win_center_x = win_rect.x + win_rect.width / 2;
-        let insert_idx = compute_insertion_index(&target_bounds, win_center_x);
+        {
+            Some(ws) => {
+                let target_row = target_row_for_cursor(ws, target_viewport, win_center_y);
+                let target_bounds = column_bounds_from_placements_for_row(ws, target_viewport, target_row);
+                let insert_idx = compute_insertion_index(&target_bounds, win_center_x);
+                (target_row, insert_idx)
+            }
+            None => {
+                self.snap_back_tiled(source_monitor, drag.source_workspace_idx);
+                return;
+            }
+        };
 
         // Collect minimized window IDs before removal (remove_column clears them
         // from the source workspace's minimized set).
@@ -1202,7 +1356,7 @@ impl AppState {
             .get(&source_monitor)
             .and_then(|v| v.get(src_idx))
             .map(|ws| {
-                ws.columns()
+                ws.columns_for_row(src_row)
                     .get(col_idx)
                     .map(|col| {
                         col.windows()
@@ -1232,7 +1386,7 @@ impl AppState {
             .workspaces
             .get_mut(&source_monitor)
             .and_then(|v| v.get_mut(src_idx))
-            .and_then(|ws| ws.remove_column(col_idx))
+            .and_then(|ws| ws.remove_column_in_row(src_row, col_idx))
         {
             Some(col) => col,
             None => {
@@ -1242,10 +1396,12 @@ impl AppState {
         };
 
         debug!(
-            "Cross-monitor drag: column with {} window(s) from monitor {} → monitor {} at index {}",
+            "Cross-monitor drag: column with {} window(s) from monitor {} (row {}) → monitor {} (row {}) at index {}",
             column.len(),
             source_monitor,
+            src_row,
             target_monitor,
+            target_row,
             insert_idx
         );
 
@@ -1255,7 +1411,7 @@ impl AppState {
             .get_mut(&target_monitor)
             .and_then(|v| v.get_mut(tgt_idx))
         {
-            target_ws.insert_column_at(column, insert_idx);
+            target_ws.insert_column_at_row(column, target_row, insert_idx);
             for wid in &minimized_in_col {
                 target_ws.mark_minimized(*wid);
             }
@@ -1304,7 +1460,31 @@ struct ColumnBound {
     screen_right: i32,
 }
 
-/// Derive column screen boundaries from animated placements.
+/// Find target row index for a given cursor Y coordinate.
+pub(crate) fn target_row_for_cursor(
+    workspace: &leopardwm_core_layout::Workspace,
+    viewport: Rect,
+    cursor_y: i32,
+) -> usize {
+    let row_rects = workspace.row_rects(viewport);
+    if row_rects.is_empty() {
+        return 0;
+    }
+    let last_idx = row_rects.len() - 1;
+    for (i, r) in row_rects.iter().enumerate() {
+        if i == last_idx {
+            return i;
+        }
+        let next_y = row_rects[i + 1].y;
+        let midpoint = (r.y + r.height + next_y) / 2;
+        if cursor_y < midpoint {
+            return i;
+        }
+    }
+    last_idx
+}
+
+/// Derive column screen boundaries from animated placements for a given row.
 ///
 /// Tabbed columns emit off-screen placements for inactive tabs (positioned
 /// at `viewport.x - viewport.width`, size 0×0). Those must be excluded
@@ -1312,16 +1492,17 @@ struct ColumnBound {
 /// reported `screen_left` to a huge negative number, and the "first
 /// matching bound" pick in `compute_target_column_index` would then claim
 /// any cursor to the left of the tabbed column as belonging to it.
-fn column_bounds_from_placements(
+fn column_bounds_from_placements_for_row(
     workspace: &leopardwm_core_layout::Workspace,
     viewport: Rect,
+    row_index: usize,
 ) -> Vec<ColumnBound> {
     let placements = workspace.compute_placements_animated(viewport);
     // Group placements by column_index and compute left/right per column,
     // skipping off-screen (inactive-tab) placements.
     let mut map: std::collections::HashMap<usize, (i32, i32)> = std::collections::HashMap::new();
     for p in &placements {
-        if !matches!(p.visibility, leopardwm_core_layout::Visibility::Visible) {
+        if p.row_index != row_index || !matches!(p.visibility, leopardwm_core_layout::Visibility::Visible) {
             continue;
         }
         let entry = map
@@ -1387,6 +1568,7 @@ fn compute_target_column_index(bounds: &[ColumnBound], screen_x: i32) -> Option<
 fn compute_column_rect(
     workspace: &leopardwm_core_layout::Workspace,
     viewport: Rect,
+    row_index: usize,
     column_index: usize,
 ) -> Option<Rect> {
     let placements = workspace.compute_placements_animated(viewport);
@@ -1396,7 +1578,7 @@ fn compute_column_rect(
     let mut max_bottom = i32::MIN;
     let mut found = false;
     for p in &placements {
-        if p.column_index == column_index && p.visibility == Visibility::Visible {
+        if p.row_index == row_index && p.column_index == column_index && p.visibility == Visibility::Visible {
             found = true;
             min_x = min_x.min(p.rect.x);
             min_y = min_y.min(p.rect.y);

@@ -286,7 +286,7 @@ impl AppState {
                 scale,
                 vw,
             );
-            params.apply_to(&mut ws);
+            params.apply_to(&mut ws, ws_idx);
             ws.set_centering_mode(self.config.layout.centering_mode.into());
             ws.set_center_past_edges(self.config.layout.center_past_edges);
             ws.set_center_single_column(self.config.layout.center_single_column);
@@ -302,6 +302,7 @@ impl AppState {
             // workspaces as needed.
             let entry = self.workspaces.entry(monitor_id).or_default();
             while entry.len() <= ws_idx {
+                let cur_idx = entry.len();
                 let mut empty = Workspace::with_directional_gaps(
                     params.gap,
                     params.outer_gap_left,
@@ -309,8 +310,7 @@ impl AppState {
                     params.outer_gap_top,
                     params.outer_gap_bottom,
                 );
-                empty.set_default_column_width(params.default_column_width);
-                empty.set_tab_strip_reserve_px(params.tab_strip_reserve_px);
+                params.apply_to(&mut empty, cur_idx);
                 empty.set_centering_mode(self.config.layout.centering_mode.into());
                 empty.set_center_past_edges(self.config.layout.center_past_edges);
                 empty.set_center_single_column(self.config.layout.center_single_column);
@@ -374,6 +374,7 @@ impl AppState {
                         vw,
                     );
                     while ws_vec.len() <= ws_idx {
+                        let cur_idx = ws_vec.len();
                         let mut ws = Workspace::with_directional_gaps(
                             params.gap,
                             params.outer_gap_left,
@@ -381,8 +382,7 @@ impl AppState {
                             params.outer_gap_top,
                             params.outer_gap_bottom,
                         );
-                        ws.set_default_column_width(params.default_column_width);
-                        ws.set_tab_strip_reserve_px(params.tab_strip_reserve_px);
+                        params.apply_to(&mut ws, cur_idx);
                         ws.set_centering_mode(self.config.layout.centering_mode.into());
                         ws.set_center_past_edges(self.config.layout.center_past_edges);
                         ws.set_center_single_column(self.config.layout.center_single_column);

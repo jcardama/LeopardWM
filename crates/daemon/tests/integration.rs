@@ -82,6 +82,8 @@ fn test_all_responses_roundtrip() {
         IpcResponse::WorkspaceState {
             columns: 3,
             windows: 5,
+            focused_row: 0,
+            rows: vec![],
             focused_column: 1,
             focused_window: 0,
             scroll_offset: 123.5,
@@ -91,11 +93,13 @@ fn test_all_responses_roundtrip() {
         },
         IpcResponse::FocusedWindow {
             window_id: Some(12345),
+            row_index: 0,
             column_index: 2,
             window_index: 1,
         },
         IpcResponse::FocusedWindow {
             window_id: None,
+            row_index: 0,
             column_index: 0,
             window_index: 0,
         },
@@ -107,6 +111,7 @@ fn test_all_responses_roundtrip() {
                 process_id: 1234,
                 executable: "test.exe".to_string(),
                 rect: IpcRect::new(0, 0, 800, 600),
+                row_index: Some(0),
                 column_index: Some(0),
                 window_index: Some(0),
                 monitor_id: 1,
@@ -122,6 +127,7 @@ fn test_all_responses_roundtrip() {
                 process_id: 5678,
                 executable: "focused.exe".to_string(),
                 rect: IpcRect::new(50, 60, 900, 700),
+                row_index: Some(0),
                 column_index: Some(1),
                 window_index: Some(0),
                 monitor_id: 2,
@@ -299,6 +305,8 @@ fn test_workspace_state_edge_values() {
     let resp = IpcResponse::WorkspaceState {
         columns: 0,
         windows: 0,
+        focused_row: 0,
+        rows: vec![],
         focused_column: 0,
         focused_window: 0,
         scroll_offset: 0.0,
@@ -327,6 +335,8 @@ fn test_workspace_state_large_values() {
     let resp = IpcResponse::WorkspaceState {
         columns: 100,
         windows: 500,
+        focused_row: 0,
+        rows: vec![],
         focused_column: 50,
         focused_window: 10,
         scroll_offset: 50000.5,
@@ -357,6 +367,8 @@ fn test_workspace_state_negative_scroll() {
     let resp = IpcResponse::WorkspaceState {
         columns: 3,
         windows: 3,
+        focused_row: 0,
+        rows: vec![],
         focused_column: 0,
         focused_window: 0,
         scroll_offset: -100.0,
@@ -405,6 +417,7 @@ fn test_window_list_multiple_windows() {
             process_id: 1000,
             executable: "app1.exe".to_string(),
             rect: IpcRect::new(0, 0, 800, 600),
+            row_index: Some(0),
             column_index: Some(0),
             window_index: Some(0),
             monitor_id: 1,
@@ -418,6 +431,7 @@ fn test_window_list_multiple_windows() {
             process_id: 2000,
             executable: "app2.exe".to_string(),
             rect: IpcRect::new(810, 0, 800, 600),
+            row_index: Some(0),
             column_index: Some(1),
             window_index: Some(0),
             monitor_id: 1,
@@ -431,6 +445,7 @@ fn test_window_list_multiple_windows() {
             process_id: 3000,
             executable: "float.exe".to_string(),
             rect: IpcRect::new(100, 100, 400, 300),
+            row_index: None,
             column_index: None,
             window_index: None,
             monitor_id: 1,
@@ -465,6 +480,7 @@ fn test_window_info_unicode_title() {
         process_id: 1234,
         executable: "test.exe".to_string(),
         rect: IpcRect::new(0, 0, 800, 600),
+        row_index: Some(0),
         column_index: Some(0),
         window_index: Some(0),
         monitor_id: 1,
@@ -716,6 +732,8 @@ fn test_event_kind_classification() {
             IpcEvent::LayoutChanged {
                 monitor: 1,
                 workspace_index: 0,
+                focused_row: 0,
+                rows: vec![],
                 focused_column: None,
                 columns: vec![ColumnSummary {
                     window_ids: vec![],
@@ -760,6 +778,8 @@ fn test_layout_changed_mixed_vertical_and_tabbed_columns() {
     let ev = IpcEvent::LayoutChanged {
         monitor: 65537,
         workspace_index: 0,
+        focused_row: 0,
+        rows: vec![],
         focused_column: Some(1),
         columns: vec![
             ColumnSummary {

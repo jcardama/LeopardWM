@@ -579,6 +579,7 @@ impl AppState {
                     ),
                     visibility: leopardwm_core_layout::Visibility::Visible,
                     column_index: 0,
+                    row_index: 0,
                 });
             }
         }

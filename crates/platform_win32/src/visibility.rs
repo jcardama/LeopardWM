@@ -611,6 +611,7 @@ where
                 ),
                 visibility: Visibility::Visible,
                 column_index: 0,
+                row_index: 0,
             }
         })
         .collect();

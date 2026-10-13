@@ -189,7 +189,7 @@ mod tests {
         assert!(matches!(
             events.first(),
             Some(IpcEvent::WorkspaceSnapshotBegin {
-                protocol_version: 4,
+                protocol_version: 5,
                 revision: 42,
                 ..
             })

@@ -6,13 +6,27 @@ pub(crate) const MIN_COLUMN_WIDTH: i32 = 100;
 
 /// Default gap between columns in pixels.
 pub const DEFAULT_GAP: i32 = 10;
+/// Default gap between rows in pixels.
+pub const DEFAULT_ROW_GAP: i32 = 8;
 /// Default outer gaps at viewport edges in pixels.
 pub const DEFAULT_OUTER_GAP: i32 = 10;
 /// Default width for new columns in pixels.
 pub const DEFAULT_COLUMN_WIDTH: i32 = 800;
 
+pub(crate) fn default_gap_value() -> i32 {
+    DEFAULT_GAP
+}
+
 pub(crate) fn default_outer_gap_value() -> i32 {
     DEFAULT_OUTER_GAP
+}
+
+pub(crate) fn default_row_gap_value() -> i32 {
+    DEFAULT_ROW_GAP
+}
+
+pub(crate) fn default_column_width_value() -> i32 {
+    DEFAULT_COLUMN_WIDTH
 }
 
 /// Unique identifier for a window.
@@ -24,6 +38,9 @@ pub type WindowId = u64;
 pub enum LayoutError {
     #[error("Column index {0} is out of bounds (max: {1})")]
     ColumnOutOfBounds(usize, usize),
+
+    #[error("Row index {0} is out of bounds (max: {1})")]
+    RowOutOfBounds(usize, usize),
 
     #[error("Window {0} not found in workspace")]
     WindowNotFound(WindowId),
@@ -76,6 +93,11 @@ impl Rect {
     pub fn bottom(&self) -> i32 {
         self.y + self.height
     }
+
+    /// Whether this rectangle contains the given point.
+    pub fn contains_point(&self, px: i32, py: i32) -> bool {
+        px >= self.x && px < self.right() && py >= self.y && py < self.bottom()
+    }
 }
 
 /// Visibility state for layout computation.
@@ -102,4 +124,54 @@ pub struct WindowPlacement {
     pub visibility: Visibility,
     /// The column index this window belongs to.
     pub column_index: usize,
+    /// The row index this window belongs to (0-based).
+    #[serde(default)]
+    pub row_index: usize,
+}
+
+impl WindowPlacement {
+    /// Create a new window placement.
+    pub fn new(
+        window_id: WindowId,
+        rect: Rect,
+        visibility: Visibility,
+        column_index: usize,
+        row_index: usize,
+    ) -> Self {
+        Self {
+            window_id,
+            rect,
+            visibility,
+            column_index,
+            row_index,
+        }
+    }
+
+    /// Helper for tiled window placement.
+    pub fn tiled(
+        window_id: WindowId,
+        rect: Rect,
+        visibility: Visibility,
+        column_index: usize,
+        row_index: usize,
+    ) -> Self {
+        Self::new(window_id, rect, visibility, column_index, row_index)
+    }
+
+    /// Helper for floating window placement (uses usize::MAX sentinel).
+    pub fn floating(window_id: WindowId, rect: Rect, visibility: Visibility) -> Self {
+        Self::new(window_id, rect, visibility, usize::MAX, usize::MAX)
+    }
+}
+
+impl Default for WindowPlacement {
+    fn default() -> Self {
+        Self {
+            window_id: 0,
+            rect: Rect::new(0, 0, 0, 0),
+            visibility: Visibility::Visible,
+            column_index: 0,
+            row_index: 0,
+        }
+    }
 }

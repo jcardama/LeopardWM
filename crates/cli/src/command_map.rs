@@ -14,6 +14,24 @@ pub(crate) fn to_ipc_command(cmd: &Commands) -> IpcCommand {
             FocusDirection::Start => IpcCommand::FocusStart,
             FocusDirection::End => IpcCommand::FocusEnd,
         },
+        Commands::FocusRow { target } => match target.to_ascii_lowercase().as_str() {
+            "up" => IpcCommand::FocusRowUp,
+            "down" => IpcCommand::FocusRowDown,
+            other => match other.parse::<usize>() {
+                Ok(idx) if (1..=4).contains(&idx) => IpcCommand::FocusRow { index: idx },
+                _ => {
+                    eprintln!(
+                        "Invalid row target '{}': expected 'up', 'down', or row number 1-4",
+                        target
+                    );
+                    std::process::exit(1);
+                }
+            },
+        },
+        Commands::MoveToRow { direction } => match direction {
+            RowDirection::Up => IpcCommand::MoveWindowToRowUp,
+            RowDirection::Down => IpcCommand::MoveWindowToRowDown,
+        },
         Commands::Scroll { direction } => match direction {
             ScrollDirection::Left { pixels } => IpcCommand::Scroll {
                 delta: -(*pixels as f64),

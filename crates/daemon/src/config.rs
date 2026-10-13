@@ -92,6 +92,9 @@ pub enum OverviewRender {
 pub struct WorkspacesConfig {
     /// Display names for workspaces 1-9, by position.
     pub names: Vec<String>,
+    /// Optional row configuration alias under [workspaces].
+    #[serde(default, skip_serializing)]
+    pub rows: Option<Vec<WorkspaceRowsConfig>>,
 }
 
 impl WorkspacesConfig {
@@ -158,6 +161,14 @@ pub struct LayoutConfig {
     #[serde(default = "default_height_presets")]
     pub height_presets: Vec<f64>,
 
+    /// Multi-row layout configuration.
+    #[serde(default)]
+    pub rows: RowsConfig,
+
+    /// Optional alias allowing `[[layout.workspace_rows]]` directly under layout.
+    #[serde(default, skip_serializing)]
+    workspace_rows: Option<Vec<WorkspaceRowsConfig>>,
+
     // Legacy fields kept for backward-compatible deserialization; not used.
     #[serde(default, skip_serializing)]
     #[allow(dead_code)]
@@ -171,6 +182,291 @@ pub struct LayoutConfig {
     #[serde(default, skip_serializing)]
     #[allow(dead_code)]
     max_column_width: Option<i32>,
+}
+
+/// Configuration for row splits in specific workspace(s).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct WorkspaceRowsConfig {
+    /// Target workspaces (1-based, 1..=9).
+    /// Accepts a single number (`workspace = 1`), an array (`workspaces = [1, 2]`),
+    /// or a comma-separated string (`workspaces = "1, 2"`).
+    #[serde(
+        default,
+        alias = "workspace",
+        deserialize_with = "deserialize_one_or_many_workspaces"
+    )]
+    pub workspaces: Vec<u8>,
+
+    /// Row split as percentages, fractions, or weights, top to bottom (max 4 rows).
+    #[serde(
+        default = "default_row_split",
+        deserialize_with = "deserialize_split"
+    )]
+    pub split: Vec<String>,
+}
+
+impl WorkspaceRowsConfig {
+    /// Parse row shares for this workspace configuration.
+    pub fn parse_shares(&self) -> Vec<f64> {
+        parse_split_shares(&self.split)
+    }
+
+    /// Check if this config targets a 1-based workspace number.
+    pub fn matches_workspace(&self, ws_1based: u8) -> bool {
+        self.workspaces.contains(&ws_1based)
+    }
+}
+
+/// Multi-row layout configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct RowsConfig {
+    /// Vertical gap between rows in pixels. Default: 8.
+    pub gap: i32,
+
+    /// Per-workspace row configurations.
+    /// Can specify 1 or more workspaces and the split for those workspaces.
+    #[serde(default, alias = "splits", alias = "rules")]
+    pub workspaces: Vec<WorkspaceRowsConfig>,
+
+    /// Global/fallback row split as percentages, fractions, or weights, top to bottom.
+    /// Default: ["100%"] (single row).
+    #[serde(
+        default = "default_row_split",
+        deserialize_with = "deserialize_split"
+    )]
+    pub split: Vec<String>,
+}
+
+fn default_row_gap() -> i32 {
+    8
+}
+
+fn default_row_split() -> Vec<String> {
+    vec!["100%".to_string()]
+}
+
+impl Default for RowsConfig {
+    fn default() -> Self {
+        Self {
+            gap: default_row_gap(),
+            workspaces: Vec::new(),
+            split: default_row_split(),
+        }
+    }
+}
+
+impl RowsConfig {
+    /// Parse row shares for a specific 0-based workspace index.
+    ///
+    /// By default, any unconfigured workspace has only 1 row (`vec![1.0]`).
+    /// If per-workspace row configs are specified, the first matching entry is used.
+    /// If no per-workspace configs are defined and a legacy/global `split` was configured,
+    /// falls back to parsing `self.split`.
+    pub fn parse_shares_for_workspace(&self, ws_idx_0based: usize) -> Vec<f64> {
+        let ws_1based = (ws_idx_0based + 1) as u8;
+        for entry in &self.workspaces {
+            if entry.matches_workspace(ws_1based) {
+                return entry.parse_shares();
+            }
+        }
+
+        // When per-workspace configurations are present, any unspecified workspace
+        // defaults to a single row.
+        if !self.workspaces.is_empty() {
+            return vec![1.0];
+        }
+
+        // When no per-workspace configurations are specified, fall back to global split
+        // (which defaults to ["100%"] -> vec![1.0]).
+        self.parse_shares()
+    }
+
+    /// Parse row shares from the global `split` field.
+    pub fn parse_shares(&self) -> Vec<f64> {
+        parse_split_shares(&self.split)
+    }
+}
+
+/// Parse row shares from a list of split strings (percentages, fractions, or weights).
+///
+/// Validates that:
+/// - Each entry parses as a percentage, fraction, or number > 0.
+/// - At most 4 rows are accepted (entries beyond the 4th are ignored with a warning).
+/// - Shares are normalized to sum to 1.0 (with a warning if raw percentages don't sum to ~100%).
+/// - If no valid entries are found, falls back to `vec![1.0]` (single row).
+pub fn parse_split_shares(split: &[String]) -> Vec<f64> {
+    let mut raw_values = Vec::new();
+    for entry in split.iter().take(4) {
+        let trimmed = entry.trim().trim_end_matches('%').trim();
+        if trimmed.contains('/') {
+            let parts: Vec<&str> = trimmed.split('/').collect();
+            if parts.len() == 2 {
+                if let (Ok(num), Ok(den)) = (
+                    parts[0].trim().parse::<f64>(),
+                    parts[1].trim().parse::<f64>(),
+                ) {
+                    if den > 0.0 && num > 0.0 && (num / den).is_finite() {
+                        raw_values.push(num / den);
+                        continue;
+                    }
+                }
+            }
+        }
+        if let Ok(val) = trimmed.parse::<f64>() {
+            if val > 0.0 && val.is_finite() {
+                raw_values.push(val);
+            } else {
+                tracing::warn!("Row split entry '{}' must be greater than 0; ignoring", entry);
+            }
+        } else {
+            tracing::warn!("Failed to parse row split entry '{}'; ignoring", entry);
+        }
+    }
+
+    if split.len() > 4 {
+        tracing::warn!(
+            "Configured {} rows, but at most 4 rows are supported; truncating to 4",
+            split.len()
+        );
+    }
+
+    if raw_values.is_empty() {
+        tracing::warn!("No valid row split entries; falling back to 100% (single row)");
+        return vec![1.0];
+    }
+
+    let sum: f64 = raw_values.iter().sum();
+    if sum <= 0.0 || !sum.is_finite() {
+        return vec![1.0];
+    }
+
+    if (sum - 100.0).abs() > 0.5 && (sum - 1.0).abs() > 0.01 {
+        tracing::warn!(
+            "Row split entries sum to {:.1} (expected 100%); normalizing shares",
+            sum
+        );
+    }
+
+    raw_values.iter().map(|&v| v / sum).collect()
+}
+
+fn deserialize_one_or_many_workspaces<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Vec<u8>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Helper {
+        SingleNum(u8),
+        NumList(Vec<u8>),
+        SingleStr(String),
+        StrList(Vec<String>),
+    }
+
+    let helper = Helper::deserialize(deserializer)?;
+    let mut result = Vec::new();
+
+    match helper {
+        Helper::SingleNum(n) => {
+            if (1..=9).contains(&n) {
+                result.push(n);
+            } else {
+                tracing::warn!("Workspace index {} out of range 1..=9; ignoring", n);
+            }
+        }
+        Helper::NumList(list) => {
+            for n in list {
+                if (1..=9).contains(&n) {
+                    if !result.contains(&n) {
+                        result.push(n);
+                    }
+                } else {
+                    tracing::warn!("Workspace index {} out of range 1..=9; ignoring", n);
+                }
+            }
+        }
+        Helper::SingleStr(s) => {
+            parse_workspaces_str(&s, &mut result);
+        }
+        Helper::StrList(list) => {
+            for s in list {
+                parse_workspaces_str(&s, &mut result);
+            }
+        }
+    }
+
+    Ok(result)
+}
+
+fn parse_workspaces_str(s: &str, out: &mut Vec<u8>) {
+    for part in s.split(',') {
+        let trimmed = part.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Some((start_s, end_s)) = trimmed.split_once('-') {
+            if let (Ok(start), Ok(end)) = (
+                start_s.trim().parse::<u8>(),
+                end_s.trim().parse::<u8>(),
+            ) {
+                for n in start..=end {
+                    if (1..=9).contains(&n) {
+                        if !out.contains(&n) {
+                            out.push(n);
+                        }
+                    } else {
+                        tracing::warn!("Workspace index {} out of range 1..=9; ignoring", n);
+                    }
+                }
+                continue;
+            }
+        }
+        if let Ok(n) = trimmed.parse::<u8>() {
+            if (1..=9).contains(&n) {
+                if !out.contains(&n) {
+                    out.push(n);
+                }
+            } else {
+                tracing::warn!("Workspace index {} out of range 1..=9; ignoring", n);
+            }
+        } else {
+            tracing::warn!("Invalid workspace entry '{}'; ignoring", trimmed);
+        }
+    }
+}
+
+fn deserialize_split<'de, D>(deserializer: D) -> std::result::Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum SplitHelper {
+        Single(String),
+        List(Vec<String>),
+        NumList(Vec<f64>),
+    }
+
+    let helper = SplitHelper::deserialize(deserializer)?;
+    match helper {
+        SplitHelper::Single(s) => {
+            let list: Vec<String> = s
+                .split(',')
+                .map(|p| p.trim().to_string())
+                .filter(|p| !p.is_empty())
+                .collect();
+            if list.is_empty() {
+                Ok(default_row_split())
+            } else {
+                Ok(list)
+            }
+        }
+        SplitHelper::List(list) => Ok(list),
+        SplitHelper::NumList(nums) => Ok(nums.into_iter().map(|n| n.to_string()).collect()),
+    }
 }
 
 fn default_width_presets() -> Vec<f64> {
@@ -199,6 +495,8 @@ impl Default for LayoutConfig {
             width_presets: default_width_presets(),
             default_width_preset: default_width_preset(),
             height_presets: default_height_presets(),
+            rows: RowsConfig::default(),
+            workspace_rows: None,
             outer_gap: None,
             default_column_width: None,
             min_column_width: None,
@@ -470,6 +768,11 @@ pub struct BehaviorConfig {
 
     #[serde(default = "default_false")]
     pub skip_empty_workspaces: bool,
+
+    /// Move a window into the adjacent row when moving up/down at its column edge.
+    /// Default: false (no-op, current behavior).
+    #[serde(default = "default_false")]
+    pub move_window_across_rows: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -512,6 +815,7 @@ impl Default for BehaviorConfig {
             mouse_follows_focus: false,
             fullscreen_follows_focus: true,
             skip_empty_workspaces: false,
+            move_window_across_rows: false,
         }
     }
 }
@@ -659,6 +963,11 @@ pub struct WindowRule {
     /// past the end append; 0 is ignored. Tiled windows only.
     #[serde(default)]
     pub open_in_column: Option<u8>,
+
+    /// Open the window on this row (1-based, 1-4). Clamped to workspace row
+    /// count; 0 is ignored; ignored if action is float. Tiled windows only.
+    #[serde(default)]
+    pub row: Option<u8>,
 
     /// Make the window sticky on open so it follows across workspaces. Pair
     /// with `action = "float"` for a floating overlay; on its own the window
@@ -1064,6 +1373,9 @@ pub struct CompiledWindowRule {
     /// Open at this 0-based column slot as its own column (validated from the
     /// 1-based config; high values append, 0 is dropped).
     pub open_in_column: Option<usize>,
+    /// Open on this 0-based row slot (validated from 1-based config;
+    /// clamped to workspace row count on insert, 0 is dropped). Tiled only.
+    pub row: Option<usize>,
     /// Make the window sticky on open.
     pub sticky: bool,
 }
@@ -1269,6 +1581,22 @@ impl Config {
                 });
                 *val = 0;
             }
+        }
+
+        if let Some(ws_rows) = self.layout.workspace_rows.take() {
+            self.layout.rows.workspaces.extend(ws_rows);
+        }
+        if let Some(ws_rows) = self.workspaces.rows.take() {
+            self.layout.rows.workspaces.extend(ws_rows);
+        }
+
+        // row gap must be >= 0
+        if self.layout.rows.gap < 0 {
+            warnings.push(ConfigWarning {
+                field: "layout.rows.gap".to_string(),
+                message: format!("Negative row gap ({}) clamped to 0", self.layout.rows.gap),
+            });
+            self.layout.rows.gap = 0;
         }
 
         // width_presets must not be empty
@@ -1517,6 +1845,20 @@ impl Config {
                 }
                 None => None,
             };
+            // 1-based row -> 0-based index. Clamped at insert time; 0 is invalid and dropped.
+            // Ignored with warning if action is float.
+            let row = match rule.row {
+                Some(_) if rule.action == WindowAction::Float => {
+                    tracing::warn!("Window rule row is not applicable with action = \"float\"; ignoring");
+                    None
+                }
+                Some(n) if n >= 1 => Some((n - 1) as usize),
+                Some(_) => {
+                    tracing::warn!("Window rule row = 0 is invalid (1-based); ignoring");
+                    None
+                }
+                None => None,
+            };
 
             let positive_limit = |value: Option<i32>, field: &str| {
                 value.filter(|&n| {
@@ -1547,6 +1889,7 @@ impl Config {
                 open_maximized: rule.open_maximized,
                 column_width,
                 open_in_column,
+                row,
                 sticky: rule.sticky,
             });
         }
@@ -1567,6 +1910,7 @@ impl Config {
                 open_maximized: false,
                 column_width: None,
                 open_in_column: None,
+                row: None,
                 sticky: false,
             });
         }
@@ -1792,7 +2136,23 @@ mod tests {
     #[test]
     fn test_hotkey_config_default() {
         let config = HotkeyConfig::default();
-        assert_eq!(config.bindings.len(), 68);
+        assert_eq!(config.bindings.len(), 70);
+        assert_eq!(
+            config.bindings.get("Ctrl+Alt+PageUp"),
+            Some(&"focus_row_up".to_string())
+        );
+        assert_eq!(
+            config.bindings.get("Ctrl+Alt+PageDown"),
+            Some(&"focus_row_down".to_string())
+        );
+        assert_eq!(
+            config.bindings.get("Ctrl+Alt+Shift+PageUp"),
+            Some(&"move_window_to_row_up".to_string())
+        );
+        assert_eq!(
+            config.bindings.get("Ctrl+Alt+Shift+PageDown"),
+            Some(&"move_window_to_row_down".to_string())
+        );
         assert_eq!(
             config.bindings.get("Ctrl+Alt+Space"),
             Some(&"toggle_overview".to_string())
@@ -2100,6 +2460,7 @@ mod tests {
             open_maximized: false,
             column_width: None,
             open_in_column: None,
+            row: None,
             sticky: false,
             match_max_width: None,
             match_max_height: None,
@@ -2123,6 +2484,7 @@ mod tests {
             open_maximized: false,
             column_width: None,
             open_in_column: None,
+            row: None,
             sticky: false,
             match_max_width: None,
             match_max_height: None,
@@ -2152,6 +2514,7 @@ mod tests {
             open_maximized: false,
             column_width: None,
             open_in_column: None,
+            row: None,
             sticky: false,
             match_max_width: None,
             match_max_height: None,
@@ -2176,6 +2539,7 @@ mod tests {
             open_maximized: false,
             column_width: None,
             open_in_column: None,
+            row: None,
             sticky: false,
             match_max_width: None,
             match_max_height: None,
@@ -2207,6 +2571,7 @@ mod tests {
             open_maximized: false,
             column_width: None,
             open_in_column: None,
+            row: None,
             sticky: false,
             match_max_width: None,
             match_max_height: None,
@@ -2323,6 +2688,7 @@ mod tests {
                 open_maximized: false,
                 column_width: None,
                 open_in_column: None,
+                row: None,
                 sticky: false,
                 match_max_width: None,
                 match_max_height: None,
@@ -2339,6 +2705,7 @@ mod tests {
                 open_maximized: false,
                 column_width: None,
                 open_in_column: None,
+                row: None,
                 sticky: false,
                 match_max_width: None,
                 match_max_height: None,
@@ -2371,6 +2738,7 @@ mod tests {
             open_maximized: false,
             column_width: None,
             open_in_column: None,
+            row: None,
             sticky: false,
             match_max_width: None,
             match_max_height: None,
@@ -2395,6 +2763,7 @@ mod tests {
             open_maximized: false,
             column_width: None,
             open_in_column: None,
+            row: None,
             sticky: false,
             match_max_width: None,
             match_max_height: None,
@@ -2419,6 +2788,7 @@ mod tests {
             open_maximized: false,
             column_width: None,
             open_in_column: None,
+            row: None,
             sticky: false,
             match_max_width: None,
             match_max_height: None,
@@ -2444,6 +2814,7 @@ mod tests {
             open_maximized: false,
             column_width: None,
             open_in_column: None,
+            row: None,
             sticky: false,
             match_max_width: None,
             match_max_height: None,
@@ -2469,6 +2840,7 @@ mod tests {
             open_maximized: false,
             column_width: None,
             open_in_column: None,
+            row: None,
             sticky: false,
             match_max_width: None,
             match_max_height: None,
@@ -2494,6 +2866,7 @@ mod tests {
             open_maximized: false,
             column_width: None,
             open_in_column: None,
+            row: None,
             sticky: false,
             match_max_width: None,
             match_max_height: None,
@@ -2519,6 +2892,7 @@ mod tests {
             open_maximized: false,
             column_width: None,
             open_in_column: None,
+            row: None,
             sticky: false,
             match_max_width: None,
             match_max_height: None,
@@ -2543,6 +2917,7 @@ mod tests {
             open_maximized: false,
             column_width: None,
             open_in_column: None,
+            row: None,
             sticky: false,
             match_max_width: None,
             match_max_height: None,
@@ -2937,6 +3312,7 @@ mod tests {
                     open_maximized: false,
                     column_width: None,
                     open_in_column: None,
+                    row: None,
                     sticky: false,
                     match_max_width: None,
                     match_max_height: None,
@@ -2953,6 +3329,7 @@ mod tests {
                     open_maximized: false,
                     column_width: None,
                     open_in_column: None,
+                    row: None,
                     sticky: false,
                     match_max_width: None,
                     match_max_height: None,
@@ -2996,6 +3373,7 @@ mod tests {
                     open_maximized: false,
                     column_width: None,
                     open_in_column: None,
+                    row: None,
                     sticky: false,
                     match_max_width: None,
                     match_max_height: None,
@@ -3012,6 +3390,7 @@ mod tests {
                     open_maximized: false,
                     column_width: None,
                     open_in_column: None,
+                    row: None,
                     sticky: false,
                     match_max_width: None,
                     match_max_height: None,
@@ -3165,6 +3544,214 @@ mod tests {
         assert!(
             toml::from_str::<Config>("[behavior]\nnew_window_monitor = \"primary\"\n").is_err()
         );
+    }
+
+    #[test]
+    fn test_rows_config_parse_shares() {
+        let rows = RowsConfig {
+            split: vec!["100%".to_string()],
+            gap: 8,
+            ..Default::default()
+        };
+        assert_eq!(rows.parse_shares(), vec![1.0]);
+
+        let rows = RowsConfig {
+            split: vec!["60%".to_string(), "40%".to_string()],
+            gap: 8,
+            ..Default::default()
+        };
+        let shares = rows.parse_shares();
+        assert_eq!(shares.len(), 2);
+        assert!((shares[0] - 0.6).abs() < 1e-6);
+        assert!((shares[1] - 0.4).abs() < 1e-6);
+
+        // Normalized when sum != 100%
+        let rows = RowsConfig {
+            split: vec!["50%".to_string(), "30%".to_string()],
+            gap: 8,
+            ..Default::default()
+        };
+        let shares = rows.parse_shares();
+        assert_eq!(shares.len(), 2);
+        assert!((shares[0] - 0.625).abs() < 1e-6);
+        assert!((shares[1] - 0.375).abs() < 1e-6);
+
+        // Clamped to at most 4 rows
+        let rows = RowsConfig {
+            split: vec![
+                "20%".to_string(),
+                "20%".to_string(),
+                "20%".to_string(),
+                "20%".to_string(),
+                "20%".to_string(),
+            ],
+            gap: 8,
+            ..Default::default()
+        };
+        let shares = rows.parse_shares();
+        assert_eq!(shares.len(), 4);
+        for s in shares {
+            assert!((s - 0.25).abs() < 1e-6);
+        }
+
+        // Invalid and zero entries ignored; fallback to 1.0 if empty
+        let rows = RowsConfig {
+            split: vec!["invalid".to_string(), "0%".to_string()],
+            gap: 8,
+            ..Default::default()
+        };
+        assert_eq!(rows.parse_shares(), vec![1.0]);
+
+        let rows = RowsConfig {
+            split: vec![],
+            gap: 8,
+            ..Default::default()
+        };
+        assert_eq!(rows.parse_shares(), vec![1.0]);
+    }
+
+    #[test]
+    fn test_per_workspace_rows_config_parse_shares() {
+        let rows = RowsConfig {
+            workspaces: vec![
+                WorkspaceRowsConfig {
+                    workspaces: vec![1, 2],
+                    split: vec!["50%".to_string(), "50%".to_string()],
+                },
+                WorkspaceRowsConfig {
+                    workspaces: vec![3],
+                    split: vec!["1/3".to_string(), "1/3".to_string(), "1/3".to_string()],
+                },
+            ],
+            gap: 8,
+            ..Default::default()
+        };
+
+        // Workspace 1 (index 0) and Workspace 2 (index 1) get 2 rows (50% each)
+        assert_eq!(rows.parse_shares_for_workspace(0), vec![0.5, 0.5]);
+        assert_eq!(rows.parse_shares_for_workspace(1), vec![0.5, 0.5]);
+
+        // Workspace 3 (index 2) gets 3 rows
+        let ws3_shares = rows.parse_shares_for_workspace(2);
+        assert_eq!(ws3_shares.len(), 3);
+        for s in ws3_shares {
+            assert!((s - 1.0 / 3.0).abs() < 1e-4);
+        }
+
+        // Workspace 4 through 9 (indices 3..9) default to 1 row
+        for ws_idx in 3..9 {
+            assert_eq!(
+                rows.parse_shares_for_workspace(ws_idx),
+                vec![1.0],
+                "Workspace index {} should default to 1 row",
+                ws_idx
+            );
+        }
+    }
+
+    #[test]
+    fn test_per_workspace_rows_toml_roundtrip() {
+        let toml_str = r#"
+            [layout.rows]
+            gap = 12
+
+            [[layout.rows.workspaces]]
+            workspaces = [1, 2]
+            split = ["1/2", "1/2"]
+
+            [[layout.rows.workspaces]]
+            workspace = 3
+            split = ["40%", "30%", "30%"]
+        "#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.layout.rows.gap, 12);
+        assert_eq!(config.layout.rows.workspaces.len(), 2);
+        assert_eq!(config.layout.rows.workspaces[0].workspaces, vec![1, 2]);
+        assert_eq!(config.layout.rows.workspaces[1].workspaces, vec![3]);
+
+        // Workspace 1 and 2: 2 rows
+        assert_eq!(config.layout.rows.parse_shares_for_workspace(0), vec![0.5, 0.5]);
+        assert_eq!(config.layout.rows.parse_shares_for_workspace(1), vec![0.5, 0.5]);
+
+        // Workspace 3: 3 rows
+        assert_eq!(config.layout.rows.parse_shares_for_workspace(2), vec![0.4, 0.3, 0.3]);
+
+        // Workspace 4: default to 1 row
+        assert_eq!(config.layout.rows.parse_shares_for_workspace(3), vec![1.0]);
+    }
+
+    #[test]
+    fn test_workspace_rows_deserialization_formats() {
+        let toml_str = r#"
+            [layout.rows]
+            gap = 8
+
+            [[layout.rows.workspaces]]
+            workspaces = "1, 2"
+            split = "60%, 40%"
+
+            [[layout.rows.workspaces]]
+            workspace = 4
+            split = ["100%"]
+
+            [[layout.rows.workspaces]]
+            workspaces = "5-7"
+            split = ["50%", "50%"]
+        "#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.layout.rows.workspaces[0].workspaces, vec![1, 2]);
+        assert_eq!(config.layout.rows.workspaces[0].split, vec!["60%", "40%"]);
+        assert_eq!(config.layout.rows.workspaces[1].workspaces, vec![4]);
+        assert_eq!(config.layout.rows.workspaces[2].workspaces, vec![5, 6, 7]);
+
+        assert_eq!(config.layout.rows.parse_shares_for_workspace(0), vec![0.6, 0.4]);
+        assert_eq!(config.layout.rows.parse_shares_for_workspace(4), vec![0.5, 0.5]);
+        assert_eq!(config.layout.rows.parse_shares_for_workspace(7), vec![1.0]);
+    }
+
+    #[test]
+    fn test_layout_rows_toml_roundtrip() {
+        let toml_str = r#"
+            [layout.rows]
+            split = ["70%", "30%"]
+            gap = 12
+        "#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.layout.rows.split, vec!["70%", "30%"]);
+        assert_eq!(config.layout.rows.gap, 12);
+        let shares = config.layout.rows.parse_shares();
+        assert_eq!(shares.len(), 2);
+        assert!((shares[0] - 0.7).abs() < 1e-6);
+        assert!((shares[1] - 0.3).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_compiled_window_rule_row_validation() {
+        let config = Config {
+            window_rules: vec![
+                WindowRule {
+                    match_class: Some("A".to_string()),
+                    row: Some(2), // 1-based 2 -> 0-based 1
+                    ..Default::default()
+                },
+                WindowRule {
+                    match_class: Some("B".to_string()),
+                    row: Some(0), // 0 violates 1-based, dropped
+                    ..Default::default()
+                },
+                WindowRule {
+                    match_class: Some("C".to_string()),
+                    action: WindowAction::Float,
+                    row: Some(2), // float ignores row
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let compiled = config.compile_window_rules();
+        assert_eq!(compiled[0].row, Some(1));
+        assert_eq!(compiled[1].row, None);
+        assert_eq!(compiled[2].row, None);
     }
 
     #[test]

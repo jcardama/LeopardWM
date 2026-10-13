@@ -297,6 +297,7 @@ fn rule(action: WindowAction, sticky: bool) -> WindowRule {
         open_maximized: true,
         column_width: Some(0.2),
         open_in_column: Some(8),
+        row: None,
         sticky,
         ..Default::default()
     }

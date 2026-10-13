@@ -410,12 +410,14 @@ fn test_application_fullscreen_session_filters_physical_dispatch_and_prunes() {
             rect: Rect::new(0, 0, 960, 1040),
             visibility: Visibility::Visible,
             column_index: 0,
+            row_index: 0,
         },
         WindowPlacement {
             window_id: 300,
             rect: Rect::new(960, 0, 960, 1040),
             visibility: Visibility::Visible,
             column_index: 1,
+            row_index: 0,
         },
     ];
 
@@ -467,12 +469,14 @@ fn test_startup_maximize_hold_is_applied_to_each_animation_duration() {
                 rect: Rect::new(0, 0, 800, 1040),
                 visibility: Visibility::Visible,
                 column_index: 0,
+                row_index: 0,
             },
             WindowPlacement {
                 window_id: 200,
                 rect: Rect::new(800, 0, 800, 1040),
                 visibility: Visibility::Visible,
                 column_index: 1,
+                row_index: 0,
             },
         ];
         state.record_last_placed_rects(&placements);
@@ -518,6 +522,7 @@ fn test_startup_maximize_hold_is_applied_to_each_animation_duration() {
                 rect: Rect::new(0, 0, 800, 1040),
                 visibility: Visibility::Visible,
                 column_index: 0,
+                row_index: 0,
             }],
             &HashSet::new(),
         );
@@ -538,6 +543,7 @@ fn test_placement_parked_maximized_target_reaches_sync_and_animation_dispatch() 
         rect: Rect::new(0, 0, 800, 1040),
         visibility: Visibility::Visible,
         column_index: 0,
+        row_index: 0,
     };
     let maximized = HashSet::from([100]);
 
@@ -593,6 +599,7 @@ fn test_empty_abandoned_request_preserves_unconfirmed_physical_context() {
         rect: Rect::new(0, 0, 800, 1040),
         visibility: leopardwm_core_layout::Visibility::Visible,
         column_index: 0,
+        row_index: 0,
     };
 
     state.apply_physical_projection(vec![placement.clone()]);
@@ -765,6 +772,7 @@ fn test_filtered_empty_apply_with_unconfirmed_prior_evidence_retains_retry() {
         rect: Rect::new(0, 0, 800, 1040),
         visibility: leopardwm_core_layout::Visibility::Visible,
         column_index: 0,
+        row_index: 0,
     };
     state.apply_physical_projection(vec![placement]);
     let (failed_request_id, failed_invalidation_id) = state.physical_request_ids();
@@ -1312,6 +1320,7 @@ fn test_physical_feedback_allows_full_placements_and_suppresses_parking() {
         rect: Rect::new(1800, 0, 400, 600),
         visibility: leopardwm_core_layout::Visibility::Visible,
         column_index: 0,
+        row_index: 0,
     };
     state.apply_physical_projection(vec![partial]);
     let (request_id, _) = state.physical_request_ids();
@@ -1325,6 +1334,7 @@ fn test_physical_feedback_allows_full_placements_and_suppresses_parking() {
         rect: Rect::new(1920, 0, 400, 600),
         visibility: leopardwm_core_layout::Visibility::Visible,
         column_index: 0,
+        row_index: 0,
     };
     state.apply_physical_projection(vec![parked]);
     let (request_id, _) = state.physical_request_ids();
@@ -1349,6 +1359,7 @@ fn test_stale_animation_result_does_not_release_newer_physical_latch() {
         rect: Rect::new(1800, 0, 400, 600),
         visibility: leopardwm_core_layout::Visibility::Visible,
         column_index: 0,
+        row_index: 0,
     };
     state.apply_physical_projection(vec![placement.clone()]);
     let (stale_request, stale_invalidation) = state.physical_request_ids();
@@ -1402,6 +1413,7 @@ fn test_outer_animation_pump_preserves_newer_frame_and_resumes_after_sync_supers
         rect: Rect::new(1800, 0, 400, 600),
         visibility: leopardwm_core_layout::Visibility::Visible,
         column_index: 0,
+        row_index: 0,
     };
     state.apply_physical_projection(vec![placement.clone()]);
     let (old_request, old_invalidation) = state.physical_request_ids();
@@ -1482,6 +1494,7 @@ fn test_stale_animation_result_resumes_after_unconsumed_sync_supersession() {
         rect: Rect::new(1800, 0, 400, 600),
         visibility: leopardwm_core_layout::Visibility::Visible,
         column_index: 0,
+        row_index: 0,
     };
     state.apply_physical_projection(vec![placement.clone()]);
     let (old_request, old_invalidation) = state.physical_request_ids();
@@ -2316,6 +2329,7 @@ fn test_invalidated_animation_result_releases_only_matching_latch() {
         rect: Rect::new(100, 0, 400, 600),
         visibility: leopardwm_core_layout::Visibility::Visible,
         column_index: 0,
+        row_index: 0,
     };
     state.apply_physical_projection(vec![placement]);
     let (request_id, invalidation_id) = state.physical_request_ids();
@@ -2658,6 +2672,7 @@ fn test_animation_projection_runs_once_and_preserves_full_partial_geometry() {
         rect: Rect::new(4320, 10, 1600, 1440),
         visibility: leopardwm_core_layout::Visibility::Visible,
         column_index: 0,
+        row_index: 0,
     };
     let physical = state.apply_physical_projection(vec![logical.clone()]);
     let maximized = std::collections::HashSet::new();
@@ -2890,12 +2905,14 @@ fn test_current_maximize_hold_cleans_only_target_ghost_state() {
                 rect: Rect::new(0, 0, 800, 600),
                 visibility: Visibility::Visible,
                 column_index: 0,
+                row_index: 0,
             },
             WindowPlacement {
                 window_id: 300,
                 rect: Rect::new(800, 0, 800, 600),
                 visibility: Visibility::Visible,
                 column_index: 1,
+                row_index: 0,
             },
         ],
         &maximized,
@@ -2962,12 +2979,14 @@ fn test_application_fullscreen_entry_removes_only_its_ghost_transition_state() {
             rect: Rect::new(0, 0, 800, 600),
             visibility: Visibility::Visible,
             column_index: 0,
+            row_index: 0,
         },
         WindowPlacement {
             window_id: 200,
             rect: Rect::new(800, 0, 800, 600),
             visibility: Visibility::Visible,
             column_index: 1,
+            row_index: 0,
         },
     ]);
     let (live, ghosts) = AppState::partition_for_animation(
@@ -3163,18 +3182,21 @@ fn test_partition_for_animation_routes_ghosted_wids_to_ghost_stream() {
             rect: Rect::new(0, 0, 800, 600),
             visibility: Visibility::Visible,
             column_index: 0,
+            row_index: 0,
         },
         WindowPlacement {
             window_id: 300, // not ghosted
             rect: Rect::new(800, 0, 800, 600),
             visibility: Visibility::Visible,
             column_index: 1,
+            row_index: 0,
         },
         WindowPlacement {
             window_id: 200, // ghosted
             rect: Rect::new(0, 0, 800, 600),
             visibility: Visibility::Visible,
             column_index: 0,
+            row_index: 0,
         },
     ];
 
@@ -3204,6 +3226,7 @@ fn test_partition_for_animation_no_transition_keeps_everything_live() {
         rect: Rect::new(0, 0, 100, 100),
         visibility: Visibility::Visible,
         column_index: 0,
+        row_index: 0,
     }];
 
     let (live, ghosts) = AppState::partition_for_animation(placements, None, &HashMap::new());
@@ -3334,6 +3357,7 @@ fn test_partition_for_animation_missing_handle_drops_placement() {
         rect: Rect::new(0, 0, 100, 100),
         visibility: Visibility::Visible,
         column_index: 0,
+        row_index: 0,
     }];
 
     let (live, ghosts) =
@@ -3759,7 +3783,9 @@ fn seed_drag_session(state: &mut AppState, hwnd: u64) {
         is_tiled: true,
         source_monitor: monitor,
         source_workspace_idx: ws_idx,
+        source_row: 0,
         source_window_slot: 0,
+        current_row_index: 0,
         current_column_index: 0,
         last_drop_target: None,
         last_hint_update: None,
@@ -3767,6 +3793,7 @@ fn seed_drag_session(state: &mut AppState, hwnd: u64) {
         preview_mode: crate::state::DragPreviewMode::None,
         target_column_peers: Vec::new(),
         source_column_peers: Vec::new(),
+        source_column_width: None,
     });
     if let Some(ws) = state
         .workspaces
@@ -3795,7 +3822,9 @@ fn safe_band_drag_fixture() -> AppState {
         is_tiled: true,
         source_monitor: 1,
         source_workspace_idx: 0,
+        source_row: 0,
         source_window_slot: 0,
+        current_row_index: 0,
         current_column_index: 0,
         last_drop_target: None,
         last_hint_update: None,
@@ -3803,6 +3832,7 @@ fn safe_band_drag_fixture() -> AppState {
         preview_mode: crate::state::DragPreviewMode::None,
         target_column_peers: Vec::new(),
         source_column_peers: Vec::new(),
+        source_column_width: None,
     });
     state
 }
@@ -3959,7 +3989,9 @@ fn test_body_preview_shift_restores_multi_window_source_before_same_monitor_reor
         is_tiled: true,
         source_monitor: 1,
         source_workspace_idx: 0,
+        source_row: 0,
         source_window_slot: 0,
+        current_row_index: 0,
         current_column_index: 0,
         last_drop_target: None,
         last_hint_update: None,
@@ -3967,6 +3999,7 @@ fn test_body_preview_shift_restores_multi_window_source_before_same_monitor_reor
         preview_mode: crate::state::DragPreviewMode::None,
         target_column_peers: Vec::new(),
         source_column_peers: Vec::new(),
+        source_column_width: None,
     });
 
     let target = *state.snapshot_layout().get(&200).unwrap();
@@ -4021,7 +4054,9 @@ fn test_body_preview_shift_restores_multi_window_source_without_reorder() {
         is_tiled: true,
         source_monitor: 1,
         source_workspace_idx: 0,
+        source_row: 0,
         source_window_slot: 0,
+        current_row_index: 0,
         current_column_index: 0,
         last_drop_target: None,
         last_hint_update: None,
@@ -4029,6 +4064,7 @@ fn test_body_preview_shift_restores_multi_window_source_without_reorder() {
         preview_mode: crate::state::DragPreviewMode::None,
         target_column_peers: Vec::new(),
         source_column_peers: Vec::new(),
+        source_column_width: None,
     });
 
     let target = *state.snapshot_layout().get(&200).unwrap();
@@ -4091,7 +4127,9 @@ fn test_body_preview_shift_restores_multi_window_source_before_cross_monitor_dro
         is_tiled: true,
         source_monitor: 1,
         source_workspace_idx: 0,
+        source_row: 0,
         source_window_slot: 0,
+        current_row_index: 0,
         current_column_index: 0,
         last_drop_target: None,
         last_hint_update: None,
@@ -4099,6 +4137,7 @@ fn test_body_preview_shift_restores_multi_window_source_before_cross_monitor_dro
         preview_mode: crate::state::DragPreviewMode::None,
         target_column_peers: Vec::new(),
         source_column_peers: Vec::new(),
+        source_column_width: None,
     });
 
     let target = *state.snapshot_layout().get(&200).unwrap();
@@ -4178,7 +4217,9 @@ fn test_body_to_safe_band_then_shift_restores_multi_window_source() {
         is_tiled: true,
         source_monitor: 1,
         source_workspace_idx: 0,
+        source_row: 0,
         source_window_slot: 0,
+        current_row_index: 0,
         current_column_index: 0,
         last_drop_target: None,
         last_hint_update: None,
@@ -4186,6 +4227,7 @@ fn test_body_to_safe_band_then_shift_restores_multi_window_source() {
         preview_mode: crate::state::DragPreviewMode::None,
         target_column_peers: Vec::new(),
         source_column_peers: Vec::new(),
+        source_column_width: None,
     });
 
     let target = *state.snapshot_layout().get(&200).unwrap();
@@ -4298,7 +4340,9 @@ fn test_body_to_no_target_then_cross_monitor_shift_restores_multi_window_source(
         is_tiled: true,
         source_monitor: 1,
         source_workspace_idx: 0,
+        source_row: 0,
         source_window_slot: 0,
+        current_row_index: 0,
         current_column_index: 0,
         last_drop_target: None,
         last_hint_update: None,
@@ -4306,6 +4350,7 @@ fn test_body_to_no_target_then_cross_monitor_shift_restores_multi_window_source(
         preview_mode: crate::state::DragPreviewMode::None,
         target_column_peers: Vec::new(),
         source_column_peers: Vec::new(),
+        source_column_width: None,
     });
 
     let target = *state.snapshot_layout().get(&200).unwrap();
@@ -4405,7 +4450,9 @@ fn test_body_preview_shift_restores_same_column_reordered_slot() {
         is_tiled: true,
         source_monitor: 1,
         source_workspace_idx: 0,
+        source_row: 0,
         source_window_slot: 0,
+        current_row_index: 0,
         current_column_index: 0,
         last_drop_target: None,
         last_hint_update: None,
@@ -4413,6 +4460,7 @@ fn test_body_preview_shift_restores_same_column_reordered_slot() {
         preview_mode: crate::state::DragPreviewMode::None,
         target_column_peers: Vec::new(),
         source_column_peers: Vec::new(),
+        source_column_width: None,
     });
 
     // Same-column reorder: drag 100 from slot 0 down into slot 1.
@@ -4560,7 +4608,9 @@ fn test_safe_band_drop_follows_surviving_target_column_after_peer_lifecycle_shif
         is_tiled: true,
         source_monitor: 1,
         source_workspace_idx: 0,
+        source_row: 0,
         source_window_slot: 0,
+        current_row_index: 0,
         current_column_index: 0,
         last_drop_target: None,
         last_hint_update: None,
@@ -4568,6 +4618,7 @@ fn test_safe_band_drop_follows_surviving_target_column_after_peer_lifecycle_shif
         preview_mode: crate::state::DragPreviewMode::None,
         target_column_peers: Vec::new(),
         source_column_peers: Vec::new(),
+        source_column_width: None,
     });
 
     let target = *state.snapshot_layout().get(&200).unwrap();
@@ -4626,7 +4677,9 @@ fn test_safe_band_drop_snaps_back_when_target_identity_vanishes_entirely() {
         is_tiled: true,
         source_monitor: 1,
         source_workspace_idx: 0,
+        source_row: 0,
         source_window_slot: 0,
+        current_row_index: 0,
         current_column_index: 0,
         last_drop_target: None,
         last_hint_update: None,
@@ -4634,6 +4687,7 @@ fn test_safe_band_drop_snaps_back_when_target_identity_vanishes_entirely() {
         preview_mode: crate::state::DragPreviewMode::None,
         target_column_peers: Vec::new(),
         source_column_peers: Vec::new(),
+        source_column_width: None,
     });
 
     let target = *state.snapshot_layout().get(&200).unwrap();
@@ -4683,7 +4737,9 @@ fn test_shift_restore_follows_surviving_source_column_after_peer_lifecycle_shift
         is_tiled: true,
         source_monitor: 1,
         source_workspace_idx: 0,
+        source_row: 0,
         source_window_slot: 0,
+        current_row_index: 0,
         current_column_index: 1,
         last_drop_target: None,
         last_hint_update: None,
@@ -4691,6 +4747,7 @@ fn test_shift_restore_follows_surviving_source_column_after_peer_lifecycle_shift
         preview_mode: crate::state::DragPreviewMode::None,
         target_column_peers: Vec::new(),
         source_column_peers: Vec::new(),
+        source_column_width: None,
     });
 
     // Body-preview onto the target column (below its safe band) so the
@@ -4769,7 +4826,9 @@ fn test_shift_restore_creates_new_column_when_no_source_peer_survives() {
         is_tiled: true,
         source_monitor: 1,
         source_workspace_idx: 0,
+        source_row: 0,
         source_window_slot: 0,
+        current_row_index: 0,
         current_column_index: 1,
         last_drop_target: None,
         last_hint_update: None,
@@ -4777,6 +4836,7 @@ fn test_shift_restore_creates_new_column_when_no_source_peer_survives() {
         preview_mode: crate::state::DragPreviewMode::None,
         target_column_peers: Vec::new(),
         source_column_peers: Vec::new(),
+        source_column_width: None,
     });
 
     let target_rect = *state.snapshot_layout().get(&200).unwrap();
@@ -6040,6 +6100,7 @@ fn tile_open_on_workspace_rule(
         open_maximized: false,
         column_width: None,
         open_in_column: None,
+        row: None,
         sticky: false,
         match_max_width: None,
         match_max_height: None,
@@ -8405,6 +8466,7 @@ fn test_window_rule_matching_class() {
             open_maximized: false,
             column_width: None,
             open_in_column: None,
+            row: None,
             sticky: false,
             match_max_width: None,
             match_max_height: None,
@@ -8431,6 +8493,7 @@ fn test_window_rule_matching_title() {
             open_maximized: false,
             column_width: None,
             open_in_column: None,
+            row: None,
             sticky: false,
             match_max_width: None,
             match_max_height: None,
@@ -8458,6 +8521,7 @@ fn test_window_rule_matching_executable() {
             open_maximized: false,
             column_width: None,
             open_in_column: None,
+            row: None,
             sticky: false,
             match_max_width: None,
             match_max_height: None,
@@ -8491,6 +8555,7 @@ fn test_floating_rect_uses_rule_dimensions() {
             open_maximized: false,
             column_width: None,
             open_in_column: None,
+            row: None,
             sticky: false,
             match_max_width: None,
             match_max_height: None,
@@ -8520,6 +8585,7 @@ fn test_floating_rect_preserves_original_if_no_dimensions() {
             open_maximized: false,
             column_width: None,
             open_in_column: None,
+            row: None,
             sticky: false,
             match_max_width: None,
             match_max_height: None,
@@ -9060,10 +9126,12 @@ fn test_cmd_query_focused_empty() {
     match resp {
         IpcResponse::FocusedWindow {
             window_id,
+            row_index,
             column_index,
             window_index,
         } => {
             assert!(window_id.is_none());
+            assert_eq!(row_index, 0);
             assert_eq!(column_index, 0);
             assert_eq!(window_index, 0);
         }
@@ -12752,6 +12820,7 @@ impl Drop for OffscreenResizeOwner {
             PostThreadMessageW(self.thread_id, WM_QUIT, WPARAM(0), LPARAM(0)).unwrap();
         }
         self.join.take().unwrap().join().unwrap();
+        leopardwm_platform_win32::forget_offscreen_placement(self.hwnd);
     }
 }
 
@@ -12779,6 +12848,7 @@ fn floating_mismatched_landing_state(owner: &OffscreenResizeOwner, readable: boo
         rect: requested,
         visibility: Visibility::Visible,
         column_index: usize::MAX,
+        row_index: 0,
     }]);
     let (request_id, invalidation_id) = state.physical_request_ids();
     state.consume_physical_landings(
@@ -12871,6 +12941,7 @@ fn test_deferred_floating_replay_uses_actual_landing_and_requires_acknowledgemen
                     rect: Rect::new(-300, 0, 300, 560),
                     visibility: Visibility::Visible,
                     column_index: usize::MAX,
+                    row_index: 0,
                 }]);
                 if matches!(acknowledgement, Abandoned) {
                     let (request_id, invalidation_id) = state.physical_request_ids();
@@ -13102,7 +13173,9 @@ fn test_floating_placement_and_special_states_preserve_stored_geometry() {
                     is_tiled: false,
                     source_monitor: 1,
                     source_workspace_idx: 0,
+                    source_row: 0,
                     source_window_slot: 0,
+                    current_row_index: 0,
                     current_column_index: 0,
                     last_drop_target: None,
                     last_hint_update: None,
@@ -13110,6 +13183,7 @@ fn test_floating_placement_and_special_states_preserve_stored_geometry() {
                     preview_mode: crate::state::DragPreviewMode::None,
                     target_column_peers: Vec::new(),
                     source_column_peers: Vec::new(),
+                    source_column_width: None,
                 });
             }
             "transition" => state.start_layout_transition_with_duration(
@@ -13735,6 +13809,7 @@ fn test_offscreen_recheck_converges_with_cached_insets_after_frame_change() {
             rect: Rect::new(-30000, -1000, 300, 560),
             visibility: leopardwm_core_layout::Visibility::Visible,
             column_index: 0,
+            row_index: 0,
         }],
         &config,
         None,
@@ -18460,6 +18535,324 @@ fn test_scratchpad_stash_uses_tiled_focus_over_stale_foreground() {
     );
 }
 
+#[test]
+fn test_scratchpad_multi_row_release_rejoins_original_row_and_column() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    {
+        let ws = state.focused_workspace_mut().unwrap();
+        ws.set_row_layout(&[0.5, 0.5]);
+        ws.insert_window_in_row(100, 0, Some(400)).unwrap();
+        ws.insert_window_in_row(200, 1, Some(400)).unwrap();
+        ws.insert_window_in_row_column_at(300, 1, 0, 1).unwrap();
+    }
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .focus_window(300)
+        .unwrap();
+
+    let ws = state.focused_workspace().unwrap();
+    assert_eq!(ws.find_window_location_rc(300), Some((1, 0, 1)));
+
+    state.scratchpad_stash();
+    assert_eq!(state.scratchpad.as_ref().unwrap().origin_row, 1);
+    assert_eq!(state.scratchpad.as_ref().unwrap().origin_sibling, Some(200));
+
+    state.scratchpad_toggle();
+    state.previous_focused_hwnd = Some(300);
+    state.scratchpad_stash();
+
+    let ws = state.focused_workspace().unwrap();
+    assert!(state.scratchpad.is_none());
+    assert_eq!(
+        ws.find_window_location_rc(300),
+        Some((1, 0, 1)),
+        "rejoined original row 1, column 0 with its sibling"
+    );
+}
+
+#[test]
+fn test_move_window_to_workspace_and_back_preserves_row() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    let mon = state.focused_monitor;
+    state.ensure_workspace_exists(mon, 1);
+    {
+        let ws0 = state.workspaces.get_mut(&mon).unwrap().first_mut().unwrap();
+        ws0.set_row_layout(&[0.5, 0.5]);
+        ws0.insert_window_in_row(100, 0, Some(400)).unwrap();
+        ws0.insert_window_in_row(200, 1, Some(400)).unwrap();
+        ws0.focus_window(200).unwrap();
+
+        let ws1 = state.workspaces.get_mut(&mon).unwrap().get_mut(1).unwrap();
+        ws1.set_row_layout(&[0.5, 0.5]);
+    }
+    state.handle_command(IpcCommand::MoveToWorkspace { index: 2 });
+    assert_eq!(state.move_origins.get(&200).map(|m| m.row), Some(1));
+    assert_eq!(state.move_origins.get(&200).map(|m| m.ws_idx), Some(0));
+
+    state.handle_command(IpcCommand::SwitchWorkspace { index: 2 });
+    state.handle_command(IpcCommand::MoveToWorkspace { index: 1 });
+    let ws0 = state.workspaces.get(&mon).unwrap().first().unwrap();
+    assert_eq!(
+        ws0.find_window_location_rc(200).map(|(r, c, _)| (r, c)),
+        Some((1, 0)),
+        "restored back into row 1"
+    );
+}
+
+#[test]
+fn test_drag_cursor_hit_test_identifies_target_row() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    {
+        let ws = state.focused_workspace_mut().unwrap();
+        ws.set_row_gap(0);
+        ws.set_row_layout(&[0.5, 0.5]);
+        ws.insert_window_in_row(100, 0, Some(400)).unwrap();
+        ws.insert_window_in_row(200, 1, Some(400)).unwrap();
+    }
+    let viewport = Rect::new(0, 0, 1920, 1000);
+    let ws = state.focused_workspace().unwrap();
+    let row_rects = ws.row_rects(viewport);
+    assert_eq!(row_rects.len(), 2);
+    // Viewport height 1000 minus default 10px top/bottom outer gaps = 980 / 2 = 490
+    assert_eq!(row_rects[0].height, 490);
+    assert_eq!(row_rects[1].height, 490);
+
+    assert_eq!(crate::drag::target_row_for_cursor(ws, viewport, 200), 0);
+    assert_eq!(crate::drag::target_row_for_cursor(ws, viewport, 700), 1);
+}
+
+#[test]
+fn test_drag_window_to_empty_row_creates_column() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = false;
+    state.reduce_motion = false;
+    let mon = state.focused_monitor;
+    {
+        let ws = state.focused_workspace_mut().unwrap();
+        ws.set_row_gap(0);
+        ws.set_row_layout(&[0.5, 0.5]);
+        ws.insert_window_in_row(100, 0, Some(400)).unwrap();
+        ws.insert_window_in_row(101, 0, Some(400)).unwrap();
+    }
+    state.injected_window_info.insert(100, make_test_window_info(100));
+    state.drag_state = Some(DragState {
+        hwnd: 100,
+        is_tiled: true,
+        source_monitor: mon,
+        source_workspace_idx: 0,
+        source_row: 0,
+        source_window_slot: 0,
+        current_row_index: 0,
+        current_column_index: 0,
+        last_drop_target: None,
+        last_hint_update: None,
+        removed_from_source: false,
+        preview_mode: crate::state::DragPreviewMode::None,
+        target_column_peers: Vec::new(),
+        source_column_peers: Vec::new(),
+        source_column_width: Some(400),
+    });
+
+    // Move cursor to row 1 (y = 700)
+    state.update_drag_hint_at(100, 200, 700, mon, false);
+    let drag = state.drag_state.take().unwrap();
+    assert_eq!(drag.last_drop_target.map(|t| t.target_row), Some(1));
+    assert_eq!(drag.last_drop_target.map(|t| t.insert_index), Some(0));
+
+    // Finalize drop
+    state.finalize_drag_merge(100, &drag, mon, &Rect::new(200, 700, 400, 400));
+    let ws = state.focused_workspace().unwrap();
+    assert_eq!(ws.find_window_location_rc(100), Some((1, 0, 0)));
+    assert_eq!(ws.find_window_location_rc(101), Some((0, 0, 0)));
+}
+
+#[test]
+fn test_drag_window_merge_into_existing_column_in_target_row() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = false;
+    state.reduce_motion = false;
+    let mon = state.focused_monitor;
+    {
+        let ws = state.focused_workspace_mut().unwrap();
+        ws.set_row_gap(0);
+        ws.set_row_layout(&[0.5, 0.5]);
+        ws.insert_window_in_row(100, 0, Some(400)).unwrap();
+        ws.insert_window_in_row(200, 1, Some(400)).unwrap();
+    }
+    state.injected_window_info.insert(100, make_test_window_info(100));
+    state.drag_state = Some(DragState {
+        hwnd: 100,
+        is_tiled: true,
+        source_monitor: mon,
+        source_workspace_idx: 0,
+        source_row: 0,
+        source_window_slot: 0,
+        current_row_index: 0,
+        current_column_index: 0,
+        last_drop_target: None,
+        last_hint_update: None,
+        removed_from_source: false,
+        preview_mode: crate::state::DragPreviewMode::None,
+        target_column_peers: Vec::new(),
+        source_column_peers: Vec::new(),
+        source_column_width: Some(400),
+    });
+
+    let target = *state.snapshot_layout().get(&200).unwrap();
+    // Hover over window 200 in row 1
+    state.update_drag_hint_at(100, target.x + target.width / 2, target.y + target.height / 2, mon, false);
+    let drag = state.drag_state.take().unwrap();
+    assert_eq!(drag.last_drop_target.map(|t| t.target_row), Some(1));
+    assert_eq!(drag.last_drop_target.map(|t| t.insert_index), Some(0));
+    assert_eq!(drag.last_drop_target.and_then(|t| t.window_slot), Some(1));
+
+    state.finalize_drag_merge(100, &drag, mon, &target);
+    let ws = state.focused_workspace().unwrap();
+    assert_eq!(ws.find_window_location_rc(200), Some((1, 0, 0)));
+    assert_eq!(ws.find_window_location_rc(100), Some((1, 0, 1)));
+}
+
+#[test]
+fn test_drag_window_to_new_column_in_target_row_with_existing_columns() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = false;
+    state.reduce_motion = false;
+    let mon = state.focused_monitor;
+    {
+        let ws = state.focused_workspace_mut().unwrap();
+        ws.set_row_gap(0);
+        ws.set_row_layout(&[0.5, 0.5]);
+        ws.insert_window_in_row(100, 0, Some(400)).unwrap();
+        ws.insert_window_in_row(200, 1, Some(400)).unwrap();
+    }
+    state.injected_window_info.insert(100, make_test_window_info(100));
+    state.drag_state = Some(DragState {
+        hwnd: 100,
+        is_tiled: true,
+        source_monitor: mon,
+        source_workspace_idx: 0,
+        source_row: 0,
+        source_window_slot: 0,
+        current_row_index: 0,
+        current_column_index: 0,
+        last_drop_target: None,
+        last_hint_update: None,
+        removed_from_source: false,
+        preview_mode: crate::state::DragPreviewMode::None,
+        target_column_peers: Vec::new(),
+        source_column_peers: Vec::new(),
+        source_column_width: Some(400),
+    });
+
+    let target = *state.snapshot_layout().get(&200).unwrap();
+    // Hover past the right edge of window 200 in row 1
+    state.update_drag_hint_at(100, target.x + target.width + 100, target.y + target.height / 2, mon, false);
+    let drag = state.drag_state.take().unwrap();
+    assert_eq!(drag.last_drop_target.map(|t| t.target_row), Some(1));
+    assert_eq!(drag.last_drop_target.map(|t| t.insert_index), Some(1));
+    assert_eq!(drag.last_drop_target.and_then(|t| t.window_slot), None);
+
+    state.finalize_drag_merge(100, &drag, mon, &Rect::new(target.x + target.width + 100, target.y, 400, 400));
+    let ws = state.focused_workspace().unwrap();
+    assert_eq!(ws.find_window_location_rc(200), Some((1, 0, 0)));
+    assert_eq!(ws.find_window_location_rc(100), Some((1, 1, 0)));
+}
+
+#[test]
+fn test_shift_drag_column_to_another_row_on_same_monitor() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = false;
+    state.reduce_motion = false;
+    let mon = state.focused_monitor;
+    {
+        let ws = state.focused_workspace_mut().unwrap();
+        ws.set_row_gap(0);
+        ws.set_row_layout(&[0.5, 0.5]);
+        ws.insert_window_in_row(100, 0, Some(400)).unwrap();
+        ws.insert_window_in_column(101, 0).unwrap();
+        ws.insert_window_in_row(200, 1, Some(400)).unwrap();
+    }
+    state.injected_window_info.insert(100, make_test_window_info(100));
+    state.drag_state = Some(DragState {
+        hwnd: 100,
+        is_tiled: true,
+        source_monitor: mon,
+        source_workspace_idx: 0,
+        source_row: 0,
+        source_window_slot: 0,
+        current_row_index: 0,
+        current_column_index: 0,
+        last_drop_target: None,
+        last_hint_update: None,
+        removed_from_source: false,
+        preview_mode: crate::state::DragPreviewMode::None,
+        target_column_peers: Vec::new(),
+        source_column_peers: Vec::new(),
+        source_column_width: Some(400),
+    });
+
+    let target = *state.snapshot_layout().get(&200).unwrap();
+    // Shift drag to row 1 past column 200
+    state.update_drag_hint_at(100, target.x + target.width + 100, target.y + target.height / 2, mon, true);
+    assert!(matches!(state.pending_drag_hint, Some(DragHintAction::ShowGhost { .. })));
+
+    let drag = state.drag_state.take().unwrap();
+    state.execute_cross_monitor_drag(100, &drag, mon, &Rect::new(target.x + target.width + 100, target.y + 10, 400, 400));
+    let ws = state.focused_workspace().unwrap();
+    assert_eq!(ws.find_window_location_rc(200), Some((1, 0, 0)));
+    assert_eq!(ws.find_window_location_rc(100), Some((1, 1, 0)));
+    assert_eq!(ws.find_window_location_rc(101), Some((1, 1, 1)));
+}
+
+#[test]
+fn test_drag_window_to_new_row_preserves_column_width() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = false;
+    state.reduce_motion = false;
+    let mon = state.focused_monitor;
+    {
+        let ws = state.focused_workspace_mut().unwrap();
+        ws.set_row_gap(0);
+        ws.set_row_layout(&[0.5, 0.5]);
+        // Insert window with non-default custom width 550
+        ws.insert_window_in_row(100, 0, Some(550)).unwrap();
+        ws.insert_window_in_row(101, 0, Some(400)).unwrap();
+    }
+    state.injected_window_info.insert(100, make_test_window_info(100));
+    state.drag_state = Some(DragState {
+        hwnd: 100,
+        is_tiled: true,
+        source_monitor: mon,
+        source_workspace_idx: 0,
+        source_row: 0,
+        source_window_slot: 0,
+        current_row_index: 0,
+        current_column_index: 0,
+        last_drop_target: None,
+        last_hint_update: None,
+        removed_from_source: false,
+        preview_mode: crate::state::DragPreviewMode::None,
+        target_column_peers: Vec::new(),
+        source_column_peers: Vec::new(),
+        source_column_width: Some(550),
+    });
+
+    // Move cursor to empty row 1 (y = 700)
+    state.update_drag_hint_at(100, 200, 700, mon, false);
+
+    // Verify placeholder in row 1 received the source column width (550)
+    let ws = state.focused_workspace().unwrap();
+    assert_eq!(ws.rows()[1].column(0).unwrap().width(), 550);
+
+    let drag = state.drag_state.take().unwrap();
+    state.finalize_drag_merge(100, &drag, mon, &Rect::new(200, 700, 550, 400));
+    let ws = state.focused_workspace().unwrap();
+    assert_eq!(ws.find_window_location_rc(100), Some((1, 0, 0)));
+    // Window in row 1 preserved custom width 550
+    assert_eq!(ws.rows()[1].column(0).unwrap().width(), 550);
+}
+
 /// Float the focused window `wid` (sticky must then keep it floating).
 fn float_focused_window(state: &mut AppState, wid: u64) {
     let vp = state.focused_viewport();
@@ -19043,6 +19436,7 @@ fn test_matched_rule_returns_first_match_extras() {
         open_maximized: false,
         column_width: Some(0.25),
         open_in_column: None,
+        row: None,
         sticky: false,
         match_max_width: None,
         match_max_height: None,
@@ -20563,10 +20957,12 @@ fn test_width_only_persistence_tracks_requested_not_native_width() {
     );
     let saved: serde_json::Value =
         serde_json::from_str(&state.build_state_json().unwrap()).unwrap();
-    assert_eq!(
-        saved["workspaces"][0]["workspace"]["columns"][0]["width"],
-        requested_width
-    );
+    let ws_json = &saved["workspaces"][0]["workspace"];
+    let saved_width = ws_json["rows"][0]["columns"][0]["width"]
+        .as_i64()
+        .or_else(|| ws_json["columns"][0]["width"].as_i64())
+        .map(|v| v as i32);
+    assert_eq!(saved_width, Some(requested_width));
     state.request_save_if_changed();
     assert_eq!(
         rx.try_recv(),
@@ -20825,6 +21221,177 @@ fn test_full_display_invalidation_clears_widths_and_heights() {
         );
         assert_eq!(workspace.columns()[0].width(), 400);
     }
+}
+
+#[test]
+fn test_window_rule_row_placement_and_workspace() {
+    let mut config = test_config();
+    config.layout.rows.split = vec!["50%".to_string(), "50%".to_string()];
+    config.window_rules = vec![
+        config::WindowRule {
+            match_class: Some("RowTwoClass".to_string()),
+            row: Some(2), // 1-based 2 -> row 1
+            ..Default::default()
+        },
+        config::WindowRule {
+            match_class: Some("RowClampedClass".to_string()),
+            row: Some(4), // clamps to last row (row 1)
+            ..Default::default()
+        },
+        config::WindowRule {
+            match_class: Some("WorkspaceAndRowClass".to_string()),
+            open_on_workspace: Some(2), // workspace 2
+            row: Some(2),               // row 2 (0-based 1)
+            ..Default::default()
+        },
+    ];
+    let mut state = AppState::new_with_config(config, test_monitors());
+    state.reduce_motion = false;
+
+    // Window 1: opens on row 2 (row index 1)
+    let mut w1 = make_test_window_info(100);
+    w1.class_name = "RowTwoClass".to_string();
+    state.injected_window_info.insert(100, w1);
+    state.handle_window_event(WindowEvent::Created(100, 0));
+
+    let mon = state.focused_monitor;
+    let ws = state.focused_workspace().unwrap();
+    assert_eq!(ws.find_window_location_rc(100).map(|(r, _, _)| r), Some(1));
+
+    // Window 2: clamps to last row (row index 1)
+    let mut w2 = make_test_window_info(200);
+    w2.class_name = "RowClampedClass".to_string();
+    state.injected_window_info.insert(200, w2);
+    state.handle_window_event(WindowEvent::Created(200, 0));
+
+    let ws = state.focused_workspace().unwrap();
+    assert_eq!(ws.find_window_location_rc(200).map(|(r, _, _)| r), Some(1));
+
+    // Window 3: combined with workspace (opens on workspace 2, row 1)
+    let mut w3 = make_test_window_info(300);
+    w3.class_name = "WorkspaceAndRowClass".to_string();
+    state.injected_window_info.insert(300, w3);
+    state.handle_window_event(WindowEvent::Created(300, 0));
+
+    let ws2 = &state.workspaces.get(&mon).unwrap()[1];
+    assert!(ws2.contains_window(300));
+    assert_eq!(
+        ws2.find_window_location_rc(300).map(|(r, _, _)| r),
+        Some(1)
+    );
+}
+
+#[test]
+fn test_apply_config_updates_row_layout_across_workspaces() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    let mon = state.focused_monitor;
+    assert_eq!(state.focused_workspace().unwrap().row_count(), 1);
+
+    let mut new_config = test_config();
+    new_config.layout.rows.split = vec!["40%".to_string(), "30%".to_string(), "30%".to_string()];
+    new_config.layout.rows.gap = 16;
+    state.apply_config(new_config);
+
+    for ws in state.workspaces.get(&mon).unwrap() {
+        assert_eq!(ws.row_count(), 3);
+        assert_eq!(ws.row_gap(), 16);
+    }
+}
+
+#[test]
+fn test_apply_config_updates_per_workspace_rows() {
+    let mut config = test_config();
+    config.layout.rows.workspaces = vec![
+        config::WorkspaceRowsConfig {
+            workspaces: vec![1],
+            split: vec!["50%".to_string(), "50%".to_string()],
+        },
+        config::WorkspaceRowsConfig {
+            workspaces: vec![2, 3],
+            split: vec!["40%".to_string(), "30%".to_string(), "30%".to_string()],
+        },
+    ];
+    let mut state = AppState::new_with_config(config, test_monitors());
+    let mon = state.focused_monitor;
+    state.ensure_workspace_exists(mon, 1);
+    state.ensure_workspace_exists(mon, 2);
+    state.ensure_workspace_exists(mon, 3);
+
+    let workspaces = state.workspaces.get(&mon).unwrap();
+    // Workspace 1 (index 0) has 2 rows
+    assert_eq!(workspaces[0].row_count(), 2);
+    // Workspace 2 (index 1) has 3 rows
+    assert_eq!(workspaces[1].row_count(), 3);
+    // Workspace 3 (index 2) has 3 rows
+    assert_eq!(workspaces[2].row_count(), 3);
+    // Workspace 4 (index 3) defaults to 1 row
+    assert_eq!(workspaces[3].row_count(), 1);
+
+    // Dynamic config update: change Workspace 1 to 1 row and Workspace 4 to 2 rows
+    let mut new_config = test_config();
+    new_config.layout.rows.workspaces = vec![
+        config::WorkspaceRowsConfig {
+            workspaces: vec![4],
+            split: vec!["50%".to_string(), "50%".to_string()],
+        },
+    ];
+    state.apply_config(new_config);
+
+    let workspaces = state.workspaces.get(&mon).unwrap();
+    // Workspace 1 now defaults to 1 row
+    assert_eq!(workspaces[0].row_count(), 1);
+    // Workspace 2 now defaults to 1 row
+    assert_eq!(workspaces[1].row_count(), 1);
+    // Workspace 4 now has 2 rows
+    assert_eq!(workspaces[3].row_count(), 2);
+}
+
+#[test]
+fn test_window_rules_respect_per_workspace_rows() {
+    let mut config = test_config();
+    config.layout.rows.workspaces = vec![
+        config::WorkspaceRowsConfig {
+            workspaces: vec![2],
+            split: vec!["50%".to_string(), "50%".to_string()],
+        },
+    ];
+    config.window_rules = vec![
+        config::WindowRule {
+            match_class: Some("WorkspaceOneClass".to_string()),
+            open_on_workspace: Some(1), // workspace 1 (1 row)
+            row: Some(2),               // row 2 clamps to 0
+            ..Default::default()
+        },
+        config::WindowRule {
+            match_class: Some("WorkspaceTwoClass".to_string()),
+            open_on_workspace: Some(2), // workspace 2 (2 rows)
+            row: Some(2),               // row 2 lands in row 1
+            ..Default::default()
+        },
+    ];
+    let mut state = AppState::new_with_config(config, test_monitors());
+    state.reduce_motion = false;
+
+    // Window 1: opens on workspace 1, row 2 requested -> clamps to 0 because workspace 1 has 1 row
+    let mut w1 = make_test_window_info(100);
+    w1.class_name = "WorkspaceOneClass".to_string();
+    state.injected_window_info.insert(100, w1);
+    state.handle_window_event(WindowEvent::Created(100, 0));
+
+    let mon = state.focused_monitor;
+    let ws1 = &state.workspaces.get(&mon).unwrap()[0];
+    assert_eq!(ws1.row_count(), 1);
+    assert_eq!(ws1.find_window_location_rc(100).map(|(r, _, _)| r), Some(0));
+
+    // Window 2: opens on workspace 2, row 2 requested -> lands on row 1
+    let mut w2 = make_test_window_info(200);
+    w2.class_name = "WorkspaceTwoClass".to_string();
+    state.injected_window_info.insert(200, w2);
+    state.handle_window_event(WindowEvent::Created(200, 0));
+
+    let ws2 = &state.workspaces.get(&mon).unwrap()[1];
+    assert_eq!(ws2.row_count(), 2);
+    assert_eq!(ws2.find_window_location_rc(200).map(|(r, _, _)| r), Some(1));
 }
 
 #[path = "maximized_admission_tests.rs"]
@@ -21236,6 +21803,49 @@ fn test_floating_above_tiled_order_and_repeated_focus_are_idempotent() {
         assert_eq!(order[2], 100);
         assert!(state.floating_raise_order(100, &order, false).is_empty());
     }
+}
+
+#[test]
+fn test_mark_minimized_and_reflow_multi_row_different_row_does_not_panic() {
+    let mut config = test_config();
+    config.layout.rows.split = vec!["50%".to_string(), "50%".to_string()];
+    config.window_rules = vec![
+        config::WindowRule {
+            match_class: Some("RowTwoClass".to_string()),
+            row: Some(2), // row 2 (0-based 1)
+            ..Default::default()
+        },
+    ];
+    let mut state = AppState::new_with_config(config, test_monitors());
+    state.reduce_motion = true;
+
+    // Window 100 opens on row 1 (0-based index 1)
+    let mut w1 = make_test_window_info(100);
+    w1.class_name = "RowTwoClass".to_string();
+    state.injected_window_info.insert(100, w1);
+    state.handle_window_event(WindowEvent::Created(100, 0));
+
+    let ws = state.focused_workspace_mut().unwrap();
+    // Focus row 0 (which has 0 columns/windows)
+    ws.focus_row(0);
+    assert_eq!(ws.focused_row(), 0);
+    assert_eq!(ws.columns().len(), 0);
+    assert_eq!(ws.find_window_location_rc(100).map(|(r, _, _)| r), Some(1));
+
+    // Minimizing window 100 in row 1 while focused_row is row 0 must not panic
+    let result = state.mark_minimized_and_reflow(100);
+    assert!(result.is_some());
+    assert!(state.focused_workspace().unwrap().is_minimized(100));
+}
+
+#[test]
+fn test_switch_workspace_when_paused_succeeds_without_error() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = true;
+
+    let response = state.handle_command(leopardwm_ipc::IpcCommand::SwitchWorkspace { index: 2 });
+    assert_eq!(response, leopardwm_ipc::IpcResponse::Ok);
+    assert_eq!(state.active_workspace_idx(state.focused_monitor), 1);
 }
 
 #[test]

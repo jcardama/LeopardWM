@@ -14,7 +14,7 @@ use windows::Win32::Graphics::Dwm::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     BeginDeferWindowPos, DeferWindowPos, EndDeferWindowPos, GetClassNameW, GetWindowRect,
-    GetWindowThreadProcessId, IsIconic, IsWindow, IsZoomed, SendMessageTimeoutW, SetWindowPos,
+    GetWindowThreadProcessId, IsHungAppWindow, IsIconic, IsWindow, IsZoomed, SendMessageTimeoutW, SetWindowPos,
     SET_WINDOW_POS_FLAGS, SMTO_ABORTIFHUNG, SMTO_BLOCK, SWP_ASYNCWINDOWPOS, SWP_FRAMECHANGED,
     SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, WM_NULL,
 };
@@ -576,9 +576,6 @@ fn apply_placements_inner(
         }
         // Uncloak all tracked windows — no placements means all previous
         // windows have left this layout (e.g., workspace switch to empty workspace).
-        if let Ok(mut records) = OFFSCREEN_PLACEMENTS.lock() {
-            records.clear();
-        }
         uncloak_all_tracked();
         return Ok(empty_result);
     }
@@ -1256,14 +1253,8 @@ fn probe_placement_owners(
         .chain(omitted)
     {
         let was_marked = marked.contains(&window_id);
-        if !display_change && !was_marked {
-            continue;
-        }
         if was_marked {
             deferrals.pending.insert(window_id);
-        }
-        if !probe_marked {
-            continue;
         }
         let Ok(hwnd) = window_id_to_hwnd(window_id) else {
             continue;
@@ -1274,6 +1265,15 @@ fn probe_placement_owners(
             continue;
         }
         if unsafe { IsIconic(hwnd).as_bool() } {
+            continue;
+        }
+        if unsafe { IsHungAppWindow(hwnd).as_bool() } {
+            deferrals.pending.insert(window_id);
+            deferrals.wait_for_owner.insert(window_id);
+            deferrals.unresponsive.insert(window_id);
+            continue;
+        }
+        if !display_change && !was_marked && !probe_marked {
             continue;
         }
         let owner_thread = unsafe { GetWindowThreadProcessId(hwnd, None) };
@@ -2604,6 +2604,7 @@ mod tests {
             rect: Rect::new(destination.0, destination.1, 800, 600),
             visibility: Visibility::Visible,
             column_index: 0,
+            row_index: 0,
         };
         let placements = [placement];
         let measured = Rect::new(100, 100, 800, 600);
@@ -2700,6 +2701,7 @@ mod tests {
             rect: Rect::new(400, 100, 800, 600),
             visibility: Visibility::Visible,
             column_index: 0,
+            row_index: 0,
         }];
         let landings = collect_placement_landings_with_recoveries(
             &placements,
@@ -4057,6 +4059,7 @@ mod tests {
             rect: Rect::new(0, 0, 800, 600),
             visibility: Visibility::OffScreenLeft,
             column_index: 0,
+            row_index: 0,
         }];
 
         // Invalid windows (hwnd 0) are silently skipped in the deferred batch
@@ -4120,6 +4123,7 @@ mod tests {
             rect: Rect::new(0, 0, 800, 600),
             visibility: Visibility::Visible,
             column_index: 0,
+            row_index: 0,
         };
         let mut cache = PlacementCache::new();
         cache
@@ -4174,6 +4178,7 @@ mod tests {
             rect: Rect::new(0, 0, 800, 600),
             visibility: Visibility::Visible,
             column_index: 0,
+            row_index: 0,
         };
         let landing_flags = SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE;
 
@@ -4358,6 +4363,7 @@ mod tests {
             rect,
             visibility,
             column_index: 0,
+            row_index: 0,
         }
     }
 

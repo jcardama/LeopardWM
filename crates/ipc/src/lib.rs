@@ -31,7 +31,10 @@ const MAX_PIPE_SCOPE_SEGMENT_LEN: usize = 64;
 /// - v4: complete workspace-state snapshots and monitor-targeted
 ///   workspace switching. `ReleaseAllWindows` and `ToggleIgnore` are
 ///   additive and retain v4 compatibility.
-pub const IPC_PROTOCOL_VERSION: u32 = 4;
+/// - v5: multi-row scrolling strips — `RowSummary`, `row_index` on `WindowInfo`
+///   and `FocusedWindow`, `rows` and `focused_row` on `LayoutChanged` and
+///   `WorkspaceState`, new row focus and movement commands.
+pub const IPC_PROTOCOL_VERSION: u32 = 5;
 /// Minimum protocol version this crate supports.
 pub const IPC_MIN_SUPPORTED_PROTOCOL_VERSION: u32 = 1;
 
@@ -157,6 +160,9 @@ pub struct WindowInfo {
     pub executable: String,
     /// The window's current rectangle (position and size).
     pub rect: IpcRect,
+    /// The row index if tiled (0-based), None if floating.
+    #[serde(default)]
+    pub row_index: Option<usize>,
     /// The column index if tiled, None if floating.
     pub column_index: Option<usize>,
     /// The window index within its column, None if floating.
@@ -283,6 +289,19 @@ pub struct ColumnSummary {
     pub mode: ColumnSummaryMode,
 }
 
+/// One row entry in a `LayoutChanged` or `WorkspaceState` payload.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RowSummary {
+    /// Columns in the row, left to right.
+    pub columns: Vec<ColumnSummary>,
+    /// Index of the focused column in this row, or `None` if no column is focused.
+    #[serde(default)]
+    pub focused_column: Option<usize>,
+    /// Scroll offset of this row's strip.
+    #[serde(default)]
+    pub scroll_offset: f64,
+}
+
 /// Events streamed to subscribers after a `Subscribe` command. Each frame
 /// is one JSON object on the wire (newline-terminated, same framing as
 /// `IpcResponse`). After a client receives `IpcResponse::Subscribed`, all
@@ -330,8 +349,14 @@ pub enum IpcEvent {
         workspace_index: u8,
         /// Index of the focused column, or `None` if no column is focused.
         focused_column: Option<usize>,
-        /// Columns in left-to-right order.
+        /// Columns in left-to-right order (in the focused row).
         columns: Vec<ColumnSummary>,
+        /// Index of the focused row (0-based). Added in protocol v5.
+        #[serde(default)]
+        focused_row: usize,
+        /// All rows in the workspace. Added in protocol v5.
+        #[serde(default)]
+        rows: Vec<RowSummary>,
     },
     /// Start of an atomic workspace-state snapshot transaction.
     WorkspaceSnapshotBegin {
@@ -420,6 +445,14 @@ pub enum IpcCommand {
     FocusStart,
     /// Focus the last (rightmost) column of the strip.
     FocusEnd,
+    /// Focus the row above. Added in protocol v5.
+    FocusRowUp,
+    /// Focus the row below. Added in protocol v5.
+    FocusRowDown,
+    /// Focus a specific row by 1-based index. Added in protocol v5.
+    FocusRow {
+        index: usize,
+    },
 
     /// Move the focused column left.
     MoveColumnLeft,
@@ -446,6 +479,10 @@ pub enum IpcCommand {
     MoveWindowUp,
     /// Move the focused window down within the column.
     MoveWindowDown,
+    /// Move the focused window to the row above. Added in protocol v5.
+    MoveWindowToRowUp,
+    /// Move the focused window to the row below. Added in protocol v5.
+    MoveWindowToRowDown,
 
     /// Focus the monitor to the left.
     FocusMonitorLeft,
@@ -736,11 +773,20 @@ pub enum IpcResponse {
         /// Display name of the active workspace, or `None` if unnamed.
         #[serde(default)]
         active_workspace_name: Option<String>,
+        /// Index of the focused row (0-based). Added in protocol v5.
+        #[serde(default)]
+        focused_row: usize,
+        /// All rows in the workspace. Added in protocol v5.
+        #[serde(default)]
+        rows: Vec<RowSummary>,
     },
     /// Focused window query response.
     FocusedWindow {
         /// Window ID of the focused window, if any.
         window_id: Option<u64>,
+        /// Row index of the focused window (0-based). Added in protocol v5.
+        #[serde(default)]
+        row_index: usize,
         /// Column index of the focused window.
         column_index: usize,
         /// Window index within the column.
@@ -925,6 +971,8 @@ mod tests {
             total_width: 2400,
             active_workspace: 1,
             active_workspace_name: None,
+            focused_row: 0,
+            rows: vec![],
         };
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains("workspace_state"));
@@ -1011,6 +1059,9 @@ mod tests {
             IpcCommand::FocusRight,
             IpcCommand::FocusUp,
             IpcCommand::FocusDown,
+            IpcCommand::FocusRowUp,
+            IpcCommand::FocusRowDown,
+            IpcCommand::FocusRow { index: 2 },
             IpcCommand::MoveColumnLeft,
             IpcCommand::MoveColumnRight,
             IpcCommand::MoveWindowLeft,
@@ -1021,6 +1072,8 @@ mod tests {
             IpcCommand::ConsumeFromRight,
             IpcCommand::MoveWindowUp,
             IpcCommand::MoveWindowDown,
+            IpcCommand::MoveWindowToRowUp,
+            IpcCommand::MoveWindowToRowDown,
             IpcCommand::FocusMonitorLeft,
             IpcCommand::FocusMonitorRight,
             IpcCommand::MoveWindowToMonitorLeft,
@@ -1095,14 +1148,22 @@ mod tests {
                 total_width: 4000,
                 active_workspace: 1,
                 active_workspace_name: None,
+                focused_row: 1,
+                rows: vec![RowSummary {
+                    columns: vec![],
+                    focused_column: None,
+                    scroll_offset: 0.0,
+                }],
             },
             IpcResponse::FocusedWindow {
                 window_id: Some(12345),
+                row_index: 1,
                 column_index: 1,
                 window_index: 0,
             },
             IpcResponse::FocusedWindow {
                 window_id: None,
+                row_index: 0,
                 column_index: 0,
                 window_index: 0,
             },
@@ -1114,6 +1175,7 @@ mod tests {
                     process_id: 100,
                     executable: "test.exe".to_string(),
                     rect: IpcRect::new(0, 0, 800, 600),
+                    row_index: Some(0),
                     column_index: Some(0),
                     window_index: Some(0),
                     monitor_id: 1,
@@ -1130,6 +1192,7 @@ mod tests {
                     process_id: 200,
                     executable: "focused.exe".to_string(),
                     rect: IpcRect::new(100, 100, 1024, 768),
+                    row_index: Some(1),
                     column_index: Some(1),
                     window_index: Some(0),
                     monitor_id: 2,
@@ -1178,6 +1241,7 @@ mod tests {
             process_id: 1234,
             executable: "test.exe".to_string(),
             rect: IpcRect::new(100, 100, 800, 600),
+            row_index: Some(0),
             column_index: Some(0),
             window_index: Some(0),
             monitor_id: 1,
@@ -1210,6 +1274,7 @@ mod tests {
                 process_id: 100,
                 executable: "app.exe".to_string(),
                 rect: IpcRect::new(0, 0, 800, 600),
+                row_index: Some(0),
                 column_index: Some(0),
                 window_index: Some(0),
                 monitor_id: 1,
@@ -1245,6 +1310,8 @@ mod tests {
             total_width: 1600,
             active_workspace: 1,
             active_workspace_name: None,
+            focused_row: 0,
+            rows: vec![],
         };
         let wire_format = serde_json::to_string(&resp).unwrap() + "\n";
         let parsed: IpcResponse = serde_json::from_str(wire_format.trim()).unwrap();
@@ -1400,6 +1467,8 @@ mod tests {
                     mode: ColumnSummaryMode::default(),
                 },
             ],
+            focused_row: 0,
+            rows: vec![],
         };
         let json = serde_json::to_string(&ev).unwrap();
         assert!(json.contains("layout_changed"));
@@ -1419,6 +1488,8 @@ mod tests {
                 height_weights: Vec::new(),
                 mode: ColumnSummaryMode::Tabbed { active_idx: 1 },
             }],
+            focused_row: 0,
+            rows: vec![],
         };
         let json = serde_json::to_string(&ev).unwrap();
         // Tag-based representation; subscribers branch on `mode.type`.
@@ -1429,10 +1500,53 @@ mod tests {
     }
 
     #[test]
+    fn test_event_layout_changed_multi_row_v5_round_trip() {
+        let ev = IpcEvent::LayoutChanged {
+            monitor: 1,
+            workspace_index: 0,
+            focused_column: Some(1),
+            columns: vec![ColumnSummary {
+                window_ids: vec![10],
+                width_px: 800,
+                height_weights: vec![],
+                mode: ColumnSummaryMode::Vertical,
+            }],
+            focused_row: 1,
+            rows: vec![
+                RowSummary {
+                    columns: vec![ColumnSummary {
+                        window_ids: vec![1, 2],
+                        width_px: 600,
+                        height_weights: vec![],
+                        mode: ColumnSummaryMode::Vertical,
+                    }],
+                    focused_column: Some(0),
+                    scroll_offset: 0.0,
+                },
+                RowSummary {
+                    columns: vec![ColumnSummary {
+                        window_ids: vec![10],
+                        width_px: 800,
+                        height_weights: vec![],
+                        mode: ColumnSummaryMode::Vertical,
+                    }],
+                    focused_column: Some(0),
+                    scroll_offset: 50.0,
+                },
+            ],
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(json.contains("\"focused_row\":1"));
+        assert!(json.contains("\"rows\":["));
+        let ev2: IpcEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(ev, ev2);
+    }
+
+    #[test]
     fn test_layout_changed_v1_payload_backward_compat() {
-        // A v1-shape `LayoutChanged` (no `mode` field on columns) must
-        // deserialize into the new struct with `mode = Vertical` so old
-        // daemons / cached payloads stay compatible.
+        // A v1-shape `LayoutChanged` (no `mode` field on columns, no `focused_row`, no `rows`)
+        // must deserialize into the new struct with `mode = Vertical`, `focused_row = 0`,
+        // and `rows = []` so old daemons / cached payloads stay compatible.
         let v1 = r#"{
             "type": "layout_changed",
             "monitor": 1,
@@ -1443,9 +1557,11 @@ mod tests {
             ]
         }"#;
         let ev: IpcEvent = serde_json::from_str(v1).unwrap();
-        if let IpcEvent::LayoutChanged { columns, .. } = ev {
+        if let IpcEvent::LayoutChanged { columns, focused_row, rows, .. } = ev {
             assert_eq!(columns.len(), 1);
             assert!(matches!(columns[0].mode, ColumnSummaryMode::Vertical));
+            assert_eq!(focused_row, 0);
+            assert!(rows.is_empty());
         } else {
             panic!("expected LayoutChanged");
         }
@@ -1469,13 +1585,14 @@ mod tests {
     }
 
     #[test]
-    fn test_protocol_version_remains_v4_for_additive_release_command() {
-        assert_eq!(IPC_PROTOCOL_VERSION, 4);
+    fn test_protocol_version_is_v5_for_multi_row() {
+        assert_eq!(IPC_PROTOCOL_VERSION, 5);
         assert!(is_protocol_version_supported(1));
         assert!(is_protocol_version_supported(2));
         assert!(is_protocol_version_supported(3));
         assert!(is_protocol_version_supported(4));
-        assert!(!is_protocol_version_supported(5));
+        assert!(is_protocol_version_supported(5));
+        assert!(!is_protocol_version_supported(6));
     }
 
     #[test]

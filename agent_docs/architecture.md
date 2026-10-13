@@ -94,3 +94,13 @@ Electron apps (Beeper, Slack) create/hide `Chrome_WidgetWin_1` popup windows eve
 - Custom combobox component replaces native `<select>` in rules table
 - Hotkeys tab: command read-only with human-readable labels, sorted by category, per-row reset icon
 - DEFAULT_HOTKEYS and CMD_ORDER constants in JS must stay in sync with Rust `HotkeyConfig::default()`
+
+### Multi-Row Layout (`core_layout/src/row.rs`, `workspace/`)
+- `Workspace` decomposes into `Vec<WorkspaceRow>` (1 to 4 rows).
+- Each `WorkspaceRow` independently owns its columns, active column index, active window index, and horizontal scroll offset.
+- `row_shares: Vec<f64>` and `row_gap: i32` control vertical partitioning of the monitor viewport rect.
+- Vertical space is partitioned proportionally: each row receives a distinct vertical sub-rect `(x, y, width, height)`.
+- Placement calculation aggregates physical window rectangles across all active rows without cross-row interference.
+- Intra-row and cross-row operations (`focus_row`, `move_window_to_row`) route through `Workspace` methods while preserving focused-state consistency.
+- `move_window_across_rows = true` automatically steps across row boundaries when vertical focus reaches column top or bottom.
+

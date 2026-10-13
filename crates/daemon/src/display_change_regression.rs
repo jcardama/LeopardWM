@@ -405,6 +405,7 @@ fn fixture_placement(window_id: u64, visibility: Visibility) -> WindowPlacement 
         },
         visibility,
         column_index: 0,
+        row_index: 0,
     }
 }
 

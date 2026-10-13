@@ -1430,16 +1430,19 @@ impl AppState {
             self.last_emitted_layout_sig = Some(sig);
             let monitor = self.focused_monitor;
             let workspace_index = self.active_workspace_idx(monitor);
-            let focused_column = self
+            let (focused_column, focused_row) = self
                 .workspaces
                 .get(&monitor)
                 .and_then(|list| list.get(workspace_index))
-                .map(|ws| ws.focused_column_index());
+                .map(|ws| (Some(ws.focused_column_index()), ws.focused_row()))
+                .unwrap_or((None, 0));
             self.broadcast_event(leopardwm_ipc::IpcEvent::LayoutChanged {
                 monitor: monitor as i64,
                 workspace_index: workspace_index as u8,
                 focused_column,
                 columns: self.focused_layout_columns(),
+                focused_row,
+                rows: self.focused_layout_rows(),
             });
         }
 
@@ -1545,6 +1548,7 @@ mod park_tests {
             rect,
             visibility,
             column_index: 0,
+            row_index: 0,
         }
     }
 

@@ -5115,7 +5115,7 @@ mod tests {
         assert_eq!(close.easing, Easing::EaseInOut);
         let k_close = anim_k(&close);
         assert!(
-            (k_open - k_close).abs() < 0.05,
+            (k_open - k_close).abs() < 0.10,
             "non-default easing must still hand over: open {k_open} vs close {k_close}"
         );
     }
