@@ -15,17 +15,17 @@ The tag push is the publication boundary; do not build or publish release assets
 The workflow:
 
 1. Checks out the tagged commit on `windows-latest` with the stable MSVC toolchain.
-2. Builds release binaries with `cargo build --release`.
-3. Verifies that `leopardwm.exe` and `leopardwm-watchdog.exe` use the Windows GUI subsystem.
-4. Runs `cargo test --all`.
-5. Packages `leopardwm.exe`, `leopardwm-cli.exe`, `lwm.exe`, `leopardwm-watchdog.exe`, `README.md`, and `LICENSE` into `LeopardWM-{version}-x86_64-windows.zip`.
-6. Builds the per-machine MSI with `cargo wix` and `wix/main.wxs`.
+2. Builds release binaries for both `x86_64-pc-windows-msvc` and `aarch64-pc-windows-msvc`.
+3. Verifies that `leopardwm.exe` and `leopardwm-watchdog.exe` use the Windows GUI subsystem on all built targets.
+4. Runs `cargo test --all --target x86_64-pc-windows-msvc` on the x64 GitHub-hosted runner.
+5. Packages `leopardwm.exe`, `leopardwm-cli.exe`, `lwm.exe`, `leopardwm-watchdog.exe`, `README.md`, and `LICENSE` into `LeopardWM-{version}-x86_64-windows.zip` and `LeopardWM-{version}-arm64-windows.zip`.
+6. Builds per-machine MSIs for both architectures with `cargo wix` and `wix/main.wxs`.
 7. Extracts the matching version section from `CHANGELOG.md` for release notes.
-8. Generates `checksums.txt` with SHA-256 hashes for the ZIP and MSI.
-9. Creates the GitHub Release with the ZIP, MSI, checksums, and release notes.
-10. Runs the dependent Winget job, which opens a public `microsoft/winget-pkgs` PR for `jcardama.LeopardWM` using the released MSI.
+8. Generates `checksums.txt` with SHA-256 hashes for all ZIPs and MSIs.
+9. Creates the GitHub Release with the ZIPs, MSIs, checksums, and release notes.
+10. Runs the dependent Winget job, which opens a public `microsoft/winget-pkgs` PR for `jcardama.LeopardWM` using the released MSIs.
 
-Binary path: `target/x86_64-pc-windows-msvc/release/` (the explicit target is configured in `.cargo/config.toml`).
+Binary paths: `target/x86_64-pc-windows-msvc/release/` and `target/aarch64-pc-windows-msvc/release/`.
 
 A successful GitHub Release does not imply the Winget job succeeded. Verify both jobs independently.
 

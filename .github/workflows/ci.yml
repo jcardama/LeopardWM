@@ -1,19 +1,64 @@
 name: CI
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
 jobs:
   check:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
-      - run: cargo build --release
+        with:
+          targets: x86_64-pc-windows-msvc, aarch64-pc-windows-msvc
+      - name: Build release binaries (x86_64)
+        run: cargo build --release --target x86_64-pc-windows-msvc
+      - name: Build release binaries (arm64)
+        run: cargo build --release --target aarch64-pc-windows-msvc
       - name: Verify GUI executable subsystems
         shell: pwsh
         run: ./.github/verify-gui-subsystems.ps1
       - name: Verify executable versions
         shell: pwsh
         run: ./.github/verify-executable-versions.ps1
-      - run: cargo test --all
+      - name: Upload x86_64 release binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: leopardwm-x86_64-windows
+          path: |
+            target/x86_64-pc-windows-msvc/release/leopardwm.exe
+            target/x86_64-pc-windows-msvc/release/leopardwm-cli.exe
+            target/x86_64-pc-windows-msvc/release/lwm.exe
+            target/x86_64-pc-windows-msvc/release/leopardwm-watchdog.exe
+      - name: Upload arm64 release binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: leopardwm-arm64-windows
+          path: |
+            target/aarch64-pc-windows-msvc/release/leopardwm.exe
+            target/aarch64-pc-windows-msvc/release/leopardwm-cli.exe
+            target/aarch64-pc-windows-msvc/release/lwm.exe
+            target/aarch64-pc-windows-msvc/release/leopardwm-watchdog.exe
+      # GitHub-hosted Windows runners are x64; run tests and clippy natively.
+      - name: Run tests
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          cargo test --all --target x86_64-pc-windows-msvc 2>&1 | Tee-Object -FilePath test-output.log
+          $exitCode = $LASTEXITCODE
+          if ($exitCode -ne 0) {
+            $snippet = (Get-Content test-output.log -Tail 150) -join [Environment]::NewLine
+            if ($env:GITHUB_STEP_SUMMARY) {
+              Set-Content -Path $env:GITHUB_STEP_SUMMARY -Value @('# Test Failures', '```', $snippet, '```')
+            }
+            exit $exitCode
+          }
+      - name: Upload test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-output-log
+          path: test-output.log
       - name: Verify offline desktop acceptance helpers
         run: python -m unittest discover -s tools -p test_desktop_acceptance.py -v
-      - run: cargo clippy --all -- -D warnings
+      - run: cargo clippy --all --target x86_64-pc-windows-msvc -- -D warnings
