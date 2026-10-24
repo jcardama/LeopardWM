@@ -110,12 +110,18 @@ impl AppState {
             self.active_workspace_idx(monitor_id).hash(&mut hasher);
             if let Some(ws_vec) = self.workspaces.get(&monitor_id) {
                 for workspace in ws_vec {
-                    for column in workspace.columns() {
-                        column.width().hash(&mut hasher);
-                        column.windows().len().hash(&mut hasher);
-                        for &wid in column.windows() {
-                            wid.hash(&mut hasher);
+                    workspace.rows().len().hash(&mut hasher);
+                    workspace.focused_row().hash(&mut hasher);
+                    for row in workspace.rows() {
+                        row.columns().len().hash(&mut hasher);
+                        for column in row.columns() {
+                            column.width().hash(&mut hasher);
+                            column.windows().len().hash(&mut hasher);
+                            for &wid in column.windows() {
+                                wid.hash(&mut hasher);
+                            }
                         }
+                        (row.scroll_offset().round() as i64).hash(&mut hasher);
                     }
                     for f in workspace.floating_windows() {
                         f.id.hash(&mut hasher);
@@ -124,7 +130,6 @@ impl AppState {
                         f.rect.width.hash(&mut hasher);
                         f.rect.height.hash(&mut hasher);
                     }
-                    (workspace.scroll_offset().round() as i64).hash(&mut hasher);
                 }
             }
         }
@@ -266,7 +271,7 @@ impl AppState {
                 scale,
                 vw,
             );
-            params.apply_to(&mut ws);
+            params.apply_to(&mut ws, ws_idx);
             ws.set_centering_mode(self.config.layout.centering_mode.into());
             ws.set_center_past_edges(self.config.layout.center_past_edges);
             ws.set_center_single_column(self.config.layout.center_single_column);
@@ -280,6 +285,7 @@ impl AppState {
 
             let entry = self.workspaces.entry(monitor_id).or_default();
             while entry.len() <= ws_idx {
+                let cur_idx = entry.len();
                 let mut empty = Workspace::with_directional_gaps(
                     params.gap,
                     params.outer_gap_left,
@@ -287,8 +293,7 @@ impl AppState {
                     params.outer_gap_top,
                     params.outer_gap_bottom,
                 );
-                empty.set_default_column_width(params.default_column_width);
-                empty.set_tab_strip_reserve_px(params.tab_strip_reserve_px);
+                params.apply_to(&mut empty, cur_idx);
                 empty.set_centering_mode(self.config.layout.centering_mode.into());
                 empty.set_center_past_edges(self.config.layout.center_past_edges);
                 empty.set_center_single_column(self.config.layout.center_single_column);
@@ -350,6 +355,7 @@ impl AppState {
                         vw,
                     );
                     while ws_vec.len() <= ws_idx {
+                        let cur_idx = ws_vec.len();
                         let mut ws = Workspace::with_directional_gaps(
                             params.gap,
                             params.outer_gap_left,
@@ -357,8 +363,7 @@ impl AppState {
                             params.outer_gap_top,
                             params.outer_gap_bottom,
                         );
-                        ws.set_default_column_width(params.default_column_width);
-                        ws.set_tab_strip_reserve_px(params.tab_strip_reserve_px);
+                        params.apply_to(&mut ws, cur_idx);
                         ws.set_centering_mode(self.config.layout.centering_mode.into());
                         ws.set_center_past_edges(self.config.layout.center_past_edges);
                         ws.set_center_single_column(self.config.layout.center_single_column);

@@ -1738,16 +1738,19 @@ async fn handle_ipc_subscribe(
     if events.contains(&EventKind::Layout) {
         let monitor = s.focused_monitor;
         let workspace_index = s.active_workspace_idx(monitor);
-        let focused_column = s
+        let (focused_column, focused_row) = s
             .workspaces
             .get(&monitor)
             .and_then(|list| list.get(workspace_index))
-            .map(|ws| ws.focused_column_index());
+            .map(|ws| (Some(ws.focused_column_index()), ws.focused_row()))
+            .unwrap_or((None, 0));
         snapshot.push(leopardwm_ipc::IpcEvent::LayoutChanged {
             monitor: monitor as i64,
             workspace_index: workspace_index as u8,
             focused_column,
             columns: s.focused_layout_columns(),
+            focused_row,
+            rows: s.focused_layout_rows(),
         });
     }
 

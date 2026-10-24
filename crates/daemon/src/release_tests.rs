@@ -213,6 +213,7 @@ fn release_invalidates_queued_frames_and_bounds_full_event_channel_wait() {
             rect: Rect::new(0, 0, 500, 500),
             visibility: leopardwm_core_layout::Visibility::Visible,
             column_index: 0,
+            row_index: 0,
         }]);
     let request = state.prepare_animation_frame(placements, &HashSet::new());
     worker.send_frame(request).unwrap();
