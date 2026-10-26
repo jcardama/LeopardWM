@@ -2,6 +2,12 @@
 
 All notable changes to LeopardWM will be documented in this file.
 
+## 0.3.5
+
+### Fixes
+
+- **Commands no longer act on the tiled window behind a focused floating window.** While a floating window has focus, closing, fullscreen, resizing, scratchpad stash and `lwm query focused` now act on the floating window, and column, focus and move commands leave the tiled windows alone. Contributed by @ShawnChiu. (#162, #163)
+
 ## 0.3.4
 
 ### Features
