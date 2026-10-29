@@ -17491,6 +17491,27 @@ fn test_scaled_border_width_scales_per_monitor() {
 }
 
 #[test]
+fn test_floating_border_scale_follows_monitor_under_window() {
+    let mut config = test_config();
+    config.appearance.active_border_width = 3;
+    let mut state = AppState::new_with_config(config, two_monitors_mixed_dpi());
+
+    // Window id 0 is never a real window, so the radius is DWM's 8px default.
+    // Monitor 1's workspace holds a floating window dropped on monitor 2.
+    state.workspaces.get_mut(&1).unwrap()[0]
+        .add_floating(0, Rect::new(2500, 200, 800, 600))
+        .unwrap();
+    // Monitor 2's workspace holds one whose center is on no monitor.
+    state.workspaces.get_mut(&2).unwrap()[0]
+        .add_floating(300, Rect::new(10_000, 0, 800, 600))
+        .unwrap();
+
+    assert_eq!(state.scaled_border_width(0), 6);
+    assert_eq!(state.corner_radius_for_window(0), 16.0);
+    assert_eq!(state.scaled_border_width(300), 6);
+}
+
+#[test]
 fn test_reconcile_monitors_new_monitor_gets_scaled_gaps() {
     let mut config = test_config();
     config.layout.gap = 8;
