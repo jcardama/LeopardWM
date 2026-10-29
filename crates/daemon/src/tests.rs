@@ -11725,6 +11725,35 @@ fn test_restore_state_preserves_scroll_offset() {
 }
 
 #[test]
+fn test_restore_state_clamps_saved_workspace_index() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    let mut saved_ws = Workspace::default();
+    saved_ws.insert_window(100, Some(800)).unwrap();
+    saved_ws.insert_window(200, Some(800)).unwrap();
+    saved_ws.insert_window(300, Some(800)).unwrap();
+    saved_ws.set_scroll_offset(500.0);
+    let snapshot = StateSnapshot {
+        saved_at: "test".to_string(),
+        workspaces: vec![WorkspaceSnapshot {
+            monitor_device_name: "DISPLAY1".to_string(),
+            workspace_index: 10_000,
+            workspace: saved_ws,
+        }],
+        focused_monitor_name: "DISPLAY1".to_string(),
+        active_workspace: HashMap::new(),
+        tab_title_overrides: HashMap::new(),
+    };
+
+    state.restore_workspace_structure_with(&snapshot, |_| true);
+    state.workspaces.get_mut(&1).unwrap()[8].set_scroll_offset(0.0);
+    state.restore_state(&snapshot);
+
+    let workspaces = &state.workspaces[&1];
+    assert!(workspaces.len() <= 9);
+    assert_eq!(workspaces[8].scroll_offset(), 500.0);
+}
+
+#[test]
 fn test_restore_state_on_empty_workspace_safe() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
 
