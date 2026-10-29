@@ -6,9 +6,10 @@ All notable changes to LeopardWM will be documented in this file.
 
 ### Fixes
 
-- **A dragged window no longer drops out of tiling when Windows briefly fails to report it at the drop.**
 - **Commands no longer act on the tiled window behind a focused floating window.** While a floating window has focus, closing, fullscreen, resizing, scratchpad stash and `lwm query focused` now act on the floating window, and column, focus and move commands leave the tiled windows alone. Contributed by @ShawnChiu. (#162, #163)
+- **Shortcuts sent by key remappers such as kanata now work while the remapped key is still held.** LeopardWM now tracks physical and injected key presses separately. (#164)
 - **Updating no longer replaces a shortcut you assigned to a key that a default shortcut also uses.** Default shortcuts are skipped when you already use the same key combination, even if it is spelled differently in your configuration.
+- **A dragged window no longer drops out of tiling when Windows briefly fails to report it at the drop.**
 - **A damaged or hand-edited workspace state file no longer makes startup create an excessive number of workspaces or hang.** Saved workspace indices are limited to the supported nine workspaces.
 
 ## 0.3.4
