@@ -53,17 +53,54 @@ fn is_transient_console_host(title: &str, class_name: &str, executable: &str) ->
             || (!executable.is_empty() && title_lower == executable.to_ascii_lowercase()))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn insert_admitted_tile(
     workspace: &mut Workspace,
     hwnd: u64,
     width: Option<i32>,
     rule_slot: Option<usize>,
+    rule_row: Option<usize>,
     in_column: bool,
     take_focus: bool,
     recreated_slot: Option<&crate::recreated_window_slot::RecreatedWindowSlot>,
 ) -> bool {
     if let Some(slot) = recreated_slot {
         slot.insert(workspace, hwnd, take_focus).is_ok()
+    } else if let Some(target_row) = rule_row {
+        if let Some(slot) = rule_slot {
+            if take_focus {
+                workspace
+                    .insert_window_at_row_column(hwnd, target_row, width, slot)
+                    .is_ok()
+            } else {
+                workspace
+                    .insert_window_at_row_column_no_focus(hwnd, target_row, width, slot)
+                    .is_ok()
+            }
+        } else if in_column {
+            let (col, win_slot) = workspace
+                .rows()
+                .get(target_row)
+                .map(|r| (r.focused_column(), r.focused_window_in_column() + 1))
+                .unwrap_or((0, 0));
+            let ok = workspace
+                .insert_window_in_row_column_at(hwnd, target_row, col, win_slot)
+                .is_ok();
+            if ok && take_focus {
+                if let Err(e) = workspace.focus_window(hwnd) {
+                    warn!("Focusing new in-column window {} failed: {:?}", hwnd, e);
+                }
+            }
+            ok
+        } else if take_focus {
+            workspace
+                .insert_window_in_row(hwnd, target_row, width)
+                .is_ok()
+        } else {
+            workspace
+                .insert_window_in_row_no_focus(hwnd, target_row, width)
+                .is_ok()
+        }
     } else if let Some(slot) = rule_slot {
         if take_focus {
             workspace.insert_window_at_column(hwnd, width, slot).is_ok()
@@ -487,9 +524,11 @@ impl AppState {
                 let in_visible_tabbed_column = self
                     .focused_workspace()
                     .map(|ws| {
-                        ws.columns()
-                            .iter()
-                            .any(|c| c.is_tabbed() && c.contains(hwnd))
+                        ws.rows().iter().any(|r| {
+                            r.columns()
+                                .iter()
+                                .any(|c| c.is_tabbed() && c.contains(hwnd))
+                        })
                     })
                     .unwrap_or(false);
                 if in_visible_tabbed_column {
@@ -932,6 +971,20 @@ impl AppState {
         outcome
     }
 
+    fn default_centered_floating_rect(&self, monitor_id: leopardwm_platform_win32::MonitorId) -> Rect {
+        let viewport = self
+            .monitors
+            .get(&monitor_id)
+            .map(|m| m.work_area)
+            .unwrap_or_else(|| Rect::new(0, 0, FALLBACK_VIEWPORT_WIDTH, FALLBACK_VIEWPORT_HEIGHT));
+        Rect::new(
+            viewport.x + (viewport.width - 800) / 2,
+            viewport.y + (viewport.height - 600) / 2,
+            800,
+            600,
+        )
+    }
+
     fn admit_window_after_replaced_departure(
         &mut self,
         hwnd: u64,
@@ -1017,18 +1070,25 @@ impl AppState {
             let action = matched
                 .map(|r| r.action)
                 .unwrap_or(config::WindowAction::Tile);
-            let (rule_workspace, rule_maximized, rule_column_width, rule_slot, rule_sticky) =
-                matched
-                    .map(|r| {
-                        (
-                            r.open_on_workspace,
-                            r.open_maximized,
-                            r.column_width,
-                            r.open_in_column,
-                            r.sticky,
-                        )
-                    })
-                    .unwrap_or((None, false, None, None, false));
+            let (
+                rule_workspace,
+                rule_maximized,
+                rule_column_width,
+                rule_slot,
+                rule_row,
+                rule_sticky,
+            ) = matched
+                .map(|r| {
+                    (
+                        r.open_on_workspace,
+                        r.open_maximized,
+                        r.column_width,
+                        r.open_in_column,
+                        r.row,
+                        r.sticky,
+                    )
+                })
+                .unwrap_or((None, false, None, None, None, false));
 
             if action == config::WindowAction::Ignore {
                 debug!(
@@ -1070,6 +1130,7 @@ impl AppState {
                     recreated_slot.is_none() && preferred_monitor.is_some(),
                 )
             });
+            let default_float_rect = self.default_centered_floating_rect(monitor_id);
 
             let viewport_width = self.viewport_width_for(monitor_id);
 
@@ -1126,37 +1187,22 @@ impl AppState {
             {
                 let added = match action {
                     config::WindowAction::Float => {
-                        let rect = floating_rect.unwrap_or_else(|| {
-                            let viewport = self
-                                .monitors
-                                .get(&monitor_id)
-                                .map(|m| m.work_area)
-                                .unwrap_or_else(|| {
-                                    Rect::new(
-                                        0,
-                                        0,
-                                        FALLBACK_VIEWPORT_WIDTH,
-                                        FALLBACK_VIEWPORT_HEIGHT,
-                                    )
-                                });
-                            Rect::new(
-                                viewport.x + (viewport.width - 800) / 2,
-                                viewport.y + (viewport.height - 600) / 2,
-                                800,
-                                600,
-                            )
-                        });
+                        let rect = floating_rect.unwrap_or(default_float_rect);
                         workspace.add_floating(hwnd, rect).is_ok()
                     }
                     config::WindowAction::Tile => {
                         let in_column = self.config.behavior.new_window_placement
                             == config::NewWindowPlacement::InColumn
-                            && workspace.column_count() > 0;
+                            && rule_row.map_or_else(
+                                || workspace.column_count() > 0,
+                                |r| workspace.column_count_for_row(r) > 0,
+                            );
                         let ok = insert_admitted_tile(
                             workspace,
                             hwnd,
                             rule_width_px,
                             rule_slot,
+                            rule_row,
                             in_column,
                             take_workspace_focus,
                             recreated_slot.as_ref(),
@@ -1222,7 +1268,9 @@ impl AppState {
                     }
                     if opens_in_background {
                         #[cfg(not(test))]
-                        let _ = leopardwm_platform_win32::move_window_offscreen(hwnd);
+                        if !self.paused {
+                            let _ = leopardwm_platform_win32::move_window_offscreen(hwnd);
+                        }
                         self.sync_inactive_workspace_taskbar_button(hwnd);
                     }
                     if let Some(snapshot) = snapshot {
@@ -1524,9 +1572,12 @@ impl AppState {
                 .and_then(|v| v.get_mut(ws_idx))
             {
                 if is_hidden_event {
-                    hidden_width = workspace
-                        .find_window_location(hwnd)
-                        .and_then(|(col, _)| workspace.columns().get(col).map(|c| c.width()));
+                    hidden_width =
+                        workspace
+                            .find_window_location_rc(hwnd)
+                            .and_then(|(row, col, _)| {
+                                workspace.column_for_row(row, col).map(|c| c.width())
+                            });
                 }
                 let was_floating = workspace.remove_floating(hwnd);
 
@@ -1850,7 +1901,9 @@ impl AppState {
             for wid in transition.exit_rects.keys() {
                 if !self.is_application_fullscreen(*wid) {
                     #[cfg(not(test))]
-                    let _ = leopardwm_platform_win32::move_window_offscreen(*wid);
+                    if !self.paused {
+                        let _ = leopardwm_platform_win32::move_window_offscreen(*wid);
+                    }
                 }
             }
         }
@@ -1934,7 +1987,9 @@ impl AppState {
         for placement in &old_placements {
             if !animating || placement.visibility != leopardwm_core_layout::Visibility::Visible {
                 #[cfg(not(test))]
-                let _ = leopardwm_platform_win32::move_window_offscreen(placement.window_id);
+                if !self.paused {
+                    let _ = leopardwm_platform_win32::move_window_offscreen(placement.window_id);
+                }
             }
         }
         if animating {
@@ -2369,9 +2424,9 @@ impl AppState {
                                 let same_col = self.workspaces.get(&mon_a)
                                     .and_then(|v| v.get(ws_a))
                                     .is_some_and(|ws| {
-                                        let loc_a = ws.find_window_location(prev_hwnd);
-                                        let loc_b = ws.find_window_location(hwnd);
-                                        matches!((loc_a, loc_b), (Some((ca, _)), Some((cb, _))) if ca == cb)
+                                        let loc_a = ws.find_window_location_rc(prev_hwnd);
+                                        let loc_b = ws.find_window_location_rc(hwnd);
+                                        matches!((loc_a, loc_b), (Some((ra, ca, _)), Some((rb, cb, _))) if ra == rb && ca == cb)
                                     });
                                 if same_col {
                                     let consumed =
@@ -2736,16 +2791,18 @@ impl AppState {
             self.previous_focused_hwnd = None;
         }
 
-        let col_loc = workspace.find_window_location(hwnd);
-        let col_info = col_loc.map(|(ci, _)| {
-            let col = &workspace.columns()[ci];
-            let visible = col
-                .windows()
-                .iter()
-                .filter(|w| !workspace.is_minimized(**w))
-                .count();
-            (ci, col.len(), visible)
-        });
+        let col_info = workspace
+            .find_window_location_rc(hwnd)
+            .and_then(|(r, ci, _)| {
+                workspace.columns_for_row(r).get(ci).map(|col| {
+                    let visible = col
+                        .windows()
+                        .iter()
+                        .filter(|w| !workspace.is_minimized(**w))
+                        .count();
+                    (ci, col.len(), visible)
+                })
+            });
         info!(
             "Window {} minimized (col={:?}, minimized_total={})",
             hwnd,
@@ -3059,45 +3116,66 @@ impl AppState {
             return;
         }
 
-        let (is_tiled, source_monitor, source_ws_idx, source_window_slot, col_idx) =
-            if let Some((monitor_id, ws_idx)) = self.find_window_workspace(hwnd) {
-                let is_floating = self
-                    .workspaces
+        let (
+            is_tiled,
+            source_monitor,
+            source_ws_idx,
+            source_row,
+            source_window_slot,
+            col_idx,
+            source_column_width,
+        ) = if let Some((monitor_id, ws_idx)) = self.find_window_workspace(hwnd) {
+            let is_floating = self
+                .workspaces
+                .get(&monitor_id)
+                .and_then(|v| v.get(ws_idx))
+                .is_none_or(|ws| ws.is_floating(hwnd));
+            let (source_row, source_window_slot, col_idx, source_column_width) = if !is_floating {
+                self.workspaces
                     .get(&monitor_id)
                     .and_then(|v| v.get(ws_idx))
-                    .is_none_or(|ws| ws.is_floating(hwnd));
-                let (source_window_slot, col_idx) = if !is_floating {
-                    self.workspaces
-                        .get(&monitor_id)
-                        .and_then(|v| v.get(ws_idx))
-                        .and_then(|ws| ws.find_window_location(hwnd))
-                        .map(|(col, slot)| (slot, col))
-                        .unwrap_or((0, 0))
-                } else {
-                    (0, 0)
-                };
-                (
-                    !is_floating,
-                    monitor_id,
-                    ws_idx,
-                    source_window_slot,
-                    col_idx,
-                )
+                    .and_then(|ws| {
+                        ws.find_window_location_rc(hwnd).map(|(row, col, slot)| {
+                            let width = ws
+                                .rows()
+                                .get(row)
+                                .and_then(|r| r.column(col))
+                                .map(|c| c.width());
+                            (row, slot, col, width)
+                        })
+                    })
+                    .unwrap_or((0, 0, 0, None))
             } else {
-                (
-                    false,
-                    self.focused_monitor,
-                    self.active_workspace_idx(self.focused_monitor),
-                    0,
-                    0,
-                )
+                (0, 0, 0, None)
             };
+            (
+                !is_floating,
+                monitor_id,
+                ws_idx,
+                source_row,
+                source_window_slot,
+                col_idx,
+                source_column_width,
+            )
+        } else {
+            (
+                false,
+                self.focused_monitor,
+                self.active_workspace_idx(self.focused_monitor),
+                0,
+                0,
+                0,
+                None,
+            )
+        };
         self.drag_state = Some(DragState {
             hwnd,
             is_tiled,
             source_monitor,
             source_workspace_idx: source_ws_idx,
+            source_row,
             source_window_slot,
+            current_row_index: source_row,
             current_column_index: col_idx,
             last_drop_target: None,
             last_hint_update: None,
@@ -3105,6 +3183,7 @@ impl AppState {
             preview_mode: crate::state::DragPreviewMode::None,
             target_column_peers: Vec::new(),
             source_column_peers: Vec::new(),
+            source_column_width,
         });
         // Disable DWM-managed position interpolation on the
         // dragged window so its final SetWindowPos on drop
@@ -3210,10 +3289,32 @@ impl AppState {
                     let _ = ws.remove_window(crate::state::DRAG_PLACEHOLDER_HWND);
                 }
             }
-            if target_monitor == drag.source_monitor {
+            let target_viewport = self.layout_viewport(target_monitor);
+            let target_ws_idx = self.active_workspace_idx(target_monitor);
+            let target_row = self
+                .workspaces
+                .get(&target_monitor)
+                .and_then(|v| v.get(target_ws_idx))
+                .map(|ws| {
+                    let cursor_y = leopardwm_platform_win32::get_cursor_pos()
+                        .map(|(_, y)| y)
+                        .unwrap_or(win_info.rect.y + win_info.rect.height / 2);
+                    crate::drag::target_row_for_cursor(ws, target_viewport, cursor_y)
+                })
+                .unwrap_or(0);
+
+            // Shift+drop: column reorder on same row (already live-reordered),
+            // or cross-row / cross-monitor column move.
+            if target_monitor == drag.source_monitor && target_row == drag.source_row {
                 self.snap_back_tiled(drag.source_monitor, drag.source_workspace_idx);
             } else {
-                self.execute_cross_monitor_drag(hwnd, &drag, target_monitor, &win_info.rect);
+                self.execute_cross_monitor_drag(
+                    hwnd,
+                    &drag,
+                    target_monitor,
+                    target_row,
+                    &win_info.rect,
+                );
             }
         } else {
             self.finalize_drag_merge(hwnd, &drag, target_monitor, &win_info.rect);
@@ -3332,7 +3433,9 @@ impl AppState {
             }
             ApplicationFullscreenExitRoute::InactivePark => {
                 #[cfg(not(test))]
-                let _ = leopardwm_platform_win32::move_window_offscreen(hwnd);
+                if !self.paused {
+                    let _ = leopardwm_platform_win32::move_window_offscreen(hwnd);
+                }
                 self.sync_inactive_workspace_taskbar_button(hwnd);
             }
             ApplicationFullscreenExitRoute::ActiveTiledApply => {
@@ -4247,22 +4350,27 @@ impl AppState {
             .get_mut(&monitor_id)
             .and_then(|v| v.get_mut(ws_idx))
         {
-            if let Some((col_idx, win_idx)) = ws.find_window_location(hwnd) {
-                ws.snap_column_width_to_preset(
+            if let Some((row_idx, col_idx, win_idx)) = ws.find_window_location_rc(hwnd) {
+                ws.snap_column_width_to_preset_in_row(
+                    row_idx,
                     col_idx,
                     visible_rect.width,
                     &width_presets,
                     viewport_width,
                 );
 
-                let col_len = ws.columns().get(col_idx).map(|c| c.len()).unwrap_or(0);
+                let col_len = ws
+                    .column_for_row(row_idx, col_idx)
+                    .map(|c| c.len())
+                    .unwrap_or(0);
                 if col_len > 1 {
                     let viewport_height = self
                         .monitors
                         .get(&monitor_id)
                         .map(|m| m.work_area.height)
                         .unwrap_or(crate::state::FALLBACK_WORK_AREA_HEIGHT);
-                    ws.snap_window_height_to_preset(
+                    ws.snap_window_height_to_preset_in_row(
+                        row_idx,
                         col_idx,
                         win_idx,
                         visible_rect.height,
@@ -4276,7 +4384,9 @@ impl AppState {
                 info!(
                     "Resize snap: window {} → width preset, new column width = {}",
                     hwnd,
-                    ws.columns().get(col_idx).map(|c| c.width()).unwrap_or(0)
+                    ws.column_for_row(row_idx, col_idx)
+                        .map(|c| c.width())
+                        .unwrap_or(0)
                 );
             }
         }
@@ -4443,5 +4553,33 @@ mod edit_config_match_tests {
         ));
         assert!(!title_names_config_file("Inbox - Mail", "config.toml"));
         assert!(!title_names_config_file("config.toml", ""));
+    }
+
+    #[test]
+    fn insert_admitted_tile_with_rule_row_respects_in_column() {
+        let mut ws = super::Workspace::new();
+        ws.set_row_layout(&[0.5, 0.5]);
+        assert!(super::insert_admitted_tile(
+            &mut ws,
+            100,
+            Some(800),
+            None,
+            Some(1),
+            false,
+            true,
+            None,
+        ));
+        assert!(super::insert_admitted_tile(
+            &mut ws,
+            101,
+            Some(800),
+            None,
+            Some(1),
+            true,
+            true,
+            None,
+        ));
+        assert_eq!(ws.column_count_for_row(1), 1);
+        assert_eq!(ws.column_for_row(1, 0).unwrap().windows(), &[100, 101]);
     }
 }

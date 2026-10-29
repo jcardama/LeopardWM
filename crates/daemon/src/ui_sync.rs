@@ -409,7 +409,7 @@ impl AppState {
             active_idx: usize,
             scale: f64,
         }
-        let mut desired: std::collections::HashMap<(isize, usize, usize), StripShow> =
+        let mut desired: std::collections::HashMap<(isize, usize, usize, usize), StripShow> =
             std::collections::HashMap::new();
 
         let monitor_ids: Vec<isize> = self.workspaces.keys().copied().collect();
@@ -429,76 +429,77 @@ impl AppState {
                 .get(&monitor)
                 .map(|m| m.scale_factor)
                 .unwrap_or(1.0);
-            for col_idx in 0..ws.column_count() {
-                let Some(col) = ws.column(col_idx) else {
-                    continue;
-                };
-                if !col.is_tabbed() {
-                    continue;
+            for (row_idx, row) in ws.rows().iter().enumerate() {
+                for (col_idx, col) in row.columns().iter().enumerate() {
+                    if !col.is_tabbed() {
+                        continue;
+                    }
+                    let Some(visible_tab) = col.effective_visible_tab(|w| ws.is_minimized(w))
+                    else {
+                        continue;
+                    };
+                    let Some(visible_hwnd) = col.get(visible_tab) else {
+                        continue;
+                    };
+                    if self.is_application_fullscreen(visible_hwnd) {
+                        continue;
+                    }
+                    let Some(content_rect) = self.compute_window_layout_rect(visible_hwnd) else {
+                        continue;
+                    };
+                    if self.is_physically_parked(visible_hwnd) {
+                        continue;
+                    }
+                    let content_rect = self
+                        .expected_physical_rect(visible_hwnd)
+                        .unwrap_or(content_rect);
+                    let strip_height =
+                        (self.config.appearance.tab_strip_height as f64 * scale).round() as i32;
+                    let bottom_gap = (self.config.layout.gap.max(0) as f64 * scale).round() as i32;
+                    let strip_rect = crate::physical_placement::tab_strip_rect(
+                        content_rect,
+                        strip_height,
+                        bottom_gap,
+                    );
+                    let Some(rect) = self.project_decoration_rect(visible_hwnd, strip_rect) else {
+                        continue;
+                    };
+                    let stored_active = col.active_tab_idx().unwrap_or(visible_tab);
+                    let active_idx =
+                        if col.get(stored_active).is_some_and(|w| !ws.is_minimized(w)) {
+                            stored_active
+                        } else {
+                            visible_tab
+                        };
+                    let tabs: Vec<TabLabel> = col
+                        .windows()
+                        .iter()
+                        .filter(|&&w| w != crate::state::DRAG_PLACEHOLDER_HWND)
+                        .map(|&w| TabLabel {
+                            title: self
+                                .tab_title_overrides
+                                .get(&w)
+                                .cloned()
+                                .or_else(|| self.lookup_window_info(w).map(|info| info.title))
+                                .unwrap_or_default(),
+                            icon: tab_icon(
+                                &mut icon_cache,
+                                w,
+                                refresh_icons,
+                                leopardwm_platform_win32::get_window_icon,
+                            ),
+                        })
+                        .collect();
+                    desired.insert(
+                        (monitor, ws_idx, row_idx, col_idx),
+                        StripShow {
+                            rect,
+                            tabs,
+                            active_idx,
+                            scale,
+                        },
+                    );
                 }
-                let Some(visible_tab) = col.effective_visible_tab(|w| ws.is_minimized(w)) else {
-                    continue;
-                };
-                let Some(visible_hwnd) = col.get(visible_tab) else {
-                    continue;
-                };
-                if self.is_application_fullscreen(visible_hwnd) {
-                    continue;
-                }
-                let Some(content_rect) = self.compute_window_layout_rect(visible_hwnd) else {
-                    continue;
-                };
-                if self.is_physically_parked(visible_hwnd) {
-                    continue;
-                }
-                let content_rect = self
-                    .expected_physical_rect(visible_hwnd)
-                    .unwrap_or(content_rect);
-                let strip_height =
-                    (self.config.appearance.tab_strip_height as f64 * scale).round() as i32;
-                let bottom_gap = (self.config.layout.gap.max(0) as f64 * scale).round() as i32;
-                let strip_rect = crate::physical_placement::tab_strip_rect(
-                    content_rect,
-                    strip_height,
-                    bottom_gap,
-                );
-                let Some(rect) = self.project_decoration_rect(visible_hwnd, strip_rect) else {
-                    continue;
-                };
-                let stored_active = col.active_tab_idx().unwrap_or(visible_tab);
-                let active_idx = if col.get(stored_active).is_some_and(|w| !ws.is_minimized(w)) {
-                    stored_active
-                } else {
-                    visible_tab
-                };
-                let tabs: Vec<TabLabel> = col
-                    .windows()
-                    .iter()
-                    .filter(|&&w| w != crate::state::DRAG_PLACEHOLDER_HWND)
-                    .map(|&w| TabLabel {
-                        title: self
-                            .tab_title_overrides
-                            .get(&w)
-                            .cloned()
-                            .or_else(|| self.lookup_window_info(w).map(|info| info.title))
-                            .unwrap_or_default(),
-                        icon: tab_icon(
-                            &mut icon_cache,
-                            w,
-                            refresh_icons,
-                            leopardwm_platform_win32::get_window_icon,
-                        ),
-                    })
-                    .collect();
-                desired.insert(
-                    (monitor, ws_idx, col_idx),
-                    StripShow {
-                        rect,
-                        tabs,
-                        active_idx,
-                        scale,
-                    },
-                );
             }
         }
 
@@ -509,7 +510,7 @@ impl AppState {
             .retain(|key, _| desired.contains_key(key));
 
         for (key, show) in desired {
-            let (monitor, ws_idx, col_idx) = key;
+            let (monitor, ws_idx, row_idx, col_idx) = key;
             if !self.tab_strip_overlays.contains_key(&key) {
                 let Some(tx) = self.tab_strip_action_tx.clone() else {
                     continue;
@@ -534,6 +535,7 @@ impl AppState {
                 colors,
                 monitor,
                 ws_idx,
+                row_idx,
                 col_idx,
                 show.scale,
                 close_action,

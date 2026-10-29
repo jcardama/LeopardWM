@@ -99,8 +99,9 @@ impl AppState {
                     .get(&mon)
                     .and_then(|v| v.get(ws_idx))
                     .and_then(|ws| {
-                        ws.find_window_location(wid)
-                            .and_then(|(col, _)| ws.columns().get(col).map(|c| c.width()))
+                        ws.find_window_location_rc(wid).and_then(|(row, col, _)| {
+                            ws.column_for_row(row, col).map(|c| c.width())
+                        })
                     });
                 let removed = self
                     .workspaces

@@ -384,11 +384,20 @@ impl AppState {
                         && p.column_index != usize::MAX // floats handled below
                 })
                 .map(|p| {
+                    let row_scroll = ws.scroll_offset_for_row(p.row_index).round() as i32;
+                    let rect = Rect::new(
+                        p.rect.x - row_scroll + scroll,
+                        p.rect.y,
+                        p.rect.width,
+                        p.rect.height,
+                    );
                     let tab_count = ws
-                        .column(p.column_index)
+                        .rows()
+                        .get(p.row_index)
+                        .and_then(|r| r.column(p.column_index))
                         .filter(|c| c.is_tabbed() && c.len() > 1)
                         .map(leopardwm_core_layout::Column::len);
-                    (p.window_id, p.rect, tab_count)
+                    (p.window_id, rect, tab_count)
                 })
                 .collect();
             for f in ws.floating_windows() {
@@ -643,7 +652,7 @@ mod tests {
     use leopardwm_platform_win32::MonitorInfo;
 
     fn test_state() -> AppState {
-        AppState::new_with_config(
+        let mut state = AppState::new_with_config(
             Config::default(),
             vec![MonitorInfo {
                 id: 1,
@@ -653,7 +662,14 @@ mod tests {
                 device_name: "DISPLAY1".to_string(),
                 scale_factor: 1.0,
             }],
-        )
+        );
+        state.reduce_motion = false;
+        for ws_vec in state.workspaces.values_mut() {
+            for ws in ws_vec.iter_mut() {
+                ws.set_reduce_motion(false);
+            }
+        }
+        state
     }
 
     fn add_windows(state: &mut AppState, ws_idx: usize, wids: &[u64]) {
@@ -2108,5 +2124,37 @@ mod tests {
         };
         assert!(!card(101).live, "ghost-handled window stays placeholder");
         assert!(card(102).live, "other windows stay live");
+    }
+
+    #[test]
+    fn test_multi_row_overview_uses_per_row_scroll_offset() {
+        let mut state = test_state();
+        {
+            let ws = &mut state.workspaces.get_mut(&1).unwrap()[0];
+            ws.set_row_layout(&[0.5, 0.5]);
+            ws.insert_window_in_row(101, 0, Some(800)).unwrap();
+            ws.insert_window_in_row(201, 1, Some(800)).unwrap();
+            ws.insert_window_in_row(202, 1, Some(800)).unwrap();
+            ws.set_scroll_offset_for_row(0, 0.0);
+            ws.set_scroll_offset_for_row(1, 500.0);
+        }
+
+        let (_, model) = state.build_overview_model().expect("model");
+        let card_101 = model.rows[0]
+            .cards
+            .iter()
+            .find(|c| c.window_id == 101)
+            .unwrap();
+        let card_201 = model.rows[0]
+            .cards
+            .iter()
+            .find(|c| c.window_id == 201)
+            .unwrap();
+        // Both windows are at column 0 in their respective rows, but row 1 is
+        // scrolled by 500px, so card 201's on-screen from_rect.x is 500px left of card 101's.
+        assert_eq!(
+            card_201.from_rect.unwrap().x,
+            card_101.from_rect.unwrap().x - 500
+        );
     }
 }

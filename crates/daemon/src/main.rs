@@ -1075,7 +1075,7 @@ fn init_workspace_state(state: &mut AppState) {
         .workspaces
         .values()
         .flat_map(|ws_vec| ws_vec.iter())
-        .map(|w| w.column_count())
+        .map(|w| w.rows().iter().map(|r| r.column_count()).sum::<usize>())
         .sum();
     info!(
         "Workspaces initialized across {} monitors: {} total columns, {} total windows",
@@ -1106,7 +1106,7 @@ fn init_workspace_state(state: &mut AppState) {
             if restored_slots.contains(&(monitor_id, ws_idx)) {
                 continue;
             }
-            if workspace.column_count() > 0 {
+            if !workspace.is_empty() {
                 let width = monitor_widths
                     .get(&monitor_id)
                     .copied()
@@ -1148,7 +1148,9 @@ fn init_workspace_state(state: &mut AppState) {
             if restored_slots.contains(&(monitor_id, ws_idx)) {
                 continue;
             }
-            workspace.set_scroll_offset(0.0);
+            for r in 0..workspace.row_count() {
+                workspace.set_scroll_offset_for_row(r, 0.0);
+            }
         }
     }
 }
@@ -1178,6 +1180,7 @@ async fn spawn_tab_forwarders(
                         .blocking_send(DaemonEvent::TabAction {
                             monitor: action_event.monitor,
                             workspace_idx: action_event.workspace_idx,
+                            row_idx: action_event.row_idx,
                             column_idx: action_event.column_idx,
                             tab_idx: action_event.tab_idx,
                             action: action_event.action,
@@ -1211,6 +1214,7 @@ async fn spawn_tab_forwarders(
                         .blocking_send(DaemonEvent::TabRenameSubmitted {
                             monitor: result.monitor,
                             workspace_idx: result.workspace_idx,
+                            row_idx: result.row_idx,
                             column_idx: result.column_idx,
                             tab_idx: result.tab_idx,
                             target_hwnd: result.target_hwnd,
@@ -1738,16 +1742,19 @@ async fn handle_ipc_subscribe(
     if events.contains(&EventKind::Layout) {
         let monitor = s.focused_monitor;
         let workspace_index = s.active_workspace_idx(monitor);
-        let focused_column = s
+        let (focused_column, focused_row) = s
             .workspaces
             .get(&monitor)
             .and_then(|list| list.get(workspace_index))
-            .map(|ws| ws.focused_column_index());
+            .map(|ws| (Some(ws.focused_column_index()), ws.focused_row()))
+            .unwrap_or((None, 0));
         snapshot.push(leopardwm_ipc::IpcEvent::LayoutChanged {
             monitor: monitor as i64,
             workspace_index: workspace_index as u8,
             focused_column,
             columns: s.focused_layout_columns(),
+            focused_row,
+            rows: s.focused_layout_rows(),
         });
     }
 
@@ -2605,7 +2612,10 @@ async fn handle_tab_strip_icon_poll(state: &Arc<Mutex<AppState>>) {
         && !s.paused
         && s.focused_workspace().is_some_and(|ws| {
             !ws.is_fullscreen()
-                && (0..ws.column_count()).any(|i| ws.column(i).is_some_and(|c| c.is_tabbed()))
+                && ws
+                    .rows()
+                    .iter()
+                    .any(|r| r.columns().iter().any(|c| c.is_tabbed()))
         });
     if needs_refresh {
         s.update_tab_strip();
@@ -2676,6 +2686,7 @@ async fn handle_tab_action(
     state: &Arc<Mutex<AppState>>,
     monitor: isize,
     workspace_idx: usize,
+    row_idx: usize,
     column_idx: usize,
     tab_idx: usize,
     action: leopardwm_platform_win32::tab_strip::TabAction,
@@ -2684,6 +2695,7 @@ async fn handle_tab_action(
         state,
         monitor,
         workspace_idx,
+        row_idx,
         column_idx,
         tab_idx,
         action,
@@ -2692,10 +2704,12 @@ async fn handle_tab_action(
     .await;
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_tab_action_with_restore(
     state: &Arc<Mutex<AppState>>,
     monitor: isize,
     workspace_idx: usize,
+    row_idx: usize,
     column_idx: usize,
     tab_idx: usize,
     action: leopardwm_platform_win32::tab_strip::TabAction,
@@ -2709,6 +2723,7 @@ async fn handle_tab_action_with_restore(
                 .handle_tab_action_activation_with_restore(
                     monitor,
                     workspace_idx,
+                    row_idx,
                     column_idx,
                     tab_idx,
                     restore,
@@ -2723,7 +2738,7 @@ async fn handle_tab_action_with_restore(
                 .workspaces
                 .get(&monitor)
                 .and_then(|wss| wss.get(workspace_idx))
-                .and_then(|ws| ws.column(column_idx))
+                .and_then(|ws| ws.column_for_row(row_idx, column_idx))
                 .and_then(|col| col.get(tab_idx));
             drop(s);
             match target_hwnd {
@@ -2733,8 +2748,8 @@ async fn handle_tab_action_with_restore(
                     }
                 }
                 None => debug!(
-                    "TabAction::Close target missing (monitor={}, ws={}, col={}, tab={})",
-                    monitor, workspace_idx, column_idx, tab_idx
+                    "TabAction::Close target missing (monitor={}, ws={}, row={}, col={}, tab={})",
+                    monitor, workspace_idx, row_idx, column_idx, tab_idx
                 ),
             }
         }
@@ -2746,6 +2761,7 @@ async fn handle_tab_action_with_restore(
             s.pending_tab_focus = Some(crate::state::PendingTabFocus {
                 monitor,
                 workspace_idx,
+                row_idx,
                 column_idx,
                 tab_idx,
                 set_at: std::time::Instant::now(),
@@ -2753,13 +2769,15 @@ async fn handle_tab_action_with_restore(
             let proceed = match s.focused_workspace_mut() {
                 None => false,
                 Some(ws) => {
-                    if ws.set_focus(column_idx, 0).is_err() {
+                    if ws.set_focus_in_row(row_idx, column_idx, 0).is_err() {
                         false
-                    } else if let Err(e) = ws.set_active_tab(column_idx, tab_idx) {
-                        warn!("Untab set_active_tab failed: {}", e);
+                    } else if let Err(e) = ws.set_active_tab_in_row(row_idx, column_idx, tab_idx) {
+                        warn!("Untab set_active_tab_in_row failed: {}", e);
                         false
                     } else {
-                        let col_len = ws.column(column_idx).map_or(0, |c| c.windows().len());
+                        let col_len = ws
+                            .column_for_row(row_idx, column_idx)
+                            .map_or(0, |c| c.windows().len());
                         col_len > 1
                     }
                 }
@@ -2782,22 +2800,22 @@ async fn handle_tab_action_with_restore(
             {
                 debug!("Rename popup already active, ignoring duplicate request");
             } else {
-                let initial = s.tab_title_for(monitor, workspace_idx, column_idx, tab_idx);
-                let (tab_rect, colors) =
-                    match s
-                        .tab_strip_overlays
-                        .get(&(monitor, workspace_idx, column_idx))
-                    {
-                        Some(strip) => (strip.tab_screen_rect(tab_idx), strip.current_colors()),
-                        None => (None, None),
-                    };
+                let initial =
+                    s.tab_title_for(monitor, workspace_idx, row_idx, column_idx, tab_idx);
+                let (tab_rect, colors) = match s
+                    .tab_strip_overlays
+                    .get(&(monitor, workspace_idx, row_idx, column_idx))
+                {
+                    Some(strip) => (strip.tab_screen_rect(tab_idx), strip.current_colors()),
+                    None => (None, None),
+                };
                 // Capture the HWND before opening the popup: column closes, reorders,
                 // or untabs during the dialog must not retarget the title override.
                 let target_hwnd_opt = s
                     .workspaces
                     .get(&monitor)
                     .and_then(|wss| wss.get(workspace_idx))
-                    .and_then(|ws| ws.column(column_idx))
+                    .and_then(|ws| ws.column_for_row(row_idx, column_idx))
                     .and_then(|col| col.get(tab_idx));
                 let icon = target_hwnd_opt.and_then(leopardwm_platform_win32::get_window_icon);
                 let tx = s.rename_result_tx.as_ref().map(Arc::downgrade);
@@ -2825,6 +2843,7 @@ async fn handle_tab_action_with_restore(
                                     let _ = sender.send(crate::events::TabRenameResult {
                                         monitor,
                                         workspace_idx,
+                                        row_idx,
                                         column_idx,
                                         tab_idx,
                                         target_hwnd,
@@ -2882,7 +2901,7 @@ mod tab_action_tests {
         app.ensure_workspace_exists(1, 1);
         let state = Arc::new(Mutex::new(app));
 
-        handle_tab_action(&state, 1, 1, 0, 0, TabAction::Activate).await;
+        handle_tab_action(&state, 1, 1, 0, 0, 0, TabAction::Activate).await;
 
         let app = state.lock().await;
         assert_eq!(app.focused_monitor, 1);
@@ -2901,13 +2920,44 @@ mod tab_action_tests {
         workspace.toggle_focused_column_tabbed_mode();
         let state = Arc::new(Mutex::new(app));
 
-        handle_tab_action_with_restore(&state, 2, 0, 0, 1, TabAction::Activate, |_| Ok(())).await;
+        handle_tab_action_with_restore(&state, 2, 0, 0, 0, 1, TabAction::Activate, |_| Ok(()))
+            .await;
 
         let app = state.lock().await;
         assert_eq!(app.focused_monitor, 2);
         let workspace = &app.workspaces[&2][0];
         assert_eq!(workspace.column(0).unwrap().active_tab_idx(), Some(1));
         assert_eq!(workspace.focused_window(), Some(200));
+    }
+
+    #[tokio::test]
+    async fn tab_activation_in_second_row_switches_row_and_activates_tab() {
+        let mut app = AppState::new_with_config(Config::default(), vec![monitor(1, true)]);
+        {
+            let workspace = app.workspaces.get_mut(&1).unwrap().first_mut().unwrap();
+            workspace.set_row_layout(&[0.5, 0.5]);
+            workspace.insert_window_in_row(100, 0, None).unwrap();
+            workspace.insert_window_in_row(200, 1, None).unwrap();
+            workspace
+                .insert_window_in_row_column_at(201, 1, 0, 1)
+                .unwrap();
+            workspace.set_focus_in_row(1, 0, 0).unwrap();
+            workspace.toggle_focused_column_tabbed_mode();
+            workspace.set_focus_in_row(0, 0, 0).unwrap();
+        }
+        let state = Arc::new(Mutex::new(app));
+
+        handle_tab_action_with_restore(&state, 1, 0, 1, 0, 1, TabAction::Activate, |_| Ok(()))
+            .await;
+
+        let app = state.lock().await;
+        let workspace = &app.workspaces[&1][0];
+        assert_eq!(workspace.focused_row(), 1);
+        assert_eq!(
+            workspace.column_for_row(1, 0).unwrap().active_tab_idx(),
+            Some(1)
+        );
+        assert_eq!(workspace.focused_window(), Some(201));
     }
 
     #[tokio::test]
@@ -2928,13 +2978,14 @@ mod tab_action_tests {
         app.pending_tab_focus = Some(PendingTabFocus {
             monitor: 1,
             workspace_idx: 0,
+            row_idx: 0,
             column_idx: 0,
             tab_idx: 0,
             set_at: Instant::now(),
         });
         let state = Arc::new(Mutex::new(app));
 
-        handle_tab_action_with_restore(&state, 2, 0, 0, 1, TabAction::Activate, |_| {
+        handle_tab_action_with_restore(&state, 2, 0, 0, 0, 1, TabAction::Activate, |_| {
             Err(Win32Error::WindowNotFound(200))
         })
         .await;
@@ -2951,10 +3002,11 @@ mod tab_action_tests {
             (
                 pending.monitor,
                 pending.workspace_idx,
+                pending.row_idx,
                 pending.column_idx,
                 pending.tab_idx
             ),
-            (1, 0, 0, 0)
+            (1, 0, 0, 0, 0)
         );
         let workspace = &app.workspaces[&2][0];
         assert!(workspace.is_minimized(200));
@@ -2980,7 +3032,7 @@ mod tab_action_tests {
         app.previous_focused_hwnd = Some(FLOATING);
         let state = Arc::new(Mutex::new(app));
 
-        handle_tab_action(&state, 1, 0, 0, 1, TabAction::Untab).await;
+        handle_tab_action(&state, 1, 0, 0, 0, 1, TabAction::Untab).await;
 
         let app = state.lock().await;
         let workspace = app.focused_workspace().unwrap();
@@ -3005,7 +3057,7 @@ mod tab_action_tests {
         workspace.toggle_focused_column_tabbed_mode();
         let state = Arc::new(Mutex::new(app));
 
-        handle_tab_action(&state, 2, 0, 1, 0, TabAction::Activate).await;
+        handle_tab_action(&state, 2, 0, 0, 1, 0, TabAction::Activate).await;
 
         let app = state.lock().await;
         assert_eq!(app.focused_monitor, 1);
@@ -3104,10 +3156,12 @@ async fn handle_overview_event(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_tab_rename_submitted(
     state: &Arc<Mutex<AppState>>,
     monitor: isize,
     workspace_idx: usize,
+    row_idx: usize,
     column_idx: usize,
     tab_idx: usize,
     target_hwnd: u64,
@@ -3123,8 +3177,8 @@ async fn handle_tab_rename_submitted(
     let hwnd = target_hwnd;
     if !leopardwm_platform_win32::is_window_valid(hwnd) {
         debug!(
-            "TabRenameSubmitted: target window gone (monitor={}, ws={}, col={}, tab={}, hwnd={})",
-            monitor, workspace_idx, column_idx, tab_idx, hwnd
+            "TabRenameSubmitted: target window gone (monitor={}, ws={}, row={}, col={}, tab={}, hwnd={})",
+            monitor, workspace_idx, row_idx, column_idx, tab_idx, hwnd
         );
         return;
     }
@@ -3877,9 +3931,8 @@ async fn main() -> Result<()> {
     };
 
     loop {
-        let event = match event_rx.recv().await {
-            Some(e) => e,
-            None => break,
+        let Some(event) = event_rx.recv().await else {
+            break;
         };
 
         match event {
@@ -3915,31 +3968,35 @@ async fn main() -> Result<()> {
                     mgr.set_available_update(Some(tag));
                 }
             }
-            DaemonEvent::TabStripIconPoll => {
-                handle_tab_strip_icon_poll(&state).await;
-            }
-            DaemonEvent::PeriodicCheck => {
-                handle_periodic_check(&mut ctx).await;
-            }
-            DaemonEvent::PersistStateNow => {
-                handle_persist_state_now(&state).await;
-            }
+            DaemonEvent::TabStripIconPoll => handle_tab_strip_icon_poll(&state).await,
+            DaemonEvent::PeriodicCheck => handle_periodic_check(&mut ctx).await,
+            DaemonEvent::PersistStateNow => handle_persist_state_now(&state).await,
             DaemonEvent::Overview(overview_event) => {
-                handle_overview_event(&mut ctx, overview_event).await;
+                handle_overview_event(&mut ctx, overview_event).await
             }
             DaemonEvent::TabAction {
                 monitor,
                 workspace_idx,
+                row_idx,
                 column_idx,
                 tab_idx,
                 action,
             } => {
-                handle_tab_action(&state, monitor, workspace_idx, column_idx, tab_idx, action)
-                    .await;
+                handle_tab_action(
+                    &state,
+                    monitor,
+                    workspace_idx,
+                    row_idx,
+                    column_idx,
+                    tab_idx,
+                    action,
+                )
+                .await
             }
             DaemonEvent::TabRenameSubmitted {
                 monitor,
                 workspace_idx,
+                row_idx,
                 column_idx,
                 tab_idx,
                 target_hwnd,
@@ -3949,18 +4006,19 @@ async fn main() -> Result<()> {
                     &state,
                     monitor,
                     workspace_idx,
+                    row_idx,
                     column_idx,
                     tab_idx,
                     target_hwnd,
                     new_title,
                 )
-                .await;
+                .await
             }
             DaemonEvent::Settings(settings_event) => {
-                handle_settings_event(&mut ctx, settings_event).await;
+                handle_settings_event(&mut ctx, settings_event).await
             }
             DaemonEvent::AnimationFrameApplied(frame_result) => {
-                handle_animation_frame_applied(&mut ctx, frame_result).await;
+                handle_animation_frame_applied(&mut ctx, frame_result).await
             }
             DaemonEvent::CrossfadeTargetDropped { epoch, window_id } => {
                 let mut state = state.lock().await;
