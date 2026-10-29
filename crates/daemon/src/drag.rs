@@ -19,6 +19,43 @@ impl AppState {
         removed
     }
 
+    pub(crate) fn restore_drag_source(
+        &mut self,
+        hwnd: u64,
+        source_monitor: MonitorId,
+        source_ws_idx: usize,
+        cached_col: usize,
+        source_slot: usize,
+        peers: &[u64],
+    ) -> bool {
+        let Some(ws) = self
+            .workspaces
+            .get_mut(&source_monitor)
+            .and_then(|v| v.get_mut(source_ws_idx))
+        else {
+            return false;
+        };
+        // Source peers may have moved or disappeared since the column was cached.
+        let cached_col_intact = ws
+            .column(cached_col)
+            .is_some_and(|c| peers.iter().any(|&peer| c.contains(peer)));
+        let resolved_col = if cached_col_intact {
+            Some(cached_col)
+        } else {
+            peers
+                .iter()
+                .find_map(|&peer| ws.find_window_location(peer).map(|(col, _)| col))
+        };
+        match resolved_col {
+            Some(col) => {
+                let len = ws.column(col).map(|c| c.len()).unwrap_or(0);
+                ws.insert_window_in_column_at(hwnd, col, source_slot.min(len))
+                    .is_ok()
+            }
+            None => ws.insert_window(hwnd, None).is_ok(),
+        }
+    }
+
     fn reset_drag_preview_without_target(&mut self, hwnd: u64) {
         let mut snapshot = self.snapshot_layout();
         if self.clear_drag_placeholder() {
@@ -132,43 +169,24 @@ impl AppState {
                 if let Some((source_monitor, source_ws_idx, cached_col, source_slot, peers)) =
                     restore
                 {
-                    if let Some(ws) = self
-                        .workspaces
-                        .get_mut(&source_monitor)
-                        .and_then(|v| v.get_mut(source_ws_idx))
-                    {
-                        // A source peer Hidden/Destroyed while unmatched may
-                        // have shifted or removed columns since this slot was
-                        // cached. Re-resolve the source column by surviving
-                        // peer membership rather than trusting the cached
-                        // index verbatim; if no source peer survives, restore
-                        // as a new column instead of landing in an unrelated
-                        // one.
-                        let cached_col_intact = ws
-                            .column(cached_col)
-                            .is_some_and(|c| peers.iter().any(|&peer| c.contains(peer)));
-                        let resolved_col = if cached_col_intact {
-                            Some(cached_col)
-                        } else {
-                            peers
-                                .iter()
-                                .find_map(|&peer| ws.find_window_location(peer).map(|(col, _)| col))
-                        };
-                        let inserted = match resolved_col {
-                            Some(col) => {
-                                let len = ws.column(col).map(|c| c.len()).unwrap_or(0);
-                                ws.insert_window_in_column_at(hwnd, col, source_slot.min(len))
-                                    .is_ok()
-                            }
-                            None => ws.insert_window(hwnd, None).is_ok(),
-                        };
-                        if inserted {
-                            let new_col_idx = ws.find_window_location(hwnd).map(|(col, _)| col);
-                            if let Some(drag) = self.drag_state.as_mut() {
-                                drag.removed_from_source = false;
-                                if let Some(col) = new_col_idx {
-                                    drag.current_column_index = col;
-                                }
+                    if self.restore_drag_source(
+                        hwnd,
+                        source_monitor,
+                        source_ws_idx,
+                        cached_col,
+                        source_slot,
+                        &peers,
+                    ) {
+                        let new_col_idx = self
+                            .workspaces
+                            .get(&source_monitor)
+                            .and_then(|v| v.get(source_ws_idx))
+                            .and_then(|ws| ws.find_window_location(hwnd))
+                            .map(|(col, _)| col);
+                        if let Some(drag) = self.drag_state.as_mut() {
+                            drag.removed_from_source = false;
+                            if let Some(col) = new_col_idx {
+                                drag.current_column_index = col;
                             }
                         }
                     }

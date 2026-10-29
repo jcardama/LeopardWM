@@ -3183,17 +3183,18 @@ impl AppState {
         }
 
         let Some(win_info) = self.lookup_window_info(hwnd) else {
-            // Window vanished during drag — clean up placeholder.
-            // Do NOT reinsert the window — it no longer exists.
-            for ws_vec in self.workspaces.values_mut() {
-                for ws in ws_vec.iter_mut() {
-                    let _ = ws.remove_window(crate::state::DRAG_PLACEHOLDER_HWND);
-                }
+            self.clear_drag_placeholder();
+            if drag.removed_from_source && leopardwm_platform_win32::is_valid_window(hwnd) {
+                self.restore_drag_source(
+                    hwnd,
+                    drag.source_monitor,
+                    drag.source_workspace_idx,
+                    drag.current_column_index,
+                    drag.source_window_slot,
+                    &drag.source_column_peers,
+                );
             }
             self.snap_back_tiled(drag.source_monitor, drag.source_workspace_idx);
-            // No-op if hwnd is truly destroyed, but cheap and
-            // covers the edge case where lookup returns None
-            // transiently while the window still exists.
             leopardwm_platform_win32::set_dwm_transitions_disabled(hwnd, false);
             return;
         };
@@ -4443,5 +4444,125 @@ mod edit_config_match_tests {
         ));
         assert!(!title_names_config_file("Inbox - Mail", "config.toml"));
         assert!(!title_names_config_file("config.toml", ""));
+    }
+}
+
+#[cfg(test)]
+mod failed_drop_lookup_tests {
+    use super::*;
+    use crate::state::{DragPreviewMode, TestApplyPlacementsBehavior, DRAG_PLACEHOLDER_HWND};
+    use std::time::Duration;
+    use windows::core::w;
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DestroyWindow, WINDOW_EX_STYLE, WINDOW_STYLE,
+    };
+
+    struct TestWindow(HWND);
+
+    impl TestWindow {
+        fn new() -> Self {
+            Self(unsafe {
+                CreateWindowExW(
+                    WINDOW_EX_STYLE::default(),
+                    w!("STATIC"),
+                    w!(""),
+                    WINDOW_STYLE::default(),
+                    0,
+                    0,
+                    200,
+                    100,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .unwrap()
+            })
+        }
+
+        fn id(&self) -> u64 {
+            self.0 .0 as u64
+        }
+    }
+
+    impl Drop for TestWindow {
+        fn drop(&mut self) {
+            let _ = unsafe { DestroyWindow(self.0) };
+        }
+    }
+
+    fn state_after_preview(hwnd: u64, peers: [u64; 2], target: u64) -> AppState {
+        let monitor = MonitorInfo {
+            id: 1,
+            rect: Rect::new(0, 0, 1920, 1080),
+            work_area: Rect::new(0, 0, 1920, 1040),
+            is_primary: true,
+            device_name: "DISPLAY1".to_string(),
+            scale_factor: 1.0,
+        };
+        let mut state = AppState::new_with_config(config::Config::default(), vec![monitor]);
+        state.reduce_motion = true;
+        state.injected_apply_placements_behavior =
+            Some(TestApplyPlacementsBehavior::SleepAndSucceed(Duration::ZERO));
+        let ws = state.focused_workspace_mut().unwrap();
+        ws.insert_window(peers[0], Some(800)).unwrap();
+        ws.insert_window_in_column(peers[1], 0).unwrap();
+        ws.insert_window(target, Some(800)).unwrap();
+        ws.insert_window_in_column(DRAG_PLACEHOLDER_HWND, 1)
+            .unwrap();
+        state.drag_state = Some(DragState {
+            hwnd,
+            is_tiled: true,
+            source_monitor: 1,
+            source_workspace_idx: 0,
+            source_window_slot: 1,
+            current_column_index: 1,
+            last_drop_target: None,
+            last_hint_update: None,
+            removed_from_source: true,
+            preview_mode: DragPreviewMode::Body,
+            target_column_peers: vec![target],
+            source_column_peers: peers.to_vec(),
+        });
+        state
+    }
+
+    #[test]
+    fn failed_drop_lookup_restores_live_window_at_source_slot() {
+        let dragged = TestWindow::new();
+        let first = TestWindow::new();
+        let last = TestWindow::new();
+        let target = TestWindow::new();
+        let hwnd = dragged.id();
+        assert!(leopardwm_platform_win32::is_valid_window(hwnd));
+        assert!(!leopardwm_platform_win32::is_window_visible(hwnd));
+        let mut state = state_after_preview(hwnd, [first.id(), last.id()], target.id());
+        assert!(state.lookup_window_info(hwnd).is_none());
+
+        state.on_move_size_end(hwnd);
+
+        let ws = state.focused_workspace().unwrap();
+        assert_eq!(ws.columns()[0].windows(), &[first.id(), hwnd, last.id()]);
+        assert_eq!(ws.columns()[1].windows(), &[target.id()]);
+        assert!(!ws.contains_window(DRAG_PLACEHOLDER_HWND));
+    }
+
+    #[test]
+    fn failed_drop_lookup_does_not_restore_invalid_window() {
+        let first = TestWindow::new();
+        let last = TestWindow::new();
+        let target = TestWindow::new();
+        let mut state = state_after_preview(0, [first.id(), last.id()], target.id());
+        assert!(!leopardwm_platform_win32::is_valid_window(0));
+        assert!(state.lookup_window_info(0).is_none());
+
+        state.on_move_size_end(0);
+
+        let ws = state.focused_workspace().unwrap();
+        assert_eq!(ws.columns()[0].windows(), &[first.id(), last.id()]);
+        assert_eq!(ws.columns()[1].windows(), &[target.id()]);
+        assert!(!ws.contains_window(0));
+        assert!(!ws.contains_window(DRAG_PLACEHOLDER_HWND));
     }
 }
