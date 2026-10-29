@@ -4,6 +4,7 @@
 use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use leopardwm_core_layout::CenteringMode;
+use leopardwm_platform_win32::parse_hotkey_string;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -1480,15 +1481,21 @@ impl Config {
         Ok(config)
     }
 
-    /// Re-add default bindings for commands the user has neither bound nor
-    /// disabled. This surfaces new hotkeys to existing configs across updates
-    /// without overriding customizations — and without resurrecting a binding
-    /// the user intentionally cleared (those go in `hotkeys.disabled`).
+    /// Re-add defaults unless their command is bound or disabled, or their
+    /// chord is already bound by the user.
     fn merge_default_hotkeys(hotkeys: &mut HotkeyConfig) {
         let user_commands: HashSet<String> = hotkeys.bindings.values().cloned().collect();
+        let user_chords: HashSet<_> = hotkeys
+            .bindings
+            .keys()
+            .filter_map(|key| parse_hotkey_string(key))
+            .collect();
         let disabled: HashSet<&String> = hotkeys.disabled.iter().collect();
         for (key, cmd) in HotkeyConfig::default().bindings {
-            if !user_commands.contains(&cmd) && !disabled.contains(&cmd) {
+            if !user_commands.contains(&cmd)
+                && !disabled.contains(&cmd)
+                && !parse_hotkey_string(&key).is_some_and(|chord| user_chords.contains(&chord))
+            {
                 hotkeys.bindings.insert(key, cmd);
             }
         }
@@ -1865,6 +1872,40 @@ mod tests {
             user.bindings.get("Ctrl+Alt+Shift+J"),
             Some(&"move_window_down".to_string())
         );
+    }
+
+    #[test]
+    fn test_hotkey_merge_preserves_user_binding_on_default_key() {
+        let mut user = HotkeyConfig {
+            scroll_modifier: default_scroll_modifier(),
+            disabled: Vec::new(),
+            bindings: HashMap::from([("Ctrl+Alt+H".to_string(), "focus_right".to_string())]),
+        };
+
+        Config::merge_default_hotkeys(&mut user);
+
+        assert_eq!(
+            user.bindings.get("Ctrl+Alt+H").map(String::as_str),
+            Some("focus_right")
+        );
+        assert!(!user.bindings.values().any(|cmd| cmd == "focus_left"));
+    }
+
+    #[test]
+    fn test_hotkey_merge_preserves_user_binding_with_alternate_spelling() {
+        let mut user = HotkeyConfig {
+            scroll_modifier: default_scroll_modifier(),
+            disabled: Vec::new(),
+            bindings: HashMap::from([("alt+ctrl+h".to_string(), "focus_right".to_string())]),
+        };
+
+        Config::merge_default_hotkeys(&mut user);
+
+        assert_eq!(
+            user.bindings.get("alt+ctrl+h").map(String::as_str),
+            Some("focus_right")
+        );
+        assert!(!user.bindings.contains_key("Ctrl+Alt+H"));
     }
 
     #[test]
