@@ -75,9 +75,117 @@ impl FixtureDesktop {
 impl Drop for FixtureDesktop {
     fn drop(&mut self) {
         unsafe {
-            assert_ne!(SetThreadDesktop(self.original as *mut _), 0);
+            if SetThreadDesktop(self.original as *mut _) == 0 {
+                let error = windows::Win32::Foundation::GetLastError().0;
+                let mut classes = Vec::<String>::new();
+                unsafe extern "system" fn collect_class(
+                    hwnd: HWND,
+                    param: LPARAM,
+                ) -> windows::core::BOOL {
+                    let classes = &mut *(param.0 as *mut Vec<String>);
+                    let mut name = [0u16; 256];
+                    let len =
+                        windows::Win32::UI::WindowsAndMessaging::GetClassNameW(hwnd, &mut name);
+                    classes.push(String::from_utf16_lossy(&name[..len as usize]));
+                    windows::core::BOOL(1)
+                }
+                use windows::Win32::UI::WindowsAndMessaging::{
+                    FindWindowExW, GetWindowThreadProcessId, HWND_MESSAGE,
+                };
+                let thread = GetCurrentThreadId();
+                let _ = windows::Win32::UI::WindowsAndMessaging::EnumThreadWindows(
+                    thread,
+                    Some(collect_class),
+                    LPARAM(&mut classes as *mut _ as isize),
+                );
+                let mut message_classes = Vec::<String>::new();
+                let mut previous = None;
+                while let Ok(hwnd) = FindWindowExW(Some(HWND_MESSAGE), previous, None, None) {
+                    if GetWindowThreadProcessId(hwnd, None) == thread {
+                        let _ =
+                            collect_class(hwnd, LPARAM(&mut message_classes as *mut _ as isize));
+                    }
+                    previous = Some(hwnd);
+                }
+                panic!("could not leave fixture desktop: error {error}, top-level classes {classes:?}, message-only classes {message_classes:?}");
+            }
             assert_ne!(CloseDesktop(self.desktop as *mut _), 0);
         }
+    }
+}
+
+pub(crate) struct ConsoleWindow {
+    pub(crate) window_id: u64,
+    thread_id: u32,
+    join: Option<thread::JoinHandle<()>>,
+}
+
+impl ConsoleWindow {
+    pub(crate) fn spawn() -> Self {
+        use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            RegisterClassW, UnregisterClassW, WINDOW_EX_STYLE, WNDCLASSW, WS_VISIBLE,
+        };
+
+        let desktop = unsafe { GetThreadDesktop(GetCurrentThreadId()) } as usize;
+        let (ready, receiver) = mpsc::channel();
+        // Keep text-services windows off the thread that must leave the fixture desktop.
+        let join = thread::spawn(move || unsafe {
+            assert_ne!(SetThreadDesktop(desktop as *mut _), 0);
+            unsafe extern "system" fn console_proc(
+                hwnd: HWND,
+                message: u32,
+                wparam: WPARAM,
+                lparam: LPARAM,
+            ) -> LRESULT {
+                DefWindowProcW(hwnd, message, wparam, lparam)
+            }
+            let instance = GetModuleHandleW(None).unwrap();
+            let class = WNDCLASSW {
+                lpfnWndProc: Some(console_proc),
+                hInstance: instance.into(),
+                lpszClassName: w!("ConsoleWindowClass"),
+                ..Default::default()
+            };
+            assert_ne!(RegisterClassW(&class), 0);
+            let hwnd = CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("ConsoleWindowClass"),
+                w!("Command Prompt"),
+                WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+                0,
+                0,
+                640,
+                480,
+                None,
+                None,
+                Some(instance.into()),
+                None,
+            )
+            .unwrap();
+            ready
+                .send((hwnd.0 as usize as u64, GetCurrentThreadId()))
+                .unwrap();
+            let mut message = MSG::default();
+            while GetMessageW(&mut message, None, 0, 0).as_bool() {
+                DispatchMessageW(&message);
+            }
+            DestroyWindow(hwnd).unwrap();
+            UnregisterClassW(w!("ConsoleWindowClass"), Some(instance.into())).unwrap();
+        });
+        let (window_id, thread_id) = receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+        Self {
+            window_id,
+            thread_id,
+            join: Some(join),
+        }
+    }
+}
+
+impl Drop for ConsoleWindow {
+    fn drop(&mut self) {
+        unsafe { PostThreadMessageW(self.thread_id, WM_QUIT, WPARAM(0), LPARAM(0)).unwrap() };
+        self.join.take().unwrap().join().unwrap();
     }
 }
 

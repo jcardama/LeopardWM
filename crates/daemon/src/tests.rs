@@ -16035,68 +16035,18 @@ fn test_empty_workspace_switch_releases_hidden_console_foreground() {
 fn test_empty_workspace_switch_releases_only_transient_visible_console_foreground() {
     use windows::core::w;
     use windows::Win32::Foundation::HWND;
-    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-    use windows::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassW, SetWindowTextW,
-        UnregisterClassW, WINDOW_EX_STYLE, WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
-    };
-
-    struct ConsoleWindow(HWND);
-    impl Drop for ConsoleWindow {
-        fn drop(&mut self) {
-            unsafe {
-                DestroyWindow(self.0).unwrap();
-                UnregisterClassW(
-                    w!("ConsoleWindowClass"),
-                    Some(GetModuleHandleW(None).unwrap().into()),
-                )
-                .unwrap();
-            }
-        }
-    }
+    use windows::Win32::UI::WindowsAndMessaging::SetWindowTextW;
 
     let _desktop = display_change_regression::FixtureDesktop::enter();
-    let instance = unsafe { GetModuleHandleW(None).unwrap() };
-    unsafe extern "system" fn console_proc(
-        hwnd: HWND,
-        message: u32,
-        wparam: windows::Win32::Foundation::WPARAM,
-        lparam: windows::Win32::Foundation::LPARAM,
-    ) -> windows::Win32::Foundation::LRESULT {
-        unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
-    }
-    let class = WNDCLASSW {
-        lpfnWndProc: Some(console_proc),
-        hInstance: instance.into(),
-        lpszClassName: w!("ConsoleWindowClass"),
-        ..Default::default()
-    };
-    assert_ne!(unsafe { RegisterClassW(&class) }, 0);
-    let console = ConsoleWindow(unsafe {
-        CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            w!("ConsoleWindowClass"),
-            w!("Command Prompt"),
-            WS_OVERLAPPEDWINDOW | WS_VISIBLE,
-            0,
-            0,
-            640,
-            480,
-            None,
-            None,
-            Some(instance.into()),
-            None,
-        )
-        .unwrap()
-    });
-    let hwnd = console.0 .0 as u64;
+    let console = display_change_regression::ConsoleWindow::spawn();
+    let hwnd = console.window_id;
     assert!(leopardwm_platform_win32::is_window_visible(hwnd));
 
     for (title, release) in [
         (w!("Command Prompt"), false),
         (w!(r"C:\Program Files\LeopardWM\bin\lwm.exe"), true),
     ] {
-        unsafe { SetWindowTextW(console.0, title).unwrap() };
+        unsafe { SetWindowTextW(HWND(hwnd as *mut _), title).unwrap() };
         let mut state = AppState::new_with_config(test_config(), test_monitors());
         state
             .injected_window_info
