@@ -454,16 +454,17 @@ impl AppState {
     }
 
     pub(crate) fn handle_command(&mut self, cmd: IpcCommand) -> IpcResponse {
+        // Capture focus before dispatch refreshes previous_focused_hwnd: mouse
+        // follows focus (#43) must not warp when navigation leaves focus unchanged.
+        let focus_before = (self.config.behavior.mouse_follows_focus && is_focus_navigation(&cmd))
+            .then_some(self.previous_focused_hwnd);
         if let Some(resp) = self.apply_floating_policy(&cmd) {
+            self.warp_cursor_if_focus_moved(focus_before);
             return resp;
         }
         if let Some(resp) = self.apply_fullscreen_policy(&cmd) {
             return resp;
         }
-        // Capture focus before dispatch refreshes previous_focused_hwnd: mouse
-        // follows focus (#43) must not warp when navigation leaves focus unchanged.
-        let focus_before = (self.config.behavior.mouse_follows_focus && is_focus_navigation(&cmd))
-            .then_some(self.previous_focused_hwnd);
         let resp = match cmd {
             IpcCommand::FocusLeft => self.execute_workspace_command(false, true, |ws, vw| {
                 ws.focus_left();
@@ -747,14 +748,17 @@ impl AppState {
             }),
             IpcCommand::SetActiveTab { column, tab } => self.handle_set_active_tab(column, tab),
         };
-        if let Some(before) = focus_before {
-            if let Some(hwnd) = self.previous_focused_hwnd {
-                if Some(hwnd) != before {
-                    leopardwm_platform_win32::warp_cursor_to_window(hwnd);
-                }
+        self.warp_cursor_if_focus_moved(focus_before);
+        resp
+    }
+
+    // `before` is None when mouse_follows_focus does not apply to the command.
+    fn warp_cursor_if_focus_moved(&self, before: Option<Option<u64>>) {
+        if let (Some(before), Some(hwnd)) = (before, self.previous_focused_hwnd) {
+            if Some(hwnd) != before {
+                leopardwm_platform_win32::warp_cursor_to_window(hwnd);
             }
         }
-        resp
     }
 
     fn focus_monitor(
