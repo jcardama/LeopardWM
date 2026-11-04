@@ -10,4 +10,5 @@ pub mod workspace;
 pub use animation::*;
 pub use column::*;
 pub use types::*;
+pub use workspace::focus::FloatingFocus;
 pub use workspace::*;

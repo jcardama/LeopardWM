@@ -2178,6 +2178,172 @@ mod tests {
         assert!(matches!(result, Err(LayoutError::DuplicateWindow(1))));
     }
 
+    fn floating_workspace(rects: &[(WindowId, Rect)]) -> Workspace {
+        let mut ws = Workspace::new();
+        for &(id, rect) in rects {
+            ws.add_floating(id, rect).unwrap();
+        }
+        ws
+    }
+
+    #[test]
+    fn test_floating_focus_directions_pick_nearest_center_on_axis() {
+        // 1 sits in the middle; 2 is far right but level, 3 is nearer right but far below.
+        let ws = floating_workspace(&[
+            (1, Rect::new(500, 500, 200, 200)),
+            (2, Rect::new(1200, 500, 200, 200)),
+            (3, Rect::new(900, 1500, 200, 200)),
+            (4, Rect::new(100, 0, 200, 200)),
+            (5, Rect::new(450, 900, 300, 300)),
+        ]);
+
+        assert_eq!(ws.floating_focus_target(1, FloatingFocus::Right), Some(3));
+        assert_eq!(ws.floating_focus_target(1, FloatingFocus::Left), Some(4));
+        assert_eq!(ws.floating_focus_target(1, FloatingFocus::Up), Some(4));
+        assert_eq!(ws.floating_focus_target(1, FloatingFocus::Down), Some(5));
+        assert_eq!(ws.floating_focus_target(5, FloatingFocus::Down), Some(3));
+        assert_eq!(ws.floating_focus_target(3, FloatingFocus::Right), Some(2));
+    }
+
+    #[test]
+    fn test_floating_focus_direction_without_candidate_stays_put() {
+        // 2 shares 1's center on the x axis, so it is in neither horizontal direction.
+        let ws = floating_workspace(&[
+            (1, Rect::new(100, 100, 200, 200)),
+            (2, Rect::new(150, 600, 100, 100)),
+        ]);
+
+        assert_eq!(ws.floating_focus_target(1, FloatingFocus::Left), None);
+        assert_eq!(ws.floating_focus_target(1, FloatingFocus::Right), None);
+        assert_eq!(ws.floating_focus_target(1, FloatingFocus::Up), None);
+        assert_eq!(ws.floating_focus_target(1, FloatingFocus::Down), Some(2));
+    }
+
+    #[test]
+    fn test_floating_focus_direction_compares_odd_sizes_exactly() {
+        // Centers 200.5 and 200: integer halving would call them equal.
+        let ws = floating_workspace(&[
+            (1, Rect::new(100, 0, 201, 100)),
+            (2, Rect::new(100, 300, 200, 100)),
+        ]);
+
+        assert_eq!(ws.floating_focus_target(1, FloatingFocus::Left), Some(2));
+        assert_eq!(ws.floating_focus_target(2, FloatingFocus::Right), Some(1));
+    }
+
+    #[test]
+    fn test_floating_focus_ties_go_to_earlier_window() {
+        let ws = floating_workspace(&[
+            (1, Rect::new(500, 500, 100, 100)),
+            (2, Rect::new(800, 0, 100, 100)),
+            (3, Rect::new(800, 900, 100, 100)),
+            (4, Rect::new(200, 0, 100, 100)),
+            (5, Rect::new(200, 900, 100, 100)),
+        ]);
+
+        assert_eq!(ws.floating_focus_target(1, FloatingFocus::Right), Some(2));
+        assert_eq!(ws.floating_focus_target(1, FloatingFocus::Left), Some(4));
+        assert_eq!(ws.floating_focus_target(1, FloatingFocus::Up), Some(2));
+        assert_eq!(ws.floating_focus_target(1, FloatingFocus::Down), Some(3));
+        assert_eq!(
+            ws.floating_focus_target(1, FloatingFocus::Leftmost),
+            Some(4)
+        );
+        assert_eq!(
+            ws.floating_focus_target(1, FloatingFocus::Rightmost),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn test_floating_focus_leftmost_and_rightmost_use_left_edge() {
+        // 2 reaches furthest right but 3 has the rightmost left edge.
+        let ws = floating_workspace(&[
+            (1, Rect::new(400, 0, 100, 100)),
+            (2, Rect::new(500, 0, 900, 100)),
+            (3, Rect::new(600, 0, 100, 100)),
+            (4, Rect::new(0, 0, 1000, 100)),
+        ]);
+
+        assert_eq!(
+            ws.floating_focus_target(1, FloatingFocus::Leftmost),
+            Some(4)
+        );
+        assert_eq!(
+            ws.floating_focus_target(1, FloatingFocus::Rightmost),
+            Some(3)
+        );
+        assert_eq!(ws.floating_focus_target(4, FloatingFocus::Leftmost), None);
+        assert_eq!(ws.floating_focus_target(3, FloatingFocus::Rightmost), None);
+    }
+
+    #[test]
+    fn test_floating_focus_next_prev_cycle_by_corner() {
+        // Order by (x, y, list): 4, 2, 3, 5, 1.
+        let ws = floating_workspace(&[
+            (1, Rect::new(900, 0, 100, 100)),
+            (2, Rect::new(300, 0, 100, 100)),
+            (3, Rect::new(300, 500, 100, 100)),
+            (4, Rect::new(100, 800, 100, 100)),
+            (5, Rect::new(300, 500, 100, 100)),
+        ]);
+
+        let mut seen = vec![4];
+        for _ in 0..5 {
+            let from = *seen.last().unwrap();
+            seen.push(ws.floating_focus_target(from, FloatingFocus::Next).unwrap());
+        }
+        assert_eq!(seen, vec![4, 2, 3, 5, 1, 4]);
+
+        let mut seen = vec![4];
+        for _ in 0..5 {
+            let from = *seen.last().unwrap();
+            seen.push(ws.floating_focus_target(from, FloatingFocus::Prev).unwrap());
+        }
+        assert_eq!(seen, vec![4, 1, 5, 3, 2, 4]);
+    }
+
+    #[test]
+    fn test_floating_focus_single_window_stays_put() {
+        let ws = floating_workspace(&[(1, Rect::new(100, 100, 400, 300))]);
+
+        for to in [
+            FloatingFocus::Left,
+            FloatingFocus::Right,
+            FloatingFocus::Up,
+            FloatingFocus::Down,
+            FloatingFocus::Leftmost,
+            FloatingFocus::Rightmost,
+            FloatingFocus::Next,
+            FloatingFocus::Prev,
+        ] {
+            assert_eq!(ws.floating_focus_target(1, to), None, "{to:?}");
+        }
+    }
+
+    #[test]
+    fn test_floating_focus_skips_minimized_and_rejects_non_floating_source() {
+        let mut ws = floating_workspace(&[
+            (1, Rect::new(0, 0, 100, 100)),
+            (2, Rect::new(300, 0, 100, 100)),
+            (3, Rect::new(600, 0, 100, 100)),
+        ]);
+        ws.insert_window(10, Some(400)).unwrap();
+        assert!(ws.mark_minimized(2));
+
+        assert_eq!(ws.floating_focus_target(1, FloatingFocus::Right), Some(3));
+        assert_eq!(ws.floating_focus_target(1, FloatingFocus::Next), Some(3));
+        assert_eq!(ws.floating_focus_target(3, FloatingFocus::Prev), Some(1));
+        assert_eq!(
+            ws.floating_focus_target(1, FloatingFocus::Rightmost),
+            Some(3)
+        );
+        // Neither a minimized floating window, a tiled window, nor an unknown one has a target.
+        assert_eq!(ws.floating_focus_target(2, FloatingFocus::Right), None);
+        assert_eq!(ws.floating_focus_target(10, FloatingFocus::Right), None);
+        assert_eq!(ws.floating_focus_target(99, FloatingFocus::Next), None);
+    }
+
     #[test]
     fn test_fullscreen_toggle() {
         let mut ws = Workspace::new();
