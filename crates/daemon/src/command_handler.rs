@@ -423,8 +423,9 @@ impl AppState {
         }
     }
 
-    // Focus stays among the floating windows and the strip is left alone;
-    // with no floating window that way, focus stays put.
+    // Focus stays among the floating windows and the strip is left alone.
+    // With no floating window that way, focus stays put, except that up/down
+    // switch workspace when workspace_edge_wrap is on, as they do in the strip.
     fn focus_floating(&mut self, hwnd: u64, to: FloatingFocus) -> IpcResponse {
         let Some(ws) = self.focused_workspace() else {
             return IpcResponse::Ok;
@@ -437,8 +438,19 @@ impl AppState {
             info!("Floating focus {:?} -> {}", to, target);
             self.previous_focused_hwnd = Some(target);
             self.sync_foreground_window();
+            return IpcResponse::Ok;
         }
-        IpcResponse::Ok
+        let wrap = match to {
+            FloatingFocus::Up => Some(IpcCommand::WorkspacePrev),
+            FloatingFocus::Down => Some(IpcCommand::WorkspaceNext),
+            _ => None,
+        };
+        match wrap {
+            Some(cmd) if self.config.behavior.workspace_edge_wrap => {
+                self.handle_workspace_prev_next(cmd)
+            }
+            _ => IpcResponse::Ok,
+        }
     }
 
     pub(crate) fn handle_command(&mut self, cmd: IpcCommand) -> IpcResponse {
@@ -2518,6 +2530,55 @@ mod floating_policy_tests {
                 Some(expected),
                 "{cmd:?} from {from}"
             );
+        }
+    }
+
+    #[test]
+    fn floating_focus_up_down_wraps_workspace_without_a_candidate() {
+        for (from, cmd, target) in [
+            (RIGHT, IpcCommand::FocusUp, 8),
+            (LOWER_LEFT, IpcCommand::FocusDown, 1),
+        ] {
+            let mut state = three_floating_state();
+            state.config.behavior.workspace_edge_wrap = true;
+            state.previous_focused_hwnd = Some(from);
+            assert_eq!(state.handle_command(cmd.clone()), IpcResponse::Ok);
+            assert_eq!(state.active_workspace_idx(1), target, "{cmd:?}");
+            assert_eq!(state.floating_focus.get(&(1, 0)), Some(&from), "{cmd:?}");
+        }
+    }
+
+    #[test]
+    fn floating_focus_up_down_prefers_a_candidate_over_wrapping() {
+        let mut state = three_floating_state();
+        state.config.behavior.workspace_edge_wrap = true;
+        for (from, cmd, expected) in [
+            (FLOATING, IpcCommand::FocusUp, RIGHT),
+            (FLOATING, IpcCommand::FocusDown, LOWER_LEFT),
+        ] {
+            assert_eq!(
+                floating_focus_after(&mut state, from, cmd.clone()),
+                Some(expected),
+                "{cmd:?}"
+            );
+            assert_eq!(state.active_workspace_idx(1), 0, "{cmd:?}");
+        }
+    }
+
+    #[test]
+    fn floating_focus_up_down_stays_put_without_edge_wrap() {
+        let mut state = three_floating_state();
+        assert!(!state.config.behavior.workspace_edge_wrap);
+        for (from, cmd) in [
+            (RIGHT, IpcCommand::FocusUp),
+            (LOWER_LEFT, IpcCommand::FocusDown),
+        ] {
+            assert_eq!(
+                floating_focus_after(&mut state, from, cmd.clone()),
+                Some(from),
+                "{cmd:?}"
+            );
+            assert_eq!(state.active_workspace_idx(1), 0, "{cmd:?}");
         }
     }
 
