@@ -3184,16 +3184,7 @@ impl AppState {
 
         let Some(win_info) = self.lookup_window_info(hwnd) else {
             self.clear_drag_placeholder();
-            if drag.removed_from_source && leopardwm_platform_win32::is_valid_window(hwnd) {
-                self.restore_drag_source(
-                    hwnd,
-                    drag.source_monitor,
-                    drag.source_workspace_idx,
-                    drag.current_column_index,
-                    drag.source_window_slot,
-                    &drag.source_column_peers,
-                );
-            }
+            self.restore_removed_drag_source(&drag);
             self.snap_back_tiled(drag.source_monitor, drag.source_workspace_idx);
             leopardwm_platform_win32::set_dwm_transitions_disabled(hwnd, false);
             return;
@@ -3206,22 +3197,28 @@ impl AppState {
         let shift_held = is_shift_key_pressed();
 
         if shift_held {
-            for ws_vec in self.workspaces.values_mut() {
-                for ws in ws_vec.iter_mut() {
-                    let _ = ws.remove_window(crate::state::DRAG_PLACEHOLDER_HWND);
-                }
-            }
-            if target_monitor == drag.source_monitor {
-                self.snap_back_tiled(drag.source_monitor, drag.source_workspace_idx);
-            } else {
-                self.execute_cross_monitor_drag(hwnd, &drag, target_monitor, &win_info.rect);
-            }
+            self.finalize_shift_drag(&drag, target_monitor, &win_info.rect);
         } else {
             self.finalize_drag_merge(hwnd, &drag, target_monitor, &win_info.rect);
         }
         // Restore minimize/maximize transitions after placement; the temporary
         // DWM disable suppresses only the drop-to-layout slide.
         leopardwm_platform_win32::set_dwm_transitions_disabled(hwnd, false);
+    }
+
+    pub(crate) fn finalize_shift_drag(
+        &mut self,
+        drag: &DragState,
+        target_monitor: leopardwm_platform_win32::MonitorId,
+        rect: &Rect,
+    ) {
+        self.clear_drag_placeholder();
+        self.restore_removed_drag_source(drag);
+        if target_monitor == drag.source_monitor {
+            self.snap_back_tiled(drag.source_monitor, drag.source_workspace_idx);
+        } else {
+            self.execute_cross_monitor_drag(drag.hwnd, drag, target_monitor, rect);
+        }
     }
 
     pub(crate) fn application_fullscreen_geometry(
@@ -4545,6 +4542,85 @@ mod failed_drop_lookup_tests {
         let ws = state.focused_workspace().unwrap();
         assert_eq!(ws.columns()[0].windows(), &[first.id(), hwnd, last.id()]);
         assert_eq!(ws.columns()[1].windows(), &[target.id()]);
+        assert!(!ws.contains_window(DRAG_PLACEHOLDER_HWND));
+    }
+
+    #[test]
+    fn merge_drop_missing_monitor_restores_source_slot() {
+        let dragged = TestWindow::new();
+        let first = TestWindow::new();
+        let last = TestWindow::new();
+        let target = TestWindow::new();
+        let mut state = state_after_preview(dragged.id(), [first.id(), last.id()], target.id());
+        state.clear_drag_placeholder();
+        let drag = state.drag_state.take().unwrap();
+
+        state.finalize_drag_merge(dragged.id(), &drag, 2, &Rect::new(0, 0, 200, 100));
+
+        let ws = state.focused_workspace().unwrap();
+        assert_eq!(
+            ws.columns()[0].windows(),
+            &[first.id(), dragged.id(), last.id()]
+        );
+        assert_eq!(ws.columns()[1].windows(), &[target.id()]);
+    }
+
+    #[test]
+    fn shift_drop_same_monitor_restores_source_slot() {
+        let dragged = TestWindow::new();
+        let first = TestWindow::new();
+        let last = TestWindow::new();
+        let target = TestWindow::new();
+        let mut state = state_after_preview(dragged.id(), [first.id(), last.id()], target.id());
+        let drag = state.drag_state.take().unwrap();
+
+        state.finalize_shift_drag(&drag, 1, &Rect::new(0, 0, 200, 100));
+
+        let ws = state.focused_workspace().unwrap();
+        assert_eq!(
+            ws.columns()[0].windows(),
+            &[first.id(), dragged.id(), last.id()]
+        );
+        assert_eq!(ws.columns()[1].windows(), &[target.id()]);
+    }
+
+    #[test]
+    fn workspace_switch_during_drag_restores_source_slot() {
+        let dragged = TestWindow::new();
+        let first = TestWindow::new();
+        let last = TestWindow::new();
+        let target = TestWindow::new();
+        let mut state = state_after_preview(dragged.id(), [first.id(), last.id()], target.id());
+
+        state.handle_command(leopardwm_ipc::IpcCommand::SwitchWorkspace { index: 2 });
+
+        let ws = &state.workspaces[&1][0];
+        assert_eq!(ws.column_count(), 2);
+        assert_eq!(
+            ws.columns()[0].windows(),
+            &[first.id(), dragged.id(), last.id()]
+        );
+        assert_eq!(ws.columns()[1].windows(), &[target.id()]);
+        assert!(!ws.contains_window(DRAG_PLACEHOLDER_HWND));
+    }
+
+    #[test]
+    fn workspace_switch_during_drag_restores_as_column_when_source_gone() {
+        let dragged = TestWindow::new();
+        let first = TestWindow::new();
+        let last = TestWindow::new();
+        let target = TestWindow::new();
+        let mut state = state_after_preview(dragged.id(), [first.id(), last.id()], target.id());
+        let ws = state.focused_workspace_mut().unwrap();
+        ws.remove_window(first.id()).unwrap();
+        ws.remove_window(last.id()).unwrap();
+
+        state.handle_command(leopardwm_ipc::IpcCommand::SwitchWorkspace { index: 2 });
+
+        let ws = &state.workspaces[&1][0];
+        assert_eq!(ws.column_count(), 2);
+        assert_eq!(ws.columns()[0].windows(), &[target.id()]);
+        assert_eq!(ws.columns()[1].windows(), &[dragged.id()]);
         assert!(!ws.contains_window(DRAG_PLACEHOLDER_HWND));
     }
 

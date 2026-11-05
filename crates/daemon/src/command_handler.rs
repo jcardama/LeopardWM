@@ -1367,18 +1367,7 @@ impl AppState {
         }
 
         if let Some(drag) = self.drag_state.take() {
-            if drag.removed_from_source
-                && drag.is_tiled
-                && leopardwm_platform_win32::is_valid_window(drag.hwnd)
-            {
-                if let Some(ws) = self
-                    .workspaces
-                    .get_mut(&drag.source_monitor)
-                    .and_then(|v| v.get_mut(drag.source_workspace_idx))
-                {
-                    let _ = ws.insert_window(drag.hwnd, None);
-                }
-            }
+            self.restore_removed_drag_source(&drag);
             for ws_vec in self.workspaces.values_mut() {
                 for ws in ws_vec.iter_mut() {
                     let _ = ws.remove_window(crate::state::DRAG_PLACEHOLDER_HWND);

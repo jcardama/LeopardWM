@@ -56,6 +56,27 @@ impl AppState {
         }
     }
 
+    pub(crate) fn restore_removed_drag_source(&mut self, drag: &DragState) {
+        if drag.removed_from_source
+            && drag.is_tiled
+            && leopardwm_platform_win32::is_valid_window(drag.hwnd)
+        {
+            self.restore_drag_source(
+                drag.hwnd,
+                drag.source_monitor,
+                drag.source_workspace_idx,
+                drag.current_column_index,
+                drag.source_window_slot,
+                &drag.source_column_peers,
+            );
+        }
+    }
+
+    fn abandon_tiled_drop(&mut self, drag: &DragState) {
+        self.restore_removed_drag_source(drag);
+        self.snap_back_tiled(drag.source_monitor, drag.source_workspace_idx);
+    }
+
     fn reset_drag_preview_without_target(&mut self, hwnd: u64) {
         let mut snapshot = self.snapshot_layout();
         if self.clear_drag_placeholder() {
@@ -747,7 +768,7 @@ impl AppState {
         let source_monitor = drag.source_monitor;
 
         if !self.monitors.contains_key(&target_monitor) {
-            self.snap_back_tiled(source_monitor, drag.source_workspace_idx);
+            self.abandon_tiled_drop(drag);
             return;
         }
         let target_viewport = self.layout_viewport(target_monitor);
@@ -795,7 +816,7 @@ impl AppState {
                 .get(&target_monitor)
                 .and_then(|v| v.get(ws_idx))
             else {
-                self.snap_back_tiled(source_monitor, drag.source_workspace_idx);
+                self.abandon_tiled_drop(drag);
                 return;
             };
             let column_bounds = column_bounds_from_placements(workspace, target_viewport);
@@ -820,7 +841,7 @@ impl AppState {
                 let col_idx = match compute_target_column_index(&column_bounds, cursor_x) {
                     Some(idx) => idx,
                     None => {
-                        self.snap_back_tiled(source_monitor, drag.source_workspace_idx);
+                        self.abandon_tiled_drop(drag);
                         return;
                     }
                 };
@@ -864,7 +885,7 @@ impl AppState {
 
         if let Some((src_col, src_len)) = src_col_info {
             if target_col_idx == src_col && src_len == 1 {
-                self.snap_back_tiled(source_monitor, drag.source_workspace_idx);
+                self.abandon_tiled_drop(drag);
                 return;
             }
         }
@@ -876,7 +897,7 @@ impl AppState {
             .and_then(|v| v.get(tgt_check_idx))
             .is_none()
         {
-            self.snap_back_tiled(source_monitor, drag.source_workspace_idx);
+            self.abandon_tiled_drop(drag);
             return;
         }
 
@@ -890,7 +911,7 @@ impl AppState {
             {
                 if let Err(e) = workspace.remove_window(hwnd) {
                     warn!("Failed to remove window {} for merge: {}", hwnd, e);
-                    self.snap_back_tiled(source_monitor, drag.source_workspace_idx);
+                    self.abandon_tiled_drop(drag);
                     return;
                 }
             }
