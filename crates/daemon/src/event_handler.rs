@@ -1824,27 +1824,7 @@ impl AppState {
             monitor_id
         );
 
-        // A live preview may have removed the dragged window from its source.
-        // Restore membership only if the window survived, then remove placeholders.
-        if let Some(drag) = self.drag_state.take() {
-            if drag.removed_from_source
-                && drag.is_tiled
-                && leopardwm_platform_win32::is_valid_window(drag.hwnd)
-            {
-                if let Some(ws) = self
-                    .workspaces
-                    .get_mut(&drag.source_monitor)
-                    .and_then(|v| v.get_mut(drag.source_workspace_idx))
-                {
-                    let _ = ws.insert_window(drag.hwnd, None);
-                }
-            }
-            for ws_vec in self.workspaces.values_mut() {
-                for ws in ws_vec.iter_mut() {
-                    let _ = ws.remove_window(crate::state::DRAG_PLACEHOLDER_HWND);
-                }
-            }
-        }
+        self.cancel_drag_for_workspace_switch();
         self.pending_drag_hint = Some(crate::state::DragHintAction::Hide);
         if let Some(ref transition) = self.layout_transition {
             for wid in transition.exit_rects.keys() {
@@ -4601,6 +4581,57 @@ mod failed_drop_lookup_tests {
             &[first.id(), dragged.id(), last.id()]
         );
         assert_eq!(ws.columns()[1].windows(), &[target.id()]);
+        assert!(!ws.contains_window(DRAG_PLACEHOLDER_HWND));
+    }
+
+    #[test]
+    fn workspace_switch_removes_source_placeholder_before_restoring_slot() {
+        let dragged = TestWindow::new();
+        let first = TestWindow::new();
+        let last = TestWindow::new();
+        let target = TestWindow::new();
+        let mut state = state_after_preview(dragged.id(), [first.id(), last.id()], target.id());
+        state.clear_drag_placeholder();
+        state
+            .focused_workspace_mut()
+            .unwrap()
+            .insert_window_in_column_at(DRAG_PLACEHOLDER_HWND, 0, 0)
+            .unwrap();
+
+        state.handle_command(leopardwm_ipc::IpcCommand::SwitchWorkspace { index: 2 });
+
+        let ws = &state.workspaces[&1][0];
+        assert_eq!(
+            ws.columns()[0].windows(),
+            &[first.id(), dragged.id(), last.id()]
+        );
+        assert_eq!(ws.column_count(), 2);
+        assert!(!ws.contains_window(DRAG_PLACEHOLDER_HWND));
+    }
+
+    #[test]
+    fn focus_follow_workspace_switch_restores_dragged_source_slot() {
+        let dragged = TestWindow::new();
+        let first = TestWindow::new();
+        let last = TestWindow::new();
+        let target = TestWindow::new();
+        let mut state = state_after_preview(dragged.id(), [first.id(), last.id()], target.id());
+        state.clear_drag_placeholder();
+        state
+            .focused_workspace_mut()
+            .unwrap()
+            .insert_window_in_column_at(DRAG_PLACEHOLDER_HWND, 0, 0)
+            .unwrap();
+        state.ensure_workspace_exists(1, 1);
+
+        state.follow_workspace_without_stealing_focus(1, 1, None);
+
+        let ws = &state.workspaces[&1][0];
+        assert_eq!(
+            ws.columns()[0].windows(),
+            &[first.id(), dragged.id(), last.id()]
+        );
+        assert_eq!(ws.column_count(), 2);
         assert!(!ws.contains_window(DRAG_PLACEHOLDER_HWND));
     }
 

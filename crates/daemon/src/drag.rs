@@ -72,6 +72,13 @@ impl AppState {
         }
     }
 
+    pub(crate) fn cancel_drag_for_workspace_switch(&mut self) {
+        if let Some(drag) = self.drag_state.take() {
+            self.clear_drag_placeholder();
+            self.restore_removed_drag_source(&drag);
+        }
+    }
+
     fn abandon_tiled_drop(&mut self, drag: &DragState) {
         self.restore_removed_drag_source(drag);
         self.snap_back_tiled(drag.source_monitor, drag.source_workspace_idx);

@@ -1366,14 +1366,7 @@ impl AppState {
             }
         }
 
-        if let Some(drag) = self.drag_state.take() {
-            self.restore_removed_drag_source(&drag);
-            for ws_vec in self.workspaces.values_mut() {
-                for ws in ws_vec.iter_mut() {
-                    let _ = ws.remove_window(crate::state::DRAG_PLACEHOLDER_HWND);
-                }
-            }
-        }
+        self.cancel_drag_for_workspace_switch();
         self.pending_drag_hint = Some(crate::state::DragHintAction::Hide);
         // Move exit windows offscreen before clearing the transition,
         // so they don't get stranded at intermediate positions.
