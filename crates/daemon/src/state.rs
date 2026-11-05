@@ -475,6 +475,10 @@ pub(crate) struct AppState {
     #[cfg(test)]
     pub(crate) last_border_show_hwnd: AtomicU64,
     #[cfg(test)]
+    pub(crate) last_border_decision: std::sync::Mutex<Option<crate::ui_sync::BorderDecision>>,
+    #[cfg(test)]
+    pub(crate) injected_high_contrast: Option<bool>,
+    #[cfg(test)]
     pub(crate) resize_complete_count: AtomicUsize,
     #[cfg(test)]
     pub(crate) tab_strip_hide_count: AtomicUsize,
@@ -1058,6 +1062,10 @@ impl AppState {
             border_show_count: AtomicUsize::new(0),
             #[cfg(test)]
             last_border_show_hwnd: AtomicU64::new(0),
+            #[cfg(test)]
+            last_border_decision: std::sync::Mutex::new(None),
+            #[cfg(test)]
+            injected_high_contrast: None,
             #[cfg(test)]
             resize_complete_count: AtomicUsize::new(0),
             #[cfg(test)]

@@ -2123,6 +2123,10 @@ function addRuleRow(r) {
   var action = r.action || 'tile';
   var actionLabel = actionLabels[action] || action;
   var corner = r.corner_style || 'auto';
+  var border = r.border === false ? 'hide' : 'show';
+  var borderColorMode = r.border_color ? 'custom' : 'default';
+  var borderKeys = { show: 'settings.text.rule_border_show', hide: 'settings.text.rule_border_hide' };
+  var borderColorKeys = { default: 'settings.text.rule_border_color_default', custom: 'settings.text.rule_border_color_custom' };
   var cornerLabels = { auto: t('settings.text.auto'), square: t('settings.text.square'), rounded: t('settings.text.rounded'), small_rounded: t('settings.text.small_rounded') };
   var chevron = '<svg class="combobox-chevron" viewBox="0 0 12 12"><path d="M2.15 4.65a.5.5 0 01.7 0L6 7.79l3.15-3.14a.5.5 0 11.7.7l-3.5 3.5a.5.5 0 01-.7 0l-3.5-3.5a.5.5 0 010-.7z"/></svg>';
   var actionOpts = ['tile','float','ignore'].map(function(a) {
@@ -2171,6 +2175,13 @@ function addRuleRow(r) {
         '<div class="menu-item has-sub rule-corner" data-value="' + corner + '">' +
           '<span class="menu-label" data-i18n="settings.text.corners">' + escHtml(t('settings.text.corners')) + '</span><span class="menu-value">' + escHtml(cornerLabels[corner]) + '</span>' + menuArrow +
           '<div class="menu-sub">' + cornerRadios + '</div></div>' +
+        '<div class="menu-item has-sub rule-border" data-value="' + border + '">' +
+          '<span class="menu-label" data-i18n="settings.text.rule_border">' + escHtml(t('settings.text.rule_border')) + '</span><span class="menu-value">' + escHtml(t(borderKeys[border])) + '</span>' + menuArrow +
+          '<div class="menu-sub">' + ['show','hide'].map(function(v) { return '<div class="menu-radio' + (v === border ? ' selected' : '') + '" data-value="' + v + '" data-i18n="' + borderKeys[v] + '">' + escHtml(t(borderKeys[v])) + '</div>'; }).join('') + '</div></div>' +
+        '<div class="menu-item has-sub rule-border-color-mode" data-value="' + borderColorMode + '">' +
+          '<span class="menu-label" data-i18n="settings.text.rule_border_color">' + escHtml(t('settings.text.rule_border_color')) + '</span><span class="menu-value">' + escHtml(t(borderColorKeys[borderColorMode])) + '</span>' + menuArrow +
+          '<div class="menu-sub">' + ['default','custom'].map(function(v) { return '<div class="menu-radio' + (v === borderColorMode ? ' selected' : '') + '" data-value="' + v + '" data-i18n="' + borderColorKeys[v] + '">' + escHtml(t(borderColorKeys[v])) + '</div>'; }).join('') + '</div></div>' +
+        '<div class="menu-item input-row"><span class="menu-label" data-i18n="settings.text.rule_border_color_custom">' + escHtml(t('settings.text.rule_border_color_custom')) + '</span><input type="color" class="rule-border-color" value="' + escAttr(hexToInput(r.border_color || '4285F4')) + '"></div>' +
       '</div>' +
     '</div></td>' +
     '<td><button class="row-delete" onclick="this.closest(\'tr\').remove();autoSave(0)">' + deleteIcon + '</button></td>';
@@ -2180,6 +2191,17 @@ function addRuleRow(r) {
     el.addEventListener('input', function() {
       validateRuleColumnWidth(tr);
       autoSave(500);
+    });
+  });
+  tr.querySelectorAll('.rule-border-color').forEach(function(input) {
+    input.addEventListener('input', function() {
+      var mode = tr.querySelector('.rule-border-color-mode');
+      mode.dataset.value = 'custom';
+      mode.querySelector('.menu-value').textContent = t('settings.text.rule_border_color_custom');
+      mode.querySelectorAll('.menu-radio').forEach(function(option) {
+        option.classList.toggle('selected', option.dataset.value === 'custom');
+      });
+      autoSave(0);
     });
   });
   tr.querySelectorAll('.combobox').forEach(function(cb) { initCombobox(cb); });
@@ -2250,11 +2272,11 @@ function initRuleOptions(tr) {
       var rect = btn.getBoundingClientRect();
       pop.style.right = Math.max(8, window.innerWidth - rect.right) + 'px';
       pop.style.left = 'auto';
-      if (window.innerHeight - rect.bottom - 8 >= 310) {
-        pop.style.top = (rect.bottom + 4) + 'px'; pop.style.bottom = 'auto';
-      } else {
-        pop.style.bottom = (window.innerHeight - rect.top + 4) + 'px'; pop.style.top = 'auto';
-      }
+      pop.style.display = 'block';
+      var popHeight = pop.offsetHeight;
+      pop.style.display = '';
+      var top = Math.min(rect.bottom + 4, window.innerHeight - popHeight - 8);
+      pop.style.top = Math.max(8, top) + 'px'; pop.style.bottom = 'auto';
     } else {
       updateRuleSummary(tr);
     }
@@ -2452,7 +2474,7 @@ function readRules() {
        are then re-read from the inputs. */
     var r = Object.assign({}, tr._rule || {});
     delete r.match_class; delete r.match_title; delete r.match_executable;
-    delete r.corner_style; delete r.open_on_workspace; delete r.open_maximized;
+    delete r.corner_style; delete r.border; delete r.border_color; delete r.open_on_workspace; delete r.open_maximized;
     delete r.column_width; delete r.open_in_column; delete r.sticky;
     delete r.match_max_width; delete r.match_max_height;
     var cls = tr.querySelector('.rule-class').value.trim();
@@ -2466,6 +2488,11 @@ function readRules() {
     if (title) r.match_title = title;
     if (exe) r.match_executable = exe;
     if (corner !== 'auto') r.corner_style = corner;
+    var borderEl = tr.querySelector('.rule-border');
+    if (borderEl && borderEl.dataset.value === 'hide') r.border = false;
+    var borderColorMode = tr.querySelector('.rule-border-color-mode');
+    var borderColor = tr.querySelector('.rule-border-color');
+    if (borderColorMode && borderColorMode.dataset.value === 'custom' && borderColor) r.border_color = inputToHex(borderColor.value);
     var wsEl = tr.querySelector('.rule-workspace');
     var wsv = wsEl ? parseInt(wsEl.dataset.value, 10) : NaN;
     if (wsv >= 1 && wsv <= 9) r.open_on_workspace = wsv;

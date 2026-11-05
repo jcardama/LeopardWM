@@ -193,6 +193,12 @@ reduce_motion_on_battery = true
 match_class = "MozillaDialogClass"
 corner_style = "square"
 
+# Hide or recolor the border for a matching app (independent options).
+# [[window_rules]]
+# match_executable = "example.exe"
+# border = false
+# border_color = "4285F4"
+
 # [[window_rules]]
 # match_class = "Chrome_WidgetWin_1"
 # match_title = ".*DevTools.*"

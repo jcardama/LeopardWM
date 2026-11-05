@@ -2,6 +2,19 @@ use crate::state::*;
 use leopardwm_platform_win32::get_process_executable;
 use tracing::{debug, info};
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum BorderDecision {
+    Hidden,
+    Show { color_bgr: u32, corner_radius: f32 },
+}
+
+#[derive(Default)]
+struct FocusBorderRule {
+    border: Option<bool>,
+    color_bgr: Option<u32>,
+    corner_style: Option<crate::config::CornerStyle>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct DepartingFocusDecision {
     pub recover: bool,
@@ -60,8 +73,16 @@ fn tab_icon(
 impl AppState {
     /// Read high contrast live so toggling it overrides the configured border
     /// color immediately, without waiting for a config reload.
+    fn high_contrast_enabled(&self) -> bool {
+        #[cfg(test)]
+        if let Some(value) = self.injected_high_contrast {
+            return value;
+        }
+        leopardwm_platform_win32::is_high_contrast_enabled()
+    }
+
     pub(crate) fn border_color_bgr(&self) -> Option<u32> {
-        if leopardwm_platform_win32::is_high_contrast_enabled() {
+        if self.high_contrast_enabled() {
             return Some(leopardwm_platform_win32::get_system_highlight_color_bgr());
         }
         hex_rgb_to_bgr(&self.config.appearance.active_border_color)
@@ -139,27 +160,88 @@ impl AppState {
             self.last_border_show_hwnd
                 .store(hwnd, std::sync::atomic::Ordering::Relaxed);
         }
-        if let Some(ref frame) = self.border_frame {
-            if self.paused
-                || self.is_application_fullscreen(hwnd)
-                || self
-                    .focused_workspace()
-                    .is_some_and(|ws| ws.is_fullscreen())
-            {
-                frame.hide();
-                return;
+        let decision = if self.paused
+            || self.is_application_fullscreen(hwnd)
+            || self
+                .focused_workspace()
+                .is_some_and(|ws| ws.is_fullscreen())
+            || self.find_window_workspace(hwnd).is_none()
+            || !self.config.appearance.active_border
+        {
+            BorderDecision::Hidden
+        } else {
+            let rule = self.focus_border_rule(hwnd);
+            let color = if self.high_contrast_enabled() {
+                Some(leopardwm_platform_win32::get_system_highlight_color_bgr())
+            } else {
+                rule.color_bgr
+                    .or_else(|| hex_rgb_to_bgr(&self.config.appearance.active_border_color))
+            };
+            match (rule.border, color) {
+                (Some(false), _) | (_, None) => BorderDecision::Hidden,
+                (_, Some(color_bgr)) => BorderDecision::Show {
+                    color_bgr,
+                    corner_radius: self.corner_radius_for_window(hwnd, rule.corner_style),
+                },
             }
-            if self.find_window_workspace(hwnd).is_none() {
+        };
+        #[cfg(test)]
+        {
+            *self.last_border_decision.lock().unwrap() = Some(decision);
+        }
+        let Some(ref frame) = self.border_frame else {
+            return;
+        };
+        let BorderDecision::Show {
+            color_bgr: bgr,
+            corner_radius,
+        } = decision
+        else {
+            frame.hide();
+            return;
+        };
+        let border_width = self.scaled_border_width(hwnd);
+        if let Some(rect) = self.resize_preview_display_rect {
+            frame.show_at_rect(
+                rect,
+                border_width,
+                self.border_position(),
+                bgr,
+                corner_radius,
+                hwnd,
+            );
+            return;
+        }
+        if self.drag_state.as_ref().is_some_and(|drag| drag.is_tiled) {
+            if let Some(layout_rect) = self.compute_window_layout_rect(hwnd) {
+                frame.show_at_rect(
+                    layout_rect,
+                    border_width,
+                    self.border_position(),
+                    bgr,
+                    corner_radius,
+                    hwnd,
+                );
+            } else {
                 frame.hide();
-                return;
             }
-            let border_width = self.scaled_border_width(hwnd);
-            let corner_radius = self.corner_radius_for_window(hwnd);
-            if let Some(rect) = self.resize_preview_display_rect {
-                if self.config.appearance.active_border {
-                    if let Some(bgr) = self.border_color_bgr() {
-                        frame.show_at_rect(
-                            rect,
+            return;
+        }
+        // Tiled borders use layout slots because DWM bounds can lag placement.
+        let (monitor_id, ws_idx) = self.find_window_workspace(hwnd).unwrap();
+        let is_floating = self
+            .workspaces
+            .get(&monitor_id)
+            .and_then(|v| v.get(ws_idx))
+            .is_some_and(|ws| ws.is_floating(hwnd));
+        if !is_floating {
+            if let Some(layout_rect) = self.compute_window_layout_rect(hwnd) {
+                if !self.is_physically_parked(hwnd) {
+                    if let Some(overlay) =
+                        self.compute_tiled_border_overlay_rect(hwnd, layout_rect, border_width)
+                    {
+                        frame.show_final_overlay(
+                            overlay,
                             border_width,
                             self.border_position(),
                             bgr,
@@ -170,87 +252,16 @@ impl AppState {
                     }
                 }
             }
-            if let Some(ref drag) = self.drag_state {
-                if drag.is_tiled && self.config.appearance.active_border {
-                    if let Some(bgr) = self.border_color_bgr() {
-                        if let Some(layout_rect) = self.compute_window_layout_rect(hwnd) {
-                            frame.show_at_rect(
-                                layout_rect,
-                                border_width,
-                                self.border_position(),
-                                bgr,
-                                corner_radius,
-                                hwnd,
-                            );
-                            return;
-                        }
-                    }
-                    frame.hide();
-                    return;
-                }
-            }
-            // DWM bounds lag SetWindowPos by 1-2 frames after drag, resize, or scroll
-            // landing; tiled borders use interpolated layout slots to avoid drift.
-            // Floating windows have no layout slot: `frame.show(hwnd)` queries DWM
-            // extended frame bounds, falling back to GetWindowRect.
-            if self.config.appearance.active_border {
-                if let Some((monitor_id, ws_idx)) = self.find_window_workspace(hwnd) {
-                    let is_floating = self
-                        .workspaces
-                        .get(&monitor_id)
-                        .and_then(|v| v.get(ws_idx))
-                        .is_some_and(|ws| ws.is_floating(hwnd));
-                    if !is_floating {
-                        match self.compute_window_layout_rect(hwnd) {
-                            Some(layout_rect) => {
-                                if self.is_physically_parked(hwnd) {
-                                    frame.hide();
-                                    return;
-                                }
-                                if let Some(bgr) = self.border_color_bgr() {
-                                    if let Some(overlay) = self.compute_tiled_border_overlay_rect(
-                                        hwnd,
-                                        layout_rect,
-                                        border_width,
-                                    ) {
-                                        frame.show_final_overlay(
-                                            overlay,
-                                            border_width,
-                                            self.border_position(),
-                                            bgr,
-                                            corner_radius,
-                                            hwnd,
-                                        );
-                                    } else {
-                                        frame.hide();
-                                    }
-                                    return;
-                                }
-                            }
-                            None => {
-                                // With no tiled placement, DWM bounds may be stale; do not leave
-                                // a border floating at the window's former position.
-                                frame.hide();
-                                return;
-                            }
-                        }
-                    }
-                }
-            }
-            if self.config.appearance.active_border {
-                if let Some(bgr) = self.border_color_bgr() {
-                    frame.show(
-                        hwnd,
-                        border_width,
-                        self.border_position(),
-                        bgr,
-                        corner_radius,
-                    );
-                    return;
-                }
-            }
             frame.hide();
+            return;
         }
+        frame.show(
+            hwnd,
+            border_width,
+            self.border_position(),
+            bgr,
+            corner_radius,
+        );
     }
 
     pub(crate) fn compute_tiled_border_overlay_rect(
@@ -289,30 +300,39 @@ impl AppState {
         }
     }
 
-    pub(crate) fn corner_radius_for_window(&self, hwnd: u64) -> f32 {
-        self.unscaled_corner_radius(hwnd) * self.window_scale_factor(hwnd) as f32
-    }
-
-    fn unscaled_corner_radius(&self, hwnd: u64) -> f32 {
-        let info = leopardwm_platform_win32::get_window_info(hwnd);
-
-        if let Some(ref info) = info {
-            let any_corner_overrides = self.compiled_rules.iter().any(|r| r.corner_style.is_some());
-            if any_corner_overrides {
-                let exe = get_process_executable(info.process_id).unwrap_or_default();
-                for rule in &self.compiled_rules {
-                    if rule.matches(&info.class_name, &info.title, &exe, None) {
-                        if let Some(style) = rule.corner_style {
-                            return style.radius_px();
-                        }
-                    }
-                }
+    fn focus_border_rule(&self, hwnd: u64) -> FocusBorderRule {
+        let mut resolved = FocusBorderRule::default();
+        if !self
+            .compiled_rules
+            .iter()
+            .any(|r| r.corner_style.is_some() || r.border.is_some() || r.border_color_bgr.is_some())
+        {
+            return resolved;
+        }
+        let Some(info) = self.lookup_window_info(hwnd) else {
+            return resolved;
+        };
+        let exe = get_process_executable(info.process_id).unwrap_or_default();
+        for rule in &self.compiled_rules {
+            if rule.matches(&info.class_name, &info.title, &exe, None) {
+                resolved.border = resolved.border.or(rule.border);
+                resolved.color_bgr = resolved.color_bgr.or(rule.border_color_bgr);
+                resolved.corner_style = resolved.corner_style.or(rule.corner_style);
             }
         }
+        resolved
+    }
 
-        // DWM DEFAULT is not an explicit corner preference.
-        leopardwm_platform_win32::get_window_corner_radius(hwnd)
-            .unwrap_or(leopardwm_platform_win32::border::DEFAULT_CORNER_RADIUS)
+    pub(crate) fn corner_radius_for_window(
+        &self,
+        hwnd: u64,
+        style: Option<crate::config::CornerStyle>,
+    ) -> f32 {
+        let radius = style.map(|style| style.radius_px()).unwrap_or_else(|| {
+            leopardwm_platform_win32::get_window_corner_radius(hwnd)
+                .unwrap_or(leopardwm_platform_win32::border::DEFAULT_CORNER_RADIUS)
+        });
+        radius * self.window_scale_factor(hwnd) as f32
     }
 
     /// Interpolate the border with the windows, or it leads them by the full

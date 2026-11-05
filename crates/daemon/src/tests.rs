@@ -3051,7 +3051,11 @@ fn test_focus_border_corner_radius_scales_with_monitor_dpi() {
             .unwrap()
             .insert_window(0, None)
             .unwrap();
-        assert_eq!(state.corner_radius_for_window(0), radius, "scale {scale}");
+        assert_eq!(
+            state.corner_radius_for_window(0, None),
+            radius,
+            "scale {scale}"
+        );
         assert_eq!(state.scaled_border_width(0), width, "scale {scale}");
     }
 }
@@ -6057,6 +6061,8 @@ fn tile_open_on_workspace_rule(
         width: None,
         height: None,
         corner_style: None,
+        border: None,
+        border_color: None,
         open_on_workspace: Some(open_on_workspace),
         open_maximized: false,
         column_width: None,
@@ -8422,6 +8428,8 @@ fn test_window_rule_matching_class() {
             width: Some(800),
             height: Some(600),
             corner_style: None,
+            border: None,
+            border_color: None,
             open_on_workspace: None,
             open_maximized: false,
             column_width: None,
@@ -8448,6 +8456,8 @@ fn test_window_rule_matching_title() {
             width: None,
             height: None,
             corner_style: None,
+            border: None,
+            border_color: None,
             open_on_workspace: None,
             open_maximized: false,
             column_width: None,
@@ -8475,6 +8485,8 @@ fn test_window_rule_matching_executable() {
             width: None,
             height: None,
             corner_style: None,
+            border: None,
+            border_color: None,
             open_on_workspace: None,
             open_maximized: false,
             column_width: None,
@@ -8508,6 +8520,8 @@ fn test_floating_rect_uses_rule_dimensions() {
             width: Some(1024),
             height: Some(768),
             corner_style: None,
+            border: None,
+            border_color: None,
             open_on_workspace: None,
             open_maximized: false,
             column_width: None,
@@ -8537,6 +8551,8 @@ fn test_floating_rect_preserves_original_if_no_dimensions() {
             width: None,
             height: None,
             corner_style: None,
+            border: None,
+            border_color: None,
             open_on_workspace: None,
             open_maximized: false,
             column_width: None,
@@ -14144,6 +14160,94 @@ fn test_moved_or_resized_suppression_window_tracking() {
     );
 }
 
+#[test]
+fn focus_border_rule_decisions_and_precedence() {
+    use crate::config::WindowRule;
+    use crate::ui_sync::BorderDecision;
+
+    let mut config = test_config();
+    config.appearance.active_border = true;
+    config.appearance.active_border_color = "112233".into();
+    let mut state = AppState::new_with_config(config, test_monitors());
+    state.paused = false;
+    state.injected_high_contrast = Some(false);
+    state
+        .injected_window_info
+        .insert(0, make_test_window_info(0));
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .insert_window(0, None)
+        .unwrap();
+    let matching = |border, color: Option<&str>| WindowRule {
+        match_class: Some("^TestWindowClass$".into()),
+        border,
+        border_color: color.map(str::to_string),
+        ..Default::default()
+    };
+    let show_color = |state: &AppState| {
+        state.show_border(0);
+        *state.last_border_decision.lock().unwrap()
+    };
+    state.config.window_rules = vec![matching(Some(false), None)];
+    state.compiled_rules = state.config.compile_window_rules();
+    assert_eq!(show_color(&state), Some(BorderDecision::Hidden));
+    state.config.window_rules = vec![matching(None, Some("A1B2C3"))];
+    state.compiled_rules = state.config.compile_window_rules();
+    assert!(matches!(
+        show_color(&state),
+        Some(BorderDecision::Show {
+            color_bgr: 0xC3B2A1,
+            ..
+        })
+    ));
+    state.config.window_rules[0].match_class = Some("Other".into());
+    state.compiled_rules = state.config.compile_window_rules();
+    assert!(matches!(
+        show_color(&state),
+        Some(BorderDecision::Show {
+            color_bgr: 0x332211,
+            ..
+        })
+    ));
+    state.config.window_rules = vec![
+        matching(Some(true), Some("A1B2C3")),
+        matching(Some(false), Some("010203")),
+    ];
+    state.compiled_rules = state.config.compile_window_rules();
+    assert!(matches!(
+        show_color(&state),
+        Some(BorderDecision::Show {
+            color_bgr: 0xC3B2A1,
+            ..
+        })
+    ));
+    state.config.window_rules[0].corner_style = Some(crate::config::CornerStyle::Square);
+    state.compiled_rules = state.config.compile_window_rules();
+    assert!(matches!(
+        show_color(&state),
+        Some(BorderDecision::Show {
+            color_bgr: 0xC3B2A1,
+            corner_radius: 0.0
+        })
+    ));
+    state.config.window_rules[0].border_color = None;
+    state.compiled_rules = state.config.compile_window_rules();
+    assert!(matches!(
+        show_color(&state),
+        Some(BorderDecision::Show {
+            color_bgr: 0x030201,
+            corner_radius: 0.0
+        })
+    ));
+    state.injected_high_contrast = Some(true);
+    assert!(
+        matches!(show_color(&state), Some(BorderDecision::Show { color_bgr, .. }) if color_bgr == leopardwm_platform_win32::get_system_highlight_color_bgr())
+    );
+    state.config.appearance.active_border = false;
+    assert_eq!(show_color(&state), Some(BorderDecision::Hidden));
+}
+
 fn make_test_window_info(hwnd: u64) -> leopardwm_platform_win32::WindowInfo {
     leopardwm_platform_win32::WindowInfo {
         hwnd,
@@ -17576,7 +17680,7 @@ fn test_floating_border_scale_follows_monitor_under_window() {
             .unwrap();
 
         assert_eq!(state.scaled_border_width(0), 6, "{rect:?}");
-        assert_eq!(state.corner_radius_for_window(0), 16.0, "{rect:?}");
+        assert_eq!(state.corner_radius_for_window(0, None), 16.0, "{rect:?}");
     }
 }
 
@@ -19415,6 +19519,8 @@ fn test_matched_rule_returns_first_match_extras() {
         width: None,
         height: None,
         corner_style: None,
+        border: None,
+        border_color: None,
         open_on_workspace: Some(3),
         open_maximized: false,
         column_width: Some(0.25),

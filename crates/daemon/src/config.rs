@@ -651,6 +651,11 @@ pub struct WindowRule {
     #[serde(default)]
     pub corner_style: Option<CornerStyle>,
 
+    #[serde(default)]
+    pub border: Option<bool>,
+    #[serde(default)]
+    pub border_color: Option<String>,
+
     /// Open the window on this workspace (1-9) instead of the active one.
     #[serde(default)]
     pub open_on_workspace: Option<u8>,
@@ -997,6 +1002,8 @@ pub struct CompiledWindowRule {
     pub height: Option<i32>,
     /// Optional corner-style override for the focus border.
     pub corner_style: Option<CornerStyle>,
+    pub border: Option<bool>,
+    pub border_color_bgr: Option<u32>,
     /// Open on this workspace (0-based index) instead of the active one.
     pub open_on_workspace: Option<usize>,
     /// Maximize the window's column after opening.
@@ -1264,6 +1271,21 @@ impl Config {
             }
         }
 
+        for (index, rule) in self.window_rules.iter_mut().enumerate() {
+            if let Some(color) = &rule.border_color {
+                if color.len() != 6 || !color.chars().all(|c| c.is_ascii_hexdigit()) {
+                    warnings.push(ConfigWarning {
+                        field: format!("window_rules[{index}].border_color"),
+                        message: format!(
+                            "Invalid hex color '{}' (must be 6 hex chars, e.g. \"4285F4\"), reset to default",
+                            color
+                        ),
+                    });
+                    rule.border_color = None;
+                }
+            }
+        }
+
         // Invalid strip heights reset to the default so a typo cannot hide the
         // strip or make it consume the screen. Colors require six hex digits.
         for (field, value, default_fn) in [
@@ -1469,6 +1491,11 @@ impl Config {
                 width: rule.width,
                 height: rule.height,
                 corner_style: rule.corner_style,
+                border: rule.border,
+                border_color_bgr: rule
+                    .border_color
+                    .as_deref()
+                    .and_then(crate::ui_sync::hex_rgb_to_bgr),
                 open_on_workspace,
                 open_maximized: rule.open_maximized,
                 column_width,
@@ -1489,6 +1516,8 @@ impl Config {
                 width: None,
                 height: None,
                 corner_style: None,
+                border: None,
+                border_color_bgr: None,
                 open_on_workspace: None,
                 open_maximized: false,
                 column_width: None,
@@ -2071,6 +2100,46 @@ mod tests {
     }
 
     #[test]
+    fn border_rule_config_round_trip_and_validation() {
+        let source = r##"
+            [[window_rules]]
+            match_class = "One"
+            border = false
+            border_color = "a1B2c3"
+            [[window_rules]]
+            match_class = "Two"
+            [[window_rules]]
+            match_class = "Three"
+            border_color = "#12345"
+        "##;
+        let mut config: Config = toml::from_str(source).unwrap();
+        assert_eq!(config.window_rules[0].border, Some(false));
+        assert_eq!(
+            config.window_rules[0].border_color.as_deref(),
+            Some("a1B2c3")
+        );
+        assert_eq!(config.window_rules[1].border, None);
+        assert_eq!(config.window_rules[1].border_color, None);
+        let round_trip: Config = toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
+        assert_eq!(round_trip.window_rules[0].border, Some(false));
+        assert_eq!(
+            round_trip.window_rules[0].border_color.as_deref(),
+            Some("a1B2c3")
+        );
+        assert_eq!(round_trip.window_rules[1].border, None);
+        assert_eq!(round_trip.window_rules[1].border_color, None);
+        let warnings = config.validate();
+        assert!(warnings
+            .iter()
+            .any(|w| w.field == "window_rules[2].border_color"));
+        assert_eq!(config.window_rules[2].border_color, None);
+        assert_eq!(
+            config.window_rules[0].border_color.as_deref(),
+            Some("a1B2c3")
+        );
+    }
+
+    #[test]
     fn test_window_rule_matches_class() {
         let rule = WindowRule {
             match_class: Some("Notepad".to_string()),
@@ -2080,6 +2149,8 @@ mod tests {
             width: None,
             height: None,
             corner_style: None,
+            border: None,
+            border_color: None,
             open_on_workspace: None,
             open_maximized: false,
             column_width: None,
@@ -2106,6 +2177,8 @@ mod tests {
             width: Some(800),
             height: Some(600),
             corner_style: None,
+            border: None,
+            border_color: None,
             open_on_workspace: None,
             open_maximized: false,
             column_width: None,
@@ -2226,6 +2299,8 @@ mod tests {
                 width: Some(800),
                 height: Some(600),
                 corner_style: None,
+                border: None,
+                border_color: None,
                 open_on_workspace: None,
                 open_maximized: false,
                 column_width: None,
@@ -2242,6 +2317,8 @@ mod tests {
                 width: None,
                 height: None,
                 corner_style: None,
+                border: None,
+                border_color: None,
                 open_on_workspace: None,
                 open_maximized: false,
                 column_width: None,
@@ -2273,6 +2350,8 @@ mod tests {
             width: None,
             height: None,
             corner_style: None,
+            border: None,
+            border_color: None,
             open_on_workspace: None,
             open_maximized: false,
             column_width: None,
@@ -2297,6 +2376,8 @@ mod tests {
             width: None,
             height: None,
             corner_style: None,
+            border: None,
+            border_color: None,
             open_on_workspace: None,
             open_maximized: false,
             column_width: None,
@@ -2321,6 +2402,8 @@ mod tests {
             width: None,
             height: None,
             corner_style: None,
+            border: None,
+            border_color: None,
             open_on_workspace: None,
             open_maximized: false,
             column_width: None,
@@ -2346,6 +2429,8 @@ mod tests {
             width: None,
             height: None,
             corner_style: None,
+            border: None,
+            border_color: None,
             open_on_workspace: None,
             open_maximized: false,
             column_width: None,
@@ -2379,6 +2464,8 @@ mod tests {
             width: None,
             height: None,
             corner_style: None,
+            border: None,
+            border_color: None,
             open_on_workspace: None,
             open_maximized: false,
             column_width: None,
@@ -2759,6 +2846,8 @@ mod tests {
                     width: Some(1024),
                     height: Some(768),
                     corner_style: None,
+                    border: None,
+                    border_color: None,
                     open_on_workspace: None,
                     open_maximized: false,
                     column_width: None,
@@ -2775,6 +2864,8 @@ mod tests {
                     width: None,
                     height: None,
                     corner_style: None,
+                    border: None,
+                    border_color: None,
                     open_on_workspace: None,
                     open_maximized: false,
                     column_width: None,
@@ -2816,6 +2907,8 @@ mod tests {
                     width: None,
                     height: None,
                     corner_style: None,
+                    border: None,
+                    border_color: None,
                     open_on_workspace: None,
                     open_maximized: false,
                     column_width: None,
@@ -2832,6 +2925,8 @@ mod tests {
                     width: None,
                     height: None,
                     corner_style: None,
+                    border: None,
+                    border_color: None,
                     open_on_workspace: None,
                     open_maximized: false,
                     column_width: None,

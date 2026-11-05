@@ -2,6 +2,12 @@
 # Translate values only; preserve quoted keys and {placeholders}.
 # Test from the repository root: cargo test -p leopardwm-daemon locale::tests
 "language.name" = "English"
+"settings.text.rule_border" = "Border"
+"settings.text.rule_border_show" = "Show"
+"settings.text.rule_border_hide" = "Hide"
+"settings.text.rule_border_color" = "Border color"
+"settings.text.rule_border_color_default" = "Default"
+"settings.text.rule_border_color_custom" = "Custom color"
 "settings.text.leopardwm_settings" = "LeopardWM Settings"
 "settings.text.settings" = "Settings"
 "settings.text.layout" = "Layout"

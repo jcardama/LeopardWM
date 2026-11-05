@@ -151,6 +151,10 @@ function ruleFixture(source, rule = {}) {
   }
   fields['.rule-action'] = { dataset: { value: rule.action || 'tile' } };
   fields['.rule-corner'] = { dataset: { value: 'auto' } };
+  for (const name of ['rule-border', 'rule-border-color-mode']) {
+    const value = row.innerHTML.match(new RegExp(`class="menu-item has-sub ${name}" data-value="([^"]*)"`))[1];
+    fields['.' + name] = { dataset: { value } };
+  }
   fields['.rule-workspace'] = { dataset: { value: '' } };
   fields['.rule-opts-summary'] = {};
   doc.querySelectorAll = selector => selector === '#rules-body tr' ? [row] : [];
@@ -166,6 +170,12 @@ for (const key of ruleKeys) {
   assert.throws(() => assertKnownKeys(rules, incomplete), error =>
     error.message.includes(`Unknown generated locale key: ${key}`));
 }
+
+const borderFixture = ruleFixture(script, { match_class: 'App', border: false, border_color: 'A1B2C3', future_key: 'kept' });
+assert.deepEqual(JSON.parse(JSON.stringify(borderFixture.ctx.readRules())), [{ match_class: 'App', action: 'tile', border: false, border_color: 'A1B2C3', future_key: 'kept' }]);
+borderFixture.fields['.rule-border'].dataset.value = 'show';
+borderFixture.fields['.rule-border-color-mode'].dataset.value = 'default';
+assert.deepEqual(JSON.parse(JSON.stringify(borderFixture.ctx.readRules())), [{ match_class: 'App', action: 'tile', future_key: 'kept' }]);
 
 const sizeRule = { match_executable: 'QQ.exe', action: 'ignore', match_max_width: 400, match_max_height: 300, width: 900, height: 700 };
 const sizeFixture = ruleFixture(script, sizeRule);
