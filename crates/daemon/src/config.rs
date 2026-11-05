@@ -371,6 +371,15 @@ pub enum TaskbarButtons {
     ShowAll,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceEdgeWrap {
+    #[default]
+    Off,
+    Wrap,
+    Clamp,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, remote = "Self")]
 pub struct BehaviorConfig {
@@ -435,12 +444,13 @@ pub struct BehaviorConfig {
     #[serde(default)]
     pub taskbar_buttons: TaskbarButtons,
 
-    /// Wrap vertical focus/move at a column's top or bottom edge into the
-    /// adjacent workspace. When on, focus_up/focus_down at the edge switch to
-    /// the previous/next workspace, and move_window_up/move_window_down at the
-    /// edge move the focused window there. Off by default.
-    #[serde(default = "default_false")]
-    pub workspace_edge_wrap: bool,
+    /// Vertical focus and moves at a column edge stay put (off), switch
+    /// workspaces with wrapping (wrap), or stop at the ends (clamp).
+    #[serde(default)]
+    pub workspace_edge_wrap: WorkspaceEdgeWrap,
+
+    #[serde(skip)]
+    pub(crate) invalid_workspace_edge_wrap: Option<String>,
 
     /// Warp the mouse cursor onto the focused window after a focus-navigation
     /// command (focus left/right/up/down/next/prev/start/end and the monitor
@@ -494,7 +504,8 @@ impl Default for BehaviorConfig {
             floating_above_tiled: false,
             new_window_placement: NewWindowPlacement::default(),
             taskbar_buttons: TaskbarButtons::default(),
-            workspace_edge_wrap: false,
+            workspace_edge_wrap: WorkspaceEdgeWrap::Off,
+            invalid_workspace_edge_wrap: None,
             mouse_follows_focus: false,
             fullscreen_follows_focus: true,
             skip_empty_workspaces: false,
@@ -511,7 +522,22 @@ impl Serialize for BehaviorConfig {
 impl<'de> Deserialize<'de> for BehaviorConfig {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let mut value = serde_json::Value::deserialize(deserializer)?;
+        let mut invalid_workspace_edge_wrap = None;
         if let Some(fields) = value.as_object_mut() {
+            if let Some(edge) = fields.get_mut("workspace_edge_wrap") {
+                match edge {
+                    serde_json::Value::Bool(enabled) => {
+                        *edge =
+                            serde_json::Value::String(if *enabled { "wrap" } else { "off" }.into());
+                    }
+                    serde_json::Value::String(mode)
+                        if matches!(mode.as_str(), "off" | "wrap" | "clamp") => {}
+                    _ => {
+                        invalid_workspace_edge_wrap = Some(edge.to_string());
+                        fields.remove("workspace_edge_wrap");
+                    }
+                }
+            }
             if let Some(legacy) = fields.remove("hide_offscreen_taskbar_buttons") {
                 if !fields.contains_key("taskbar_buttons") {
                     let enabled = legacy.as_bool().ok_or_else(|| {
@@ -531,7 +557,9 @@ impl<'de> Deserialize<'de> for BehaviorConfig {
                 }
             }
         }
-        Self::deserialize(value).map_err(serde::de::Error::custom)
+        let mut config = Self::deserialize(value).map_err(serde::de::Error::custom)?;
+        config.invalid_workspace_edge_wrap = invalid_workspace_edge_wrap;
+        Ok(config)
     }
 }
 
@@ -1296,6 +1324,13 @@ impl Config {
             self.appearance.tab_strip_height = default_tab_strip_height();
         }
 
+        if let Some(value) = self.behavior.invalid_workspace_edge_wrap.take() {
+            warnings.push(ConfigWarning {
+                field: "behavior.workspace_edge_wrap".to_string(),
+                message: format!("Invalid workspace_edge_wrap {value} (must be off/wrap/clamp or true/false), falling back to off"),
+            });
+        }
+
         {
             let normalized = self.behavior.log_level.to_lowercase();
             let valid = matches!(
@@ -1589,6 +1624,46 @@ fn dirs_home() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workspace_edge_wrap_config_compatibility_and_validation() {
+        for (input, expected, saved) in [
+            ("true", WorkspaceEdgeWrap::Wrap, "wrap"),
+            ("false", WorkspaceEdgeWrap::Off, "off"),
+            ("\"wrap\"", WorkspaceEdgeWrap::Wrap, "wrap"),
+            ("\"clamp\"", WorkspaceEdgeWrap::Clamp, "clamp"),
+            ("\"off\"", WorkspaceEdgeWrap::Off, "off"),
+        ] {
+            let config: Config =
+                toml::from_str(&format!("[behavior]\nworkspace_edge_wrap = {input}")).unwrap();
+            assert_eq!(config.behavior.workspace_edge_wrap, expected);
+            let serialized = toml::to_string(&config).unwrap();
+            let value: toml::Value = toml::from_str(&serialized).unwrap();
+            assert_eq!(
+                value["behavior"]["workspace_edge_wrap"].as_str(),
+                Some(saved)
+            );
+            let reloaded: Config = toml::from_str(&serialized).unwrap();
+            assert_eq!(reloaded.behavior.workspace_edge_wrap, expected);
+        }
+        let omitted: Config = toml::from_str("[behavior]").unwrap();
+        assert_eq!(omitted.behavior.workspace_edge_wrap, WorkspaceEdgeWrap::Off);
+        for bad in ["\"sideways\"", "42"] {
+            let mut config: Config =
+                toml::from_str(&format!("[behavior]\nworkspace_edge_wrap = {bad}")).unwrap();
+            assert_eq!(config.behavior.workspace_edge_wrap, WorkspaceEdgeWrap::Off);
+            let warnings = config.validate();
+            assert_eq!(warnings.len(), 1);
+            assert_eq!(warnings[0].field, "behavior.workspace_edge_wrap");
+            assert!(warnings[0].message.contains(bad));
+            assert!(warnings[0].message.contains("off/wrap/clamp"));
+            assert!(warnings[0].message.contains("true/false"));
+            assert!(warnings[0].message.contains("falling back to off"));
+            assert!(config.validate().is_empty());
+        }
+        let _: Config =
+            toml::from_str(&leopardwm_ipc::config_template::render_default_config()).unwrap();
+    }
 
     #[test]
     fn language_default_round_trip_and_validation() {

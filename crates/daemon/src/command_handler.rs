@@ -1,4 +1,4 @@
-use crate::config::Config;
+use crate::config::{Config, WorkspaceEdgeWrap};
 use crate::hotkey_resolution::resolve_hotkeys;
 use crate::layout_apply::LayoutApplyOutcome;
 use crate::state::{
@@ -425,7 +425,7 @@ impl AppState {
 
     // Focus stays among the floating windows and the strip is left alone.
     // With no floating window that way, focus stays put, except that up/down
-    // switch workspace when workspace_edge_wrap is on, as they do in the strip.
+    // switch workspace according to workspace_edge_wrap, as they do in the strip.
     fn focus_floating(&mut self, hwnd: u64, to: FloatingFocus) -> IpcResponse {
         let Some(ws) = self.focused_workspace() else {
             return IpcResponse::Ok;
@@ -446,9 +446,11 @@ impl AppState {
             _ => None,
         };
         match wrap {
-            Some(cmd) if self.config.behavior.workspace_edge_wrap => {
-                self.handle_workspace_prev_next(cmd)
-            }
+            Some(cmd) if self.config.behavior.workspace_edge_wrap != WorkspaceEdgeWrap::Off => self
+                .handle_workspace_prev_next(
+                    cmd,
+                    self.config.behavior.workspace_edge_wrap == WorkspaceEdgeWrap::Wrap,
+                ),
             _ => IpcResponse::Ok,
         }
     }
@@ -705,7 +707,7 @@ impl AppState {
             }
             IpcCommand::QueryStatus => self.handle_query_status(),
             IpcCommand::WorkspacePrev | IpcCommand::WorkspaceNext => {
-                self.handle_workspace_prev_next(cmd)
+                self.handle_workspace_prev_next(cmd, true)
             }
             IpcCommand::MoveToWorkspacePrev => self.handle_move_to_workspace_relative(false),
             IpcCommand::MoveToWorkspaceNext => self.handle_move_to_workspace_relative(true),
@@ -927,7 +929,7 @@ impl AppState {
         }
     }
 
-    fn handle_workspace_prev_next(&mut self, cmd: IpcCommand) -> IpcResponse {
+    fn handle_workspace_prev_next(&mut self, cmd: IpcCommand, wrap: bool) -> IpcResponse {
         const COUNT: usize = 9;
         let monitor = self.focused_monitor;
         let current = self.active_workspace_idx(monitor);
@@ -937,10 +939,16 @@ impl AppState {
             _ => unreachable!(),
         };
         let target = (1..COUNT).find_map(|distance| {
-            let idx = if forward {
-                (current + distance) % COUNT
+            let idx = if wrap {
+                if forward {
+                    (current + distance) % COUNT
+                } else {
+                    (current + COUNT - distance) % COUNT
+                }
+            } else if forward {
+                current.checked_add(distance).filter(|&idx| idx < COUNT)?
             } else {
-                (current + COUNT - distance) % COUNT
+                current.checked_sub(distance)?
             };
             let occupied = || {
                 self.workspaces
@@ -980,14 +988,17 @@ impl AppState {
         let empty_workspace = self
             .focused_workspace()
             .is_some_and(|ws| ws.columns().is_empty());
-        if self.config.behavior.workspace_edge_wrap
+        if self.config.behavior.workspace_edge_wrap != WorkspaceEdgeWrap::Off
             && (empty_workspace || self.focus_at_vertical_edge(up))
         {
-            return self.handle_workspace_prev_next(if up {
-                IpcCommand::WorkspacePrev
-            } else {
-                IpcCommand::WorkspaceNext
-            });
+            return self.handle_workspace_prev_next(
+                if up {
+                    IpcCommand::WorkspacePrev
+                } else {
+                    IpcCommand::WorkspaceNext
+                },
+                self.config.behavior.workspace_edge_wrap == WorkspaceEdgeWrap::Wrap,
+            );
         }
         self.execute_workspace_command(false, true, |ws, _vw| {
             if up {
@@ -1004,7 +1015,15 @@ impl AppState {
     }
 
     fn move_window_vertical(&mut self, up: bool) -> IpcResponse {
-        if self.config.behavior.workspace_edge_wrap && self.focus_at_vertical_edge(up) {
+        if self.config.behavior.workspace_edge_wrap != WorkspaceEdgeWrap::Off
+            && self.focus_at_vertical_edge(up)
+        {
+            let current = self.active_workspace_idx(self.focused_monitor);
+            if self.config.behavior.workspace_edge_wrap == WorkspaceEdgeWrap::Clamp
+                && ((up && current == 0) || (!up && current == 8))
+            {
+                return IpcResponse::Ok;
+            }
             return self.handle_move_to_workspace_relative(!up);
         }
         self.execute_workspace_command(true, true, |ws, _vw| {
@@ -2538,13 +2557,51 @@ mod floating_policy_tests {
     }
 
     #[test]
+    fn floating_focus_edge_modes_at_both_ends() {
+        for mode in [
+            WorkspaceEdgeWrap::Off,
+            WorkspaceEdgeWrap::Wrap,
+            WorkspaceEdgeWrap::Clamp,
+        ] {
+            for (current, cmd, wrapped) in
+                [(0, IpcCommand::FocusUp, 8), (8, IpcCommand::FocusDown, 0)]
+            {
+                let mut state = AppState::new_with_config(Config::default(), vec![monitor(1, 0)]);
+                state.config.behavior.workspace_edge_wrap = mode;
+                state.ensure_workspace_exists(1, 8).unwrap();
+                state.active_workspace.insert(1, current);
+                state
+                    .focused_workspace_mut()
+                    .unwrap()
+                    .add_floating(FLOATING, Rect::new(100, 100, 500, 400))
+                    .unwrap();
+                state.previous_focused_hwnd = Some(FLOATING);
+                assert_eq!(state.handle_command(cmd.clone()), IpcResponse::Ok);
+                assert_eq!(
+                    state.active_workspace_idx(1),
+                    if mode == WorkspaceEdgeWrap::Wrap {
+                        wrapped
+                    } else {
+                        current
+                    },
+                    "{mode:?} {cmd:?}"
+                );
+                if mode != WorkspaceEdgeWrap::Wrap {
+                    assert_eq!(state.focused_floating_window(), Some(FLOATING));
+                    assert!(state.layout_transition.is_none());
+                }
+            }
+        }
+    }
+
+    #[test]
     fn floating_focus_up_down_wraps_workspace_without_a_candidate() {
         for (from, cmd, target) in [
             (RIGHT, IpcCommand::FocusUp, 8),
             (LOWER_LEFT, IpcCommand::FocusDown, 1),
         ] {
             let mut state = three_floating_state();
-            state.config.behavior.workspace_edge_wrap = true;
+            state.config.behavior.workspace_edge_wrap = WorkspaceEdgeWrap::Wrap;
             state.previous_focused_hwnd = Some(from);
             assert_eq!(state.handle_command(cmd.clone()), IpcResponse::Ok);
             assert_eq!(state.active_workspace_idx(1), target, "{cmd:?}");
@@ -2555,7 +2612,7 @@ mod floating_policy_tests {
     #[test]
     fn floating_focus_up_down_prefers_a_candidate_over_wrapping() {
         let mut state = three_floating_state();
-        state.config.behavior.workspace_edge_wrap = true;
+        state.config.behavior.workspace_edge_wrap = WorkspaceEdgeWrap::Wrap;
         for (from, cmd, expected) in [
             (FLOATING, IpcCommand::FocusUp, RIGHT),
             (FLOATING, IpcCommand::FocusDown, LOWER_LEFT),
@@ -2572,7 +2629,10 @@ mod floating_policy_tests {
     #[test]
     fn floating_focus_up_down_stays_put_without_edge_wrap() {
         let mut state = three_floating_state();
-        assert!(!state.config.behavior.workspace_edge_wrap);
+        assert_eq!(
+            state.config.behavior.workspace_edge_wrap,
+            WorkspaceEdgeWrap::Off
+        );
         for (from, cmd) in [
             (RIGHT, IpcCommand::FocusUp),
             (LOWER_LEFT, IpcCommand::FocusDown),

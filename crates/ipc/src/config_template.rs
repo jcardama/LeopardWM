@@ -116,10 +116,11 @@ focus_follows_mouse = false
 # windows keep their buttons on the active workspace in every mode.
 # taskbar_buttons = "hide_offscreen"
 
-# Wrap vertical focus/move at a column's top or bottom edge into the adjacent
-# workspace. When on, focus_up/focus_down at the edge switch workspaces and
-# move_window_up/move_window_down at the edge move the window there. Default false.
-# workspace_edge_wrap = false
+# Vertical focus/move at a column edge: "off" (default) stays put, "wrap"
+# switches to the adjacent workspace and wraps between 1 and 9, and "clamp"
+# stops at the ends. Legacy true and false mean "wrap" and "off".
+# With skip_empty_workspaces, clamp focus stops at the first/last occupied workspace.
+# workspace_edge_wrap = "off"
 
 # Skip empty workspaces for prev/next and edge-wrap focus on this monitor.
 # Tiled, floating and minimized windows count; sticky windows do not.

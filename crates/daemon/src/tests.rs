@@ -16503,7 +16503,7 @@ fn test_skip_empty_workspace_unchanged_commands_table() {
         ] {
             let mut state = AppState::new_with_config(test_config(), test_monitors());
             state.config.behavior.skip_empty_workspaces = skip;
-            state.config.behavior.workspace_edge_wrap = true;
+            state.config.behavior.workspace_edge_wrap = crate::config::WorkspaceEdgeWrap::Wrap;
             let mon = state.focused_monitor;
             state
                 .focused_workspace_mut()
@@ -16547,7 +16547,7 @@ fn test_skip_empty_workspace_unchanged_commands_table() {
         }
         let mut state = AppState::new_with_config(test_config(), test_monitors());
         state.config.behavior.skip_empty_workspaces = skip;
-        state.config.behavior.workspace_edge_wrap = true;
+        state.config.behavior.workspace_edge_wrap = crate::config::WorkspaceEdgeWrap::Wrap;
         let ws = state.focused_workspace_mut().unwrap();
         ws.insert_window(100, None).unwrap();
         ws.insert_window_in_column(200, 0).unwrap();
@@ -16584,6 +16584,124 @@ fn test_skip_empty_workspace_unchanged_commands_table() {
 }
 
 #[test]
+fn test_workspace_edge_modes_at_both_ends() {
+    use crate::config::WorkspaceEdgeWrap::{Clamp, Off, Wrap};
+    for mode in [Off, Wrap, Clamp] {
+        for (current, focus, movement, wrapped) in [
+            (0, IpcCommand::FocusUp, IpcCommand::MoveWindowUp, 8),
+            (8, IpcCommand::FocusDown, IpcCommand::MoveWindowDown, 0),
+        ] {
+            for has_window in [false, true] {
+                let mut state = AppState::new_with_config(test_config(), test_monitors());
+                state.config.behavior.workspace_edge_wrap = mode;
+                state.ensure_workspace_exists(1, 8).unwrap();
+                state.active_workspace.insert(1, current);
+                if has_window {
+                    state
+                        .focused_workspace_mut()
+                        .unwrap()
+                        .insert_window(100, None)
+                        .unwrap();
+                }
+                assert!(matches!(
+                    state.handle_command(focus.clone()),
+                    IpcResponse::Ok
+                ));
+                assert_eq!(
+                    state.active_workspace_idx(1),
+                    if mode == Wrap { wrapped } else { current },
+                    "{mode:?} {focus:?} window={has_window}"
+                );
+                if mode != Wrap {
+                    assert!(state.layout_transition.is_none());
+                }
+            }
+            let mut state = AppState::new_with_config(test_config(), test_monitors());
+            state.config.behavior.workspace_edge_wrap = mode;
+            state.ensure_workspace_exists(1, 8).unwrap();
+            state.active_workspace.insert(1, current);
+            state
+                .focused_workspace_mut()
+                .unwrap()
+                .insert_window(100, None)
+                .unwrap();
+            assert!(matches!(
+                state.handle_command(movement.clone()),
+                IpcResponse::Ok
+            ));
+            assert_eq!(state.active_workspace_idx(1), current);
+            assert!(
+                state.workspaces[&1][if mode == Wrap { wrapped } else { current }]
+                    .contains_window(100),
+                "{mode:?} {movement:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_workspace_edge_clamp_skips_empty_without_wrapping() {
+    use crate::config::WorkspaceEdgeWrap::Clamp;
+    for (current, command, expected) in [
+        (5, IpcCommand::FocusDown, 5),
+        (2, IpcCommand::FocusUp, 2),
+        (2, IpcCommand::FocusDown, 5),
+        (5, IpcCommand::FocusUp, 2),
+    ] {
+        let mut state = AppState::new_with_config(test_config(), test_monitors());
+        state.config.behavior.workspace_edge_wrap = Clamp;
+        state.config.behavior.skip_empty_workspaces = true;
+        state.ensure_workspace_exists(1, 8).unwrap();
+        for idx in [2, 5] {
+            state.workspaces.get_mut(&1).unwrap()[idx]
+                .insert_window(100 + idx as u64, None)
+                .unwrap();
+        }
+        state.active_workspace.insert(1, current);
+        assert!(matches!(
+            state.handle_command(command.clone()),
+            IpcResponse::Ok
+        ));
+        assert_eq!(
+            state.active_workspace_idx(1),
+            expected,
+            "{command:?} from {current}"
+        );
+        if expected == current {
+            assert!(state.layout_transition.is_none());
+        }
+    }
+    for (current, command, target) in [
+        (0, IpcCommand::WorkspacePrev, 8),
+        (8, IpcCommand::WorkspaceNext, 0),
+    ] {
+        let mut state = AppState::new_with_config(test_config(), test_monitors());
+        state.config.behavior.workspace_edge_wrap = Clamp;
+        state.ensure_workspace_exists(1, 8).unwrap();
+        state.active_workspace.insert(1, current);
+        assert!(matches!(state.handle_command(command), IpcResponse::Ok));
+        assert_eq!(state.active_workspace_idx(1), target);
+    }
+    for (current, command, target) in [
+        (2, IpcCommand::MoveWindowDown, 3),
+        (5, IpcCommand::MoveWindowUp, 4),
+    ] {
+        let mut state = AppState::new_with_config(test_config(), test_monitors());
+        state.config.behavior.workspace_edge_wrap = Clamp;
+        state.config.behavior.skip_empty_workspaces = true;
+        state.ensure_workspace_exists(1, 8).unwrap();
+        state.active_workspace.insert(1, current);
+        state
+            .focused_workspace_mut()
+            .unwrap()
+            .insert_window(100, None)
+            .unwrap();
+        assert!(matches!(state.handle_command(command), IpcResponse::Ok));
+        assert!(state.workspaces[&1][target].contains_window(100));
+    }
+}
+
+#[test]
 fn test_edge_wrap_focus_switches_workspace_only_when_enabled() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
     let mon = state.focused_monitor;
@@ -16602,7 +16720,7 @@ fn test_edge_wrap_focus_switches_workspace_only_when_enabled() {
     );
 
     // Enabled: FocusDown at the bottom edge switches to the next workspace.
-    state.config.behavior.workspace_edge_wrap = true;
+    state.config.behavior.workspace_edge_wrap = crate::config::WorkspaceEdgeWrap::Wrap;
     state.handle_command(IpcCommand::FocusDown);
     assert_eq!(
         state.active_workspace_idx(mon),
@@ -16619,7 +16737,7 @@ fn test_edge_wrap_focus_crosses_empty_workspaces() {
     state.handle_command(IpcCommand::FocusDown);
     assert_eq!(state.active_workspace_idx(mon), 0);
 
-    state.config.behavior.workspace_edge_wrap = true;
+    state.config.behavior.workspace_edge_wrap = crate::config::WorkspaceEdgeWrap::Wrap;
     state.handle_command(IpcCommand::FocusDown);
     assert_eq!(state.active_workspace_idx(mon), 1);
     state.handle_command(IpcCommand::FocusDown);
@@ -16647,7 +16765,7 @@ fn test_edge_wrap_focus_stays_in_column_before_bottom_edge() {
     ws.focus_up();
     assert_eq!(ws.focused_window(), Some(100));
 
-    state.config.behavior.workspace_edge_wrap = true;
+    state.config.behavior.workspace_edge_wrap = crate::config::WorkspaceEdgeWrap::Wrap;
     state.handle_command(IpcCommand::FocusDown);
     assert_eq!(state.active_workspace_idx(mon), 0);
     assert_eq!(
@@ -16662,7 +16780,7 @@ fn test_edge_wrap_focus_stays_in_column_before_bottom_edge() {
 #[test]
 fn test_edge_wrap_move_crosses_window_to_adjacent_workspace() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
-    state.config.behavior.workspace_edge_wrap = true;
+    state.config.behavior.workspace_edge_wrap = crate::config::WorkspaceEdgeWrap::Wrap;
     let mon = state.focused_monitor;
     state
         .injected_window_info

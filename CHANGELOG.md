@@ -6,6 +6,7 @@ All notable changes to LeopardWM will be documented in this file.
 
 ### Features
 
+- **Workspace edge navigation can now stop at the ends instead of wrapping.** Set `workspace_edge_wrap` to `clamp` to keep vertical focus and moves within workspaces 1 through 9. (#155)
 - **Focus commands now move between floating windows.** While a floating window has focus, the `focus_*` commands pick another floating window on the same workspace instead of doing nothing: the directional commands go to the nearest window in that direction, and `focus_start`, `focus_end`, `focus_next` and `focus_prev` follow the windows' left edges. With `workspace_edge_wrap` on, `focus_up` and `focus_down` switch workspace when no floating window lies in that direction. Contributed by @ShawnChiu. (#166, #173)
 
 ## 0.3.5

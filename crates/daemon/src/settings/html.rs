@@ -1104,7 +1104,14 @@ input[type="range"]::-webkit-slider-thumb {
           </div>
           <div class="field">
             <div class="field-info"><div class="field-label" data-i18n="settings.behavior.workspace_edge_wrap.label"></div><div class="field-desc" data-i18n="settings.behavior.workspace_edge_wrap.description"></div></div>
-            <label class="toggle"><input type="checkbox" id="behavior-workspace_edge_wrap"><span class="track"></span><span class="thumb"></span></label>
+            <div class="combobox" id="cb-behavior-workspace_edge_wrap">
+              <button class="combobox-trigger" type="button"><span class="combobox-text" data-i18n="settings.text.workspace_edge_off"></span><svg class="combobox-chevron" viewBox="0 0 12 12"><path d="M2.15 4.65a.5.5 0 01.7 0L6 7.79l3.15-3.14a.5.5 0 11.7.7l-3.5 3.5a.5.5 0 01-.7 0l-3.5-3.5a.5.5 0 010-.7z"/></svg></button>
+              <div class="combobox-popup">
+                <div class="combobox-option selected" data-value="off" data-i18n="settings.text.workspace_edge_off"></div>
+                <div class="combobox-option" data-value="wrap" data-i18n="settings.text.workspace_edge_wrap"></div>
+                <div class="combobox-option" data-value="clamp" data-i18n="settings.text.workspace_edge_clamp"></div>
+              </div>
+            </div>
           </div>
           <div class="field">
             <div class="field-info"><div class="field-label" data-i18n="settings.behavior.skip_empty_workspaces.label"></div><div class="field-desc" data-i18n="settings.behavior.skip_empty_workspaces.description"></div></div>
@@ -1662,7 +1669,7 @@ function init(cfg) {
   setChecked('behavior-focus_follows_mouse', cfg.behavior.focus_follows_mouse);
   setVal('behavior-focus_follows_mouse_delay_ms', cfg.behavior.focus_follows_mouse_delay_ms);
   setChecked('behavior-mouse_follows_focus', cfg.behavior.mouse_follows_focus === true);
-  setChecked('behavior-workspace_edge_wrap', cfg.behavior.workspace_edge_wrap === true);
+  setCb('cb-behavior-workspace_edge_wrap', cfg.behavior.workspace_edge_wrap || 'off');
   setChecked('behavior-skip_empty_workspaces', cfg.behavior.skip_empty_workspaces === true);
   setChecked('behavior-fullscreen_follows_focus', cfg.behavior.fullscreen_follows_focus !== false);
   setChecked('behavior-disable_snap_layouts', cfg.behavior.disable_snap_layouts !== false);
@@ -2349,7 +2356,7 @@ function readConfig() {
       focus_follows_mouse: checked('behavior-focus_follows_mouse'),
       focus_follows_mouse_delay_ms: num('behavior-focus_follows_mouse_delay_ms'),
       mouse_follows_focus: checked('behavior-mouse_follows_focus'),
-      workspace_edge_wrap: checked('behavior-workspace_edge_wrap'),
+      workspace_edge_wrap: cbVal('cb-behavior-workspace_edge_wrap'),
       skip_empty_workspaces: checked('behavior-skip_empty_workspaces'),
       fullscreen_follows_focus: checked('behavior-fullscreen_follows_focus'),
       disable_snap_layouts: checked('behavior-disable_snap_layouts'),
