@@ -26,7 +26,8 @@ function Invoke-Stage([string]$Label, [string]$FilePath, [string[]]$ArgumentList
         $lines = @(Get-Content $stdout) + @(Get-Content $stderr)
         if ($process.ExitCode -eq 0) {
             $passed = 0
-            foreach ($line in $lines) { if ($line -match '^test result: ok\. (\d+) passed') { $passed += [int]$Matches[1] } }
+            # Child processes that tests spawn to rerun one test print their own filtered summaries.
+            foreach ($line in $lines) { if ($line -match '^test result: ok\. (\d+) passed;.* 0 filtered out;') { $passed += [int]$Matches[1] } }
             $summary = if ($passed) { " ($passed tests)" } else { '' }
             Write-Output "  pass  $Label$summary"
             return

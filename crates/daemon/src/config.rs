@@ -3216,7 +3216,10 @@ mod tests {
 
     #[test]
     fn test_config_save_roundtrip() {
-        let dir = std::env::temp_dir().join("leopardwm_test_save_roundtrip");
+        let dir = std::env::temp_dir().join(format!(
+            "leopardwm_test_save_roundtrip_{}",
+            std::process::id()
+        ));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("config.toml");

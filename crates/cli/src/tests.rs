@@ -1337,7 +1337,7 @@ fn test_doctor_config_path_returns_primary() {
 #[test]
 fn test_validate_toml_valid() {
     let dir = std::env::temp_dir();
-    let path = dir.join("leopardwm-test-valid.toml");
+    let path = dir.join(format!("leopardwm-test-valid-{}.toml", std::process::id()));
     fs::write(&path, "[layout]\ngap = 10\n").unwrap();
     assert!(validate_toml_file(&path).is_ok());
     let _ = fs::remove_file(&path);
@@ -1346,7 +1346,10 @@ fn test_validate_toml_valid() {
 #[test]
 fn test_validate_toml_invalid() {
     let dir = std::env::temp_dir();
-    let path = dir.join("leopardwm-test-invalid.toml");
+    let path = dir.join(format!(
+        "leopardwm-test-invalid-{}.toml",
+        std::process::id()
+    ));
     fs::write(&path, "[layout\ngap = !!!").unwrap();
     assert!(validate_toml_file(&path).is_err());
     let _ = fs::remove_file(&path);
@@ -1507,7 +1510,10 @@ fn test_config_backup_path() {
 
 #[test]
 fn test_config_backup_and_restore_roundtrip() {
-    let dir = std::env::temp_dir().join("leopardwm-test-config-roundtrip");
+    let dir = std::env::temp_dir().join(format!(
+        "leopardwm-test-config-roundtrip-{}",
+        std::process::id()
+    ));
     let _ = fs::create_dir_all(&dir);
     let config_path = dir.join("config.toml");
     let backup_path = config_backup_path(&config_path);
