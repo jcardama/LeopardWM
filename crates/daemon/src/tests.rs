@@ -14215,6 +14215,10 @@ fn focus_border_rule_decisions_and_precedence() {
         matching(Some(false), Some("010203")),
     ];
     state.compiled_rules = state.config.compile_window_rules();
+    assert_eq!(show_color(&state), Some(BorderDecision::Hidden));
+    state.config.window_rules[0].border = None;
+    state.config.window_rules[1].border = None;
+    state.compiled_rules = state.config.compile_window_rules();
     assert!(matches!(
         show_color(&state),
         Some(BorderDecision::Show {

@@ -1002,7 +1002,7 @@ pub struct CompiledWindowRule {
     pub height: Option<i32>,
     /// Optional corner-style override for the focus border.
     pub corner_style: Option<CornerStyle>,
-    pub border: Option<bool>,
+    pub border_hidden: bool,
     pub border_color_bgr: Option<u32>,
     /// Open on this workspace (0-based index) instead of the active one.
     pub open_on_workspace: Option<usize>,
@@ -1491,7 +1491,7 @@ impl Config {
                 width: rule.width,
                 height: rule.height,
                 corner_style: rule.corner_style,
-                border: rule.border,
+                border_hidden: rule.border == Some(false),
                 border_color_bgr: rule
                     .border_color
                     .as_deref()
@@ -1516,7 +1516,7 @@ impl Config {
                 width: None,
                 height: None,
                 corner_style: None,
-                border: None,
+                border_hidden: false,
                 border_color_bgr: None,
                 open_on_workspace: None,
                 open_maximized: false,

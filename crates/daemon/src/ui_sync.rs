@@ -10,7 +10,7 @@ pub(crate) enum BorderDecision {
 
 #[derive(Default)]
 struct FocusBorderRule {
-    border: Option<bool>,
+    border_hidden: bool,
     color_bgr: Option<u32>,
     corner_style: Option<crate::config::CornerStyle>,
 }
@@ -177,9 +177,9 @@ impl AppState {
                 rule.color_bgr
                     .or_else(|| hex_rgb_to_bgr(&self.config.appearance.active_border_color))
             };
-            match (rule.border, color) {
-                (Some(false), _) | (_, None) => BorderDecision::Hidden,
-                (_, Some(color_bgr)) => BorderDecision::Show {
+            match (rule.border_hidden, color) {
+                (true, _) | (_, None) => BorderDecision::Hidden,
+                (false, Some(color_bgr)) => BorderDecision::Show {
                     color_bgr,
                     corner_radius: self.corner_radius_for_window(hwnd, rule.corner_style),
                 },
@@ -305,7 +305,7 @@ impl AppState {
         if !self
             .compiled_rules
             .iter()
-            .any(|r| r.corner_style.is_some() || r.border.is_some() || r.border_color_bgr.is_some())
+            .any(|r| r.corner_style.is_some() || r.border_hidden || r.border_color_bgr.is_some())
         {
             return resolved;
         }
@@ -315,7 +315,7 @@ impl AppState {
         let exe = get_process_executable(info.process_id).unwrap_or_default();
         for rule in &self.compiled_rules {
             if rule.matches(&info.class_name, &info.title, &exe, None) {
-                resolved.border = resolved.border.or(rule.border);
+                resolved.border_hidden |= rule.border_hidden;
                 resolved.color_bgr = resolved.color_bgr.or(rule.border_color_bgr);
                 resolved.corner_style = resolved.corner_style.or(rule.corner_style);
             }
