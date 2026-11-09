@@ -19728,6 +19728,104 @@ fn scrolled_cross_row_fixture() -> AppState {
     state
 }
 
+fn scrolled_rows_with_floating_focus() -> AppState {
+    let mut state = scrolled_cross_row_fixture();
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .add_floating(900, Rect::new(100, 100, 500, 400))
+        .unwrap();
+    state.previous_focused_hwnd = Some(900);
+    state
+}
+
+fn row_snapshot(state: &AppState) -> (usize, Option<u64>, Vec<serde_json::Value>) {
+    let ws = state.focused_workspace().unwrap();
+    (
+        ws.focused_row(),
+        ws.focused_window(),
+        (0..ws.row_count())
+            .map(|index| serde_json::to_value(ws.row(index).unwrap()).unwrap())
+            .collect(),
+    )
+}
+
+#[test]
+fn row_commands_preserve_scrolled_rows_when_floating_is_focused() {
+    for (command, tiled_focus) in [
+        (IpcCommand::FocusRowUp, 200),
+        (IpcCommand::FocusRowDown, 101),
+        (IpcCommand::FocusRow { index: 1 }, 101),
+        (IpcCommand::MoveWindowToRowUp, 200),
+        (IpcCommand::MoveWindowToRowDown, 101),
+    ] {
+        let mut state = scrolled_rows_with_floating_focus();
+        state
+            .focused_workspace_mut()
+            .unwrap()
+            .focus_window(tiled_focus)
+            .unwrap();
+        let before = row_snapshot(&state);
+        let rect = state.focused_workspace().unwrap().floating_windows()[0].rect;
+
+        assert_eq!(
+            state.handle_command(command.clone()),
+            IpcResponse::Ok,
+            "{command:?}"
+        );
+        assert_eq!(state.focused_floating_window(), Some(900), "{command:?}");
+        assert_eq!(
+            state.focused_workspace().unwrap().floating_windows()[0].rect,
+            rect,
+            "{command:?}"
+        );
+        assert_eq!(row_snapshot(&state), before, "{command:?}");
+    }
+}
+
+#[test]
+fn floating_geometry_commands_preserve_scrolled_rows() {
+    for (command, expected) in [
+        (IpcCommand::MoveColumnLeft, Rect::new(50, 100, 500, 400)),
+        (IpcCommand::MoveColumnRight, Rect::new(150, 100, 500, 400)),
+        (IpcCommand::MoveWindowLeft, Rect::new(50, 100, 500, 400)),
+        (IpcCommand::MoveWindowRight, Rect::new(150, 100, 500, 400)),
+        (IpcCommand::MoveWindowUp, Rect::new(100, 50, 500, 400)),
+        (IpcCommand::MoveWindowDown, Rect::new(100, 150, 500, 400)),
+        (IpcCommand::NudgeLeft, Rect::new(50, 100, 500, 400)),
+        (IpcCommand::NudgeRight, Rect::new(150, 100, 500, 400)),
+        (
+            IpcCommand::SetColumnWidth { fraction: 0.5 },
+            Rect::new(100, 100, 960, 400),
+        ),
+        (IpcCommand::CycleWidth, Rect::new(100, 100, 960, 400)),
+        (IpcCommand::CycleWidthUp, Rect::new(100, 100, 960, 400)),
+        (IpcCommand::CycleWidthDown, Rect::new(100, 100, 480, 400)),
+        (IpcCommand::CycleHeight, Rect::new(100, 100, 500, 520)),
+        (IpcCommand::CycleHeightUp, Rect::new(100, 100, 500, 520)),
+        (IpcCommand::CycleHeightDown, Rect::new(100, 100, 500, 260)),
+        (IpcCommand::CenterColumn, Rect::new(710, 320, 500, 400)),
+    ] {
+        let mut state = scrolled_rows_with_floating_focus();
+        state.config.layout.width_presets = vec![0.25, 0.5, 0.75];
+        state.config.layout.height_presets = vec![0.25, 0.5, 0.75];
+        let before = row_snapshot(&state);
+
+        assert_eq!(
+            state.handle_command(command.clone()),
+            IpcResponse::Ok,
+            "{command:?}"
+        );
+        assert_eq!(state.focused_floating_window(), Some(900), "{command:?}");
+        assert_eq!(
+            state.focused_workspace().unwrap().floating_windows()[0].rect,
+            expected,
+            "{command:?}"
+        );
+        assert_eq!(row_snapshot(&state), before, "{command:?}");
+    }
+}
+
 fn assert_source_row_revealed(state: &AppState) {
     let ws = state.focused_workspace().unwrap();
     let viewport = state.focused_viewport();
