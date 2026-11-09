@@ -171,6 +171,8 @@
 "settings.behavior.track_focus_changes.description" = "跟随 Windows 的焦点变化。焦点跟踪钩子的更改将在下次启动 LeopardWM 时生效。"
 "settings.behavior.focus_follows_mouse.label" = "焦点跟随鼠标"
 "settings.behavior.focus_follows_mouse.description" = "鼠标移入窗口时聚焦"
+"settings.behavior.move_step.label" = "浮动窗口移动步长"
+"settings.behavior.move_step.description" = "每次键盘移动的距离，单位为逻辑像素（1–1000）"
 "settings.behavior.focus_follows_mouse_delay_ms.label" = "焦点延迟"
 "settings.behavior.focus_follows_mouse_delay_ms.description" = "鼠标移入后切换焦点的延迟（毫秒）"
 "settings.behavior.mouse_follows_focus.label" = "鼠标跟随焦点"

@@ -26,18 +26,20 @@ At a vertical edge, `[behavior] workspace_edge_wrap` controls `focus up`/`focus 
 
 ## Move windows and columns
 
+Move left/right and move-window directions nudge a focused floating window by `move_step`, constrained to its monitor's work area.
+
 | Command | Arguments and effect |
 |---|---|
 | `lwm move` | Choose a direction for the focused column. |
-| `lwm move left` | Move the focused column left. |
-| `lwm move right` | Move the focused column right. |
+| `lwm move left` | Move the focused column left, or nudge a floating window left. |
+| `lwm move right` | Move the focused column right, or nudge a floating window right. |
 | `lwm move start` | Move the focused column to the start of the strip. |
 | `lwm move end` | Move the focused column to the end of the strip. |
 | `lwm move-window` | Choose a direction for the focused window. |
-| `lwm move-window left` | Move the focused window to the column on the left. |
-| `lwm move-window right` | Move the focused window to the column on the right. |
-| `lwm move-window up` | Move the focused window up in its column. |
-| `lwm move-window down` | Move the focused window down in its column. |
+| `lwm move-window left` | Move the focused window to the column on the left, or nudge it left if floating. |
+| `lwm move-window right` | Move the focused window to the column on the right, or nudge it right if floating. |
+| `lwm move-window up` | Move the focused window up in its column, or nudge it up if floating. |
+| `lwm move-window down` | Move the focused window down in its column, or nudge it down if floating. |
 | `lwm expel` | Choose a side for a new column. |
 | `lwm expel left` | Expel the focused window into a new column on the left. |
 | `lwm expel right` | Expel the focused window into a new column on the right. |
@@ -71,19 +73,21 @@ Next/previous workspace commands always wrap; optional skip-empty behavior is de
 
 ## Layout, width and height
 
+With a floating window focused, `set-width` and width/height preset commands size it as a fraction of its monitor's work area; `center-column` centers it in that area. Up/down presets stop at the ends, while the unqualified cycle commands wrap.
+
 | Command | Arguments and effect |
 |---|---|
 | `lwm resize` | Required `-d, --delta <PIXELS>` changes focused column width in pixels. Use `--delta=-50` for a negative delta. |
-| `lwm set-width` | Required `-f, --fraction <FRACTION>` sets column width as a finite fraction of the viewport, from 0.1 to 1.0 inclusive. Example: `lwm set-width --fraction 0.5`. |
-| `lwm center-column` | Center the focused column. |
+| `lwm set-width` | Required `-f, --fraction <FRACTION>` sets column width as a finite fraction of the viewport, or floating width as a fraction of the work area, from 0.1 to 1.0 inclusive. Example: `lwm set-width --fraction 0.5`. |
+| `lwm center-column` | Center the focused column, or center a floating window in the work area. |
 | `lwm maximize-column` | Toggle the focused column filling the viewport width. |
 | `lwm equalize-widths` | Equalize column widths. |
-| `lwm cycle-width` | Cycle to the next width preset, wrapping at the end. |
-| `lwm cycle-width-up` | Cycle the focused column width up through presets. |
-| `lwm cycle-width-down` | Cycle the focused column width down through presets. |
-| `lwm cycle-height` | Cycle to the next height preset, wrapping at the end. |
-| `lwm cycle-height-up` | Cycle the focused window height up through presets. |
-| `lwm cycle-height-down` | Cycle the focused window height down through presets. |
+| `lwm cycle-width` | Cycle column or floating window width to the next preset, wrapping at the end. |
+| `lwm cycle-width-up` | Cycle column or floating window width up through presets. |
+| `lwm cycle-width-down` | Cycle column or floating window width down through presets. |
+| `lwm cycle-height` | Cycle window height to the next preset, wrapping at the end, including floating windows. |
+| `lwm cycle-height-up` | Cycle window height up through presets, including floating windows. |
+| `lwm cycle-height-down` | Cycle window height down through presets, including floating windows. |
 | `lwm equalize-heights` | Equalize window heights in the focused column. |
 
 ## Window modes

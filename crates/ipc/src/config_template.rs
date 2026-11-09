@@ -130,6 +130,9 @@ focus_follows_mouse = false
 # Switch to the destination workspace when moving the focused window.
 # follow_window_to_workspace = false
 
+# Keyboard move distance for floating windows in logical pixels (1..1000).
+# move_step = 50
+
 # Warp the mouse cursor onto the focused window after a focus-navigation command
 # (the inverse of focus_follows_mouse). Default false.
 # mouse_follows_focus = false

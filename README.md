@@ -333,7 +333,7 @@ Enable **Settings → Layout → Center single column**, or set `center_single_c
 
 ### Layout commands
 
-Most users drive the layout via hotkeys, but many commands are also available through the CLI for scripting or AutoHotkey integration.
+Most users drive the layout via hotkeys, but many commands are also available through the CLI for scripting or AutoHotkey integration. With a floating window focused, move commands nudge it within the monitor work area by `[behavior] move_step` logical pixels (default 50, range 1–1000); width and height presets size it against that work area, and center centers it there.
 
 ```bash
 lwm focus left | right | up | down

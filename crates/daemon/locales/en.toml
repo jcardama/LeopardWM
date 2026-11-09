@@ -171,6 +171,8 @@
 "settings.behavior.track_focus_changes.description" = "Follow Windows focus changes. Changes to focus tracking hooks take effect the next time LeopardWM starts."
 "settings.behavior.focus_follows_mouse.label" = "Focus follows mouse"
 "settings.behavior.focus_follows_mouse.description" = "Focus windows on mouse enter"
+"settings.behavior.move_step.label" = "Floating window move step"
+"settings.behavior.move_step.description" = "Distance per keyboard move in logical pixels (1–1000)"
 "settings.behavior.focus_follows_mouse_delay_ms.label" = "Focus delay"
 "settings.behavior.focus_follows_mouse_delay_ms.description" = "Delay before focus change on mouse enter (ms)"
 "settings.behavior.mouse_follows_focus.label" = "Mouse follows focus"

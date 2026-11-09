@@ -2,7 +2,8 @@ use crate::*;
 
 use crate::workspace::Workspace;
 
-enum PresetCycle {
+/// Direction and wrapping behavior for preset cycling.
+pub enum PresetCycle {
     Up,
     Down,
     Wrap,
@@ -29,6 +30,42 @@ fn cycle_preset(presets: &[f64], current: f64, cycle: PresetCycle) -> Option<f64
 }
 
 impl Workspace {
+    /// Cycle a floating dimension through the same presets as tiled windows.
+    pub fn cycle_floating_size(
+        &mut self,
+        window_id: WindowId,
+        area: Rect,
+        presets: &[f64],
+        horizontal: bool,
+        cycle: PresetCycle,
+    ) {
+        let Some(window) = self
+            .floating_windows
+            .iter()
+            .find(|window| window.id == window_id)
+        else {
+            return;
+        };
+        let (current, base) = if horizontal {
+            (window.rect.width, area.width)
+        } else {
+            (window.rect.height, area.height)
+        };
+        if base <= 0 {
+            return;
+        }
+        if let Some(fraction) = cycle_preset(presets, current as f64 / base as f64, cycle) {
+            self.set_floating_size(
+                window_id,
+                (base as f64 * fraction).floor() as i32,
+                horizontal,
+                area,
+            );
+        } else {
+            self.move_floating(window_id, 0, 0, area);
+        }
+    }
+
     /// Records a placement minimum width in layout pixels, excluding invisible border insets.
     pub fn set_window_min_width(&mut self, window_id: WindowId, min_width: i32) {
         self.window_min_widths.insert(window_id, min_width);

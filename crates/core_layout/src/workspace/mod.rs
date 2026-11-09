@@ -282,6 +282,66 @@ impl Workspace {
         }
     }
 
+    fn change_floating_rect(
+        &mut self,
+        window_id: WindowId,
+        area: Rect,
+        change: impl FnOnce(&mut Rect),
+    ) {
+        if let Some(window) = self.floating_windows.iter_mut().find(|f| f.id == window_id) {
+            let rect = &mut window.rect;
+            change(rect);
+            rect.x = rect.x.clamp(
+                area.x,
+                area.x
+                    .saturating_add(area.width.saturating_sub(rect.width).max(0)),
+            );
+            rect.y = rect.y.clamp(
+                area.y,
+                area.y
+                    .saturating_add(area.height.saturating_sub(rect.height).max(0)),
+            );
+        }
+    }
+
+    /// Move a floating window by physical pixels and constrain it to the work area.
+    pub fn move_floating(&mut self, window_id: WindowId, dx: i32, dy: i32, area: Rect) {
+        self.change_floating_rect(window_id, area, |rect| {
+            rect.x = rect.x.saturating_add(dx);
+            rect.y = rect.y.saturating_add(dy);
+        });
+    }
+
+    /// Set one floating dimension, retaining the existing minimum-size floor.
+    pub fn set_floating_size(
+        &mut self,
+        window_id: WindowId,
+        size: i32,
+        horizontal: bool,
+        area: Rect,
+    ) {
+        self.change_floating_rect(window_id, area, |rect| {
+            let dimension = if horizontal {
+                &mut rect.width
+            } else {
+                &mut rect.height
+            };
+            *dimension = size.max(MIN_COLUMN_WIDTH.min(*dimension));
+        });
+    }
+
+    /// Center a floating window in the work area.
+    pub fn center_floating(&mut self, window_id: WindowId, area: Rect) {
+        self.change_floating_rect(window_id, area, |rect| {
+            rect.x = area
+                .x
+                .saturating_add(area.width.saturating_sub(rect.width) / 2);
+            rect.y = area
+                .y
+                .saturating_add(area.height.saturating_sub(rect.height) / 2);
+        });
+    }
+
     pub fn floating_windows(&self) -> &[FloatingWindow] {
         &self.floating_windows
     }

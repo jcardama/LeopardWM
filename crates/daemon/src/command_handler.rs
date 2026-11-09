@@ -4,6 +4,7 @@ use crate::layout_apply::LayoutApplyOutcome;
 use crate::state::{
     validate_set_width_fraction, AppState, ElevationBlockedRecord, PendingWorkspaceSwitchFocus,
 };
+use leopardwm_core_layout::workspace::sizing::PresetCycle;
 use leopardwm_core_layout::{
     FloatingFocus, LayoutError, Rect, Visibility, WindowPlacement, Workspace,
 };
@@ -138,26 +139,26 @@ fn floating_policy(cmd: &IpcCommand) -> FloatingPolicy {
         | FocusEnd
         | FocusFloating
         | FocusTiling
-        | SwitchFocusFloatingTiling => FloatingPolicy::Target,
-        SetColumnWidth { .. }
+        | SwitchFocusFloatingTiling
+        | SetColumnWidth { .. }
         | CycleWidth
         | CycleWidthUp
         | CycleWidthDown
         | CycleHeight
         | CycleHeightUp
         | CycleHeightDown
-        | MaximizeColumn
         | CenterColumn
-        | EqualizeColumnHeights
-        | ToggleTabbed
         | MoveColumnLeft
         | MoveColumnRight
-        | MoveColumnToStart
-        | MoveColumnToEnd
         | MoveWindowLeft
         | MoveWindowRight
         | MoveWindowUp
-        | MoveWindowDown
+        | MoveWindowDown => FloatingPolicy::Target,
+        MaximizeColumn
+        | EqualizeColumnHeights
+        | ToggleTabbed
+        | MoveColumnToStart
+        | MoveColumnToEnd
         | ConsumeFromLeft
         | ConsumeFromRight
         | ExpelToLeft
@@ -400,6 +401,20 @@ impl AppState {
             IpcCommand::ToggleFullscreen => {
                 Some(self.toggle_fullscreen_with(|ws| ws.toggle_fullscreen_window(hwnd)))
             }
+            IpcCommand::MoveColumnLeft
+            | IpcCommand::MoveColumnRight
+            | IpcCommand::MoveWindowLeft
+            | IpcCommand::MoveWindowRight
+            | IpcCommand::MoveWindowUp
+            | IpcCommand::MoveWindowDown
+            | IpcCommand::SetColumnWidth { .. }
+            | IpcCommand::CycleWidth
+            | IpcCommand::CycleWidthUp
+            | IpcCommand::CycleWidthDown
+            | IpcCommand::CycleHeight
+            | IpcCommand::CycleHeightUp
+            | IpcCommand::CycleHeightDown
+            | IpcCommand::CenterColumn => Some(self.handle_floating_geometry(cmd, hwnd)),
             IpcCommand::Resize { delta } => {
                 if self
                     .focused_workspace()
@@ -439,6 +454,82 @@ impl AppState {
             IpcCommand::FocusPrev => Some(self.focus_among_floating(hwnd, FloatingFocus::Prev)),
             _ => None,
         }
+    }
+
+    pub(crate) fn move_step_px(&self, monitor: MonitorId) -> Option<i32> {
+        self.monitors.get(&monitor).map(|info| {
+            leopardwm_platform_win32::scale_px(self.config.behavior.move_step, info.scale_factor)
+        })
+    }
+
+    fn handle_floating_geometry(&mut self, cmd: &IpcCommand, hwnd: u64) -> IpcResponse {
+        if self
+            .focused_workspace()
+            .is_some_and(|ws| ws.fullscreen_window_id() == Some(hwnd))
+        {
+            debug!("Ignoring {:?} while the floating window is fullscreen", cmd);
+            return IpcResponse::Ok;
+        }
+        if let IpcCommand::SetColumnWidth { fraction } = cmd {
+            if let Err(message) = validate_set_width_fraction(*fraction) {
+                return IpcResponse::error(message);
+            }
+        }
+        let monitor = self.focused_monitor;
+        let Some(info) = self.monitors.get(&monitor) else {
+            return IpcResponse::Ok;
+        };
+        let area = info.work_area;
+        let Some(step) = self.move_step_px(monitor) else {
+            return IpcResponse::Ok;
+        };
+        let width_presets = self.config.layout.width_presets.clone();
+        let height_presets = self.config.layout.height_presets.clone();
+        self.execute_workspace_command(true, false, |ws, _| match cmd {
+            IpcCommand::MoveColumnLeft | IpcCommand::MoveWindowLeft => {
+                ws.move_floating(hwnd, -step, 0, area)
+            }
+            IpcCommand::MoveColumnRight | IpcCommand::MoveWindowRight => {
+                ws.move_floating(hwnd, step, 0, area)
+            }
+            IpcCommand::MoveWindowUp => ws.move_floating(hwnd, 0, -step, area),
+            IpcCommand::MoveWindowDown => ws.move_floating(hwnd, 0, step, area),
+            IpcCommand::SetColumnWidth { fraction } => ws.set_floating_size(
+                hwnd,
+                (area.width as f64 * fraction).floor() as i32,
+                true,
+                area,
+            ),
+            IpcCommand::CycleWidth
+            | IpcCommand::CycleWidthUp
+            | IpcCommand::CycleWidthDown
+            | IpcCommand::CycleHeight
+            | IpcCommand::CycleHeightUp
+            | IpcCommand::CycleHeightDown => {
+                let horizontal = matches!(
+                    cmd,
+                    IpcCommand::CycleWidth | IpcCommand::CycleWidthUp | IpcCommand::CycleWidthDown
+                );
+                let cycle = match cmd {
+                    IpcCommand::CycleWidthUp | IpcCommand::CycleHeightUp => PresetCycle::Up,
+                    IpcCommand::CycleWidthDown | IpcCommand::CycleHeightDown => PresetCycle::Down,
+                    _ => PresetCycle::Wrap,
+                };
+                ws.cycle_floating_size(
+                    hwnd,
+                    area,
+                    if horizontal {
+                        &width_presets
+                    } else {
+                        &height_presets
+                    },
+                    horizontal,
+                    cycle,
+                );
+            }
+            IpcCommand::CenterColumn => ws.center_floating(hwnd, area),
+            _ => unreachable!(),
+        })
     }
 
     fn focus_layer(&mut self, cmd: &IpcCommand) -> IpcResponse {
@@ -2219,7 +2310,13 @@ mod floating_policy_tests {
         IpcCommand::FocusEnd,
     ];
 
-    const IGNORED: [IpcCommand; 23] = [
+    const FLOATING_GEOMETRY: [IpcCommand; 14] = [
+        IpcCommand::MoveColumnLeft,
+        IpcCommand::MoveColumnRight,
+        IpcCommand::MoveWindowLeft,
+        IpcCommand::MoveWindowRight,
+        IpcCommand::MoveWindowUp,
+        IpcCommand::MoveWindowDown,
         IpcCommand::SetColumnWidth { fraction: 0.5 },
         IpcCommand::CycleWidth,
         IpcCommand::CycleWidthUp,
@@ -2227,18 +2324,15 @@ mod floating_policy_tests {
         IpcCommand::CycleHeight,
         IpcCommand::CycleHeightUp,
         IpcCommand::CycleHeightDown,
-        IpcCommand::MaximizeColumn,
         IpcCommand::CenterColumn,
+    ];
+
+    const IGNORED: [IpcCommand; 9] = [
+        IpcCommand::MaximizeColumn,
         IpcCommand::EqualizeColumnHeights,
         IpcCommand::ToggleTabbed,
-        IpcCommand::MoveColumnLeft,
-        IpcCommand::MoveColumnRight,
         IpcCommand::MoveColumnToStart,
         IpcCommand::MoveColumnToEnd,
-        IpcCommand::MoveWindowLeft,
-        IpcCommand::MoveWindowRight,
-        IpcCommand::MoveWindowUp,
-        IpcCommand::MoveWindowDown,
         IpcCommand::ConsumeFromLeft,
         IpcCommand::ConsumeFromRight,
         IpcCommand::ExpelToLeft,
@@ -2349,6 +2443,7 @@ mod floating_policy_tests {
         ]
         .into_iter()
         .chain(FOCUS)
+        .chain(FLOATING_GEOMETRY)
         {
             assert!(
                 matches!(floating_policy(&cmd), FloatingPolicy::Target),
@@ -2380,6 +2475,7 @@ mod floating_policy_tests {
                 state.focused_workspace_mut().unwrap().toggle_fullscreen();
             }
             let before = strip_snapshot(&state);
+            let floating_before = state.focused_workspace().unwrap().floating_windows()[0].rect;
             assert_eq!(before.fullscreen.is_some(), fullscreen);
             for cmd in IGNORED {
                 assert_eq!(
@@ -2393,6 +2489,10 @@ mod floating_policy_tests {
                     "{cmd:?} changed the strip (fullscreen: {fullscreen})"
                 );
                 assert_eq!(state.focused_floating_window(), Some(FLOATING));
+                assert_eq!(
+                    state.focused_workspace().unwrap().floating_windows()[0].rect,
+                    floating_before
+                );
             }
         }
     }
@@ -2412,6 +2512,153 @@ mod floating_policy_tests {
             .map(|c| c.width())
             .collect();
         assert!(widths.windows(2).all(|w| w[0] == w[1]), "{widths:?}");
+    }
+
+    #[test]
+    fn floating_move_commands_use_scaled_step_and_work_area() {
+        for (scale, step) in [(1.0, 50), (1.5, 75)] {
+            for (cmd, dx, dy) in [
+                (IpcCommand::MoveColumnLeft, -step, 0),
+                (IpcCommand::MoveColumnRight, step, 0),
+                (IpcCommand::MoveWindowLeft, -step, 0),
+                (IpcCommand::MoveWindowRight, step, 0),
+                (IpcCommand::MoveWindowUp, 0, -step),
+                (IpcCommand::MoveWindowDown, 0, step),
+            ] {
+                let mut monitor = monitor(1, 0);
+                monitor.scale_factor = scale;
+                let mut state = floating_focus_state_on(vec![monitor]);
+                assert_eq!(
+                    state.handle_command(cmd.clone()),
+                    IpcResponse::Ok,
+                    "{cmd:?}"
+                );
+                assert_eq!(
+                    state.focused_workspace().unwrap().floating_windows()[0].rect,
+                    Rect::new(100 + dx, 100 + dy, 500, 400),
+                    "{cmd:?}"
+                );
+            }
+        }
+        let mut monitor = monitor(1, 0);
+        monitor.scale_factor = 1.5;
+        let mut state = floating_focus_state_on(vec![monitor]);
+        state.config.behavior.move_step = 100;
+        assert_eq!(
+            state.handle_command(IpcCommand::MoveWindowRight),
+            IpcResponse::Ok
+        );
+        assert_eq!(
+            state.focused_workspace().unwrap().floating_windows()[0].rect,
+            Rect::new(250, 100, 500, 400)
+        );
+        state
+            .focused_workspace_mut()
+            .unwrap()
+            .update_floating(FLOATING, Rect::new(0, 0, 500, 400));
+        assert_eq!(
+            state.handle_command(IpcCommand::MoveWindowLeft),
+            IpcResponse::Ok
+        );
+        assert_eq!(
+            state.handle_command(IpcCommand::MoveWindowUp),
+            IpcResponse::Ok
+        );
+        assert_eq!(
+            state.focused_workspace().unwrap().floating_windows()[0].rect,
+            Rect::new(0, 0, 500, 400)
+        );
+        state
+            .focused_workspace_mut()
+            .unwrap()
+            .update_floating(FLOATING, Rect::new(1420, 640, 500, 400));
+        assert_eq!(
+            state.handle_command(IpcCommand::MoveWindowRight),
+            IpcResponse::Ok
+        );
+        assert_eq!(
+            state.handle_command(IpcCommand::MoveWindowDown),
+            IpcResponse::Ok
+        );
+        assert_eq!(
+            state.focused_workspace().unwrap().floating_windows()[0].rect,
+            Rect::new(1420, 640, 500, 400)
+        );
+    }
+
+    #[test]
+    fn floating_size_and_center_commands_use_work_area_presets() {
+        let mut state = floating_focus_state();
+        state.config.layout.width_presets = vec![0.25, 0.5, 0.75];
+        state.config.layout.height_presets = vec![0.25, 0.5, 0.75];
+        for (cmd, expected) in [
+            (
+                IpcCommand::SetColumnWidth { fraction: 0.5 },
+                Rect::new(100, 100, 960, 400),
+            ),
+            (IpcCommand::CycleWidthUp, Rect::new(100, 100, 1440, 400)),
+            (IpcCommand::CycleWidthUp, Rect::new(100, 100, 1440, 400)),
+            (IpcCommand::CycleWidth, Rect::new(100, 100, 480, 400)),
+            (IpcCommand::CycleWidthDown, Rect::new(100, 100, 480, 400)),
+            (IpcCommand::CycleHeightUp, Rect::new(100, 100, 480, 520)),
+            (IpcCommand::CycleHeightDown, Rect::new(100, 100, 480, 260)),
+            (IpcCommand::CycleHeightDown, Rect::new(100, 100, 480, 260)),
+            (IpcCommand::CycleHeight, Rect::new(100, 100, 480, 520)),
+            (IpcCommand::CycleHeight, Rect::new(100, 100, 480, 780)),
+            (IpcCommand::CycleHeight, Rect::new(100, 100, 480, 260)),
+            (IpcCommand::CenterColumn, Rect::new(720, 390, 480, 260)),
+        ] {
+            assert_eq!(
+                state.handle_command(cmd.clone()),
+                IpcResponse::Ok,
+                "{cmd:?}"
+            );
+            assert_eq!(
+                state.focused_workspace().unwrap().floating_windows()[0].rect,
+                expected,
+                "{cmd:?}"
+            );
+        }
+        state
+            .focused_workspace_mut()
+            .unwrap()
+            .update_floating(FLOATING, Rect::new(1000, 900, 1440, 400));
+        assert_eq!(
+            state.handle_command(IpcCommand::CycleWidthUp),
+            IpcResponse::Ok
+        );
+        assert_eq!(
+            state.focused_workspace().unwrap().floating_windows()[0].rect,
+            Rect::new(480, 640, 1440, 400)
+        );
+        assert!(matches!(
+            state.handle_command(IpcCommand::SetColumnWidth { fraction: 1.1 }),
+            IpcResponse::Error { .. }
+        ));
+    }
+
+    #[test]
+    fn floating_geometry_commands_ignore_floating_fullscreen() {
+        let mut state = floating_focus_state();
+        state
+            .focused_workspace_mut()
+            .unwrap()
+            .toggle_fullscreen_window(FLOATING);
+        let before = state.focused_workspace().unwrap().floating_windows()[0].rect;
+        let strip = strip_snapshot(&state);
+        for cmd in FLOATING_GEOMETRY {
+            assert_eq!(
+                state.handle_command(cmd.clone()),
+                IpcResponse::Ok,
+                "{cmd:?}"
+            );
+            assert_eq!(
+                state.focused_workspace().unwrap().floating_windows()[0].rect,
+                before,
+                "{cmd:?}"
+            );
+            assert_eq!(strip_snapshot(&state), strip, "{cmd:?}");
+        }
     }
 
     #[test]

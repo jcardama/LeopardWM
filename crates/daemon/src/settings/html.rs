@@ -1103,6 +1103,10 @@ input[type="range"]::-webkit-slider-thumb {
             <input type="number" id="behavior-focus_follows_mouse_delay_ms" min="50" max="2000">
           </div>
           <div class="field">
+            <div class="field-info"><div class="field-label" data-i18n="settings.behavior.move_step.label"></div><div class="field-desc" data-i18n="settings.behavior.move_step.description"></div></div>
+            <input type="number" id="behavior-move_step" min="1" max="1000">
+          </div>
+          <div class="field">
             <div class="field-info"><div class="field-label" data-i18n="settings.behavior.mouse_follows_focus.label"></div><div class="field-desc" data-i18n="settings.behavior.mouse_follows_focus.description"></div></div>
             <label class="toggle"><input type="checkbox" id="behavior-mouse_follows_focus"><span class="track"></span><span class="thumb"></span></label>
           </div>
@@ -1679,6 +1683,7 @@ function init(cfg) {
   setChecked('behavior-track_focus_changes', cfg.behavior.track_focus_changes);
   setChecked('behavior-focus_follows_mouse', cfg.behavior.focus_follows_mouse);
   setVal('behavior-focus_follows_mouse_delay_ms', cfg.behavior.focus_follows_mouse_delay_ms);
+  setVal('behavior-move_step', cfg.behavior.move_step);
   setChecked('behavior-mouse_follows_focus', cfg.behavior.mouse_follows_focus === true);
   setCb('cb-behavior-workspace_edge_wrap', cfg.behavior.workspace_edge_wrap || 'off');
   setChecked('behavior-skip_empty_workspaces', cfg.behavior.skip_empty_workspaces === true);
@@ -2394,6 +2399,7 @@ function readConfig() {
       track_focus_changes: checked('behavior-track_focus_changes'),
       focus_follows_mouse: checked('behavior-focus_follows_mouse'),
       focus_follows_mouse_delay_ms: num('behavior-focus_follows_mouse_delay_ms'),
+      move_step: num('behavior-move_step'),
       mouse_follows_focus: checked('behavior-mouse_follows_focus'),
       workspace_edge_wrap: cbVal('cb-behavior-workspace_edge_wrap'),
       skip_empty_workspaces: checked('behavior-skip_empty_workspaces'),

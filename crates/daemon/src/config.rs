@@ -487,6 +487,13 @@ pub struct BehaviorConfig {
 
     #[serde(default = "default_false")]
     pub follow_window_to_workspace: bool,
+
+    #[serde(default = "default_move_step")]
+    pub move_step: i32,
+}
+
+fn default_move_step() -> i32 {
+    50
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -530,6 +537,7 @@ impl Default for BehaviorConfig {
             fullscreen_follows_focus: true,
             skip_empty_workspaces: false,
             follow_window_to_workspace: false,
+            move_step: default_move_step(),
         }
     }
 }
@@ -1161,6 +1169,17 @@ impl Config {
                 ),
             });
             self.appearance.language = "en".to_string();
+        }
+
+        if !(1..=1000).contains(&self.behavior.move_step) {
+            warnings.push(ConfigWarning {
+                field: "behavior.move_step".to_string(),
+                message: format!(
+                    "move_step ({}) out of range 1..=1000, clamped",
+                    self.behavior.move_step
+                ),
+            });
+            self.behavior.move_step = self.behavior.move_step.clamp(1, 1000);
         }
 
         if self.behavior.floating_above_tiled && !self.behavior.track_focus_changes {
@@ -2312,6 +2331,24 @@ mod tests {
         assert!(config.snap_hints.enabled);
         assert_eq!(config.snap_hints.duration_ms, 300);
         assert_eq!(config.snap_hints.opacity, 200);
+    }
+
+    #[test]
+    fn move_step_defaults_roundtrips_and_clamps() {
+        let missing: Config = toml::from_str("[behavior]\n").unwrap();
+        assert_eq!(missing.behavior.move_step, 50);
+        let explicit: Config = toml::from_str("[behavior]\nmove_step = 125\n").unwrap();
+        let roundtrip: Config = toml::from_str(&toml::to_string(&explicit).unwrap()).unwrap();
+        assert_eq!(roundtrip.behavior.move_step, 125);
+        for (input, expected) in [(-1, 1), (0, 1), (1001, 1000)] {
+            let mut config: Config =
+                toml::from_str(&format!("[behavior]\nmove_step = {input}\n")).unwrap();
+            assert!(config
+                .validate()
+                .iter()
+                .any(|w| w.field == "behavior.move_step"));
+            assert_eq!(config.behavior.move_step, expected);
+        }
     }
 
     #[test]

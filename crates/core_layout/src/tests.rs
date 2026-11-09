@@ -2810,6 +2810,32 @@ mod tests {
     }
 
     #[test]
+    fn floating_geometry_clamps_oversized_windows_and_preserves_size_floor() {
+        let mut ws = Workspace::new();
+        let area = Rect::new(-200, 100, 800, 600);
+        ws.add_floating(10, Rect::new(0, 200, 300, 200)).unwrap();
+        ws.move_floating(10, 1000, -1000, area);
+        assert_eq!(ws.floating_windows()[0].rect, Rect::new(300, 100, 300, 200));
+        ws.set_floating_size(10, 20, true, area);
+        ws.set_floating_size(10, 20, false, area);
+        assert_eq!(
+            ws.floating_windows()[0].rect,
+            Rect::new(300, 100, MIN_COLUMN_WIDTH, MIN_COLUMN_WIDTH)
+        );
+        ws.update_floating(10, Rect::new(0, 200, 1000, 700));
+        ws.center_floating(10, area);
+        assert_eq!(
+            ws.floating_windows()[0].rect,
+            Rect::new(-200, 100, 1000, 700)
+        );
+        ws.update_floating(10, Rect::new(0, 200, 80, 80));
+        ws.set_floating_size(10, 10, true, area);
+        ws.set_floating_size(10, 10, false, area);
+        assert_eq!(ws.floating_windows()[0].rect.width, 80);
+        assert_eq!(ws.floating_windows()[0].rect.height, 80);
+    }
+
+    #[test]
     fn test_resize_floating_ignores_tiled_and_missing_windows() {
         let mut ws = Workspace::new();
         ws.insert_window(1, Some(400)).unwrap();
