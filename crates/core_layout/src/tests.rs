@@ -3088,6 +3088,31 @@ mod tests {
     }
 
     #[test]
+    fn test_reconcile_multi_row_preserves_animation_to_valid_target_after_shrink() {
+        let mut ws = Workspace::with_gaps(10, 10);
+        ws.set_row_layout(&[0.5, 0.5]);
+        ws.set_center_past_edges(false);
+        for id in [1, 2, 3] {
+            ws.insert_window_in_row(id, 0, Some(800)).unwrap();
+        }
+        ws.set_window_min_width(3, 1500);
+        ws.set_scroll_offset(1220.0);
+        ws.start_scroll_animation(300.0, 1920, Some(1000), Some(Easing::Linear));
+        ws.tick_animation(10);
+        ws.clear_window_min_width(3);
+        let current = ws.effective_scroll_offset_for_row(0);
+        assert!(current > 520.0);
+
+        ws.reconcile_scroll_bounds(1920);
+
+        assert!(ws.is_animating_for_row(0));
+        assert_eq!(ws.effective_scroll_offset_for_row(0), current);
+        ws.tick_animation(1000);
+        assert!(!ws.is_animating_for_row(0));
+        assert_eq!(ws.scroll_offset_for_row(0), 300.0);
+    }
+
+    #[test]
     fn test_reconcile_scroll_bounds_cancels_invalid_current_or_target() {
         for (current, target) in [(1220.0, 300.0), (100.0, 1220.0)] {
             let mut ws = Workspace::with_gaps(10, 10);

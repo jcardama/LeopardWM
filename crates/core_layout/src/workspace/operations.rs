@@ -695,7 +695,7 @@ impl Workspace {
             let bounds = min_scroll..=max_scroll;
             if bounds.contains(&target)
                 && (bounds.contains(&current)
-                    || (self.center_single_column
+                    || ((self.center_single_column || self.rows.len() > 1)
                         && self.fullscreen_window.is_none()
                         && self.rows[row_idx].active_animation.is_some()))
             {
