@@ -214,6 +214,12 @@ corner_style = "square"
 # match_class = "Chrome_WidgetWin_1"
 # match_title = ".*DevTools.*"
 # action = "float"
+# x = 100
+# y = 100
+# x/y are optional 96-DPI logical-pixel offsets from the opening monitor's
+# work-area top-left. An unset axis keeps the window's own position. If either
+# is set, both axes are clamped inside the work area; oversized windows align
+# to its start on that axis. Only floating rules use x/y.
 
 # Ignore small QQ NT helpers using outer sizes in logical pixels, the same units
 # as rule width/height. At 100% scaling these equal the window's pixel dimensions;

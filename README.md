@@ -586,6 +586,20 @@ These processes are ignored via built-in window rules (action = `ignore`):
 | `CredentialUIBroker.exe` | Windows credential/login prompt |
 | `SnippingTool.exe` | Screen capture overlay |
 
+## Floating Window Rule Position
+
+Floating window rules can specify `x` and `y` as integer offsets in 96-DPI logical pixels from the top-left of the work area on the monitor where the window opens. The monitor is chosen by normal admission, including `new_window_monitor`; no rule-specific monitor selector is needed. The offsets scale with that monitor's DPI. An unset axis keeps the window's own position before clamping.
+
+```toml
+[[window_rules]]
+match_class = "ExampleClass"
+action = "float"
+x = 100
+y = 50
+```
+
+When either offset is set, both axes are clamped inside the work area. A window larger than the area on an axis is aligned to that area's start on that axis. Rules with neither `x` nor `y` retain their existing placement behavior. These fields apply only to floating rules and are config-only; Settings preserves them when saving rules.
+
 ## Size Conditions for Window Rules
 
 Small helpers can share an app's class, title, and executable with its main window. For example, ignore QQ NT helpers with an app-specific size rule:

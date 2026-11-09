@@ -177,7 +177,7 @@ borderFixture.fields['.rule-border'].dataset.value = 'show';
 borderFixture.fields['.rule-border-color-mode'].dataset.value = 'default';
 assert.deepEqual(JSON.parse(JSON.stringify(borderFixture.ctx.readRules())), [{ match_class: 'App', action: 'tile', future_key: 'kept' }]);
 
-const sizeRule = { match_executable: 'QQ.exe', action: 'ignore', match_max_width: 400, match_max_height: 300, width: 900, height: 700 };
+const sizeRule = { match_executable: 'QQ.exe', action: 'float', match_max_width: 400, match_max_height: 300, width: 900, height: 700, x: -25, y: 0 };
 const sizeFixture = ruleFixture(script, sizeRule);
 const savedRules = () => JSON.parse(JSON.stringify(sizeFixture.ctx.readRules()));
 assert.deepEqual(savedRules(), [sizeRule]);
@@ -196,7 +196,7 @@ for (const [width, height, expected] of [
 ]) {
   sizeFixture.fields['.rule-max-width'].value = width;
   sizeFixture.fields['.rule-max-height'].value = height;
-  assert.deepEqual(savedRules(), [{ match_executable: 'QQ.exe', action: 'ignore', width: 900, height: 700, ...expected }]);
+  assert.deepEqual(savedRules(), [{ match_executable: 'QQ.exe', action: 'float', width: 900, height: 700, x: -25, y: 0, ...expected }]);
 }
 assert.equal(sizeRule.match_max_width, 400);
 assert.equal(sizeRule.match_max_height, 300);

@@ -676,6 +676,19 @@ pub struct WindowRule {
     #[serde(default)]
     pub height: Option<i32>,
 
+    /// Floating window's left offset from the opening monitor's work-area left edge,
+    /// in 96-DPI logical pixels, scaled by that monitor's DPI. If either offset
+    /// is set, both axes are clamped into that work area, with oversized
+    /// dimensions aligned to its start.
+    #[serde(default)]
+    pub x: Option<i32>,
+
+    /// Floating window's top offset from the opening monitor's work-area top edge,
+    /// in 96-DPI logical pixels. An unset axis retains the window's own position
+    /// before the work-area clamp.
+    #[serde(default)]
+    pub y: Option<i32>,
+
     /// `None` = auto-detect from DWM corner preference.
     #[serde(default)]
     pub corner_style: Option<CornerStyle>,
@@ -1030,6 +1043,8 @@ pub struct CompiledWindowRule {
     pub width: Option<i32>,
     /// Fixed height for floating windows (optional).
     pub height: Option<i32>,
+    pub x: Option<i32>,
+    pub y: Option<i32>,
     /// Optional corner-style override for the focus border.
     pub corner_style: Option<CornerStyle>,
     pub border_hidden: bool,
@@ -1531,6 +1546,8 @@ impl Config {
                 action: rule.action,
                 width: rule.width,
                 height: rule.height,
+                x: rule.x,
+                y: rule.y,
                 corner_style: rule.corner_style,
                 border_hidden: rule.border == Some(false),
                 border_color_bgr: rule
@@ -1556,6 +1573,8 @@ impl Config {
                 action: WindowAction::Ignore,
                 width: None,
                 height: None,
+                x: None,
+                y: None,
                 corner_style: None,
                 border_hidden: false,
                 border_color_bgr: None,
@@ -2223,6 +2242,7 @@ mod tests {
             sticky: false,
             match_max_width: None,
             match_max_height: None,
+            ..Default::default()
         };
 
         let rule = compile_rule(rule);
@@ -2251,6 +2271,7 @@ mod tests {
             sticky: false,
             match_max_width: None,
             match_max_height: None,
+            ..Default::default()
         };
 
         let rule = compile_rule(rule);
@@ -2304,6 +2325,21 @@ mod tests {
             Some(".*dialog.*".to_string())
         );
         assert_eq!(config.window_rules[2].action, WindowAction::Ignore);
+    }
+
+    #[test]
+    fn floating_rule_position_survives_config_and_settings_roundtrip() {
+        let config: Config = toml::from_str("[[window_rules]]\nmatch_class = 'App'\naction = 'float'\nx = -25\ny = 0\n\n[[window_rules]]\nmatch_class = 'Other'\naction = 'float'\n").unwrap();
+        let settings = serde_json::to_value(&config).unwrap();
+        assert_eq!(settings["window_rules"][0]["x"], -25);
+        assert_eq!(settings["window_rules"][0]["y"], 0);
+        assert!(settings["window_rules"][1]["x"].is_null());
+        assert!(settings["window_rules"][1]["y"].is_null());
+        let saved: Config = serde_json::from_value(settings).unwrap();
+        let restored: Config = toml::from_str(&toml::to_string(&saved).unwrap()).unwrap();
+        let result = serde_json::to_value(restored).unwrap();
+        assert_eq!(result["window_rules"][0]["x"], -25);
+        assert_eq!(result["window_rules"][0]["y"], 0);
     }
 
     #[test]
@@ -2391,6 +2427,7 @@ mod tests {
                 sticky: false,
                 match_max_width: None,
                 match_max_height: None,
+                ..Default::default()
             },
             WindowRule {
                 match_class: Some("Notepad".to_string()),
@@ -2409,6 +2446,7 @@ mod tests {
                 sticky: false,
                 match_max_width: None,
                 match_max_height: None,
+                ..Default::default()
             },
         ];
 
@@ -2442,6 +2480,7 @@ mod tests {
             sticky: false,
             match_max_width: None,
             match_max_height: None,
+            ..Default::default()
         };
 
         let rule = compile_rule(rule);
@@ -2468,6 +2507,7 @@ mod tests {
             sticky: false,
             match_max_width: None,
             match_max_height: None,
+            ..Default::default()
         };
 
         let rule = compile_rule(rule);
@@ -2494,6 +2534,7 @@ mod tests {
             sticky: false,
             match_max_width: None,
             match_max_height: None,
+            ..Default::default()
         };
 
         let rule = compile_rule(rule);
@@ -2521,6 +2562,7 @@ mod tests {
             sticky: false,
             match_max_width: None,
             match_max_height: None,
+            ..Default::default()
         };
 
         let config = Config {
@@ -2556,6 +2598,7 @@ mod tests {
             sticky: false,
             match_max_width: None,
             match_max_height: None,
+            ..Default::default()
         };
 
         let rule = compile_rule(rule);
@@ -2938,6 +2981,7 @@ mod tests {
                     sticky: false,
                     match_max_width: None,
                     match_max_height: None,
+                    ..Default::default()
                 },
                 WindowRule {
                     match_class: None,
@@ -2956,6 +3000,7 @@ mod tests {
                     sticky: false,
                     match_max_width: None,
                     match_max_height: None,
+                    ..Default::default()
                 },
             ],
             ..Default::default()
@@ -2999,6 +3044,7 @@ mod tests {
                     sticky: false,
                     match_max_width: None,
                     match_max_height: None,
+                    ..Default::default()
                 },
                 WindowRule {
                     match_class: Some("ValidClass".to_string()),
@@ -3017,6 +3063,7 @@ mod tests {
                     sticky: false,
                     match_max_width: None,
                     match_max_height: None,
+                    ..Default::default()
                 },
             ],
             ..Default::default()

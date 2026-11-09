@@ -157,7 +157,17 @@ impl AppState {
             Some(monitor_id),
             Some(self.window_rule_size(&window.rect)),
         );
-        if use_preferred_monitor {
+        let positioned_by_rule = self
+            .matched_rule(
+                &window.class_name,
+                &window.title,
+                executable,
+                Some(self.window_rule_size(&window.rect)),
+            )
+            .is_some_and(|rule| {
+                rule.action == config::WindowAction::Float && (rule.x.is_some() || rule.y.is_some())
+            });
+        if use_preferred_monitor && !positioned_by_rule {
             let monitor = &self.monitors[&monitor_id];
             if !monitor.contains_rect_center(&rect) {
                 let area = monitor.work_area;
@@ -436,9 +446,9 @@ impl AppState {
 
     /// Get the floating rect for a window based on rules.
     ///
-    /// Rule-defined `width`/`height` are config values (logical pixels) and
-    /// are scaled by the monitor's DPI factor. The `monitor_id` parameter
-    /// is used to look up the scale factor; pass `None` to skip scaling.
+    /// Rule-defined dimensions and work-area offsets are logical pixels scaled
+    /// by the opening monitor's DPI factor. Without a monitor, dimensions use
+    /// scale 1 and offsets cannot be applied.
     pub(crate) fn get_floating_rect_from_rules(
         &self,
         class_name: &str,
@@ -448,10 +458,8 @@ impl AppState {
         monitor_id: Option<MonitorId>,
         size: Option<(i32, i32)>,
     ) -> leopardwm_core_layout::Rect {
-        let scale = monitor_id
-            .and_then(|id| self.monitors.get(&id))
-            .map(|m| m.scale_factor)
-            .unwrap_or(1.0);
+        let monitor = monitor_id.and_then(|id| self.monitors.get(&id));
+        let scale = monitor.map(|m| m.scale_factor).unwrap_or(1.0);
         for rule in &self.compiled_rules {
             if rule.matches(class_name, title, executable, size) {
                 // Only scale rule-provided dimensions (config logical pixels).
@@ -465,12 +473,31 @@ impl AppState {
                     .height
                     .map(|h| scale_px(h, scale))
                     .unwrap_or(original_rect.height);
-                return leopardwm_core_layout::Rect::new(
-                    original_rect.x,
-                    original_rect.y,
-                    width,
-                    height,
-                );
+                let mut rect = Rect::new(original_rect.x, original_rect.y, width, height);
+                if rule.action == config::WindowAction::Float
+                    && (rule.x.is_some() || rule.y.is_some())
+                {
+                    if let Some(monitor) = monitor {
+                        let area = monitor.work_area;
+                        if let Some(x) = rule.x {
+                            rect.x = area.x.saturating_add(scale_px(x, scale));
+                        }
+                        if let Some(y) = rule.y {
+                            rect.y = area.y.saturating_add(scale_px(y, scale));
+                        }
+                        rect.x = rect.x.clamp(
+                            area.x,
+                            area.x
+                                .saturating_add(area.width.saturating_sub(width).max(0)),
+                        );
+                        rect.y = rect.y.clamp(
+                            area.y,
+                            area.y
+                                .saturating_add(area.height.saturating_sub(height).max(0)),
+                        );
+                    }
+                }
+                return rect;
             }
         }
         *original_rect

@@ -6070,6 +6070,7 @@ fn tile_open_on_workspace_rule(
         sticky: false,
         match_max_width: None,
         match_max_height: None,
+        ..Default::default()
     }
 }
 
@@ -8437,6 +8438,7 @@ fn test_window_rule_matching_class() {
             sticky: false,
             match_max_width: None,
             match_max_height: None,
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -8465,6 +8467,7 @@ fn test_window_rule_matching_title() {
             sticky: false,
             match_max_width: None,
             match_max_height: None,
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -8494,6 +8497,7 @@ fn test_window_rule_matching_executable() {
             sticky: false,
             match_max_width: None,
             match_max_height: None,
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -8529,6 +8533,7 @@ fn test_floating_rect_uses_rule_dimensions() {
             sticky: false,
             match_max_width: None,
             match_max_height: None,
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -8560,6 +8565,7 @@ fn test_floating_rect_preserves_original_if_no_dimensions() {
             sticky: false,
             match_max_width: None,
             match_max_height: None,
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -14836,6 +14842,135 @@ fn test_new_window_monitor_sticky_keeps_opening_monitor() {
     }
 }
 
+fn check_floating_rule_positions_on_admission(enumerate: bool) {
+    use crate::config::NewWindowMonitor;
+
+    for (scale, x, y, width, height) in [(1.0, 2020, 160, 200, 100), (1.5, 2070, 220, 300, 150)] {
+        for (fields, original, expected) in [
+            (
+                "x = 100\ny = 120",
+                Rect::new(2200, 100, 400, 300),
+                Rect::new(x, y, 400, 300),
+            ),
+            (
+                "x = 100",
+                Rect::new(2200, 100, 400, 300),
+                Rect::new(x, 100, 400, 300),
+            ),
+            (
+                "y = 120",
+                Rect::new(2200, 100, 400, 300),
+                Rect::new(2200, y, 400, 300),
+            ),
+            (
+                "x = 100",
+                Rect::new(2200, 800, 400, 300),
+                Rect::new(x, 640, 400, 300),
+            ),
+            (
+                "x = 10000\ny = 10000\nwidth = 200\nheight = 100",
+                Rect::new(2200, 100, 400, 300),
+                Rect::new(3520 - width, 940 - height, width, height),
+            ),
+            (
+                "x = -100\ny = -100",
+                Rect::new(2200, 100, 400, 300),
+                Rect::new(1920, 40, 400, 300),
+            ),
+            (
+                "x = 10000\ny = 10000",
+                Rect::new(2200, 100, 400, 300),
+                Rect::new(3120, 640, 400, 300),
+            ),
+            (
+                "x = 0\ny = 0",
+                Rect::new(2000, 100, 2000, 1100),
+                Rect::new(1920, 40, 2000, 1100),
+            ),
+            (
+                "",
+                Rect::new(3300, 100, 400, 300),
+                Rect::new(3300, 100, 400, 300),
+            ),
+        ] {
+            let source = format!(
+                "[[window_rules]]\nmatch_class = 'TestWindowClass'\naction = 'float'\n{fields}\n"
+            );
+            let rules: Config = toml::from_str(&source).unwrap();
+            let mut config = test_config();
+            config.window_rules = rules.window_rules;
+            config.behavior.new_window_monitor = NewWindowMonitor::Focused;
+            config.behavior.focus_new_windows = false;
+            let mut state = new_window_monitor_state(config);
+            state.focused_monitor = 2;
+            state.monitors.get_mut(&2).unwrap().scale_factor = scale;
+            state.monitors.get_mut(&2).unwrap().work_area = Rect::new(1920, 40, 1600, 900);
+            let mut info = make_test_window_info(100);
+            info.rect = original;
+            if enumerate {
+                state.injected_enumerated_windows = Some(vec![info]);
+                assert_eq!(state.enumerate_and_add_windows().unwrap(), 1);
+            } else {
+                state.injected_window_info.insert(100, info);
+                state.handle_window_event(WindowEvent::Created(100, 0));
+            }
+            assert_eq!(
+                state.find_window_workspace(100),
+                Some((2, 0)),
+                "{enumerate} {scale} {fields}"
+            );
+            assert_eq!(
+                state.workspaces[&2][0].floating_windows()[0].rect,
+                expected,
+                "{enumerate} {scale} {fields}"
+            );
+        }
+    }
+}
+
+#[test]
+fn floating_rule_positions_apply_to_live_admission() {
+    check_floating_rule_positions_on_admission(false);
+}
+
+#[test]
+fn floating_rule_positions_apply_to_enumerated_admission() {
+    check_floating_rule_positions_on_admission(true);
+}
+
+#[test]
+fn floating_rule_position_uses_preferred_monitor_and_does_not_recenter_oversized() {
+    let rules: Config = toml::from_str(
+        "[[window_rules]]\nmatch_class = 'TestWindowClass'\naction = 'float'\nx = 100\ny = 120\n",
+    )
+    .unwrap();
+    let mut config = test_config();
+    config.window_rules = rules.window_rules;
+    config.behavior.new_window_monitor = crate::config::NewWindowMonitor::Focused;
+    config.behavior.focus_new_windows = false;
+    for (original, expected) in [
+        (
+            Rect::new(100, 100, 400, 300),
+            Rect::new(2070, 220, 400, 300),
+        ),
+        (
+            Rect::new(100, 100, 4000, 1200),
+            Rect::new(1920, 40, 4000, 1200),
+        ),
+    ] {
+        let mut state = new_window_monitor_state(config.clone());
+        state.focused_monitor = 2;
+        state.monitors.get_mut(&2).unwrap().scale_factor = 1.5;
+        state.monitors.get_mut(&2).unwrap().work_area = Rect::new(1920, 40, 1600, 900);
+        let mut info = make_test_window_info(100);
+        info.rect = original;
+        state.injected_window_info.insert(100, info);
+        state.handle_window_event(WindowEvent::Created(100, 0));
+        assert_eq!(state.find_window_workspace(100), Some((2, 0)));
+        assert_eq!(state.workspaces[&2][0].floating_windows()[0].rect, expected);
+    }
+}
+
 #[test]
 fn test_new_window_monitor_floating_placement() {
     for rect in [
@@ -19980,6 +20115,7 @@ fn test_matched_rule_returns_first_match_extras() {
         sticky: false,
         match_max_width: None,
         match_max_height: None,
+        ..Default::default()
     }];
     config.window_rules.push(crate::config::WindowRule {
         open_on_workspace: Some(5),
