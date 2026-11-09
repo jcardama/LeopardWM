@@ -19745,6 +19745,26 @@ fn assert_source_row_revealed(state: &AppState) {
 }
 
 #[test]
+fn test_focus_down_reveals_focused_window_in_scrolled_row() {
+    let mut state = scrolled_cross_row_fixture();
+    state.handle_command(IpcCommand::FocusDown);
+    let ws = state.focused_workspace().unwrap();
+    assert_eq!(ws.focused_window(), Some(200));
+    let viewport = state.focused_viewport();
+    let placement = ws
+        .compute_placements(viewport)
+        .into_iter()
+        .find(|p| p.window_id == 200)
+        .unwrap();
+    assert!(
+        placement.rect.x >= viewport.x
+            && placement.rect.x + placement.rect.width <= viewport.x + viewport.width,
+        "focused window is off screen: {:?}",
+        placement.rect
+    );
+}
+
+#[test]
 fn test_move_to_row_repairs_source_scroll() {
     let mut state = scrolled_cross_row_fixture();
     state.handle_command(IpcCommand::MoveWindowToRowDown);

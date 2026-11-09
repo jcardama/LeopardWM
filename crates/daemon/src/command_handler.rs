@@ -1271,11 +1271,15 @@ impl AppState {
                 self.config.behavior.workspace_edge_wrap == WorkspaceEdgeWrap::Wrap,
             );
         }
-        self.execute_workspace_command(false, true, |ws, _vw| {
+        self.execute_workspace_command(false, true, |ws, vw| {
+            let source_row = ws.focused_row();
             if up {
                 ws.focus_up();
             } else {
                 ws.focus_down();
+            }
+            if ws.focused_row() != source_row {
+                ws.ensure_focused_visible_animated(vw);
             }
             info!(
                 "Focus {} -> window {}",
