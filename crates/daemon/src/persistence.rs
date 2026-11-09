@@ -6,6 +6,13 @@ use leopardwm_platform_win32::MonitorId;
 use std::collections::{HashMap, HashSet};
 use tracing::{debug, info, warn};
 
+fn saved_workspace_slot(index: usize) -> usize {
+    // Clamp to the 1-9 workspace range (0-based 0..=8). The snapshot is
+    // user-writable JSON, so a garbage index must not drive the vec to
+    // pathological length on startup.
+    index.min(8)
+}
+
 impl AppState {
     pub(crate) fn save_state(&self) -> Result<()> {
         let json = self.build_state_json()?;
@@ -231,10 +238,7 @@ impl AppState {
                 continue;
             };
 
-            // Clamp to the 1-9 workspace range (0-based 0..=8). The snapshot is
-            // user-writable JSON, so a garbage index must not drive the vec to
-            // pathological length on startup.
-            let ws_idx = ws_snapshot.workspace_index.min(8);
+            let ws_idx = saved_workspace_slot(ws_snapshot.workspace_index);
 
             // Preserve each window's tiled/floating type when pruning the snapshot.
             let mut ws = ws_snapshot.workspace.clone();
@@ -338,7 +342,7 @@ impl AppState {
                 .map(|(&id, _)| id);
 
             if let Some(id) = monitor_id {
-                let ws_idx = ws_snapshot.workspace_index;
+                let ws_idx = saved_workspace_slot(ws_snapshot.workspace_index);
                 if let Some(ws_vec) = self.workspaces.get_mut(&id) {
                     let scale = self
                         .monitors

@@ -1,6 +1,29 @@
+use std::cmp::Reverse;
+
 use crate::*;
 
 use crate::workspace::Workspace;
+
+/// Where focus moves among a workspace's floating windows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FloatingFocus {
+    /// The nearest window whose center lies to the left.
+    Left,
+    /// The nearest window whose center lies to the right.
+    Right,
+    /// The nearest window whose center lies above.
+    Up,
+    /// The nearest window whose center lies below.
+    Down,
+    /// The window whose left edge is furthest left.
+    Leftmost,
+    /// The window whose left edge is furthest right.
+    Rightmost,
+    /// The next window by left edge, then top edge, wrapping at the end.
+    Next,
+    /// The previous window by left edge, then top edge, wrapping at the start.
+    Prev,
+}
 
 impl Workspace {
     /// Insert a new window as a new column to the right of the focused column
@@ -1156,5 +1179,62 @@ impl Workspace {
             return Ok(());
         }
         Err(LayoutError::WindowNotFound(window_id))
+    }
+
+    /// The floating window that `from` should hand focus to, or None to stay put.
+    ///
+    /// Candidates are this workspace's floating windows that are not minimized; `from` must be
+    /// one of them. Directions compare window centers on that axis only and pick the nearest
+    /// window strictly in that direction. Ties go to the window earlier in the floating list.
+    pub fn floating_focus_target(&self, from: WindowId, to: FloatingFocus) -> Option<WindowId> {
+        let candidates: Vec<&FloatingWindow> = self
+            .floating_windows
+            .iter()
+            .filter(|f| !self.minimized_windows.contains(&f.id))
+            .collect();
+        let current = candidates.iter().find(|f| f.id == from)?.rect;
+        // Doubled centers keep odd sizes exact.
+        let center_x = |r: &Rect| 2 * i64::from(r.x) + i64::from(r.width);
+        let center_y = |r: &Rect| 2 * i64::from(r.y) + i64::from(r.height);
+        let distance = |r: &Rect| match to {
+            FloatingFocus::Left => center_x(&current) - center_x(r),
+            FloatingFocus::Right => center_x(r) - center_x(&current),
+            FloatingFocus::Up => center_y(&current) - center_y(r),
+            FloatingFocus::Down => center_y(r) - center_y(&current),
+            _ => 0,
+        };
+
+        let target = match to {
+            FloatingFocus::Left
+            | FloatingFocus::Right
+            | FloatingFocus::Up
+            | FloatingFocus::Down => candidates
+                .iter()
+                .filter_map(|f| {
+                    let d = distance(&f.rect);
+                    (d > 0).then_some((d, f.id))
+                })
+                .min_by_key(|&(d, _)| d)
+                .map(|(_, id)| id),
+            FloatingFocus::Leftmost => candidates.iter().min_by_key(|f| f.rect.x).map(|f| f.id),
+            FloatingFocus::Rightmost => candidates
+                .iter()
+                .min_by_key(|f| Reverse(f.rect.x))
+                .map(|f| f.id),
+            FloatingFocus::Next | FloatingFocus::Prev => {
+                let mut order = candidates;
+                // Stable sort keeps list order among windows sharing a corner.
+                order.sort_by_key(|f| (f.rect.x, f.rect.y));
+                let len = order.len();
+                let pos = order.iter().position(|f| f.id == from)?;
+                let step = if to == FloatingFocus::Next {
+                    1
+                } else {
+                    len - 1
+                };
+                Some(order[(pos + step) % len].id)
+            }
+        };
+        target.filter(|&id| id != from)
     }
 }

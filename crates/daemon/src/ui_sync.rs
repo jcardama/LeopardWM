@@ -92,11 +92,27 @@ impl AppState {
         }
     }
 
+    /// A floating window dragged to another monitor stays in its original
+    /// workspace, so its scale follows the monitor under the window. The live
+    /// rect is read because the stored one lags the move being painted.
     fn window_scale_factor(&self, hwnd: u64) -> f64 {
-        self.find_window_workspace(hwnd)
-            .and_then(|(mid, _)| self.monitors.get(&mid))
-            .map(|m| m.scale_factor)
-            .unwrap_or(1.0)
+        let Some((workspace_monitor, ws_idx)) = self.find_window_workspace(hwnd) else {
+            return 1.0;
+        };
+        let floating_rect = self
+            .workspaces
+            .get(&workspace_monitor)
+            .and_then(|workspaces| workspaces.get(ws_idx))
+            .and_then(|ws| ws.floating_windows().iter().find(|f| f.id == hwnd))
+            .map(|f| leopardwm_platform_win32::get_window_visible_rect(hwnd).unwrap_or(f.rect));
+        floating_rect
+            .and_then(|rect| {
+                self.monitors
+                    .values()
+                    .find(|m| m.contains_rect_center(&rect))
+            })
+            .or_else(|| self.monitors.get(&workspace_monitor))
+            .map_or(1.0, |m| m.scale_factor)
     }
 
     pub(crate) fn scaled_border_width(&self, hwnd: u64) -> u32 {

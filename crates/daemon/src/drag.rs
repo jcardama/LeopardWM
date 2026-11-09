@@ -22,6 +22,49 @@ impl AppState {
         removed
     }
 
+    pub(crate) fn restore_drag_source(
+        &mut self,
+        hwnd: u64,
+        source_monitor: MonitorId,
+        source_ws_idx: usize,
+        cached_col: usize,
+        source_slot: usize,
+        peers: &[u64],
+    ) -> bool {
+        let Some(ws) = self
+            .workspaces
+            .get_mut(&source_monitor)
+            .and_then(|v| v.get_mut(source_ws_idx))
+        else {
+            return false;
+        };
+        // Source peers may have moved or disappeared since the column was cached.
+        let resolved = peers
+            .iter()
+            .find_map(|&peer| ws.find_window_location_rc(peer));
+        if let Some((row, col, _)) = resolved {
+            let len = ws
+                .rows()
+                .get(row)
+                .and_then(|r| r.column(col))
+                .map(|c| c.len())
+                .unwrap_or(0);
+            ws.insert_window_in_row_column_at(hwnd, row, col, source_slot.min(len))
+                .is_ok()
+        } else {
+            let cached_col_intact = ws
+                .column(cached_col)
+                .is_some_and(|c| peers.iter().any(|&peer| c.contains(peer)));
+            if cached_col_intact {
+                let len = ws.column(cached_col).map(|c| c.len()).unwrap_or(0);
+                ws.insert_window_in_column_at(hwnd, cached_col, source_slot.min(len))
+                    .is_ok()
+            } else {
+                ws.insert_window(hwnd, None).is_ok()
+            }
+        }
+    }
+
     fn reset_drag_preview_without_target(&mut self, hwnd: u64) {
         let mut snapshot = self.snapshot_layout();
         if self.clear_drag_placeholder() {

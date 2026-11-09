@@ -11822,6 +11822,35 @@ fn test_restore_state_preserves_scroll_offset() {
 }
 
 #[test]
+fn test_restore_state_clamps_saved_workspace_index() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    let mut saved_ws = Workspace::default();
+    saved_ws.insert_window(100, Some(800)).unwrap();
+    saved_ws.insert_window(200, Some(800)).unwrap();
+    saved_ws.insert_window(300, Some(800)).unwrap();
+    saved_ws.set_scroll_offset(500.0);
+    let snapshot = StateSnapshot {
+        saved_at: "test".to_string(),
+        workspaces: vec![WorkspaceSnapshot {
+            monitor_device_name: "DISPLAY1".to_string(),
+            workspace_index: 10_000,
+            workspace: saved_ws,
+        }],
+        focused_monitor_name: "DISPLAY1".to_string(),
+        active_workspace: HashMap::new(),
+        tab_title_overrides: HashMap::new(),
+    };
+
+    state.restore_workspace_structure_with(&snapshot, |_| true);
+    state.workspaces.get_mut(&1).unwrap()[8].set_scroll_offset(0.0);
+    state.restore_state(&snapshot);
+
+    let workspaces = &state.workspaces[&1];
+    assert!(workspaces.len() <= 9);
+    assert_eq!(workspaces[8].scroll_offset(), 500.0);
+}
+
+#[test]
 fn test_restore_state_on_empty_workspace_safe() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
 
@@ -16110,98 +16139,20 @@ fn test_empty_workspace_switch_releases_hidden_console_foreground() {
 
 #[test]
 fn test_empty_workspace_switch_releases_only_transient_visible_console_foreground() {
-    use std::sync::mpsc;
-    use std::thread;
     use windows::core::w;
-    use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
-    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-    use windows::Win32::System::Threading::GetCurrentThreadId;
-    use windows::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
-        PostThreadMessageW, RegisterClassW, SetWindowTextW, UnregisterClassW, MSG,
-        WINDOW_EX_STYLE, WM_QUIT, WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
-    };
-
-    struct ConsoleWindow {
-        hwnd: HWND,
-        thread_id: u32,
-        join: Option<thread::JoinHandle<()>>,
-    }
-
-    impl Drop for ConsoleWindow {
-        fn drop(&mut self) {
-            unsafe {
-                let _ = PostThreadMessageW(self.thread_id, WM_QUIT, WPARAM(0), LPARAM(0));
-            }
-            if let Some(join) = self.join.take() {
-                let _ = join.join();
-            }
-        }
-    }
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::SetWindowTextW;
 
     let _desktop = display_change_regression::FixtureDesktop::enter();
-    let desktop = _desktop.desktop_handle();
-    let (ready_tx, ready_rx) = mpsc::channel();
-    let join = thread::spawn(move || unsafe {
-        assert!(display_change_regression::FixtureDesktop::set_current_thread_desktop(desktop));
-        let instance = GetModuleHandleW(None).unwrap();
-        unsafe extern "system" fn console_proc(
-            hwnd: HWND,
-            message: u32,
-            wparam: WPARAM,
-            lparam: LPARAM,
-        ) -> windows::Win32::Foundation::LRESULT {
-            unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
-        }
-        let class = WNDCLASSW {
-            lpfnWndProc: Some(console_proc),
-            hInstance: instance.into(),
-            lpszClassName: w!("ConsoleWindowClass"),
-            ..Default::default()
-        };
-        assert_ne!(RegisterClassW(&class), 0);
-        let hwnd = CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            w!("ConsoleWindowClass"),
-            w!("Command Prompt"),
-            WS_OVERLAPPEDWINDOW | WS_VISIBLE,
-            0,
-            0,
-            640,
-            480,
-            None,
-            None,
-            Some(instance.into()),
-            None,
-        )
-        .unwrap();
-        ready_tx.send((hwnd.0 as usize, GetCurrentThreadId())).unwrap();
-
-        let mut msg = MSG::default();
-        while GetMessageW(&mut msg, None, 0, 0).as_bool() {
-            DispatchMessageW(&msg);
-        }
-
-        let _ = DestroyWindow(hwnd);
-        let _ = UnregisterClassW(
-            w!("ConsoleWindowClass"),
-            Some(instance.into()),
-        );
-    });
-    let (hwnd_val, thread_id) = ready_rx.recv().unwrap();
-    let console = ConsoleWindow {
-        hwnd: HWND(hwnd_val as *mut _),
-        thread_id,
-        join: Some(join),
-    };
-    let hwnd = console.hwnd.0 as usize as u64;
+    let console = display_change_regression::ConsoleWindow::spawn();
+    let hwnd = console.window_id;
     assert!(leopardwm_platform_win32::is_window_visible(hwnd));
 
     for (title, release) in [
         (w!("Command Prompt"), false),
         (w!(r"C:\Program Files\LeopardWM\bin\lwm.exe"), true),
     ] {
-        unsafe { SetWindowTextW(console.hwnd, title).unwrap() };
+        unsafe { SetWindowTextW(HWND(hwnd as *mut _), title).unwrap() };
         let mut state = AppState::new_with_config(test_config(), test_monitors());
         state
             .injected_window_info
@@ -17593,6 +17544,28 @@ fn test_scaled_border_width_scales_per_monitor() {
     assert_eq!(state.scaled_border_width(100), 3);
     assert_eq!(state.scaled_border_width(200), 6);
     assert_eq!(state.scaled_border_width(999), 3);
+}
+
+#[test]
+fn test_floating_border_scale_follows_monitor_under_window() {
+    // Window id 0 is never a real window, so the live rect query finds nothing,
+    // the stored rect decides, and the radius is DWM's 8px default.
+    for (workspace_monitor, rect) in [
+        // Dropped on monitor 2 from monitor 1's workspace.
+        (1, Rect::new(2500, 200, 800, 600)),
+        // Center on no monitor, so the workspace monitor (not the primary) decides.
+        (2, Rect::new(10_000, 0, 800, 600)),
+    ] {
+        let mut config = test_config();
+        config.appearance.active_border_width = 3;
+        let mut state = AppState::new_with_config(config, two_monitors_mixed_dpi());
+        state.workspaces.get_mut(&workspace_monitor).unwrap()[0]
+            .add_floating(0, rect)
+            .unwrap();
+
+        assert_eq!(state.scaled_border_width(0), 6, "{rect:?}");
+        assert_eq!(state.corner_radius_for_window(0), 16.0, "{rect:?}");
+    }
 }
 
 #[test]

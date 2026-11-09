@@ -12,6 +12,16 @@ All notable changes to LeopardWM will be documented in this file.
 - **Row window rules.** Route applications to specific rows on startup via the `row` field in `[[window_rules]]` (1-based index) or from the Settings GUI Window Rules editor.
 - **Settings GUI row controls.** Visual editor in Settings for configuring row count, height splits, intra-row vertical gaps, the `move_window_across_rows` toggle, and row assignment in window rules.
 - **IPC Protocol v5.** Incremented protocol version to 5 with row-aware workspace snapshots (`rows`, `focused_row`, `row_index`), row layout broadcasts, and `focus_row` / `focus_row_up` / `focus_row_down` / `move_window_to_row_up` / `move_window_to_row_down` commands.
+## 0.3.5
+
+### Fixes
+
+- **Commands no longer act on the tiled window behind a focused floating window.** While a floating window has focus, closing, fullscreen, resizing, scratchpad stash and `lwm query focused` now act on the floating window, and column, focus and move commands leave the tiled windows alone. Contributed by @ShawnChiu. (#162, #163)
+- **Shortcuts sent by key remappers such as kanata now work while the remapped key is still held.** LeopardWM now tracks physical and injected key presses separately. (#164)
+- **Updating no longer replaces a shortcut you assigned to a key that a default shortcut also uses.** Default shortcuts are skipped when you already use the same key combination, even if it is spelled differently in your configuration.
+- **The focus border of a floating window moved to a monitor with a different display scale now uses that monitor's scale.** Its width and rounded corners no longer keep the scale of the monitor where the window started.
+- **A dragged window no longer drops out of tiling when Windows briefly fails to report it at the drop.**
+- **A damaged or hand-edited workspace state file no longer makes startup create an excessive number of workspaces or hang.** Saved workspace indices are limited to the supported nine workspaces.
 
 ## 0.3.4
 
