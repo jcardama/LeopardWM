@@ -72,6 +72,58 @@ fn is_border_color_unsupported_hresult(code: windows::core::HRESULT) -> bool {
     code.0 == E_INVALIDARG_HRESULT || code.0 == E_NOTIMPL_HRESULT
 }
 
+static FRAME_REFRESHES: Mutex<Option<HashMap<WindowId, (WindowIdentity, u64)>>> = Mutex::new(None);
+static NEXT_FRAME_REFRESH: AtomicU64 = AtomicU64::new(1);
+
+fn record_frame_change(window_id: WindowId, hwnd: HWND, identity: WindowIdentity) {
+    use windows::Win32::Graphics::Gdi::{MonitorFromWindow, MONITOR_DEFAULTTONULL};
+
+    let offscreen = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONULL).0.is_null() };
+    let mut guard = FRAME_REFRESHES
+        .lock()
+        .unwrap_or_else(crate::recover_poisoned_mutex);
+    let marks = guard.get_or_insert_with(HashMap::new);
+    if offscreen
+        && identity.managed_lifetime_token.is_some()
+        && window_identity_matches(hwnd, identity)
+    {
+        marks.insert(
+            window_id,
+            (identity, NEXT_FRAME_REFRESH.fetch_add(1, Ordering::Relaxed)),
+        );
+    } else {
+        marks.remove(&window_id);
+    }
+}
+
+pub(crate) fn frame_refresh(window_id: WindowId, hwnd: HWND) -> Option<u64> {
+    let mut guard = FRAME_REFRESHES
+        .lock()
+        .unwrap_or_else(crate::recover_poisoned_mutex);
+    let marks = guard.as_mut()?;
+    let (identity, generation) = *marks.get(&window_id)?;
+    if window_identity_matches(hwnd, identity) {
+        Some(generation)
+    } else {
+        marks.remove(&window_id);
+        None
+    }
+}
+
+pub(crate) fn clear_frame_refresh(window_id: WindowId, generation: u64) {
+    let mut guard = FRAME_REFRESHES
+        .lock()
+        .unwrap_or_else(crate::recover_poisoned_mutex);
+    if let Some(marks) = guard.as_mut() {
+        if marks
+            .get(&window_id)
+            .is_some_and(|&(_, current)| current == generation)
+        {
+            marks.remove(&window_id);
+        }
+    }
+}
+
 /// Tracks window identities queued for WS_MAXIMIZEBOX removal.
 /// Available for panic recovery when AppState is poisoned or unavailable.
 static SNAP_DISABLED_HWNDS: Mutex<Option<HashMap<WindowId, WindowIdentity>>> = Mutex::new(None);
@@ -551,6 +603,7 @@ fn apply_window_style_inner(
             0,
             SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
         );
+        record_frame_change(window_id, hwnd, identity);
         log_maximizebox_geometry(
             operation_name,
             "after_frame",
@@ -672,6 +725,7 @@ pub fn restore_maximizebox_all(window_ids: &[WindowId]) {
 fn recover_maximizebox(
     window_id: WindowId,
     hwnd: HWND,
+    identity: WindowIdentity,
     deadline: Option<std::time::Instant>,
     async_unmarked: bool,
 ) {
@@ -706,6 +760,7 @@ fn recover_maximizebox(
             0,
             SWP_FRAMECHANGED | dispatch | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
         );
+        record_frame_change(window_id, hwnd, identity);
     }
 }
 
@@ -750,7 +805,7 @@ pub(crate) fn emergency_restore_maximizebox(window_ids: &[WindowId], deadline: s
         if !window_identity_matches(hwnd, identity) {
             continue;
         }
-        recover_maximizebox(id, hwnd, Some(deadline), true);
+        recover_maximizebox(id, hwnd, identity, Some(deadline), true);
     }
 }
 
@@ -804,7 +859,7 @@ pub fn restore_maximizebox_panic_recovery() {
         if !unsafe { IsWindow(Some(hwnd)).as_bool() } {
             continue;
         }
-        recover_maximizebox(wid, hwnd, None, false);
+        recover_maximizebox(wid, hwnd, identity, None, false);
     }
 
     eprintln!(

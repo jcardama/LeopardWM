@@ -18,7 +18,7 @@ use windows::Win32::UI::HiDpi::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetWindowRect, IsIconic, IsWindow, SetWindowPos, ShowWindow, HWND_TOP, SET_WINDOW_POS_FLAGS,
-    SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SW_RESTORE,
+    SWP_ASYNCWINDOWPOS, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SW_RESTORE,
 };
 
 /// Check whether coordinates indicate MoveOffScreen sentinel placement.
@@ -195,6 +195,15 @@ fn restore_window_if_offscreen_to_work_area(
         if !async_flag.contains(SWP_ASYNCWINDOWPOS) {
             crate::placement::note_synchronous_move(window_id);
         }
+        let frame_refresh = crate::window_style::frame_refresh(window_id, hwnd);
+        let flags = SWP_NOZORDER
+            | SWP_NOACTIVATE
+            | async_flag
+            | if frame_refresh.is_some() {
+                SWP_FRAMECHANGED
+            } else {
+                SET_WINDOW_POS_FLAGS(0)
+            };
         if let Err(e) = SetWindowPos(
             hwnd,
             None,
@@ -202,7 +211,7 @@ fn restore_window_if_offscreen_to_work_area(
             restore_rect.y,
             restore_rect.width,
             restore_rect.height,
-            SWP_NOZORDER | SWP_NOACTIVATE | async_flag,
+            flags,
         ) {
             if !IsWindow(Some(hwnd)).as_bool() {
                 return Err(Win32Error::WindowNotFound(window_id));
@@ -211,6 +220,15 @@ fn restore_window_if_offscreen_to_work_area(
                 "Failed to restore off-screen window {}: {}",
                 window_id, e
             )));
+        }
+        if let Some(mark) = frame_refresh {
+            crate::placement::clear_frame_refresh_at_target(
+                window_id,
+                hwnd,
+                mark,
+                restore_rect,
+                flags,
+            );
         }
         if owner_wait {
             crate::placement::record_queued_owner_rect(
@@ -303,9 +321,16 @@ fn emergency_marked_move_with_identity(
             let Ok(hwnd) = window_id_to_hwnd(id) else {
                 return;
             };
-            if Instant::now() < deadline
-                && window_identity_matches(hwnd, identity)
-                && unsafe {
+            if Instant::now() < deadline && window_identity_matches(hwnd, identity) {
+                let frame_refresh = crate::window_style::frame_refresh(id, hwnd);
+                let flags = SWP_NOZORDER
+                    | SWP_NOACTIVATE
+                    | if frame_refresh.is_some() {
+                        SWP_FRAMECHANGED
+                    } else {
+                        SET_WINDOW_POS_FLAGS(0)
+                    };
+                if unsafe {
                     SetWindowPos(
                         hwnd,
                         None,
@@ -313,13 +338,20 @@ fn emergency_marked_move_with_identity(
                         restored.y,
                         restored.width,
                         restored.height,
-                        SWP_NOZORDER | SWP_NOACTIVATE,
+                        flags,
                     )
                 }
                 .is_ok()
-                && origin.is_some()
-            {
-                crate::placement::record_queued_owner_rect(id, &restored, origin);
+                {
+                    if let Some(mark) = frame_refresh {
+                        crate::placement::clear_frame_refresh_at_target(
+                            id, hwnd, mark, restored, flags,
+                        );
+                    }
+                    if origin.is_some() {
+                        crate::placement::record_queued_owner_rect(id, &restored, origin);
+                    }
+                }
             }
             let _ = done_tx.send(());
         });
@@ -385,6 +417,15 @@ fn emergency_sentinel_pass(
                 );
                 continue;
             }
+            let frame_refresh = crate::window_style::frame_refresh(id, hwnd);
+            let flags = SWP_NOZORDER
+                | SWP_NOACTIVATE
+                | SWP_ASYNCWINDOWPOS
+                | if frame_refresh.is_some() {
+                    SWP_FRAMECHANGED
+                } else {
+                    SET_WINDOW_POS_FLAGS(0)
+                };
             if SetWindowPos(
                 hwnd,
                 None,
@@ -392,16 +433,22 @@ fn emergency_sentinel_pass(
                 restored.y,
                 restored.width,
                 restored.height,
-                SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS,
+                flags,
             )
             .is_ok()
-                && owner_wait
             {
-                crate::placement::record_queued_owner_rect(
-                    id,
-                    &restored,
-                    Some((current.x, current.y)),
-                );
+                if let Some(mark) = frame_refresh {
+                    crate::placement::clear_frame_refresh_at_target(
+                        id, hwnd, mark, restored, flags,
+                    );
+                }
+                if owner_wait {
+                    crate::placement::record_queued_owner_rect(
+                        id,
+                        &restored,
+                        Some((current.x, current.y)),
+                    );
+                }
             }
         }
     }
@@ -524,7 +571,15 @@ pub(crate) fn recover_after_placement_mover(
     if !is_current() {
         return;
     }
-    if let Err(error) = unsafe {
+    let frame_refresh = crate::window_style::frame_refresh(window_id, hwnd);
+    let flags = SWP_NOZORDER
+        | SWP_NOACTIVATE
+        | if frame_refresh.is_some() {
+            SWP_FRAMECHANGED
+        } else {
+            SET_WINDOW_POS_FLAGS(0)
+        };
+    match unsafe {
         SetWindowPos(
             hwnd,
             None,
@@ -532,10 +587,19 @@ pub(crate) fn recover_after_placement_mover(
             restored.y,
             restored.width,
             restored.height,
-            SWP_NOZORDER | SWP_NOACTIVATE,
+            flags,
         )
     } {
-        tracing::warn!(window_id, %error, "Could not recover a late placement mover call");
+        Ok(()) => {
+            if let Some(mark) = frame_refresh {
+                crate::placement::clear_frame_refresh_at_target(
+                    window_id, hwnd, mark, restored, flags,
+                );
+            }
+        }
+        Err(error) => {
+            tracing::warn!(window_id, %error, "Could not recover a late placement mover call")
+        }
     }
 }
 

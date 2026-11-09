@@ -1,3 +1,6 @@
+#[path = "display_change_regression/parked_frame_refresh.rs"]
+mod parked_frame_refresh;
+
 use super::*;
 use leopardwm_core_layout::{Visibility, WindowPlacement};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};

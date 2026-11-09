@@ -555,9 +555,22 @@ struct DeferEntry {
     flags: windows::Win32::UI::WindowsAndMessaging::SET_WINDOW_POS_FLAGS,
     column_index: usize,
     offscreen_rect: Option<Rect>,
+    frame_refresh: Option<u64>,
 }
 
 impl DeferEntry {
+    fn clear_frame_refresh(&self) {
+        if let Some(generation) = self.frame_refresh {
+            clear_frame_refresh_at_target(
+                self.window_id,
+                self.hwnd,
+                generation,
+                Rect::new(self.x, self.y, self.w, self.h),
+                self.flags,
+            );
+        }
+    }
+
     fn position_only(
         hwnd: HWND,
         window_id: WindowId,
@@ -581,7 +594,38 @@ impl DeferEntry {
             flags: flags | SWP_NOSIZE,
             column_index: usize::MAX,
             offscreen_rect: None,
+            frame_refresh: None,
         }
+    }
+}
+
+pub(crate) fn clear_frame_refresh_at_target(
+    window_id: WindowId,
+    hwnd: HWND,
+    generation: u64,
+    mut target: Rect,
+    flags: SET_WINDOW_POS_FLAGS,
+) {
+    use windows::Win32::Graphics::Gdi::{MonitorFromRect, MONITOR_DEFAULTTONULL};
+    if !flags.contains(SWP_FRAMECHANGED) {
+        return;
+    }
+    if flags.contains(SWP_NOSIZE) {
+        let mut current = RECT::default();
+        if unsafe { GetWindowRect(hwnd, &mut current) }.is_err() {
+            return;
+        }
+        target.width = current.right - current.left;
+        target.height = current.bottom - current.top;
+    }
+    let rect = RECT {
+        left: target.x,
+        top: target.y,
+        right: target.x.saturating_add(target.width),
+        bottom: target.y.saturating_add(target.height),
+    };
+    if !unsafe { MonitorFromRect(&rect, MONITOR_DEFAULTTONULL).0.is_null() } {
+        crate::window_style::clear_frame_refresh(window_id, generation);
     }
 }
 
@@ -1045,14 +1089,21 @@ fn skip_visible_tiled_maximized(
                 let Ok(hwnd) = window_id_to_hwnd(placement.window_id) else {
                     return false;
                 };
+                let frame_refresh = crate::window_style::frame_refresh(placement.window_id, hwnd);
+                let flags = if frame_refresh.is_some() {
+                    flags | SWP_FRAMECHANGED
+                } else {
+                    flags
+                };
                 if mover::is_marked(placement.window_id) {
-                    let entry = DeferEntry::position_only(
+                    let mut entry = DeferEntry::position_only(
                         hwnd,
                         placement.window_id,
                         placement.rect.x,
                         placement.rect.y,
                         flags,
                     );
+                    entry.frame_refresh = frame_refresh;
                     if async_flag.contains(SWP_ASYNCWINDOWPOS) {
                         mover::submit(&entry, generation);
                         return true;
@@ -1060,10 +1111,22 @@ fn skip_visible_tiled_maximized(
                     return mover::seal(&entry);
                 }
                 origin = observed_async_position(hwnd);
-                unsafe {
+                let success = unsafe {
                     SetWindowPos(hwnd, None, placement.rect.x, placement.rect.y, 0, 0, flags)
                         .is_ok()
+                };
+                if success {
+                    if let Some(mark) = frame_refresh {
+                        clear_frame_refresh_at_target(
+                            placement.window_id,
+                            hwnd,
+                            mark,
+                            Rect::new(placement.rect.x, placement.rect.y, 0, 0),
+                            flags,
+                        );
+                    }
                 }
+                success
             });
         *async_recovery = recovery == ParkedRecoveryOutcome::Succeeded && pending;
         *failed_recovery = recovery == ParkedRecoveryOutcome::Failed;
@@ -1195,7 +1258,11 @@ fn build_defer_entries(
             }
             continue;
         }
+        let frame_refresh = (placement.visibility == Visibility::Visible)
+            .then(|| crate::window_style::frame_refresh(placement.window_id, hwnd))
+            .flatten();
         if !force_positioning
+            && frame_refresh.is_none()
             && cache.as_deref().is_some_and(|cache| {
                 cache.positions.get(&placement.window_id)
                     == Some(&(placement.rect, placement.visibility))
@@ -1228,7 +1295,7 @@ fn build_defer_entries(
             let needs_frame_changed = cache
                 .as_ref()
                 .is_none_or(|cache| !cache.positions.contains_key(&placement.window_id));
-            if needs_frame_changed {
+            if needs_frame_changed || frame_refresh.is_some() {
                 flags |= SWP_FRAMECHANGED;
             }
             entries.push(DeferEntry {
@@ -1247,6 +1314,7 @@ fn build_defer_entries(
                 flags,
                 column_index: placement.column_index,
                 offscreen_rect: None,
+                frame_refresh,
             });
         } else {
             // SWP_NOSIZE avoids resize side-effects; SetWindowPos ignores w/h.
@@ -1280,6 +1348,7 @@ fn build_defer_entries(
                 flags: SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | async_flag,
                 column_index: placement.column_index,
                 offscreen_rect: actual_rect.map(|rect| Rect::new(x, y, rect.width, rect.height)),
+                frame_refresh: None,
             });
         }
     }
@@ -1575,7 +1644,11 @@ fn position_entries_for_pending(
                 entry.y,
                 entry.w,
                 entry.h,
-                (entry.flags & !SWP_FRAMECHANGED) | SWP_ASYNCWINDOWPOS,
+                (if entry.frame_refresh.is_some() {
+                    entry.flags
+                } else {
+                    entry.flags & !SWP_FRAMECHANGED
+                }) | SWP_ASYNCWINDOWPOS,
             )
         },
         position_entries_batch,
@@ -1630,7 +1703,8 @@ where
         if !(post_animation_landing
             || deferrals.pending.contains(&entry.window_id)
             || deferrals.probe_expired.contains(&entry.window_id))
-            || queued_endpoints.get(&entry.window_id) == Some(&endpoint_target)
+            || (entry.frame_refresh.is_none()
+                && queued_endpoints.get(&entry.window_id) == Some(&endpoint_target))
         {
             continue;
         }
@@ -1639,6 +1713,7 @@ where
             tracing::warn!(window_id = entry.window_id, %error, "Could not queue animation endpoint");
             failures.insert(entry.window_id);
         } else {
+            entry.clear_frame_refresh();
             queued_endpoints.insert(entry.window_id, endpoint_target);
             record_async_position(entry, origin);
         }
@@ -1674,6 +1749,7 @@ where
         if batch_failures.contains(&entry.window_id) {
             continue;
         }
+        entry.clear_frame_refresh();
         if entry.flags.contains(SWP_ASYNCWINDOWPOS) {
             record_async_position(entry, origin);
         } else if !post_animation_landing && !deferrals.probe_expired.contains(&entry.window_id) {
@@ -3504,6 +3580,7 @@ pub(crate) mod tests {
                     flags,
                     column_index: 0,
                     offscreen_rect: None,
+                    frame_refresh: None,
                 };
                 position_entries(&[entry], landing)
             };
@@ -3634,6 +3711,7 @@ pub(crate) mod tests {
                     flags,
                     column_index: 0,
                     offscreen_rect: None,
+                    frame_refresh: None,
                 };
                 position_entries(&[entry], landing)
             })
@@ -4258,6 +4336,7 @@ pub(crate) mod tests {
             flags: SET_WINDOW_POS_FLAGS(0),
             column_index: 0,
             offscreen_rect: None,
+            frame_refresh: None,
         }
     }
 
