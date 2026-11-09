@@ -260,7 +260,7 @@ LeopardWM ships two interchangeable CLI binaries — both invoke the same code:
 | `leopardwm-cli` | Canonical name. Use in docs, scripts, and shared examples. |
 | `lwm` | Short alias for daily typing. |
 
-Examples below use whichever is shorter for the line.
+Examples below use whichever is shorter for the line. See the [CLI command reference](docs/cli.md) for every command and its options.
 
 ### Daemon lifecycle
 
@@ -275,9 +275,9 @@ Matching versions (Recommended): use the CLI and daemon from the same release. C
 ### Query state
 
 ```bash
-lwm query workspace    # current workspace placements as JSON
+lwm query workspace    # current workspace layout summary
 lwm query focused      # focused window info
-lwm query all-windows  # every managed window across all workspaces
+lwm query all          # every managed window across all workspaces
 lwm query hotkeys      # effective bindings plus config diagnostics
 ```
 
@@ -333,7 +333,7 @@ Enable **Settings → Layout → Center single column**, or set `center_single_c
 
 ### Layout commands
 
-Most users drive the layout via hotkeys, but every hotkey has a CLI equivalent — useful for scripting or AutoHotkey integration.
+Most users drive the layout via hotkeys, but many commands are also available through the CLI for scripting or AutoHotkey integration.
 
 ```bash
 lwm focus left | right | up | down
@@ -417,7 +417,7 @@ legacy event set (`workspace_changed`, `focused_window_changed`, `layout_changed
 `config_reloaded`, `heartbeat`); complete workspace snapshots require explicit
 `--events workspace_state` opt-in and acknowledgement (IPC v4). Targeted workspace commands
 use 1-based indices and transfer focus to the named monitor; snapshot indices are
-0-based. Full schemas and sample clients are in `agent_docs/ipc-events.md`.
+0-based. See the [bar integration guide](docs/yasb.md#any-bar) and [full event schemas](agent_docs/ipc-events.md).
 
 ### Yasb workspace buttons
 

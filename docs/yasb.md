@@ -4,6 +4,20 @@
 
 Use a matching LeopardWM CLI and daemon with `lwm query workspaces` support (introduced in 0.2.10), and [put `lwm.exe` on the PATH inherited by Yasb](../README.md#put-lwm-on-the-path). Restart Yasb after a PATH change. Yasb's GlazeWM and komorebi widgets speak those managers' own protocols; pointing them at LeopardWM will not work.
 
+## Any bar
+
+Bars such as Zebar or Rainmeter can use the CLI if they can run a process and consume its output:
+
+```powershell
+lwm subscribe --events workspace_state
+lwm query workspaces
+lwm workspace 3 --monitor '\\.\DISPLAY2'
+```
+
+The subscription streams newline-delimited JSON until disconnected; the query prints a one-shot snapshot in the same frame format. Use separate processes for the stream, query, and commands. A workspace snapshot is a begin frame, zero or more chunk frames, and a matching end frame. Accumulate records and replace displayed state only after the matching end. On a `lagged` event, EOF, or an incomplete transaction, discard partial state and reconnect for a fresh snapshot. Snapshot workspace indices are zero-based; the workspace command takes 1–9 and transfers focus to the selected monitor. Obtain the exact `monitor_device_name` from a current snapshot because display names can change.
+
+Other filters include `workspace`, `focused_window`, `layout`, `config`, and `heartbeat`. The default subscription excludes `workspace_state`. See the [IPC event contract](../agent_docs/ipc-events.md) for schemas and recovery details and the [CLI reference](cli.md) for commands. A bar must support subprocess output and JSON parsing; this does not provide a bar-specific adapter.
+
 ## 1. Save the query adapter
 
 Create `%APPDATA%\yasb\leopardwm-workspaces.ps1` with the following content. It converts the CLI's newline-delimited snapshot into the single JSON value Yasb expects. Only a successfully completed query is displayed as workspace state. If the adapter runs but the daemon is unavailable, the query is unsupported, or the monitor is missing, it returns nine `?` labels with a "LeopardWM unavailable" tooltip instead of stale workspace state. This deliberately keeps the buttons visible; it does not rely on Yasb hiding empty output.

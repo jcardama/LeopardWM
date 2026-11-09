@@ -15,6 +15,26 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 #[test]
+fn cli_reference_lists_every_command_path() {
+    fn check_paths(command: &clap::Command, prefix: &str, reference: &str) {
+        for subcommand in command
+            .get_subcommands()
+            .filter(|sub| sub.get_name() != "help")
+        {
+            let path = format!("{prefix} {}", subcommand.get_name());
+            let entry = format!("| `{path}` |");
+            assert!(
+                reference.lines().any(|line| line.starts_with(&entry)),
+                "CLI reference is missing command path: {path}"
+            );
+            check_paths(subcommand, &path, reference);
+        }
+    }
+
+    check_paths(&Cli::command(), "lwm", include_str!("../../../docs/cli.md"));
+}
+
+#[test]
 fn test_wrap_cycle_verbs_map_to_ipc() {
     for (verb, expected) in [
         ("cycle-width", IpcCommand::CycleWidth),
