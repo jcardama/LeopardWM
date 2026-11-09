@@ -64,7 +64,7 @@ At a vertical edge, `[behavior] workspace_edge_wrap` controls `focus up`/`focus 
 | `lwm move-to-monitor up` | Move the focused window to the monitor above. |
 | `lwm move-to-monitor down` | Move the focused window to the monitor below. |
 
-Next/previous workspace commands always wrap; optional skip-empty behavior is described in the [README](../README.md#layout-commands). Monitor names come from `lwm query workspaces` and can change with display topology.
+Next/previous workspace commands always wrap; optional skip-empty behavior is described in the [README](../README.md#layout-commands). The `move-to-workspace` commands and the edge moves stay on the current workspace by default; with `[behavior] follow_window_to_workspace = true` they also switch to the destination and keep the moved window focused. Monitor names come from `lwm query workspaces` and can change with display topology.
 
 ## Layout, width and height
 
