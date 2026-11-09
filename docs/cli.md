@@ -52,7 +52,7 @@ At a vertical edge, `[behavior] workspace_edge_wrap` controls `focus up`/`focus 
 | `lwm move-to-workspace` | `<NUMBER>` moves the focused window to workspace 1–9. |
 | `lwm move-to-workspace-next` | Move the focused window to the next workspace, wrapping from 9 to 1. |
 | `lwm move-to-workspace-prev` | Move the focused window to the previous workspace, wrapping from 1 to 9. |
-| `lwm toggle-overview` | Toggle the overview of non-empty workspaces. |
+| `lwm toggle-overview` | Toggle the overview of non-empty workspaces on the focused monitor. |
 | `lwm focus-monitor` | Choose a monitor direction to focus. |
 | `lwm focus-monitor left` | Focus the monitor to the left. |
 | `lwm focus-monitor right` | Focus the monitor to the right. |
@@ -91,7 +91,7 @@ Next/previous workspace commands always wrap; optional skip-empty behavior is de
 | `lwm toggle-floating` | Toggle floating for the focused window. |
 | `lwm toggle-fullscreen` | Toggle fullscreen for the focused window. |
 | `lwm toggle-sticky` | Pin or unpin the focused window across workspaces. |
-| `lwm scratchpad-stash` | Designate and hide the focused scratchpad window, or release it. |
+| `lwm scratchpad-stash` | Designate and hide the focused window as the scratchpad. If it is already the scratchpad, release it to tiling; if a different scratchpad exists, release that window first. |
 | `lwm scratchpad-toggle` | Show the hidden scratchpad centered and floating, or hide it. |
 | `lwm toggle-tabbed` | Toggle tabbed mode for the focused column. |
 | `lwm toggle-new-window-placement` | Toggle new windows between a new column and the focused column. |
@@ -138,7 +138,7 @@ See the [bar guide](yasb.md#any-bar) and [event schemas](../agent_docs/ipc-event
 |---|---|
 | `lwm config` | Choose a configuration operation. |
 | `lwm config init` | Generate defaults at `%APPDATA%/leopardwm/config/config.toml`. Optional `-o, --output <PATH>` selects another path, `-f, --force` overwrites, and `-p, --profile <PROFILE>` selects `developer`, `laptop`, or `ultrawide`; without a profile uses defaults. |
-| `lwm config reset` | Back up the current config to `config.toml.bak` and write defaults. |
+| `lwm config reset` | Back up the current config to `config.toml.bak` if it exists, then write defaults. |
 | `lwm config backup` | Back up the current config. |
 | `lwm config restore` | Restore the backup. |
 | `lwm autostart` | Choose a login autostart operation. |
@@ -150,12 +150,19 @@ See the [bar guide](yasb.md#any-bar) and [event schemas](../agent_docs/ipc-event
 
 Test commands in a terminal first: launching a hidden process can swallow errors. A daemon non-success response exits with code 1; argument and other failures also return nonzero. Check the process exit status instead of assuming a hidden command succeeded.
 
-AutoHotkey v2 uses a single-quoted string here; backslashes are literal and the embedded double quotes group the monitor argument:
+AutoHotkey v2 uses `RunWait` to wait for the hidden command and return its exit code. Backslashes are literal in these single-quoted strings; the embedded double quotes group the monitor argument:
 
 ```ahk
-Run 'lwm focus left', , 'Hide'
-Run 'lwm workspace 2 --monitor "\\.\DISPLAY2"', , 'Hide'
+exitCode := RunWait('lwm focus left', , 'Hide')
+if exitCode != 0
+    MsgBox 'lwm failed with exit code ' exitCode
+
+exitCode := RunWait('lwm workspace 2 --monitor "\\.\DISPLAY2"', , 'Hide')
+if exitCode != 0
+    MsgBox 'lwm failed with exit code ' exitCode
 ```
+
+Plain `Run` is fine once a command is known to work, but it does not wait for the exit code and hiding the process hides its errors.
 
 PowerShell also treats backslashes literally in quoted strings. For example:
 
