@@ -19903,6 +19903,35 @@ fn test_035_config_loads_with_single_row_defaults() {
 }
 
 #[test]
+fn test_flat_state_restore_reapplies_row_config() {
+    let mut saved_state = AppState::new_with_config(test_config(), test_monitors());
+    saved_state
+        .focused_workspace_mut()
+        .unwrap()
+        .insert_window(100, Some(600))
+        .unwrap();
+    let json = saved_state.build_state_json().unwrap();
+    let snapshot: StateSnapshot = serde_json::from_str(&json).unwrap();
+    for split in [
+        vec!["100%".to_string()],
+        vec!["40%".to_string(), "60%".to_string()],
+    ] {
+        let mut config = test_config();
+        config.layout.rows.gap = 37;
+        config.layout.rows.split = split.clone();
+        let mut state = AppState::new_with_config(config, test_monitors());
+        assert!(state
+            .restore_workspace_structure_with(&snapshot, |_| true)
+            .contains(&(1, 0)));
+        let ws = state.focused_workspace().unwrap();
+        assert_eq!(ws.row_gap(), 37);
+        assert_eq!(ws.row_count(), split.len());
+        assert_eq!(ws.find_window_location_rc(100), Some((0, 0, 0)));
+        assert_eq!(ws.columns()[0].width(), 600);
+    }
+}
+
+#[test]
 fn test_035_saved_state_loads_flat_workspace() {
     let json = r#"{
       "saved_at":"123", "focused_monitor_name":"DISPLAY1",
@@ -22487,12 +22516,10 @@ fn test_width_only_persistence_tracks_requested_not_native_width() {
     );
     let saved: serde_json::Value =
         serde_json::from_str(&state.build_state_json().unwrap()).unwrap();
-    let ws_json = &saved["workspaces"][0]["workspace"];
-    let saved_width = ws_json["rows"][0]["columns"][0]["width"]
-        .as_i64()
-        .or_else(|| ws_json["columns"][0]["width"].as_i64())
-        .map(|v| v as i32);
-    assert_eq!(saved_width, Some(requested_width));
+    assert_eq!(
+        saved["workspaces"][0]["workspace"]["columns"][0]["width"],
+        requested_width
+    );
     state.request_save_if_changed();
     assert_eq!(
         rx.try_recv(),

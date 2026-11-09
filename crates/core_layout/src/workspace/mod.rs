@@ -38,7 +38,7 @@ pub struct FloatingWindow {
 
 /// A horizontal strip of tiled columns with separate floating windows.
 /// Layout operations maintain unique windows, valid focus indices, and minimum column widths.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(from = "WorkspaceRepr")]
 pub struct Workspace {
     /// Horizontal strip rows (ordered top to bottom). Always at least one row.
@@ -111,6 +111,37 @@ pub struct Workspace {
     /// off-screen above the work area.
     #[serde(skip)]
     pub(crate) tab_strip_reserve_px: i32,
+}
+
+impl Serialize for Workspace {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+
+        let mut state = serializer.serialize_struct("Workspace", 14)?;
+        if self.rows.len() == 1 {
+            let row = &self.rows[0];
+            state.serialize_field("columns", &row.columns)?;
+            state.serialize_field("focused_column", &row.focused_column)?;
+            state.serialize_field("focused_window_in_column", &row.focused_window_in_column)?;
+            state.serialize_field("scroll_offset", &row.scroll_offset)?;
+        } else {
+            state.serialize_field("rows", &self.rows)?;
+            state.serialize_field("focused_row", &self.focused_row)?;
+            state.serialize_field("row_shares", &self.row_shares)?;
+            state.serialize_field("row_gap", &self.row_gap)?;
+        }
+        state.serialize_field("gap", &self.gap)?;
+        state.serialize_field("outer_gap_left", &self.outer_gap_left)?;
+        state.serialize_field("outer_gap_right", &self.outer_gap_right)?;
+        state.serialize_field("outer_gap_top", &self.outer_gap_top)?;
+        state.serialize_field("outer_gap_bottom", &self.outer_gap_bottom)?;
+        state.serialize_field("default_column_width", &self.default_column_width)?;
+        state.serialize_field("centering_mode", &self.centering_mode)?;
+        state.serialize_field("floating_windows", &self.floating_windows)?;
+        state.serialize_field("fullscreen_window", &self.fullscreen_window)?;
+        state.serialize_field("minimized_windows", &self.minimized_windows)?;
+        state.end()
+    }
 }
 
 /// Intermediate deserialization representation supporting both legacy flat

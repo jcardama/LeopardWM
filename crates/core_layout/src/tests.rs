@@ -3236,11 +3236,7 @@ mod tests {
         ws.set_window_min_width(1, 842);
         ws.set_window_min_width(2, 700);
         let saved = serde_json::to_value(&ws).unwrap();
-        let col_width = saved
-            .get("columns")
-            .and_then(|c| c[0]["width"].as_i64())
-            .or_else(|| saved["rows"][0]["columns"][0]["width"].as_i64());
-        assert_eq!(col_width, Some(467));
+        assert_eq!(saved["columns"][0]["width"], 467);
         assert!(saved.get("window_min_widths").is_none());
         let restored: Workspace = serde_json::from_value(saved).unwrap();
         assert_eq!(restored.effective_column_width(&restored.columns()[0]), 467);
@@ -5686,6 +5682,59 @@ mod tests {
         assert_eq!(ws.gap(), 12);
     }
 
+    #[derive(serde::Serialize, serde::Deserialize)]
+    struct LegacyWorkspace035 {
+        columns: Vec<Column>,
+        focused_column: usize,
+        focused_window_in_column: usize,
+        scroll_offset: f64,
+        gap: i32,
+        #[serde(default = "crate::types::default_outer_gap_value")]
+        outer_gap_left: i32,
+        #[serde(default = "crate::types::default_outer_gap_value")]
+        outer_gap_right: i32,
+        #[serde(default = "crate::types::default_outer_gap_value")]
+        outer_gap_top: i32,
+        #[serde(default = "crate::types::default_outer_gap_value")]
+        outer_gap_bottom: i32,
+        default_column_width: i32,
+        centering_mode: CenteringMode,
+        #[serde(default)]
+        floating_windows: Vec<FloatingWindow>,
+        #[serde(default)]
+        fullscreen_window: Option<WindowId>,
+        #[serde(default)]
+        minimized_windows: std::collections::HashSet<WindowId>,
+    }
+
+    #[test]
+    fn test_single_row_json_is_035_compatible() {
+        let mut ws = Workspace::with_gaps(10, 12);
+        ws.insert_window(10, Some(400)).unwrap();
+        ws.insert_window(20, Some(600)).unwrap();
+        ws.insert_window_in_column(30, 1).unwrap();
+        ws.focus_window(30).unwrap();
+        ws.set_scroll_offset(125.0);
+        let current = serde_json::to_value(&ws).unwrap();
+        let legacy: LegacyWorkspace035 = serde_json::from_value(current.clone()).unwrap();
+        assert_eq!(legacy.columns[0].width(), 400);
+        assert_eq!(legacy.columns[1].width(), 600);
+        assert_eq!(legacy.columns[1].windows(), &[20, 30]);
+        assert_eq!(
+            (legacy.focused_column, legacy.focused_window_in_column),
+            (1, 1)
+        );
+        assert_eq!(legacy.scroll_offset, 125.0);
+        let legacy_json = serde_json::to_value(&legacy).unwrap();
+        assert_eq!(current, legacy_json);
+        let restored: Workspace = serde_json::from_value(legacy_json).unwrap();
+        assert_eq!(restored.columns()[0].windows(), &[10]);
+        assert_eq!(restored.columns()[1].windows(), &[20, 30]);
+        assert_eq!(restored.columns()[1].width(), 600);
+        assert_eq!(restored.focused_window(), Some(30));
+        assert_eq!(restored.scroll_offset(), 125.0);
+    }
+
     #[test]
     fn test_multi_row_json_roundtrip() {
         let mut ws = Workspace::with_gaps(10, 10);
@@ -5700,6 +5749,9 @@ mod tests {
         ws.insert_window(30, Some(900)).unwrap();
 
         let json = serde_json::to_string_pretty(&ws).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["rows"].as_array().unwrap().len(), 2);
+        assert!(value.get("columns").is_none());
         let restored: Workspace = serde_json::from_str(&json).unwrap();
 
         assert_eq!(restored.row_count(), 2);
