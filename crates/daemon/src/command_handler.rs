@@ -1628,6 +1628,15 @@ impl AppState {
             self.floating_focus.insert((monitor, idx), hwnd);
         } else {
             self.floating_focus.remove(&(monitor, idx));
+            let viewport_width = self.viewport_width_for(monitor);
+            if let Some(workspace) = self
+                .workspaces
+                .get_mut(&monitor)
+                .and_then(|v| v.get_mut(idx))
+            {
+                workspace.stop_animation();
+                workspace.ensure_focused_visible(viewport_width);
+            }
         }
         self.handle_switch_workspace_with_direction(index, direction)
     }

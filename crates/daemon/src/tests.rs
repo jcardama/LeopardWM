@@ -16462,6 +16462,48 @@ fn test_follow_window_to_workspace_tiled_commands() {
 }
 
 #[test]
+fn test_follow_window_to_workspace_reveals_tiled_window() {
+    let mut visibility = Vec::new();
+    for (command, animating) in [
+        (IpcCommand::MoveToWorkspace { index: 2 }, false),
+        (IpcCommand::MoveToWorkspaceNext, false),
+        (IpcCommand::MoveToWorkspace { index: 2 }, true),
+        (IpcCommand::MoveToWorkspaceNext, true),
+    ] {
+        let mut state = AppState::new_with_config(test_config(), test_monitors());
+        let monitor = state.focused_monitor;
+        state
+            .injected_window_info
+            .insert(100, make_test_window_info(100));
+        state.handle_window_event(WindowEvent::Created(100, 0));
+        state.ensure_workspace_exists(monitor, 1);
+        let viewport_width = state.viewport_width_for(monitor);
+        let destination = &mut state.workspaces.get_mut(&monitor).unwrap()[1];
+        destination
+            .insert_window(200, Some(viewport_width))
+            .unwrap();
+        if animating {
+            destination
+                .insert_window(201, Some(viewport_width))
+                .unwrap();
+            destination.start_scroll_animation(500.0, viewport_width, None, None);
+        }
+        state.config.behavior.follow_window_to_workspace = true;
+        assert!(matches!(state.handle_command(command), IpcResponse::Ok));
+        assert_eq!(state.active_workspace_idx(monitor), 1);
+        visibility.push(
+            state
+                .workspace_placements(monitor, 1)
+                .into_iter()
+                .find(|placement| placement.window_id == 100)
+                .unwrap()
+                .visibility,
+        );
+    }
+    assert_eq!(visibility, [leopardwm_core_layout::Visibility::Visible; 4]);
+}
+
+#[test]
 fn test_follow_window_to_workspace_wrap_slide_direction() {
     for (source, target, command, forward) in [
         (8, 0, IpcCommand::MoveToWorkspaceNext, true),
