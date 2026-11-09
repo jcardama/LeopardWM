@@ -1284,6 +1284,16 @@ impl AppState {
             if let Err(e) = workspace.focus_window(hwnd) {
                 debug!("Failed to focus merged window {}: {}", hwnd, e);
             }
+            if target_monitor == source_monitor
+                && tgt_mut_idx == src_ws_idx
+                && workspace
+                    .find_window_location_rc(hwnd)
+                    .is_some_and(|(row, _, _)| {
+                        row != src_col_info.map_or(drag.source_row, |(source_row, _, _)| source_row)
+                    })
+            {
+                workspace.reconcile_scroll_bounds(target_viewport.width);
+            }
             workspace.ensure_focused_visible_animated(target_viewport.width);
         }
 
@@ -1449,6 +1459,14 @@ impl AppState {
                     .get(&target_monitor)
                     .map(|m| m.work_area.width)
                     .unwrap_or(FALLBACK_VIEWPORT_WIDTH);
+                if target_monitor == source_monitor
+                    && tgt_idx == src_ws_idx
+                    && ws.find_window_location_rc(hwnd).is_some_and(|(row, _, _)| {
+                        row != src_info.map_or(drag.source_row, |(source_row, _, _)| source_row)
+                    })
+                {
+                    ws.reconcile_scroll_bounds(vw);
+                }
                 ws.ensure_focused_visible_animated(vw);
             }
 
@@ -1602,6 +1620,9 @@ impl AppState {
                     "Failed to focus moved window after cross-monitor drag: {}",
                     e
                 );
+            }
+            if target_monitor == source_monitor && tgt_idx == src_idx && target_row != src_row {
+                target_ws.reconcile_scroll_bounds(target_viewport.width);
             }
             target_ws.ensure_focused_visible_animated(target_viewport.width);
         }

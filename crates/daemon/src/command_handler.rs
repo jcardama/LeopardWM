@@ -751,12 +751,20 @@ impl AppState {
                 })
             }
             IpcCommand::MoveWindowToRowUp => self.execute_workspace_command(true, true, |ws, vw| {
+                let source_row = ws.focused_row();
                 let _ = ws.move_window_to_row_up();
+                if ws.focused_row() != source_row {
+                    ws.reconcile_scroll_bounds(vw);
+                }
                 ws.ensure_focused_visible_animated(vw);
                 info!("Moved window to row up -> row {}", ws.focused_row());
             }),
             IpcCommand::MoveWindowToRowDown => self.execute_workspace_command(true, true, |ws, vw| {
+                let source_row = ws.focused_row();
                 let _ = ws.move_window_to_row_down();
+                if ws.focused_row() != source_row {
+                    ws.reconcile_scroll_bounds(vw);
+                }
                 ws.ensure_focused_visible_animated(vw);
                 info!("Moved window to row down -> row {}", ws.focused_row());
             }),
@@ -1288,11 +1296,16 @@ impl AppState {
             return self.handle_move_to_workspace_relative(!up);
         }
         let move_across_rows = self.config.behavior.move_window_across_rows;
-        self.execute_workspace_command(true, true, move |ws, _vw| {
+        self.execute_workspace_command(true, true, move |ws, vw| {
+            let source_row = ws.focused_row();
             if up {
                 ws.move_window_up(move_across_rows);
             } else {
                 ws.move_window_down(move_across_rows);
+            }
+            if ws.focused_row() != source_row {
+                ws.reconcile_scroll_bounds(vw);
+                ws.ensure_focused_visible_animated(vw);
             }
             info!("Moved window {} in column", if up { "up" } else { "down" });
         })

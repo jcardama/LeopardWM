@@ -19704,6 +19704,126 @@ fn test_move_window_to_workspace_and_back_preserves_row() {
     );
 }
 
+fn scrolled_cross_row_fixture() -> AppState {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.config.behavior.move_window_across_rows = true;
+    let ws = state.focused_workspace_mut().unwrap();
+    ws.set_row_layout(&[0.5, 0.5]);
+    ws.set_reduce_motion(true);
+    ws.insert_window_in_row(100, 0, Some(300)).unwrap();
+    ws.insert_window_in_row(101, 0, Some(1800)).unwrap();
+    ws.insert_window_in_row(200, 1, Some(300)).unwrap();
+    ws.insert_window_in_row(201, 1, Some(2800)).unwrap();
+    ws.focus_window(200).unwrap();
+    ws.scroll_row_by(1, 1000.0, 1920);
+    ws.focus_window(101).unwrap();
+    ws.ensure_focused_visible(1920);
+    assert!(ws.scroll_offset_for_row(0) > 0.0);
+    assert!(ws.scroll_offset_for_row(1) > 0.0);
+    state
+}
+
+fn assert_source_row_revealed(state: &AppState) {
+    let ws = state.focused_workspace().unwrap();
+    let viewport = state.focused_viewport();
+    let placement = ws
+        .compute_placements(viewport)
+        .into_iter()
+        .find(|p| p.window_id == 100)
+        .unwrap();
+    assert!(
+        ws.scroll_offset_for_row(0) <= 0.0,
+        "source row offset remains beyond its bounds: {}",
+        ws.scroll_offset_for_row(0)
+    );
+    assert!(
+        placement.rect.x >= viewport.x
+            && placement.rect.x + placement.rect.width <= viewport.x + viewport.width,
+        "remaining source column is off screen: {:?}",
+        placement.rect
+    );
+}
+
+#[test]
+fn test_move_to_row_repairs_source_scroll() {
+    let mut state = scrolled_cross_row_fixture();
+    state.handle_command(IpcCommand::MoveWindowToRowDown);
+    assert_eq!(
+        state
+            .focused_workspace()
+            .unwrap()
+            .find_window_location_rc(101)
+            .unwrap()
+            .0,
+        1
+    );
+    assert_source_row_revealed(&state);
+}
+
+#[test]
+fn test_vertical_cross_row_move_reveals_destination_and_source() {
+    let mut state = scrolled_cross_row_fixture();
+    state.handle_command(IpcCommand::MoveWindowDown);
+    let ws = state.focused_workspace().unwrap();
+    assert_eq!(ws.find_window_location_rc(101).unwrap().0, 1);
+    let viewport = state.focused_viewport();
+    let placement = ws
+        .compute_placements(viewport)
+        .into_iter()
+        .find(|p| p.window_id == 101)
+        .unwrap();
+    assert!(
+        placement.rect.x >= viewport.x
+            && placement.rect.x + placement.rect.width <= viewport.x + viewport.width,
+        "moved window is off screen: {:?}",
+        placement.rect
+    );
+    assert_source_row_revealed(&state);
+}
+
+#[test]
+fn test_cross_row_column_drag_repairs_source_scroll() {
+    let mut state = scrolled_cross_row_fixture();
+    seed_drag_session(&mut state, 101);
+    state.clear_drag_placeholder();
+    let drag = state.drag_state.take().unwrap();
+    state.execute_cross_monitor_drag(101, &drag, 1, 1, &Rect::new(0, 700, 400, 300));
+    assert_eq!(
+        state
+            .focused_workspace()
+            .unwrap()
+            .find_window_location_rc(101)
+            .unwrap()
+            .0,
+        1
+    );
+    assert_source_row_revealed(&state);
+}
+
+#[test]
+fn test_cross_row_placeholder_drop_repairs_source_scroll() {
+    let mut state = scrolled_cross_row_fixture();
+    seed_drag_session(&mut state, 101);
+    state.clear_drag_placeholder();
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .insert_window_in_row(DRAG_PLACEHOLDER_HWND, 1, Some(400))
+        .unwrap();
+    let drag = state.drag_state.take().unwrap();
+    state.finalize_drag_merge(101, &drag, 1, &Rect::new(0, 700, 400, 300));
+    assert_eq!(
+        state
+            .focused_workspace()
+            .unwrap()
+            .find_window_location_rc(101)
+            .unwrap()
+            .0,
+        1
+    );
+    assert_source_row_revealed(&state);
+}
+
 #[test]
 fn test_drag_cursor_hit_test_identifies_target_row() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
