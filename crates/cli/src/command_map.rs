@@ -11,6 +11,9 @@ pub(crate) fn to_ipc_command(cmd: &Commands) -> IpcCommand {
             FocusDirection::Start => IpcCommand::FocusStart,
             FocusDirection::End => IpcCommand::FocusEnd,
         },
+        Commands::FocusFloating => IpcCommand::FocusFloating,
+        Commands::FocusTiling => IpcCommand::FocusTiling,
+        Commands::SwitchFocusFloatingTiling => IpcCommand::SwitchFocusFloatingTiling,
         Commands::Scroll { direction } => match direction {
             ScrollDirection::Left { pixels } => IpcCommand::Scroll {
                 delta: -(*pixels as f64),

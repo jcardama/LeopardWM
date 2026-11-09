@@ -41,6 +41,12 @@ fn test_simple_verbs_map_to_ipc() {
         ("cycle-height", IpcCommand::CycleHeight),
         ("float", IpcCommand::Float),
         ("tile", IpcCommand::Tile),
+        ("focus-floating", IpcCommand::FocusFloating),
+        ("focus-tiling", IpcCommand::FocusTiling),
+        (
+            "switch-focus-floating-tiling",
+            IpcCommand::SwitchFocusFloatingTiling,
+        ),
     ] {
         let cli = Cli::try_parse_from(["lwm", verb]).unwrap();
         assert_eq!(to_ipc_command(&cli.command), expected);
@@ -63,6 +69,9 @@ fn test_cli_focus_commands_allow_daemon_foreground() {
         (&["lwm", "focus", "down"], true),
         (&["lwm", "focus", "start"], true),
         (&["lwm", "focus", "end"], true),
+        (&["lwm", "focus-floating"], true),
+        (&["lwm", "focus-tiling"], true),
+        (&["lwm", "switch-focus-floating-tiling"], true),
         (&["lwm", "focus-monitor", "left"], true),
         (&["lwm", "focus-monitor", "right"], true),
         (&["lwm", "focus-monitor", "up"], true),

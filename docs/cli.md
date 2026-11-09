@@ -15,6 +15,9 @@ Arguments in the tables are required unless marked optional. Commands that take 
 | `lwm focus down` | Focus the window below. |
 | `lwm focus start` | Focus the first column or floating window. |
 | `lwm focus end` | Focus the last column or floating window. |
+| `lwm focus-floating` | Focus the remembered floating window, or the most recently added floating window if none is remembered. |
+| `lwm focus-tiling` | Focus the tiled layer, remembering the floating window being left. |
+| `lwm switch-focus-floating-tiling` | Switch focus between the floating and tiled layers. |
 | `lwm scroll` | Choose a viewport scroll direction. |
 | `lwm scroll left` | Scroll left; optional `-p, --pixels <PIXELS>` defaults to 100. |
 | `lwm scroll right` | Scroll right; optional `-p, --pixels <PIXELS>` defaults to 100. |

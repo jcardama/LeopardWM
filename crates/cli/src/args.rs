@@ -41,6 +41,12 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         direction: FocusDirection,
     },
+    /// Focus a floating window on the current workspace
+    FocusFloating,
+    /// Focus the tiled layer on the current workspace
+    FocusTiling,
+    /// Switch focus between the floating and tiled layers
+    SwitchFocusFloatingTiling,
     /// Scroll the viewport
     Scroll {
         #[command(subcommand)]

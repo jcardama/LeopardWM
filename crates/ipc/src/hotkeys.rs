@@ -53,6 +53,14 @@ pub fn hotkey_catalog() -> Vec<HotkeyAction> {
             "Focus",
         ),
         action(
+            "switch_focus_floating_tiling",
+            None,
+            "Switch focus between floating and tiled",
+            "Focus",
+        ),
+        action("focus_floating", None, "Focus floating window", "Focus"),
+        action("focus_tiling", None, "Focus tiled window", "Focus"),
+        action(
             "move_column_left",
             Some("Ctrl+Alt+Shift+H"),
             "Move column left",
@@ -397,6 +405,9 @@ pub fn command_for_action(id: &str) -> Option<crate::IpcCommand> {
         "focus_prev" => IpcCommand::FocusPrev,
         "focus_start" => IpcCommand::FocusStart,
         "focus_end" => IpcCommand::FocusEnd,
+        "focus_floating" => IpcCommand::FocusFloating,
+        "focus_tiling" => IpcCommand::FocusTiling,
+        "switch_focus_floating_tiling" => IpcCommand::SwitchFocusFloatingTiling,
         "move_column_left" => IpcCommand::MoveColumnLeft,
         "move_column_right" => IpcCommand::MoveColumnRight,
         "move_column_to_start" => IpcCommand::MoveColumnToStart,
@@ -493,6 +504,45 @@ mod tests {
             let command: IpcCommand = serde_json::from_str(&wire).unwrap();
             assert_eq!(command, expected);
             assert_eq!(serde_json::to_string(&command).unwrap(), wire);
+        }
+    }
+
+    #[test]
+    fn test_layer_focus_catalog_and_wire_contract() {
+        let catalog = hotkey_catalog();
+        let end = catalog
+            .iter()
+            .position(|action| action.id == "focus_end")
+            .unwrap();
+        for (offset, id, label, expected) in [
+            (
+                1,
+                "switch_focus_floating_tiling",
+                "Switch focus between floating and tiled",
+                IpcCommand::SwitchFocusFloatingTiling,
+            ),
+            (
+                2,
+                "focus_floating",
+                "Focus floating window",
+                IpcCommand::FocusFloating,
+            ),
+            (
+                3,
+                "focus_tiling",
+                "Focus tiled window",
+                IpcCommand::FocusTiling,
+            ),
+        ] {
+            let action = &catalog[end + offset];
+            assert_eq!(action.id, id);
+            assert_eq!(action.label, label);
+            assert_eq!(action.group, "Focus");
+            assert_eq!(action.default_key, None);
+            assert_eq!(command_for_action(id), Some(expected.clone()));
+            let wire = format!(r#"{{"type":"{id}"}}"#);
+            assert_eq!(serde_json::to_string(&expected).unwrap(), wire);
+            assert_eq!(serde_json::from_str::<IpcCommand>(&wire).unwrap(), expected);
         }
     }
 

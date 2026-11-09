@@ -398,6 +398,12 @@ pub enum IpcCommand {
     FocusStart,
     /// Focus the last (rightmost) column of the strip.
     FocusEnd,
+    /// Focus a floating window on the current workspace.
+    FocusFloating,
+    /// Focus the tiled layer on the current workspace.
+    FocusTiling,
+    /// Switch focus between the floating and tiled layers.
+    SwitchFocusFloatingTiling,
 
     /// Move the focused column left.
     MoveColumnLeft,
@@ -991,6 +997,9 @@ mod tests {
             IpcCommand::FocusRight,
             IpcCommand::FocusUp,
             IpcCommand::FocusDown,
+            IpcCommand::FocusFloating,
+            IpcCommand::FocusTiling,
+            IpcCommand::SwitchFocusFloatingTiling,
             IpcCommand::MoveColumnLeft,
             IpcCommand::MoveColumnRight,
             IpcCommand::MoveWindowLeft,

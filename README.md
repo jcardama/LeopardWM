@@ -337,6 +337,9 @@ Most users drive the layout via hotkeys, but many commands are also available th
 
 ```bash
 lwm focus left | right | up | down
+lwm focus-floating                     # focus the remembered floating window
+lwm focus-tiling                       # return focus to the tiled layer
+lwm switch-focus-floating-tiling       # switch between floating and tiled layers
 lwm cycle-width                       # next width preset, wrapping at the end
 lwm cycle-height                      # next height preset, wrapping at the end
 lwm move left | right                  # move focused column

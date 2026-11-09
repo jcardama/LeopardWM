@@ -53,6 +53,9 @@ pub(crate) fn command_may_move_focus(cmd: &IpcCommand) -> bool {
             | IpcCommand::FocusDown
             | IpcCommand::FocusStart
             | IpcCommand::FocusEnd
+            | IpcCommand::FocusFloating
+            | IpcCommand::FocusTiling
+            | IpcCommand::SwitchFocusFloatingTiling
             | IpcCommand::FocusMonitorLeft
             | IpcCommand::FocusMonitorRight
             | IpcCommand::FocusMonitorUp

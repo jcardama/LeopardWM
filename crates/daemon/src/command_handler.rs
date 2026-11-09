@@ -66,6 +66,9 @@ fn is_focus_navigation(cmd: &IpcCommand) -> bool {
             | FocusPrev
             | FocusStart
             | FocusEnd
+            | FocusFloating
+            | FocusTiling
+            | SwitchFocusFloatingTiling
             | FocusMonitorLeft
             | FocusMonitorRight
             | FocusMonitorUp
@@ -97,7 +100,10 @@ fn fullscreen_policy(cmd: &IpcCommand) -> FullscreenPolicy {
         | CenterColumn
         | MaximizeColumn
         | EqualizeColumnWidths
-        | EqualizeColumnHeights => FullscreenPolicy::Suppress,
+        | EqualizeColumnHeights
+        | FocusFloating
+        | FocusTiling
+        | SwitchFocusFloatingTiling => FullscreenPolicy::Suppress,
         ToggleFloating | Float | Tile => FullscreenPolicy::Allow,
         _ => FullscreenPolicy::Allow,
     }
@@ -129,7 +135,10 @@ fn floating_policy(cmd: &IpcCommand) -> FloatingPolicy {
         | FocusNext
         | FocusPrev
         | FocusStart
-        | FocusEnd => FloatingPolicy::Target,
+        | FocusEnd
+        | FocusFloating
+        | FocusTiling
+        | SwitchFocusFloatingTiling => FloatingPolicy::Target,
         SetColumnWidth { .. }
         | CycleWidth
         | CycleWidthUp
@@ -415,22 +424,68 @@ impl AppState {
                     is_floating: true,
                 })
             }
-            IpcCommand::FocusLeft => Some(self.focus_floating(hwnd, FloatingFocus::Left)),
-            IpcCommand::FocusRight => Some(self.focus_floating(hwnd, FloatingFocus::Right)),
-            IpcCommand::FocusUp => Some(self.focus_floating(hwnd, FloatingFocus::Up)),
-            IpcCommand::FocusDown => Some(self.focus_floating(hwnd, FloatingFocus::Down)),
-            IpcCommand::FocusStart => Some(self.focus_floating(hwnd, FloatingFocus::Leftmost)),
-            IpcCommand::FocusEnd => Some(self.focus_floating(hwnd, FloatingFocus::Rightmost)),
-            IpcCommand::FocusNext => Some(self.focus_floating(hwnd, FloatingFocus::Next)),
-            IpcCommand::FocusPrev => Some(self.focus_floating(hwnd, FloatingFocus::Prev)),
+            IpcCommand::FocusFloating
+            | IpcCommand::FocusTiling
+            | IpcCommand::SwitchFocusFloatingTiling => Some(self.focus_layer(cmd)),
+            IpcCommand::FocusLeft => Some(self.focus_among_floating(hwnd, FloatingFocus::Left)),
+            IpcCommand::FocusRight => Some(self.focus_among_floating(hwnd, FloatingFocus::Right)),
+            IpcCommand::FocusUp => Some(self.focus_among_floating(hwnd, FloatingFocus::Up)),
+            IpcCommand::FocusDown => Some(self.focus_among_floating(hwnd, FloatingFocus::Down)),
+            IpcCommand::FocusStart => {
+                Some(self.focus_among_floating(hwnd, FloatingFocus::Leftmost))
+            }
+            IpcCommand::FocusEnd => Some(self.focus_among_floating(hwnd, FloatingFocus::Rightmost)),
+            IpcCommand::FocusNext => Some(self.focus_among_floating(hwnd, FloatingFocus::Next)),
+            IpcCommand::FocusPrev => Some(self.focus_among_floating(hwnd, FloatingFocus::Prev)),
             _ => None,
+        }
+    }
+
+    fn focus_layer(&mut self, cmd: &IpcCommand) -> IpcResponse {
+        let Some(ws) = self.focused_workspace() else {
+            return IpcResponse::Ok;
+        };
+        if ws.is_fullscreen() {
+            debug!("Ignoring {:?} while fullscreen", cmd);
+            return IpcResponse::Ok;
+        }
+        let floating = self.focused_floating_window();
+        let monitor = self.focused_monitor;
+        let key = (monitor, self.active_workspace_idx(monitor));
+        if let Some(hwnd) = floating {
+            if matches!(cmd, IpcCommand::FocusFloating) {
+                return IpcResponse::Ok;
+            }
+            let Some(tiled) = ws.focused_visible_window() else {
+                return IpcResponse::Ok;
+            };
+            self.floating_focus.insert(key, hwnd);
+            self.previous_focused_hwnd = Some(tiled);
+            self.execute_workspace_command(false, true, |ws, width| {
+                ws.ensure_focused_visible_animated(width);
+            })
+        } else {
+            if matches!(cmd, IpcCommand::FocusTiling) {
+                return IpcResponse::Ok;
+            }
+            let target = self
+                .floating_focus
+                .get(&key)
+                .copied()
+                .filter(|id| ws.is_floating(*id))
+                .or_else(|| ws.floating_windows().last().map(|window| window.id));
+            if let Some(target) = target {
+                self.previous_focused_hwnd = Some(target);
+                self.sync_foreground_window();
+            }
+            IpcResponse::Ok
         }
     }
 
     // Focus stays among the floating windows and the strip is left alone.
     // With no floating window that way, focus stays put, except that up/down
     // switch workspace according to workspace_edge_wrap, as they do in the strip.
-    fn focus_floating(&mut self, hwnd: u64, to: FloatingFocus) -> IpcResponse {
+    fn focus_among_floating(&mut self, hwnd: u64, to: FloatingFocus) -> IpcResponse {
         let Some(ws) = self.focused_workspace() else {
             return IpcResponse::Ok;
         };
@@ -472,6 +527,9 @@ impl AppState {
             return resp;
         }
         let resp = match cmd {
+            IpcCommand::FocusFloating
+            | IpcCommand::FocusTiling
+            | IpcCommand::SwitchFocusFloatingTiling => self.focus_layer(&cmd),
             IpcCommand::FocusLeft => self.execute_workspace_command(false, true, |ws, vw| {
                 ws.focus_left();
                 ws.ensure_focused_visible_animated(vw);
@@ -2254,6 +2312,18 @@ mod floating_policy_tests {
             assert!(matches!(fullscreen_policy(&cmd), FullscreenPolicy::Allow));
         }
         for cmd in [
+            IpcCommand::FocusFloating,
+            IpcCommand::FocusTiling,
+            IpcCommand::SwitchFocusFloatingTiling,
+        ] {
+            assert!(matches!(
+                fullscreen_policy(&cmd),
+                FullscreenPolicy::Suppress
+            ));
+            assert!(matches!(floating_policy(&cmd), FloatingPolicy::Target));
+            assert!(is_focus_navigation(&cmd));
+        }
+        for cmd in [
             IpcCommand::CloseWindow,
             IpcCommand::ToggleFloating,
             IpcCommand::Float,
@@ -2336,6 +2406,140 @@ mod floating_policy_tests {
             .map(|c| c.width())
             .collect();
         assert!(widths.windows(2).all(|w| w[0] == w[1]), "{widths:?}");
+    }
+
+    #[test]
+    fn focus_floating_uses_remembered_window_or_latest_fallback() {
+        for remembered in [Some(FLOATING), None, Some(999)] {
+            let mut state = three_floating_state();
+            state.previous_focused_hwnd = Some(201);
+            if let Some(hwnd) = remembered {
+                state.floating_focus.insert((1, 0), hwnd);
+            }
+            assert_eq!(
+                state.handle_command(IpcCommand::FocusFloating),
+                IpcResponse::Ok
+            );
+            assert_eq!(
+                state.focused_floating_window(),
+                Some(if remembered == Some(FLOATING) {
+                    FLOATING
+                } else {
+                    LOWER_LEFT
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn focus_layer_commands_leave_focus_unchanged_when_destination_is_absent_or_active() {
+        let mut state = floating_focus_state();
+        let before = strip_snapshot(&state);
+        assert_eq!(
+            state.handle_command(IpcCommand::FocusFloating),
+            IpcResponse::Ok
+        );
+        assert_eq!(state.previous_focused_hwnd, Some(FLOATING));
+        assert_eq!(strip_snapshot(&state), before);
+
+        state
+            .focused_workspace_mut()
+            .unwrap()
+            .remove_floating(FLOATING);
+        state.previous_focused_hwnd = Some(201);
+        for cmd in [
+            IpcCommand::FocusFloating,
+            IpcCommand::FocusTiling,
+            IpcCommand::SwitchFocusFloatingTiling,
+        ] {
+            assert_eq!(state.handle_command(cmd), IpcResponse::Ok);
+            assert_eq!(state.previous_focused_hwnd, Some(201));
+            assert_eq!(strip_snapshot(&state), before);
+        }
+
+        let mut state = AppState::new_with_config(Config::default(), vec![monitor(1, 0)]);
+        state
+            .focused_workspace_mut()
+            .unwrap()
+            .add_floating(FLOATING, Rect::new(100, 100, 500, 400))
+            .unwrap();
+        state.previous_focused_hwnd = Some(FLOATING);
+        for cmd in [
+            IpcCommand::FocusTiling,
+            IpcCommand::SwitchFocusFloatingTiling,
+        ] {
+            assert_eq!(state.handle_command(cmd), IpcResponse::Ok);
+            assert_eq!(state.previous_focused_hwnd, Some(FLOATING));
+        }
+    }
+
+    #[test]
+    fn focus_tiling_remembers_floating_and_preserves_strip_focus() {
+        let mut state = floating_focus_state();
+        state
+            .focused_workspace_mut()
+            .unwrap()
+            .set_scroll_offset(2000.0);
+        let before = strip_snapshot(&state);
+        assert_eq!(
+            state.handle_command(IpcCommand::FocusTiling),
+            IpcResponse::Ok
+        );
+        assert_eq!(state.previous_focused_hwnd, Some(201));
+        assert_eq!(state.floating_focus.get(&(1, 0)), Some(&FLOATING));
+        assert_eq!(strip_snapshot(&state), before);
+        let ws = state.focused_workspace_mut().unwrap();
+        ws.stop_animation();
+        assert!(ws.scroll_offset() < 2000.0);
+    }
+
+    #[test]
+    fn switch_focus_returns_to_the_same_floating_window() {
+        let mut state = three_floating_state();
+        state.previous_focused_hwnd = Some(201);
+        state.floating_focus.insert((1, 0), FLOATING);
+        for expected in [FLOATING, 201, FLOATING] {
+            assert_eq!(
+                state.handle_command(IpcCommand::SwitchFocusFloatingTiling),
+                IpcResponse::Ok
+            );
+            assert_eq!(state.previous_focused_hwnd, Some(expected));
+        }
+    }
+
+    #[test]
+    fn layer_focus_commands_do_nothing_in_fullscreen_for_both_layers() {
+        for fullscreen_floating in [None, Some(false), Some(true)] {
+            for cmd in [
+                IpcCommand::FocusFloating,
+                IpcCommand::FocusTiling,
+                IpcCommand::SwitchFocusFloatingTiling,
+            ] {
+                let mut state = floating_focus_state();
+                if fullscreen_floating.is_none() {
+                    state.previous_focused_hwnd = Some(201);
+                }
+                if fullscreen_floating == Some(true) {
+                    state
+                        .focused_workspace_mut()
+                        .unwrap()
+                        .toggle_fullscreen_window(FLOATING);
+                } else {
+                    state.focused_workspace_mut().unwrap().toggle_fullscreen();
+                }
+                let before = strip_snapshot(&state);
+                let focus = state.previous_focused_hwnd;
+                let remembered = state.floating_focus.clone();
+                assert_eq!(
+                    state.handle_command(cmd.clone()),
+                    IpcResponse::Ok,
+                    "{cmd:?}"
+                );
+                assert_eq!(state.previous_focused_hwnd, focus, "{cmd:?}");
+                assert_eq!(strip_snapshot(&state), before, "{cmd:?}");
+                assert_eq!(state.floating_focus, remembered, "{cmd:?}");
+            }
+        }
     }
 
     #[test]
