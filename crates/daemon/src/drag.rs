@@ -49,12 +49,24 @@ impl AppState {
         };
         match resolved_col {
             Some(col) => {
-                let len = ws.rows().get(row).and_then(|r| r.column(col)).map(|c| c.len()).unwrap_or(0);
-                ws.insert_window_in_row_column_at(drag.hwnd, row, col, drag.source_window_slot.min(len))
-                    .is_ok()
+                let len = ws
+                    .rows()
+                    .get(row)
+                    .and_then(|r| r.column(col))
+                    .map(|c| c.len())
+                    .unwrap_or(0);
+                ws.insert_window_in_row_column_at(
+                    drag.hwnd,
+                    row,
+                    col,
+                    drag.source_window_slot.min(len),
+                )
+                .is_ok()
             }
             None => {
-                let width = (ws.rows().len() > 1).then_some(drag.source_column_width).flatten();
+                let width = (ws.rows().len() > 1)
+                    .then_some(drag.source_column_width)
+                    .flatten();
                 ws.insert_window_in_row(drag.hwnd, row, width).is_ok()
             }
         }
@@ -232,8 +244,7 @@ impl AppState {
                         }
                     };
                     if inserted {
-                        let new_col_idx =
-                            ws.find_window_location_rc(hwnd).map(|(_, col, _)| col);
+                        let new_col_idx = ws.find_window_location_rc(hwnd).map(|(_, col, _)| col);
                         if let Some(drag) = self.drag_state.as_mut() {
                             drag.removed_from_source = false;
                             if let Some(col) = new_col_idx {

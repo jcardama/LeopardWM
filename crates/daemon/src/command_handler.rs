@@ -2364,7 +2364,10 @@ impl AppState {
             });
         }
         self.sync_foreground_window();
-        info!("Set active tab: row={}, column={}, tab={}", row, column, tab);
+        info!(
+            "Set active tab: row={}, column={}, tab={}",
+            row, column, tab
+        );
         IpcResponse::Ok
     }
 }

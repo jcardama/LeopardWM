@@ -971,7 +971,10 @@ impl AppState {
         outcome
     }
 
-    fn default_centered_floating_rect(&self, monitor_id: leopardwm_platform_win32::MonitorId) -> Rect {
+    fn default_centered_floating_rect(
+        &self,
+        monitor_id: leopardwm_platform_win32::MonitorId,
+    ) -> Rect {
         let viewport = self
             .monitors
             .get(&monitor_id)
