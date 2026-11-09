@@ -9583,6 +9583,20 @@ fn test_cmd_focus_left_empty() {
 }
 
 #[test]
+fn test_paused_focus_left_updates_intended_foreground() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    assert!(state.paused);
+    let ws = state.focused_workspace_mut().unwrap();
+    ws.insert_window(100, Some(800)).unwrap();
+    ws.insert_window(200, Some(800)).unwrap();
+    state.previous_focused_hwnd = Some(200);
+
+    assert_eq!(state.handle_command(IpcCommand::FocusLeft), IpcResponse::Ok);
+    assert_eq!(state.previous_focused_hwnd, Some(100));
+    assert_eq!(state.last_broadcast_focused, Some((1, Some(100))));
+}
+
+#[test]
 fn test_cmd_focus_right_empty() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
     let resp = state.handle_command(IpcCommand::FocusRight);
@@ -18254,6 +18268,9 @@ fn test_snap_style_requests_do_not_wait_for_non_pumping_window() {
 
 #[test]
 fn test_snap_disable_failure_leaves_window_untracked() {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{GetWindowLongW, GWL_STYLE, WS_MAXIMIZEBOX};
+
     let _serial = REAL_WINDOW_STYLE_TEST_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -18263,16 +18280,28 @@ fn test_snap_disable_failure_leaves_window_untracked() {
     state.paused = false;
     let owner = OffscreenResizeOwner::create(true);
     let hwnd = owner.hwnd;
+    let original_style = unsafe { GetWindowLongW(HWND(hwnd as *mut _), GWL_STYLE) };
+    assert_ne!(original_style & WS_MAXIMIZEBOX.0 as i32, 0);
 
     state.disable_snap_for_window(hwnd);
     assert!(
         state.snap_disabled_hwnds.contains(&hwnd),
         "a live window with WS_MAXIMIZEBOX must be tracked"
     );
+    assert!(leopardwm_platform_win32::wait_for_window_style_requests(
+        Duration::from_secs(5)
+    ));
+    let disabled_style = unsafe { GetWindowLongW(HWND(hwnd as *mut _), GWL_STYLE) };
+    assert_eq!(disabled_style & WS_MAXIMIZEBOX.0 as i32, 0);
     state.restore_snap_for_window(hwnd);
     assert!(leopardwm_platform_win32::wait_for_window_style_requests(
         Duration::from_secs(5)
     ));
+    let restored_style = unsafe { GetWindowLongW(HWND(hwnd as *mut _), GWL_STYLE) };
+    assert_eq!(
+        restored_style, original_style,
+        "restore must restore the original style"
+    );
 
     state.disable_snap_for_window(0);
     assert!(
