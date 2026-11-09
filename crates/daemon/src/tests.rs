@@ -16517,6 +16517,162 @@ fn test_follow_window_to_workspace_reveals_tiled_window() {
     assert_eq!(visibility, [leopardwm_core_layout::Visibility::Visible; 4]);
 }
 
+fn follow_window_fullscreen_destination(
+    moved_floating: bool,
+    fullscreen_floating: bool,
+) -> AppState {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    let monitor = state.focused_monitor;
+    let source = state.focused_workspace_mut().unwrap();
+    if moved_floating {
+        source.add_floating(100, Rect::new(0, 0, 300, 300)).unwrap();
+    } else {
+        source.insert_window(100, Some(800)).unwrap();
+    }
+    state.previous_focused_hwnd = Some(100);
+    state.ensure_workspace_exists(monitor, 1);
+    let destination = &mut state.workspaces.get_mut(&monitor).unwrap()[1];
+    if fullscreen_floating {
+        destination
+            .add_floating(200, Rect::new(0, 0, 300, 300))
+            .unwrap();
+    } else {
+        destination.insert_window(200, Some(800)).unwrap();
+    }
+    assert!(destination.toggle_fullscreen_window(200));
+    state.config.behavior.follow_window_to_workspace = true;
+    state
+}
+
+fn shown_scratchpad_destination() -> AppState {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    assert_eq!(
+        state.handle_command(IpcCommand::SwitchWorkspace { index: 2 }),
+        IpcResponse::Ok
+    );
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .insert_window(300, Some(800))
+        .unwrap();
+    state.scratchpad_stash();
+    state.scratchpad_toggle();
+    assert!(state.scratchpad.unwrap().shown);
+    assert_eq!(
+        state.handle_command(IpcCommand::SwitchWorkspace { index: 1 }),
+        IpcResponse::Ok
+    );
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .insert_window(100, Some(800))
+        .unwrap();
+    state.previous_focused_hwnd = Some(100);
+    state.config.behavior.follow_window_to_workspace = true;
+    state
+}
+
+#[test]
+fn test_follow_window_to_workspace_retargets_destination_fullscreen() {
+    let mut state = follow_window_fullscreen_destination(false, false);
+    state.config.behavior.fullscreen_follows_focus = true;
+    assert_eq!(
+        state.handle_command(IpcCommand::MoveToWorkspace { index: 2 }),
+        IpcResponse::Ok
+    );
+    let monitor = state.focused_monitor;
+    assert_eq!(state.active_workspace_idx(monitor), 1);
+    assert_eq!(
+        state.focused_workspace().unwrap().fullscreen_window_id(),
+        Some(100),
+        "destination fullscreen must follow the moved tiled window"
+    );
+    assert_eq!(state.previous_focused_hwnd, Some(100));
+    let placement = state
+        .workspace_placements(monitor, 1)
+        .into_iter()
+        .find(|placement| placement.window_id == 100)
+        .unwrap();
+    assert_eq!(
+        placement.visibility,
+        leopardwm_core_layout::Visibility::Visible
+    );
+}
+
+#[test]
+fn test_follow_window_to_workspace_exits_incompatible_destination_fullscreen() {
+    for (follows_focus, moved_floating, fullscreen_floating) in [
+        (false, false, false),
+        (true, true, false),
+        (true, false, true),
+    ] {
+        let mut state = follow_window_fullscreen_destination(moved_floating, fullscreen_floating);
+        state.config.behavior.fullscreen_follows_focus = follows_focus;
+        assert_eq!(
+            state.handle_command(IpcCommand::MoveToWorkspace { index: 2 }),
+            IpcResponse::Ok
+        );
+        let monitor = state.focused_monitor;
+        assert_eq!(state.active_workspace_idx(monitor), 1);
+        assert!(
+            !state.focused_workspace().unwrap().is_fullscreen(),
+            "destination must exit fullscreen: follows_focus={follows_focus}, moved_floating={moved_floating}, fullscreen_floating={fullscreen_floating}"
+        );
+        assert_eq!(state.previous_focused_hwnd, Some(100));
+        let placement = state
+            .workspace_placements(monitor, 1)
+            .into_iter()
+            .find(|placement| placement.window_id == 100)
+            .unwrap();
+        assert_eq!(
+            placement.visibility,
+            leopardwm_core_layout::Visibility::Visible
+        );
+    }
+}
+
+#[test]
+fn test_follow_window_to_workspace_keeps_focus_over_shown_scratchpad() {
+    let mut state = shown_scratchpad_destination();
+    assert_eq!(
+        state.handle_command(IpcCommand::MoveToWorkspace { index: 2 }),
+        IpcResponse::Ok
+    );
+    assert_eq!(state.active_workspace_idx(state.focused_monitor), 1);
+    assert_eq!(
+        state.previous_focused_hwnd,
+        Some(100),
+        "shown scratchpad must not steal focus from the followed window"
+    );
+    assert!(state.scratchpad.unwrap().shown);
+    assert!(state.focused_workspace().unwrap().is_floating(300));
+}
+
+#[test]
+fn test_plain_workspace_switch_preserves_fullscreen_and_scratchpad_focus() {
+    let mut fullscreen = follow_window_fullscreen_destination(false, false);
+    assert_eq!(
+        fullscreen.handle_command(IpcCommand::SwitchWorkspace { index: 2 }),
+        IpcResponse::Ok
+    );
+    assert_eq!(
+        fullscreen
+            .focused_workspace()
+            .unwrap()
+            .fullscreen_window_id(),
+        Some(200)
+    );
+    assert_eq!(fullscreen.previous_focused_hwnd, Some(200));
+
+    let mut scratchpad = shown_scratchpad_destination();
+    assert_eq!(
+        scratchpad.handle_command(IpcCommand::SwitchWorkspace { index: 2 }),
+        IpcResponse::Ok
+    );
+    assert_eq!(scratchpad.previous_focused_hwnd, Some(300));
+    assert!(scratchpad.scratchpad.unwrap().shown);
+}
+
 #[test]
 fn test_follow_window_to_workspace_wrap_slide_direction() {
     for (source, target, command, forward) in [

@@ -1290,7 +1290,7 @@ impl AppState {
             return IpcResponse::error(format!("Monitor not found: {}", monitor_device_name));
         };
 
-        self.switch_workspace_on_monitor(monitor, index, None, true)
+        self.switch_workspace_on_monitor(monitor, index, None, true, None)
     }
 
     fn handle_switch_workspace_with_direction(
@@ -1301,7 +1301,7 @@ impl AppState {
         if !(1..=9).contains(&index) {
             return IpcResponse::error("Workspace index must be 1-9");
         }
-        self.switch_workspace_on_monitor(self.focused_monitor, index, relative_forward, false)
+        self.switch_workspace_on_monitor(self.focused_monitor, index, relative_forward, false, None)
     }
 
     fn switch_workspace_on_monitor(
@@ -1310,6 +1310,7 @@ impl AppState {
         index: u8,
         relative_forward: Option<bool>,
         focus_target_monitor: bool,
+        focus_target: Option<u64>,
     ) -> IpcResponse {
         self.preserve_deferred_floating_moves();
         let idx = (index - 1) as usize;
@@ -1422,6 +1423,31 @@ impl AppState {
         self.rehome_sticky_windows();
 
         let viewport_width = self.viewport_width_for(monitor);
+        let fullscreen_follows_focus = self.config.behavior.fullscreen_follows_focus;
+        if let Some(workspace) = self
+            .workspaces
+            .get_mut(&monitor)
+            .and_then(|workspaces| workspaces.get_mut(idx))
+        {
+            if let Some((hwnd, fullscreen)) = focus_target.zip(workspace.fullscreen_window_id()) {
+                let stays_visible = hwnd == fullscreen
+                    || workspace
+                        .floating_windows()
+                        .iter()
+                        .any(|floating| floating.id == hwnd && floating.pinned);
+                if !stays_visible {
+                    if fullscreen_follows_focus
+                        && !workspace.is_floating(fullscreen)
+                        && !workspace.is_floating(hwnd)
+                    {
+                        workspace.fullscreen_follow_focus();
+                        workspace.ensure_focused_visible_animated(viewport_width);
+                    } else {
+                        workspace.clear_fullscreen_if_window(fullscreen);
+                    }
+                }
+            }
+        }
         if let Some(workspace) = self.focused_workspace_mut() {
             workspace.commit_pending_min_size_clears();
             workspace.reconcile_scroll_bounds(viewport_width);
@@ -1512,7 +1538,11 @@ impl AppState {
         // If a summoned scratchpad lives on this workspace, restore
         // its focus (it would otherwise stay visible but lose focus
         // to a tiled window on the switch back).
-        self.refocus_scratchpad_if_active();
+        if focus_target.is_none()
+            || focus_target == self.scratchpad.map(|scratchpad| scratchpad.window_id)
+        {
+            self.refocus_scratchpad_if_active();
+        }
         // The user was focused on a pinned window: it followed the switch
         // (re-homed above), so focus stays on it. Re-assert again at the
         // animation landing — a spurious foreground event from the
@@ -1638,7 +1668,7 @@ impl AppState {
                 workspace.ensure_focused_visible(viewport_width);
             }
         }
-        self.handle_switch_workspace_with_direction(index, direction)
+        self.switch_workspace_on_monitor(monitor, index, direction, false, Some(hwnd))
     }
 
     pub(crate) fn move_window_to_workspace(
