@@ -171,7 +171,7 @@ Set `new_window_monitor = "focused"` under `[behavior]` or choose Settings → B
 
 Most hotkeys use `Ctrl+Alt` as the base modifier. Layered pattern: base = focus, +Shift = move, +Win = monitor scope. Every hotkey is rebindable in `config.toml`. Combos Windows reserves (like `Win+Ctrl+Arrow`) can't be bound directly, but the opt-in **Reclaim Windows-reserved shortcuts** setting lets you use them anyway.
 
-Punctuation bindings accept `-`, `=`, `,`, `.`, `[`, `]`, `;`, `/`, `` ` ``, `\`, and `'`, or the word tokens `Minus`, `Equals`, `Comma`, `Period`, `Bracket_Left`, `Bracket_Right`, `Semicolon`, `Slash`, `Backtick`, `Backslash`, and `Apostrophe`. Each punctuation binding matches the Windows virtual key for that symbol on a US English layout. On other keyboard layouts, that key can be in a different place.
+Punctuation bindings accept `-`, `=`, `,`, `.`, `[`, `]`, `;`, `/`, `` ` ``, `\`, and `'`, or the word tokens `Minus`, `Equals`, `Comma`, `Period`, `Bracket_Left`, `Bracket_Right`, `Semicolon`, `Slash`, `Backtick`, `Backslash`, and `Apostrophe`. Each punctuation binding matches the Windows virtual key for that symbol on a US English layout. On other keyboard layouts, that key can be in a different place. The Settings shortcut recorder saves the key you press on any layout, using its US-layout symbol as the saved name.
 
 | Key | Action |
 |---|---|

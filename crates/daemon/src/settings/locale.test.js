@@ -527,21 +527,44 @@ assert.equal(recordedBindings['Ctrl+Alt+H'], 'focus_left');
 assert.ok(!Object.hasOwn(recordedBindings, 'Ctrl+Alt+Left'));
 assertChordIgnored('Ctrl+Alt+X');
 
-for (const [code, token, symbol] of [
-  ['Semicolon', 'Semicolon', ';'], ['Quote', 'Apostrophe', "'"],
-  ['Slash', 'Slash', '/'], ['Backslash', 'Backslash', '\\'], ['Backquote', 'Backtick', '`']
+for (const [code, keyCode, token, symbol] of [
+  ['Quote', 0xBD, 'Minus', '-'], ['Minus', 0xBB, 'Equals', '='],
+  ['Equal', 0xBC, 'Comma', ','], ['Comma', 0xBE, 'Period', '.'],
+  ['Period', 0xDB, 'Bracket_Left', '['], ['BracketLeft', 0xDD, 'Bracket_Right', ']'],
+  ['BracketRight', 0xBA, 'Semicolon', ';'], ['Semicolon', 0xBF, 'Slash', '/'],
+  ['Slash', 0xC0, 'Backtick', '`'], ['Backquote', 0xDC, 'Backslash', '\\'],
+  ['Backslash', 0xDE, 'Apostrophe', "'"]
 ]) {
-  recorder.ctx.loadHotkeysSorted({ ['Ctrl+Alt+' + token]: 'focus_left' }, 'Ctrl+Alt');
+  recorder.ctx.loadHotkeysSorted({ ['Ctrl+' + token]: 'focus_left' }, 'Ctrl+Alt');
   const input = recorder.rows.find(row => row.dataset.cmd === 'focus_left').input;
-  const chord = 'Ctrl+Alt+' + symbol;
+  const chord = 'Ctrl+' + symbol;
   assert.equal(input.value, chord, token + ' display');
   input.emit('mousedown', { button: 0 });
-  input.emit('keydown', { code, key: 'non-US symbol', ctrlKey: true, altKey: true, preventDefault() {} });
+  input.emit('keydown', { code, keyCode, key: 'non-US symbol', ctrlKey: true, preventDefault() {} });
   assert.equal(input.value, chord, code + ' recording');
   assert.ok(!input.classList.contains('recording'), code);
   recorder.flush();
   assert.equal(recorder.saves.at(-1).config.hotkeys[chord], 'focus_left', code + ' save');
 }
+
+const azertyInput = recorder.rows.find(row => row.dataset.cmd === 'focus_left').input;
+azertyInput.emit('mousedown', { button: 0 });
+azertyInput.emit('keydown', { code: 'KeyM', keyCode: 0xBC, key: ',', ctrlKey: true, preventDefault() {} });
+assert.equal(azertyInput.value, 'Ctrl+,', 'AZERTY comma recording');
+assert.ok(!azertyInput.classList.contains('recording'));
+recorder.flush();
+assert.equal(recorder.saves.at(-1).config.hotkeys['Ctrl+,'], 'focus_left', 'AZERTY comma save');
+
+const unsupportedInput = recorder.rows.find(row => row.dataset.cmd === 'focus_left').input;
+unsupportedInput.emit('mousedown', { button: 0 });
+const savesBeforeUnsupported = recorder.saves.length;
+const scheduledBeforeUnsupported = recorder.scheduledSaves();
+unsupportedInput.emit('keydown', { code: 'Quote', keyCode: 0xDF, key: 'non-US symbol', ctrlKey: true, altKey: true, preventDefault() {} });
+assert.equal(unsupportedInput.value, '');
+assert.ok(unsupportedInput.classList.contains('recording'));
+assert.equal(recorder.saves.length, savesBeforeUnsupported);
+assert.equal(recorder.scheduledSaves(), scheduledBeforeUnsupported);
+unsupportedInput.emit('blur');
 
 for (const [full, short] of [
   ['Command (detail)', 'Command'], ['Command(detail)', 'Command'],

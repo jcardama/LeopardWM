@@ -1838,12 +1838,17 @@ var CODE_TO_KEY = {
   ArrowLeft: 'Left', ArrowRight: 'Right', ArrowUp: 'Up', ArrowDown: 'Down',
   Home: 'Home', End: 'End', PageUp: 'PageUp', PageDown: 'PageDown',
   Space: 'Space', Enter: 'Enter', Tab: 'Tab', Escape: 'Escape',
-  Minus: '-', Equal: '=', Comma: ',', Period: '.', BracketLeft: '[', BracketRight: ']',
-  Semicolon: ';', Quote: "'", Slash: '/', Backslash: '\\', Backquote: '`',
   NumpadAdd: 'NumpadAdd', NumpadSubtract: 'NumpadSubtract', NumpadMultiply: 'NumpadMultiply',
   NumpadDivide: 'NumpadDivide', NumpadDecimal: 'NumpadDecimal'
 };
-function codeToKey(code, key) {
+// Match punctuation to the virtual key the daemon's hook sees.
+var PUNCTUATION_VK_TO_KEY = {
+  0xBD: '-', 0xBB: '=', 0xBC: ',', 0xBE: '.', 0xDB: '[', 0xDD: ']',
+  0xBA: ';', 0xBF: '/', 0xC0: '`', 0xDC: '\\', 0xDE: "'"
+};
+function codeToKey(code, key, keyCode) {
+  var punctuation = PUNCTUATION_VK_TO_KEY[keyCode];
+  if (punctuation !== undefined) return punctuation;
   if (/^Key[A-Z]$/.test(code)) {
     // Record the letter the layout produces (e.key), not the physical US
     // position, so the bind matches the VK the daemon's hook sees on Dvorak.
@@ -1973,7 +1978,7 @@ function attachRecorder(input) {
       autoSave(0);
       return;
     }
-    var token = codeToKey(e.code, e.key);
+    var token = codeToKey(e.code, e.key, e.keyCode);
     if (!token) return; /* unmapped key: keep waiting */
     e.preventDefault();
     e.stopPropagation();

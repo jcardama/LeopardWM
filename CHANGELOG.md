@@ -13,6 +13,7 @@ All notable changes to LeopardWM will be documented in this file.
 ### Fixes
 
 - **A dragged window returns to its original place in a stacked column when its drop is cancelled or has no target.** This also applies when switching workspaces during the drag.
+- **Shortcuts recorded in Settings with punctuation keys now fire on the key you pressed on non-US layouts such as Dvorak.** Settings saves the key Windows reports, so the shortcut matches it on any keyboard layout.
 
 ## 0.3.5
 
