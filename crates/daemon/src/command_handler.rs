@@ -472,8 +472,14 @@ impl AppState {
                 .floating_focus
                 .get(&key)
                 .copied()
-                .filter(|id| ws.is_floating(*id))
-                .or_else(|| ws.floating_windows().last().map(|window| window.id));
+                .filter(|id| ws.is_floating(*id) && !ws.is_minimized(*id))
+                .or_else(|| {
+                    ws.floating_windows()
+                        .iter()
+                        .rev()
+                        .find(|window| !ws.is_minimized(window.id))
+                        .map(|window| window.id)
+                });
             if let Some(target) = target {
                 self.previous_focused_hwnd = Some(target);
                 self.sync_foreground_window();
@@ -2428,6 +2434,31 @@ mod floating_policy_tests {
                     LOWER_LEFT
                 })
             );
+        }
+    }
+
+    #[test]
+    fn layer_focus_skips_minimized_floating_windows() {
+        for cmd in [
+            IpcCommand::FocusFloating,
+            IpcCommand::SwitchFocusFloatingTiling,
+        ] {
+            for (remembered, minimized, expected) in [
+                (Some(FLOATING), vec![FLOATING], LOWER_LEFT),
+                (None, vec![LOWER_LEFT], RIGHT),
+                (Some(FLOATING), vec![FLOATING, RIGHT, LOWER_LEFT], 201),
+            ] {
+                let mut state = three_floating_state();
+                state.previous_focused_hwnd = Some(201);
+                if let Some(hwnd) = remembered {
+                    state.floating_focus.insert((1, 0), hwnd);
+                }
+                for hwnd in minimized {
+                    assert!(state.focused_workspace_mut().unwrap().mark_minimized(hwnd));
+                }
+                assert_eq!(state.handle_command(cmd.clone()), IpcResponse::Ok);
+                assert_eq!(state.previous_focused_hwnd, Some(expected), "{cmd:?}");
+            }
         }
     }
 
