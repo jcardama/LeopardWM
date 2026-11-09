@@ -375,49 +375,43 @@ async fn timed_out_feed_disconnects_clients_and_recovers_after_late_reply() {
 }
 
 #[tokio::test]
-async fn malformed_startup_snapshot_resubscribes() {
+async fn startup_snapshot_error_disconnects_without_repeated_subscribes() {
+    let listener = bind(0).unwrap();
+    let addr = listener.local_addr().unwrap();
     let (events, mut event_rx) = mpsc::channel(8);
-    let (snapshots, mut current) = watch::channel(None);
-    let (changes, _) = broadcast::channel(8);
-    let task = tokio::spawn(snapshot_feed(events, snapshots, changes));
-    let Some(DaemonEvent::IpcSubscribe { events, responder }) = event_rx.recv().await else {
-        panic!("expected subscription")
-    };
-    let (source, receiver) = broadcast::channel(8);
-    responder
-        .send(crate::events::SubscribeStartup {
-            ack: IpcResponse::Subscribed { events },
-            snapshot: vec![IpcEvent::WorkspaceSnapshotEnd { revision: 1 }],
-            receiver,
-        })
-        .ok()
-        .unwrap();
-    let Some(DaemonEvent::IpcSubscribe { events, responder }) =
-        tokio::time::timeout(Duration::from_secs(3), event_rx.recv())
+    let task = tokio::spawn(run(listener, events));
+    let mut client = open(addr).await;
+    let (source, _) = broadcast::channel(8);
+    let mut subscribes = 0;
+    let closed = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            tokio::select! {
+                event = event_rx.recv() => {
+                    let Some(DaemonEvent::IpcSubscribe { events, responder }) = event else {
+                        panic!("expected subscription")
+                    };
+                    subscribes += 1;
+                    responder.send(crate::events::SubscribeStartup {
+                        ack: IpcResponse::Subscribed { events },
+                        snapshot: vec![IpcEvent::WorkspaceSnapshotError { message: "snapshot too large".into() }],
+                        receiver: source.subscribe(),
+                    }).ok().unwrap();
+                    assert_eq!(subscribes, 1, "startup errors must not cause immediate resubscription");
+                }
+                message = client.next() => break message,
+            }
+        }
+    }).await.expect("startup snapshot error must disconnect the client");
+    assert!(matches!(
+        closed,
+        None | Some(Err(_)) | Some(Ok(Message::Close(_)))
+    ));
+    assert_eq!(subscribes, 1);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), event_rx.recv())
             .await
-            .unwrap()
-    else {
-        panic!("expected resubscription")
-    };
-    let snapshot = WorkspaceStateSnapshot {
-        session_id: "test".into(),
-        revision: 2,
-        focused_monitor_device_name: None,
-        records: vec![],
-    };
-    responder
-        .send(crate::events::SubscribeStartup {
-            ack: IpcResponse::Subscribed { events },
-            snapshot: snapshot.events().unwrap(),
-            receiver: source.subscribe(),
-        })
-        .ok()
-        .unwrap();
-    let recovered = tokio::time::timeout(Duration::from_secs(3), get_snapshot(&mut current))
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(recovered.revision, 2);
+            .is_err()
+    );
     task.abort();
     let _ = task.await;
 }

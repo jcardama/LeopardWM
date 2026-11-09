@@ -179,7 +179,7 @@ async fn snapshot_feed(
     changes: broadcast::Sender<Snapshot>,
 ) {
     let mut previous: Option<(String, u64)> = None;
-    'subscribe: loop {
+    loop {
         let (tx, rx) = oneshot::channel();
         if events
             .send(DaemonEvent::IpcSubscribe {
@@ -205,7 +205,7 @@ async fn snapshot_feed(
                 Ok(None) => {}
                 Err(()) => {
                     snapshots.send_replace(None);
-                    continue 'subscribe;
+                    return;
                 }
             }
         }
