@@ -39,7 +39,9 @@ impl Server {
         config: &GlazewmCompatConfig,
         events: mpsc::Sender<DaemonEvent>,
     ) {
-        if self.config.as_ref() == Some(config) {
+        if self.config.as_ref() == Some(config)
+            && !self.task.as_ref().is_some_and(JoinHandle::is_finished)
+        {
             return;
         }
         self.stop().await;
@@ -96,7 +98,17 @@ async fn run(listener: TcpListener, events: mpsc::Sender<DaemonEvent>) {
     loop {
         tokio::select! {
             accepted = listener.accept() => {
-                let Ok((stream, remote)) = accepted else { break; };
+                let (stream, remote) = match accepted {
+                    Ok(connection) => connection,
+                    Err(error) if matches!(error.kind(), std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted | std::io::ErrorKind::Interrupted) => {
+                        tracing::debug!(%error, "GlazeWM compatibility connection accept failed");
+                        continue;
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "GlazeWM compatibility listener stopped");
+                        break;
+                    }
+                };
                 if clients.len() >= 8 { continue; }
                 let (SocketAddr::V4(peer_addr), Ok(SocketAddr::V4(local_addr))) = (remote, stream.local_addr()) else { continue; };
                 if !peer::same_user_peer(peer_addr, local_addr) { continue; }
@@ -109,6 +121,11 @@ async fn run(listener: TcpListener, events: mpsc::Sender<DaemonEvent>) {
                 if let Some((snapshot, changes)) = &channels {
                     clients.spawn(client(stream, events.clone(), snapshot.clone(), changes.subscribe()));
                 }
+            }
+            _ = feed.join_next(), if !feed.is_empty() => {
+                clients.abort_all();
+                while clients.join_next().await.is_some() {}
+                channels = None;
             }
             _ = clients.join_next(), if !clients.is_empty() => {
                 if clients.is_empty() {
@@ -162,7 +179,7 @@ async fn snapshot_feed(
     changes: broadcast::Sender<Snapshot>,
 ) {
     let mut previous: Option<(String, u64)> = None;
-    loop {
+    'subscribe: loop {
         let (tx, rx) = oneshot::channel();
         if events
             .send(DaemonEvent::IpcSubscribe {
@@ -186,7 +203,10 @@ async fn snapshot_feed(
             match update_snapshot(&mut partial, event) {
                 Ok(Some(snapshot)) => publish(snapshot, &mut previous, &snapshots, &changes),
                 Ok(None) => {}
-                Err(()) => return,
+                Err(()) => {
+                    snapshots.send_replace(None);
+                    continue 'subscribe;
+                }
             }
         }
         loop {

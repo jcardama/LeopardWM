@@ -108,6 +108,32 @@ async fn enable_disable_rebind_and_collision_do_not_retry() {
     assert!(TcpStream::connect(first_addr).await.is_err());
 }
 
+#[tokio::test]
+async fn unchanged_config_restarts_finished_listener() {
+    let listener = bind(0).unwrap();
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+    let (events, _receiver) = mpsc::channel(16);
+    let mut server = Server::default();
+    let config = GlazewmCompatConfig {
+        enabled: true,
+        port: addr.port(),
+    };
+    server.configure(&config, events.clone()).await;
+    assert!(TcpStream::connect(addr).await.is_ok());
+    let task = server.task.as_ref().unwrap();
+    task.abort();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while !task.is_finished() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    server.configure(&config, events).await;
+    assert!(TcpStream::connect(addr).await.is_ok());
+}
+
 async fn send_text(client: &mut Client, message: &str) -> Value {
     client.send(Message::Text(message.into())).await.unwrap();
     receive(client).await
@@ -285,6 +311,113 @@ async fn lagged_feed_resubscribes_and_replaces_snapshot() {
         2
     );
     assert_eq!(current.borrow().as_ref().unwrap().revision, 2);
+    task.abort();
+    let _ = task.await;
+}
+
+#[tokio::test]
+async fn timed_out_feed_disconnects_clients_and_recovers_after_late_reply() {
+    let listener = bind(0).unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (events, mut event_rx) = mpsc::channel(16);
+    let task = tokio::spawn(run(listener, events));
+    let mut first = open(addr).await;
+    let Some(DaemonEvent::IpcSubscribe { events, responder }) = event_rx.recv().await else {
+        panic!("expected subscription")
+    };
+    let (source, receiver) = broadcast::channel(8);
+    let snapshot = WorkspaceStateSnapshot {
+        session_id: "test".into(),
+        revision: 1,
+        focused_monitor_device_name: None,
+        records: vec![],
+    };
+    let closed = tokio::time::timeout(Duration::from_secs(13), first.next())
+        .await
+        .expect("timed-out feed must disconnect its client");
+    assert!(matches!(
+        closed,
+        None | Some(Err(_)) | Some(Ok(Message::Close(_)))
+    ));
+    assert!(
+        responder
+            .send(crate::events::SubscribeStartup {
+                ack: IpcResponse::Subscribed { events },
+                snapshot: snapshot.events().unwrap(),
+                receiver,
+            })
+            .is_err(),
+        "the delayed subscriber answers after the feed timeout"
+    );
+    let mut second = open(addr).await;
+    let Some(DaemonEvent::IpcSubscribe { events, responder }) =
+        tokio::time::timeout(Duration::from_secs(3), event_rx.recv())
+            .await
+            .unwrap()
+    else {
+        panic!("expected fresh subscription after reconnect")
+    };
+    responder
+        .send(crate::events::SubscribeStartup {
+            ack: IpcResponse::Subscribed { events },
+            snapshot: snapshot.events().unwrap(),
+            receiver: source.subscribe(),
+        })
+        .ok()
+        .unwrap();
+    assert_eq!(
+        send_text(&mut second, "query monitors").await["success"],
+        true
+    );
+    drop(second);
+    task.abort();
+    let _ = task.await;
+}
+
+#[tokio::test]
+async fn malformed_startup_snapshot_resubscribes() {
+    let (events, mut event_rx) = mpsc::channel(8);
+    let (snapshots, mut current) = watch::channel(None);
+    let (changes, _) = broadcast::channel(8);
+    let task = tokio::spawn(snapshot_feed(events, snapshots, changes));
+    let Some(DaemonEvent::IpcSubscribe { events, responder }) = event_rx.recv().await else {
+        panic!("expected subscription")
+    };
+    let (source, receiver) = broadcast::channel(8);
+    responder
+        .send(crate::events::SubscribeStartup {
+            ack: IpcResponse::Subscribed { events },
+            snapshot: vec![IpcEvent::WorkspaceSnapshotEnd { revision: 1 }],
+            receiver,
+        })
+        .ok()
+        .unwrap();
+    let Some(DaemonEvent::IpcSubscribe { events, responder }) =
+        tokio::time::timeout(Duration::from_secs(3), event_rx.recv())
+            .await
+            .unwrap()
+    else {
+        panic!("expected resubscription")
+    };
+    let snapshot = WorkspaceStateSnapshot {
+        session_id: "test".into(),
+        revision: 2,
+        focused_monitor_device_name: None,
+        records: vec![],
+    };
+    responder
+        .send(crate::events::SubscribeStartup {
+            ack: IpcResponse::Subscribed { events },
+            snapshot: snapshot.events().unwrap(),
+            receiver: source.subscribe(),
+        })
+        .ok()
+        .unwrap();
+    let recovered = tokio::time::timeout(Duration::from_secs(3), get_snapshot(&mut current))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(recovered.revision, 2);
     task.abort();
     let _ = task.await;
 }

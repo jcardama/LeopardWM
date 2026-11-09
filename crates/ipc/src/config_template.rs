@@ -189,6 +189,11 @@ reduce_motion_on_battery = true
 # ("") to keep that workspace's number. Omit the list to name nothing.
 # names = ["web", "code", "chat", "media"]
 
+[glazewm_compat]
+# Enable the local endpoint for YASB's stock GlazeWM workspaces widget.
+enabled = false
+port = 6123
+
 # Built-in example: Firefox / Zen Picture-in-Picture popups draw their own
 # square frame, so we override the focus-border corner style to match. Edit
 # or remove freely — corner_style accepts "square" | "rounded" | "small_rounded".
@@ -257,6 +262,7 @@ mod tests {
             "[animation]",
             "[overview]",
             "[workspaces]",
+            "[glazewm_compat]",
             "[[window_rules]]",
         ] {
             assert!(config.contains(section), "missing section: {section}");
@@ -266,6 +272,15 @@ mod tests {
         assert!(config.contains("centering_mode = \"center\""));
         assert!(config.contains("\"Win+Ctrl+Escape\" = \"panic_revert\""));
         assert!(config.contains("diagnostic_capture_secs = 0"));
+        let section = config
+            .split_once("[glazewm_compat]")
+            .unwrap()
+            .1
+            .split("\n[")
+            .next()
+            .unwrap();
+        assert!(section.lines().any(|line| line.trim() == "enabled = false"));
+        assert!(section.lines().any(|line| line.trim() == "port = 6123"));
     }
 
     #[test]
@@ -281,5 +296,14 @@ mod tests {
         assert!(config.contains("outer_gap_left = 16"));
         assert!(config.contains("outer_gap_bottom = 16"));
         assert!(config.contains("centering_mode = \"just_in_view\""));
+        let section = config
+            .split_once("[glazewm_compat]")
+            .unwrap()
+            .1
+            .split("\n[")
+            .next()
+            .unwrap();
+        assert!(section.lines().any(|line| line.trim() == "enabled = false"));
+        assert!(section.lines().any(|line| line.trim() == "port = 6123"));
     }
 }

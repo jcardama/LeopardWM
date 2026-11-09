@@ -1645,9 +1645,7 @@ pub fn ensure_config_on_disk() -> Result<Option<PathBuf>> {
 }
 
 fn generate_default_config_content() -> String {
-    let mut content = leopardwm_ipc::config_template::render_default_config();
-    content.push_str("\n[glazewm_compat]\n# Enable the local endpoint for YASB's stock GlazeWM workspaces widget.\nenabled = false\nport = 6123\n");
-    content
+    leopardwm_ipc::config_template::render_default_config()
 }
 
 /// Get all possible config file paths in priority order.
@@ -1687,12 +1685,6 @@ mod tests {
                 port: 6123
             }
         );
-        let generated: toml::Value = toml::from_str(&generate_default_config_content()).unwrap();
-        assert_eq!(
-            generated["glazewm_compat"]["enabled"].as_bool(),
-            Some(false)
-        );
-        assert_eq!(generated["glazewm_compat"]["port"].as_integer(), Some(6123));
         let partial: Config = toml::from_str("[glazewm_compat]\nenabled = true").unwrap();
         assert_eq!(
             partial.glazewm_compat,
