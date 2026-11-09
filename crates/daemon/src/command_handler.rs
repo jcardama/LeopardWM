@@ -3316,6 +3316,22 @@ mod floating_policy_tests {
     }
 
     #[test]
+    fn directional_floating_focus_preserves_both_rows() {
+        let mut state = three_floating_state();
+        let ws = state.focused_workspace_mut().unwrap();
+        ws.set_row_layout(&[0.5, 0.5]);
+        ws.insert_window_in_row(400, 1, Some(500)).unwrap();
+        ws.focus_window(400).unwrap();
+        assert_eq!(
+            floating_focus_after(&mut state, FLOATING, IpcCommand::FocusRight),
+            Some(RIGHT)
+        );
+        let ws = state.focused_workspace().unwrap();
+        assert_eq!(ws.focused_row(), 1);
+        assert_eq!(ws.focused_window(), Some(400));
+    }
+
+    #[test]
     fn floating_focus_stays_put_without_a_candidate() {
         let mut state = three_floating_state();
         for (from, cmd) in [

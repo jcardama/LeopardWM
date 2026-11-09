@@ -19868,6 +19868,233 @@ fn test_rule_row_past_workspace_joins_existing_last_row_column() {
     assert_eq!(ws.column_for_row(1, 0).unwrap().windows(), &[100, 101]);
 }
 
+const LEGACY_035_CONFIG: &str = r#"
+[layout]
+gap = 14
+outer_gap_left = 12
+outer_gap_right = 16
+outer_gap_top = 18
+outer_gap_bottom = 20
+
+[behavior]
+focus_new_windows = false
+
+[[window_rules]]
+match_class = "LegacyApp"
+action = "tile"
+"#;
+
+#[test]
+fn test_035_config_loads_with_single_row_defaults() {
+    let config: Config = toml::from_str(LEGACY_035_CONFIG).unwrap();
+    assert_eq!(config.layout.gap, 14);
+    assert_eq!(config.layout.outer_gap_left, 12);
+    assert_eq!(config.layout.outer_gap_right, 16);
+    assert_eq!(config.layout.outer_gap_top, 18);
+    assert_eq!(config.layout.outer_gap_bottom, 20);
+    assert!(!config.behavior.focus_new_windows);
+    assert_eq!(
+        config.window_rules[0].match_class.as_deref(),
+        Some("LegacyApp")
+    );
+    assert_eq!(config.window_rules[0].row, None);
+    let state = AppState::new_with_config(config, test_monitors());
+    assert_eq!(state.focused_workspace().unwrap().row_count(), 1);
+}
+
+#[test]
+fn test_035_saved_state_loads_flat_workspace() {
+    let json = r#"{
+      "saved_at":"123", "focused_monitor_name":"DISPLAY1",
+      "active_workspace":{"DISPLAY1":0}, "tab_title_overrides":{},
+      "workspaces":[{"monitor_device_name":"DISPLAY1", "workspace_index":0,
+        "workspace":{
+          "columns":[
+            {"width":400,"windows":[100],"height_weights":[1.0],"mode":{"type":"vertical"}},
+            {"width":600,"windows":[200,201],"height_weights":[0.5,0.5],"mode":{"type":"vertical"}}
+          ],
+          "focused_column":1,"focused_window_in_column":1,"scroll_offset":125.0,
+          "gap":10,"outer_gap_left":10,"outer_gap_right":10,
+          "outer_gap_top":10,"outer_gap_bottom":10,"default_column_width":800,
+          "centering_mode":"Center","floating_windows":[],"fullscreen_window":null,"minimized_windows":[]
+        }}]
+    }"#;
+    let snapshot: StateSnapshot = serde_json::from_str(json).unwrap();
+    let ws = &snapshot.workspaces[0].workspace;
+    assert_eq!(snapshot.focused_monitor_name, "DISPLAY1");
+    assert_eq!(snapshot.active_workspace["DISPLAY1"], 0);
+    assert_eq!(ws.row_count(), 1);
+    assert_eq!(
+        ws.columns().iter().map(|c| c.width()).collect::<Vec<_>>(),
+        [400, 600]
+    );
+    assert_eq!(ws.columns()[0].windows(), &[100]);
+    assert_eq!(ws.columns()[1].windows(), &[200, 201]);
+    assert_eq!(ws.focused_column_index(), 1);
+    assert_eq!(ws.focused_window_index_in_column(), 1);
+    assert_eq!(ws.focused_window(), Some(201));
+    assert_eq!(ws.scroll_offset(), 125.0);
+}
+
+#[test]
+fn test_single_row_default_and_035_config_preserve_layout_sequence() {
+    for config in [
+        Config::default(),
+        toml::from_str("[behavior]\nfocus_new_windows = true").unwrap(),
+    ] {
+        let mut state = AppState::new_with_config(config, test_monitors());
+        state.reduce_motion = true;
+        let ws = state.focused_workspace_mut().unwrap();
+        ws.set_reduce_motion(true);
+        ws.insert_window(100, Some(400)).unwrap();
+        ws.insert_window(200, Some(500)).unwrap();
+        ws.insert_window_in_column(201, 1).unwrap();
+        ws.focus_window(201).unwrap();
+        assert_eq!(ws.row_count(), 1);
+        let placements = ws.compute_placements(Rect::new(0, 0, 1920, 1040));
+        let rect = |id| placements.iter().find(|p| p.window_id == id).unwrap().rect;
+        assert_eq!(rect(100), Rect::new(10, 10, 400, 1020));
+        assert_eq!(rect(200), Rect::new(420, 10, 500, 505));
+        assert_eq!(rect(201), Rect::new(420, 525, 500, 505));
+        assert_eq!(ws.scroll_offset(), 0.0);
+        for cmd in [
+            IpcCommand::FocusLeft,
+            IpcCommand::FocusRight,
+            IpcCommand::FocusUp,
+            IpcCommand::FocusDown,
+            IpcCommand::MoveColumnLeft,
+            IpcCommand::Resize { delta: 100 },
+            IpcCommand::MaximizeColumn,
+            IpcCommand::ToggleTabbed,
+        ] {
+            assert_eq!(state.handle_command(cmd), IpcResponse::Ok);
+        }
+        let ws = state.focused_workspace().unwrap();
+        assert_eq!(ws.focused_window(), Some(201));
+        assert_eq!(ws.columns()[0].width(), 1900);
+        assert!(ws.columns()[0].is_tabbed());
+        let placements = ws.compute_placements(Rect::new(0, 0, 1920, 1040));
+        assert_eq!(
+            placements.iter().find(|p| p.window_id == 201).unwrap().rect,
+            Rect::new(10, 48, 1900, 982)
+        );
+        assert_eq!(ws.scroll_offset(), 0.0);
+        state
+            .focused_workspace_mut()
+            .unwrap()
+            .remove_window(201)
+            .unwrap();
+        assert_eq!(
+            state.handle_command(IpcCommand::SwitchWorkspace { index: 2 }),
+            IpcResponse::Ok
+        );
+        assert_eq!(
+            state.handle_command(IpcCommand::SwitchWorkspace { index: 1 }),
+            IpcResponse::Ok
+        );
+        let ws = state.focused_workspace().unwrap();
+        assert_eq!(ws.row_count(), 1);
+        assert_eq!(ws.focused_window(), Some(200));
+        assert_eq!(ws.columns()[0].windows(), &[200]);
+        assert_eq!(ws.scroll_offset(), 0.0);
+    }
+}
+
+#[test]
+fn test_two_row_workspace_edge_modes() {
+    use crate::config::WorkspaceEdgeWrap::{Clamp, Off, Wrap};
+    for mode in [Off, Wrap, Clamp] {
+        for (source, target) in [
+            (8, if mode == Wrap { 0 } else { 8 }),
+            (1, if mode == Off { 1 } else { 2 }),
+        ] {
+            let mut state = AppState::new_with_config(test_config(), test_monitors());
+            state.config.behavior.workspace_edge_wrap = mode;
+            state.ensure_workspace_exists(1, 8).unwrap();
+            state.active_workspace.insert(1, source);
+            let ws = state.focused_workspace_mut().unwrap();
+            ws.set_row_layout(&[0.5, 0.5]);
+            ws.insert_window_in_row(100, 0, None).unwrap();
+            ws.insert_window_in_row(200, 1, None).unwrap();
+            ws.focus_window(100).unwrap();
+            assert_eq!(state.handle_command(IpcCommand::FocusDown), IpcResponse::Ok);
+            assert_eq!(state.active_workspace_idx(1), source);
+            assert_eq!(
+                state.focused_workspace().unwrap().focused_window(),
+                Some(200)
+            );
+            assert_eq!(state.handle_command(IpcCommand::FocusDown), IpcResponse::Ok);
+            assert_eq!(
+                state.active_workspace_idx(1),
+                target,
+                "{mode:?} from {source}"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_follow_window_from_second_row_to_focused_destination_row() {
+    let mut config = test_config();
+    config.layout.rows.split = vec!["50%".into(), "50%".into()];
+    config.behavior.follow_window_to_workspace = true;
+    let mut state = AppState::new_with_config(config, test_monitors());
+    state
+        .injected_window_info
+        .insert(200, make_test_window_info(200));
+    let source = state.focused_workspace_mut().unwrap();
+    source.insert_window_in_row(100, 0, Some(400)).unwrap();
+    source.insert_window_in_row(200, 1, Some(400)).unwrap();
+    source.focus_window(200).unwrap();
+    let dest = state.ensure_workspace_exists(1, 1).unwrap();
+    dest.insert_window_in_row(300, 1, Some(400)).unwrap();
+    dest.focus_window(300).unwrap();
+    assert_eq!(
+        state.handle_command(IpcCommand::MoveToWorkspace { index: 2 }),
+        IpcResponse::Ok
+    );
+    assert_eq!(state.active_workspace_idx(1), 1);
+    let dest = state.focused_workspace().unwrap();
+    assert_eq!(dest.find_window_location_rc(200), Some((1, 1, 0)));
+    assert_eq!(dest.focused_window(), Some(200));
+    assert_eq!(state.previous_focused_hwnd, Some(200));
+    assert!(!state.workspaces[&1][0].contains_window(200));
+}
+
+#[test]
+fn test_drag_restore_rejoins_second_row_original_slot() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    let ws = state.focused_workspace_mut().unwrap();
+    ws.set_row_layout(&[0.5, 0.5]);
+    ws.insert_window_in_row(100, 0, Some(400)).unwrap();
+    ws.insert_window_in_row(200, 1, Some(500)).unwrap();
+    ws.insert_window_in_row_column_at(201, 1, 0, 1).unwrap();
+    ws.insert_window_in_row_column_at(202, 1, 0, 2).unwrap();
+    ws.remove_window(201).unwrap();
+    let drag = DragState {
+        hwnd: 201,
+        is_tiled: true,
+        source_monitor: 1,
+        source_workspace_idx: 0,
+        source_row: 1,
+        source_window_slot: 1,
+        current_row_index: 0,
+        current_column_index: 0,
+        last_drop_target: None,
+        last_hint_update: None,
+        removed_from_source: true,
+        preview_mode: crate::state::DragPreviewMode::None,
+        target_column_peers: vec![],
+        source_column_peers: vec![200, 202],
+        source_column_width: Some(500),
+    };
+    assert!(state.restore_drag_source(&drag));
+    let ws = state.focused_workspace().unwrap();
+    assert_eq!(ws.find_window_location_rc(201), Some((1, 0, 1)));
+    assert_eq!(ws.rows()[1].column(0).unwrap().windows(), &[200, 201, 202]);
+    assert_eq!(ws.find_window_location_rc(100), Some((0, 0, 0)));
+}
+
 #[test]
 fn test_drag_cursor_hit_test_identifies_target_row() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
