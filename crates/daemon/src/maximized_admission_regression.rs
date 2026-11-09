@@ -21,6 +21,10 @@ struct MaximizedOwner {
 
 impl MaximizedOwner {
     fn spawn() -> Self {
+        Self::spawn_with_explicit_release(false)
+    }
+
+    fn spawn_with_explicit_release(explicit_release: bool) -> Self {
         let (ready_tx, ready_rx) = mpsc::channel();
         let (release, resume) = mpsc::channel();
         let join = thread::spawn(move || unsafe {
@@ -47,7 +51,11 @@ impl MaximizedOwner {
             ready_tx
                 .send((hwnd.0 as usize as u64, GetCurrentThreadId()))
                 .unwrap();
-            let _ = resume.recv_timeout(Duration::from_secs(2));
+            if explicit_release {
+                let _ = resume.recv();
+            } else {
+                let _ = resume.recv_timeout(Duration::from_secs(2));
+            }
             let mut message = MSG::default();
             while GetMessageW(&mut message, None, 0, 0).as_bool() {
                 DispatchMessageW(&message);
@@ -305,21 +313,29 @@ fn test_maximized_admission_without_completion_route_does_not_stick_pending() {
     let _serial = REAL_WINDOW_STYLE_TEST_LOCK
         .lock()
         .unwrap_or_else(|error| error.into_inner());
+    let blocker = MaximizedOwner::spawn_with_explicit_release(true);
+    assert!(leopardwm_platform_win32::remove_maximizebox(blocker.window_id).unwrap());
+    assert!(!leopardwm_platform_win32::wait_for_window_style_requests(
+        Duration::from_millis(20)
+    ));
     let owner = MaximizedOwner::spawn();
     let hwnd = owner.window_id;
     assert!(unsafe { IsZoomed(HWND(hwnd as *mut _)).as_bool() });
     let mut state = native_admission_state(hwnd);
-    // No timing check here: without a completion route the window is not held pending, so its
-    // ordinary synchronous placement may wait on the non-pumping owner. The responsiveness
-    // guarantee for the hooked path is covered by the test above.
+    let _ = owner.release.send(());
     let outcome = state.try_admit_window(hwnd, AdmissionKind::Automatic);
     let pending = state.pending_maximized_admission_restores.contains(&hwnd);
     let grace = state.window_last_maximized_at.contains_key(&hwnd);
-    let _ = owner.release.send(());
+    let still_zoomed = unsafe { IsZoomed(HWND(hwnd as *mut _)).as_bool() };
+    let _ = blocker.release.send(());
     assert!(leopardwm_platform_win32::wait_for_window_style_requests(
         Duration::from_secs(5)
     ));
     assert_eq!(outcome, AdmitOutcome::Admitted);
+    assert!(
+        still_zoomed,
+        "restore must remain queued until after the sample"
+    );
     assert!(
         !pending,
         "admission with no completion route must not remain pending"
