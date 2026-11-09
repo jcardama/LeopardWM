@@ -140,6 +140,10 @@ pub(crate) enum Commands {
     CloseWindow,
     /// Toggle floating for the focused window
     ToggleFloating,
+    /// Float the focused window if it is tiled
+    Float,
+    /// Tile the focused window if it is floating
+    Tile,
     /// Toggle fullscreen for the focused window
     ToggleFullscreen,
     /// Designate the focused window as the scratchpad and hide it

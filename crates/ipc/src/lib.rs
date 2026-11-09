@@ -491,6 +491,10 @@ pub enum IpcCommand {
     CloseWindow,
     /// Toggle floating state for the focused window.
     ToggleFloating,
+    /// Float the focused window if it is tiled.
+    Float,
+    /// Tile the focused window if it is floating.
+    Tile,
     /// Toggle fullscreen for the focused window.
     ToggleFullscreen,
     /// Designate the focused window as the scratchpad and hide it.
@@ -1018,6 +1022,8 @@ mod tests {
             IpcCommand::ToggleIgnore,
             IpcCommand::CloseWindow,
             IpcCommand::ToggleFloating,
+            IpcCommand::Float,
+            IpcCommand::Tile,
             IpcCommand::ToggleFullscreen,
             IpcCommand::ScratchpadStash,
             IpcCommand::ScratchpadToggle,

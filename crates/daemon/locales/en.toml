@@ -326,6 +326,8 @@
 "hotkeys.command.scroll_right" = "Scroll viewport right by 100 px"
 "hotkeys.command.close_window" = "Close window"
 "hotkeys.command.toggle_floating" = "Toggle floating"
+"hotkeys.command.float" = "Float window"
+"hotkeys.command.tile" = "Tile window"
 "hotkeys.command.toggle_fullscreen" = "Toggle fullscreen"
 "hotkeys.command.toggle_tabbed" = "Toggle tabbed column"
 "hotkeys.command.scratchpad_toggle" = "Toggle scratchpad"

@@ -89,6 +89,8 @@ Next/previous workspace commands always wrap; optional skip-empty behavior is de
 |---|---|
 | `lwm close-window` | Close the focused window. |
 | `lwm toggle-floating` | Toggle floating for the focused window. |
+| `lwm float` | Float the focused window if tiled; otherwise do nothing. |
+| `lwm tile` | Tile the focused window if floating; otherwise do nothing. |
 | `lwm toggle-fullscreen` | Toggle fullscreen for the focused window. |
 | `lwm toggle-sticky` | Pin or unpin the focused window across workspaces. |
 | `lwm scratchpad-stash` | Designate and hide the focused window as the scratchpad. If it is already the scratchpad, release it to tiling; if a different scratchpad exists, release that window first. |

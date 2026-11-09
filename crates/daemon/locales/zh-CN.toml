@@ -326,6 +326,8 @@
 "hotkeys.command.scroll_right" = "视口向右滚动 100 像素"
 "hotkeys.command.close_window" = "关闭窗口"
 "hotkeys.command.toggle_floating" = "切换浮动"
+"hotkeys.command.float" = "浮动窗口"
+"hotkeys.command.tile" = "平铺窗口"
 "hotkeys.command.toggle_fullscreen" = "切换全屏"
 "hotkeys.command.toggle_tabbed" = "切换标签列"
 "hotkeys.command.scratchpad_toggle" = "切换暂存区"

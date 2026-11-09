@@ -35,10 +35,12 @@ fn cli_reference_lists_every_command_path() {
 }
 
 #[test]
-fn test_wrap_cycle_verbs_map_to_ipc() {
+fn test_simple_verbs_map_to_ipc() {
     for (verb, expected) in [
         ("cycle-width", IpcCommand::CycleWidth),
         ("cycle-height", IpcCommand::CycleHeight),
+        ("float", IpcCommand::Float),
+        ("tile", IpcCommand::Tile),
     ] {
         let cli = Cli::try_parse_from(["lwm", verb]).unwrap();
         assert_eq!(to_ipc_command(&cli.command), expected);

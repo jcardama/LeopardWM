@@ -241,6 +241,8 @@ pub fn hotkey_catalog() -> Vec<HotkeyAction> {
             "Toggle floating",
             "Window",
         ),
+        action("float", None, "Float window", "Window"),
+        action("tile", None, "Tile window", "Window"),
         action(
             "toggle_fullscreen",
             Some("Ctrl+Alt+Shift+F"),
@@ -422,6 +424,8 @@ pub fn command_for_action(id: &str) -> Option<crate::IpcCommand> {
         "toggle_pause" => IpcCommand::TogglePause,
         "close_window" => IpcCommand::CloseWindow,
         "toggle_floating" => IpcCommand::ToggleFloating,
+        "float" => IpcCommand::Float,
+        "tile" => IpcCommand::Tile,
         "toggle_fullscreen" => IpcCommand::ToggleFullscreen,
         "scratchpad_stash" => IpcCommand::ScratchpadStash,
         "scratchpad_toggle" => IpcCommand::ScratchpadToggle,
@@ -489,6 +493,29 @@ mod tests {
             let command: IpcCommand = serde_json::from_str(&wire).unwrap();
             assert_eq!(command, expected);
             assert_eq!(serde_json::to_string(&command).unwrap(), wire);
+        }
+    }
+
+    #[test]
+    fn test_float_tile_catalog_and_wire_contract() {
+        let catalog = hotkey_catalog();
+        let toggle = catalog
+            .iter()
+            .position(|action| action.id == "toggle_floating")
+            .unwrap();
+        for (offset, id, label, expected) in [
+            (1, "float", "Float window", IpcCommand::Float),
+            (2, "tile", "Tile window", IpcCommand::Tile),
+        ] {
+            let action = &catalog[toggle + offset];
+            assert_eq!(action.id, id);
+            assert_eq!(action.label, label);
+            assert_eq!(action.group, "Window");
+            assert_eq!(action.default_key, None);
+            assert_eq!(command_for_action(id), Some(expected.clone()));
+            let wire = format!(r#"{{"type":"{id}"}}"#);
+            assert_eq!(serde_json::to_string(&expected).unwrap(), wire);
+            assert_eq!(serde_json::from_str::<IpcCommand>(&wire).unwrap(), expected);
         }
     }
 

@@ -63,6 +63,8 @@ pub(crate) fn to_ipc_command(cmd: &Commands) -> IpcCommand {
         Commands::Reload => IpcCommand::Reload,
         Commands::CloseWindow => IpcCommand::CloseWindow,
         Commands::ToggleFloating => IpcCommand::ToggleFloating,
+        Commands::Float => IpcCommand::Float,
+        Commands::Tile => IpcCommand::Tile,
         Commands::ToggleFullscreen => IpcCommand::ToggleFullscreen,
         Commands::ScratchpadStash => IpcCommand::ScratchpadStash,
         Commands::ScratchpadToggle => IpcCommand::ScratchpadToggle,

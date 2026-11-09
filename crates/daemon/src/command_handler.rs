@@ -98,6 +98,7 @@ fn fullscreen_policy(cmd: &IpcCommand) -> FullscreenPolicy {
         | MaximizeColumn
         | EqualizeColumnWidths
         | EqualizeColumnHeights => FullscreenPolicy::Suppress,
+        ToggleFloating | Float | Tile => FullscreenPolicy::Allow,
         _ => FullscreenPolicy::Allow,
     }
 }
@@ -107,6 +108,8 @@ fn floating_policy(cmd: &IpcCommand) -> FloatingPolicy {
     match cmd {
         CloseWindow
         | ToggleFloating
+        | Float
+        | Tile
         | ToggleSticky
         | ToggleFullscreen
         | Resize { .. }
@@ -352,7 +355,8 @@ impl AppState {
     fn handle_floating_target(&mut self, cmd: &IpcCommand, hwnd: u64) -> Option<IpcResponse> {
         match *cmd {
             IpcCommand::CloseWindow => Some(self.handle_close_window()),
-            IpcCommand::ToggleFloating => Some(self.handle_unfloat_window(hwnd)),
+            IpcCommand::ToggleFloating | IpcCommand::Tile => Some(self.handle_unfloat_window(hwnd)),
+            IpcCommand::Float => Some(IpcResponse::Ok),
             IpcCommand::ToggleSticky => {
                 self.toggle_sticky_window(hwnd);
                 Some(IpcResponse::Ok)
@@ -613,7 +617,8 @@ impl AppState {
             }
             IpcCommand::QueryAllWindows => self.handle_query_all_windows(),
             IpcCommand::CloseWindow => self.handle_close_window(),
-            IpcCommand::ToggleFloating => self.handle_toggle_floating(),
+            IpcCommand::ToggleFloating | IpcCommand::Float => self.handle_toggle_floating(),
+            IpcCommand::Tile => IpcResponse::Ok,
             IpcCommand::ScratchpadStash => {
                 self.scratchpad_stash();
                 IpcResponse::Ok
@@ -2242,8 +2247,17 @@ mod floating_policy_tests {
     #[test]
     fn floating_policy_groups_commands() {
         for cmd in [
+            IpcCommand::ToggleFloating,
+            IpcCommand::Float,
+            IpcCommand::Tile,
+        ] {
+            assert!(matches!(fullscreen_policy(&cmd), FullscreenPolicy::Allow));
+        }
+        for cmd in [
             IpcCommand::CloseWindow,
             IpcCommand::ToggleFloating,
+            IpcCommand::Float,
+            IpcCommand::Tile,
             IpcCommand::ToggleSticky,
             IpcCommand::ToggleFullscreen,
             IpcCommand::Resize { delta: 100 },
@@ -2322,6 +2336,35 @@ mod floating_policy_tests {
             .map(|c| c.width())
             .collect();
         assert!(widths.windows(2).all(|w| w[0] == w[1]), "{widths:?}");
+    }
+
+    #[test]
+    fn float_and_tile_set_the_focused_window_mode() {
+        let mut state = floating_focus_state();
+        state.previous_focused_hwnd = Some(201);
+        assert_eq!(state.handle_command(IpcCommand::Float), IpcResponse::Ok);
+        let ws = state.focused_workspace().unwrap();
+        assert!(ws.is_floating(201));
+        assert!(ws.is_floating(FLOATING));
+
+        let mut state = floating_focus_state();
+        let before = strip_snapshot(&state);
+        assert_eq!(state.handle_command(IpcCommand::Float), IpcResponse::Ok);
+        assert!(state.focused_workspace().unwrap().is_floating(FLOATING));
+        assert_eq!(strip_snapshot(&state), before);
+        assert_eq!(state.focused_floating_window(), Some(FLOATING));
+
+        assert_eq!(state.handle_command(IpcCommand::Tile), IpcResponse::Ok);
+        let ws = state.focused_workspace().unwrap();
+        assert!(!ws.is_floating(FLOATING));
+        assert!(ws.columns().iter().any(|c| c.windows().contains(&FLOATING)));
+
+        let mut state = floating_focus_state();
+        state.previous_focused_hwnd = Some(201);
+        let before = strip_snapshot(&state);
+        assert_eq!(state.handle_command(IpcCommand::Tile), IpcResponse::Ok);
+        assert_eq!(strip_snapshot(&state), before);
+        assert!(state.focused_workspace().unwrap().is_floating(FLOATING));
     }
 
     #[test]

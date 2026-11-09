@@ -343,6 +343,8 @@ lwm move left | right                  # move focused column
 lwm move-window up | down              # reorder within a column
 lwm workspace 3                        # switch to workspace 3
 lwm toggle-floating
+lwm float                              # float the focused window if tiled
+lwm tile                               # tile the focused window if floating
 lwm toggle-fullscreen
 lwm scratchpad-stash                   # stash focused window (or release the scratchpad)
 lwm scratchpad-toggle                  # summon / hide the scratchpad
