@@ -19825,6 +19825,30 @@ fn test_cross_row_placeholder_drop_repairs_source_scroll() {
 }
 
 #[test]
+fn test_rule_row_past_workspace_joins_existing_last_row_column() {
+    let mut config = test_config();
+    config.behavior.new_window_placement = crate::config::NewWindowPlacement::InColumn;
+    config.window_rules = vec![crate::config::WindowRule {
+        match_class: Some("^TestWindowClass$".into()),
+        row: Some(4),
+        ..Default::default()
+    }];
+    let mut state = AppState::new_with_config(config, test_monitors());
+    let ws = state.focused_workspace_mut().unwrap();
+    ws.set_row_layout(&[0.5, 0.5]);
+    ws.insert_window_in_row(100, 1, Some(400)).unwrap();
+    state
+        .injected_window_info
+        .insert(101, make_test_window_info(101));
+
+    state.handle_window_event(WindowEvent::Created(101, 0));
+
+    let ws = state.focused_workspace().unwrap();
+    assert_eq!(ws.column_count_for_row(1), 1);
+    assert_eq!(ws.column_for_row(1, 0).unwrap().windows(), &[100, 101]);
+}
+
+#[test]
 fn test_drag_cursor_hit_test_identifies_target_row() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
     {

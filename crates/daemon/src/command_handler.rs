@@ -176,6 +176,11 @@ fn floating_policy(cmd: &IpcCommand) -> FloatingPolicy {
         | ToggleTabbed
         | MoveColumnToStart
         | MoveColumnToEnd
+        | FocusRowUp
+        | FocusRowDown
+        | FocusRow { .. }
+        | MoveWindowToRowUp
+        | MoveWindowToRowDown
         | ConsumeFromLeft
         | ConsumeFromRight
         | ExpelToLeft
@@ -2473,12 +2478,17 @@ mod floating_policy_tests {
         IpcCommand::CenterColumn,
     ];
 
-    const IGNORED: [IpcCommand; 9] = [
+    const IGNORED: [IpcCommand; 14] = [
         IpcCommand::MaximizeColumn,
         IpcCommand::EqualizeColumnHeights,
         IpcCommand::ToggleTabbed,
         IpcCommand::MoveColumnToStart,
         IpcCommand::MoveColumnToEnd,
+        IpcCommand::FocusRowUp,
+        IpcCommand::FocusRowDown,
+        IpcCommand::FocusRow { index: 1 },
+        IpcCommand::MoveWindowToRowUp,
+        IpcCommand::MoveWindowToRowDown,
         IpcCommand::ConsumeFromLeft,
         IpcCommand::ConsumeFromRight,
         IpcCommand::ExpelToLeft,

@@ -1194,6 +1194,7 @@ impl AppState {
                         workspace.add_floating(hwnd, rect).is_ok()
                     }
                     config::WindowAction::Tile => {
+                        let rule_row = rule_row.map(|row| row.min(workspace.row_count() - 1));
                         let in_column = self.config.behavior.new_window_placement
                             == config::NewWindowPlacement::InColumn
                             && rule_row.map_or_else(
