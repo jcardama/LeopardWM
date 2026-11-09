@@ -7,6 +7,7 @@ All notable changes to LeopardWM will be documented in this file.
 ### Features
 
 - **Choose which drag gesture reorders columns.** Set `plain_drag_action` to `reorder` in Settings or `[behavior]` to make plain drag reorder and Shift+drag merge. (#154)
+- **Resize tiled windows freely with the mouse.** Choose free mouse resize in Settings or the layout config instead of snapping to presets. (#141)
 - **Yasb's stock GlazeWM workspaces widget can now connect to LeopardWM.** Enable GlazeWM compatibility in Settings or the config to use the local workspace endpoint. (#170)
 - **Choose where floating windows open.** `action = "float"` window rules accept `x` and `y` in logical pixels from the top-left of the monitor's work area and keep the window on screen. Thanks to @ShawnChiu for the design. (#166)
 - **Nudge windows in small steps.** `nudge_left` and `nudge_right` move a focused floating window by `move_step`, or shift the strip by that amount when a tiled window has focus. Bind them to the modifier and mouse wheel under `[gestures]` or to keys. (#142)

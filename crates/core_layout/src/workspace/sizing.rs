@@ -678,6 +678,98 @@ impl Workspace {
             .copied()
     }
 
+    fn free_resize_target(
+        &self,
+        row_idx: usize,
+        col_idx: usize,
+        width: i32,
+        height: i32,
+        viewport: Rect,
+    ) -> Option<(i32, Option<f64>)> {
+        let column = self.rows.get(row_idx)?.columns.get(col_idx)?;
+        let min_width = self
+            .column_effective_min_width(column)
+            .max(MIN_COLUMN_WIDTH);
+        let max_width = self.visible_width(viewport.width).max(min_width);
+        let width = width.clamp(min_width, max_width);
+        let weight = if column.len() > 1 && !column.is_tabbed() {
+            let row_rect = self.row_rects(viewport).get(row_idx).copied()?;
+            let gaps = self.gap.max(0).saturating_mul(column.len() as i32 - 1);
+            Some(height as f64 / (row_rect.height - gaps).max(1) as f64)
+        } else {
+            None
+        };
+        Some((width, weight))
+    }
+
+    pub fn resize_free(&mut self, window_id: WindowId, width: i32, height: i32, viewport: Rect) {
+        let Some((row_idx, col_idx, win_idx)) = self.find_window_location_rc(window_id) else {
+            return;
+        };
+        let Some((width, weight)) =
+            self.free_resize_target(row_idx, col_idx, width, height, viewport)
+        else {
+            return;
+        };
+        let column = &mut self.rows[row_idx].columns[col_idx];
+        column.set_width(width);
+        if let Some(weight) = weight {
+            column.set_height_weight(win_idx, weight);
+        }
+        for wid in column.windows() {
+            self.window_min_widths.remove(wid);
+            self.window_min_heights.remove(wid);
+        }
+    }
+
+    pub fn preview_resize_free(
+        &mut self,
+        window_id: WindowId,
+        width: i32,
+        height: i32,
+        viewport: Rect,
+    ) -> Option<Rect> {
+        let (row_idx, col_idx, win_idx) = self.find_window_location_rc(window_id)?;
+        let (width, weight) = self.free_resize_target(row_idx, col_idx, width, height, viewport)?;
+        let column = &mut self.rows[row_idx].columns[col_idx];
+        let original_width = column.width;
+        let original_weights = column.height_weights.clone();
+        let original_cache = column.width_fraction_cache.clone();
+        let windows = column.windows().to_vec();
+        column.set_width(width);
+        if let Some(weight) = weight {
+            column.set_height_weight(win_idx, weight);
+        }
+        let minima: Vec<_> = windows
+            .into_iter()
+            .map(|id| {
+                (
+                    id,
+                    self.window_min_widths.remove(&id),
+                    self.window_min_heights.remove(&id),
+                )
+            })
+            .collect();
+        let rect = self
+            .compute_placements(viewport)
+            .iter()
+            .find(|p| p.window_id == window_id)
+            .map(|p| p.rect);
+        for (id, width, height) in minima {
+            if let Some(width) = width {
+                self.window_min_widths.insert(id, width);
+            }
+            if let Some(height) = height {
+                self.window_min_heights.insert(id, height);
+            }
+        }
+        let column = &mut self.rows[row_idx].columns[col_idx];
+        column.width = original_width;
+        column.height_weights = original_weights;
+        column.width_fraction_cache = original_cache;
+        rect
+    }
+
     /// Compute the placement rect a window would occupy after snapping its
     /// column width and height to the nearest presets.
     pub fn preview_resize_snap(

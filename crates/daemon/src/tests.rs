@@ -5190,6 +5190,36 @@ fn test_resize_narrowing_clamps_scroll_reveals_column_and_syncs_taskbar() {
 }
 
 #[test]
+fn free_resize_complete_keeps_dragged_width_and_stacked_height() {
+    let _desktop = display_change_regression::FixtureDesktop::enter();
+    for width in [777, 2400] {
+        let fixture = ResizeTestWindow::new(width);
+        let sibling = ResizeTestWindow::new(500);
+        let visible = leopardwm_platform_win32::get_window_visible_rect(fixture.id()).unwrap();
+        let mut config = test_config();
+        config.layout.mouse_resize = crate::config::MouseResize::Free;
+        let mut state = AppState::new_with_config(config, test_monitors());
+        state.reduce_motion = true;
+        for hwnd in [fixture.id(), sibling.id()] {
+            state
+                .injected_window_info
+                .insert(hwnd, make_test_window_info(hwnd));
+        }
+        let viewport_width = state.viewport_width_for(state.focused_monitor);
+        let workspace = state.focused_workspace_mut().unwrap();
+        workspace.set_reduce_motion(true);
+        workspace.insert_window(fixture.id(), Some(500)).unwrap();
+        workspace.insert_window_in_column(sibling.id(), 0).unwrap();
+        let max_width = workspace.visible_width(viewport_width);
+        seed_resize_session(&mut state, fixture.id());
+        state.handle_window_event(WindowEvent::MoveSizeEnd(fixture.id()));
+        let column = &state.focused_workspace().unwrap().columns()[0];
+        assert_eq!(column.width(), visible.width.min(max_width));
+        assert!((column.height_weights()[0] - visible.height as f64 / 1010.0).abs() < 1e-9);
+    }
+}
+
+#[test]
 fn test_resize_snap_preserves_valid_scroll_when_focused_column_stays_visible() {
     // A visible focused column with in-bounds scroll needs no post-snap correction.
     let fixture = ResizeTestWindow::new(960);

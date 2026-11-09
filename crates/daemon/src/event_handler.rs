@@ -4249,20 +4249,25 @@ impl AppState {
         };
         let width_presets = self.config.layout.width_presets.clone();
         let height_presets = self.config.layout.height_presets.clone();
+        let free_resize = self.config.layout.mouse_resize == crate::config::MouseResize::Free;
 
         let snap_rect = self
             .workspaces
             .get_mut(&monitor_id)
             .and_then(|v| v.get_mut(ws_idx))
             .and_then(|ws| {
-                ws.preview_resize_snap(
-                    hwnd,
-                    visible_rect.width,
-                    visible_rect.height,
-                    &width_presets,
-                    &height_presets,
-                    work_area,
-                )
+                if free_resize {
+                    ws.preview_resize_free(hwnd, visible_rect.width, visible_rect.height, work_area)
+                } else {
+                    ws.preview_resize_snap(
+                        hwnd,
+                        visible_rect.width,
+                        visible_rect.height,
+                        &width_presets,
+                        &height_presets,
+                        work_area,
+                    )
+                }
             });
 
         let Some(target_rect) = snap_rect else {
@@ -4332,6 +4337,12 @@ impl AppState {
         let viewport_width = self.viewport_width_for(monitor_id);
         let width_presets = self.config.layout.width_presets.clone();
         let height_presets = self.config.layout.height_presets.clone();
+        let free_resize = self.config.layout.mouse_resize == crate::config::MouseResize::Free;
+        let viewport_height = self
+            .monitors
+            .get(&monitor_id)
+            .map(|m| m.work_area.height)
+            .unwrap_or(crate::state::FALLBACK_WORK_AREA_HEIGHT);
 
         if let Some(ws) = self
             .workspaces
@@ -4339,43 +4350,52 @@ impl AppState {
             .and_then(|v| v.get_mut(ws_idx))
         {
             if let Some((row_idx, col_idx, win_idx)) = ws.find_window_location_rc(hwnd) {
-                ws.snap_column_width_to_preset_in_row(
-                    row_idx,
-                    col_idx,
-                    visible_rect.width,
-                    &width_presets,
-                    viewport_width,
-                );
-
-                let col_len = ws
-                    .column_for_row(row_idx, col_idx)
-                    .map(|c| c.len())
-                    .unwrap_or(0);
-                if col_len > 1 {
-                    let viewport_height = self
-                        .monitors
-                        .get(&monitor_id)
-                        .map(|m| m.work_area.height)
-                        .unwrap_or(crate::state::FALLBACK_WORK_AREA_HEIGHT);
-                    ws.snap_window_height_to_preset_in_row(
+                if free_resize {
+                    ws.resize_free(
+                        hwnd,
+                        visible_rect.width,
+                        visible_rect.height,
+                        leopardwm_core_layout::Rect::new(0, 0, viewport_width, viewport_height),
+                    );
+                } else {
+                    ws.snap_column_width_to_preset_in_row(
                         row_idx,
                         col_idx,
-                        win_idx,
-                        visible_rect.height,
-                        &height_presets,
-                        viewport_height,
+                        visible_rect.width,
+                        &width_presets,
+                        viewport_width,
                     );
+
+                    let col_len = ws
+                        .column_for_row(row_idx, col_idx)
+                        .map(|c| c.len())
+                        .unwrap_or(0);
+                    if col_len > 1 {
+                        ws.snap_window_height_to_preset_in_row(
+                            row_idx,
+                            col_idx,
+                            win_idx,
+                            visible_rect.height,
+                            &height_presets,
+                            viewport_height,
+                        );
+                    }
                 }
 
                 ws.ensure_focused_visible_animated(viewport_width);
 
-                info!(
-                    "Resize snap: window {} → width preset, new column width = {}",
-                    hwnd,
-                    ws.column_for_row(row_idx, col_idx)
-                        .map(|c| c.width())
-                        .unwrap_or(0)
-                );
+                let width = ws
+                    .column_for_row(row_idx, col_idx)
+                    .map(|c| c.width())
+                    .unwrap_or(0);
+                if free_resize {
+                    info!("Free resize: window {}, new column width = {}", hwnd, width);
+                } else {
+                    info!(
+                        "Resize snap: window {} → width preset, new column width = {}",
+                        hwnd, width
+                    );
+                }
             }
         }
 

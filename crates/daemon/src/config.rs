@@ -155,6 +155,9 @@ pub struct LayoutConfig {
     #[serde(default = "default_false")]
     pub center_past_edges: bool,
 
+    #[serde(default)]
+    pub mouse_resize: MouseResize,
+
     /// Width presets for cycling (fractions of usable viewport width).
     #[serde(default = "default_width_presets")]
     pub width_presets: Vec<f64>,
@@ -484,6 +487,7 @@ impl Default for LayoutConfig {
             centering_mode: CenteringModeConfig::default(),
             center_past_edges: false,
             center_single_column: false,
+            mouse_resize: MouseResize::default(),
             width_presets: default_width_presets(),
             default_width_preset: default_width_preset(),
             height_presets: default_height_presets(),
@@ -539,6 +543,14 @@ impl LayoutConfig {
             }
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum MouseResize {
+    #[default]
+    Presets,
+    Free,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -2250,6 +2262,16 @@ mod tests {
         assert_eq!(config.layout.gap, 20);
         assert_eq!(config.layout.outer_gap_left, 10);
         assert_eq!(config.layout.width_presets, vec![0.333, 0.5, 0.667]);
+    }
+
+    #[test]
+    fn mouse_resize_config_defaults_and_rejects_invalid_values() {
+        let default: Config = toml::from_str("[layout]").unwrap();
+        assert_eq!(default.layout.mouse_resize, MouseResize::Presets);
+        let free: Config = toml::from_str("[layout]\nmouse_resize = 'free'").unwrap();
+        assert_eq!(free.layout.mouse_resize, MouseResize::Free);
+        assert!(toml::from_str::<Config>("[layout]\nmouse_resize = 'invalid'").is_err());
+        assert!(toml::from_str::<Config>("[layout]\ncentering_mode = 'invalid'").is_err());
     }
 
     #[test]

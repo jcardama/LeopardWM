@@ -4850,6 +4850,18 @@ mod tests {
     }
 
     #[test]
+    fn cycle_width_from_off_preset_selects_next_in_each_direction() {
+        let mut ws = Workspace::with_gaps(0, 0);
+        ws.insert_window(1, Some(420)).unwrap();
+        let presets = [0.25, 0.5, 0.75];
+        ws.cycle_width_up(&presets, 1000);
+        assert_eq!(ws.columns()[0].width(), 500);
+        ws.set_column_width(0, 420).unwrap();
+        ws.cycle_width_down(&presets, 1000);
+        assert_eq!(ws.columns()[0].width(), 250);
+    }
+
+    #[test]
     fn test_cycle_width_up() {
         let mut ws = Workspace::with_gaps(0, 0);
         ws.insert_window(1, Some(640)).unwrap(); // 640/1920 ≈ 0.333
@@ -6307,6 +6319,33 @@ mod tests {
         assert_eq!(ws.fullscreen_window_id(), None);
         assert_eq!(ws.window_min_widths.get(&1).copied(), None);
         assert_eq!(ws.window_min_height(1), None);
+    }
+
+    #[test]
+    fn free_resize_preview_matches_release_with_native_minimum() {
+        let mut ws = Workspace::with_directional_gaps(10, 20, 20, 40, 40);
+        ws.set_row_gap(20);
+        ws.set_row_layout(&[0.5, 0.5]);
+        ws.focus_row(1);
+        ws.insert_window(10, Some(600)).unwrap();
+        ws.insert_window_in_column(11, 0).unwrap();
+        ws.set_window_min_width(10, 700);
+        ws.set_window_min_height(10, 100);
+        let viewport = Rect::new(0, 0, 1920, 1080);
+        let preview = ws.preview_resize_free(10, 400, 217, viewport).unwrap();
+        assert_eq!(ws.rows()[1].columns()[0].width(), 600);
+        ws.resize_free(10, 400, 217, viewport);
+        let released = ws
+            .compute_placements(viewport)
+            .into_iter()
+            .find(|p| p.window_id == 10)
+            .unwrap()
+            .rect;
+        assert_eq!(preview, released);
+        assert_eq!(ws.rows()[1].columns()[0].width(), 700);
+        assert!((ws.rows()[1].columns()[0].height_weights()[0] - 217.0 / 480.0).abs() < 1e-9);
+        assert!(!ws.window_min_widths.contains_key(&10));
+        assert!(ws.window_min_height(10).is_none());
     }
 
     #[test]

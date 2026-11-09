@@ -69,7 +69,7 @@ A few deliberate **non-features**, so you know what you're getting:
 - **Overview mode** — `Ctrl+Alt+Space` opens a map of the monitor's non-empty workspaces; click a window card to jump to it, click a row to switch workspace, or navigate with arrows or your configured keyboard `focus_left` / `focus_right` / `focus_up` / `focus_down` bindings while keeping the overview open. Your configured keyboard `move_window_up` / `move_window_down` bindings move the selected window to the previous / next numbered workspace on that monitor, including empty workspaces, without switching workspace or closing the overview; selection follows the moved window. Moves stop at workspace 1 or 9, sticky windows stay put, and `move_window_left` / `move_window_right` do nothing while the overview is open. Enter selects, digits switch workspace, and Esc cancels without undoing moves. Other bound actions and gesture bindings keep their normal behavior.
 - **Per-app window rules** — float, ignore, or tile by class/title/executable, plus per-app open behavior: target workspace, initial column width, open maximized
 - Floating and fullscreen toggles
-- Width and height presets with column equalization, maximize-column, center-column
+- Width and height presets with column equalization, maximize-column, center-column, and optional free mouse resizing
 - Active focus border with auto-detected rounded corners
 - System tray with pause, reload, settings, and diagnostics
 - WebView-based settings GUI (Mica backdrop, live theme switching, dark mode)
@@ -165,6 +165,8 @@ Start the daemon:
 ```
 
 A default config is created automatically at `%APPDATA%\leopardwm\config\config.toml`. Customize via the tray icon → Settings, or edit the file directly.
+
+By default, resizing a tiled window with the mouse snaps to width and height presets. Set `mouse_resize = "free"` under `[layout]`, or choose Free under Settings → Layout → Mouse resize, to keep the dragged size instead.
 
 Set `new_window_monitor = "focused"` under `[behavior]` or choose Settings → Behavior → New window monitor → Focused monitor to open new windows on the focused monitor's active workspace, including an empty workspace. The default, `"opening"`, uses the monitor where Windows opened the window, falling back to the focused monitor when it opens outside all monitors. If no focused monitor is known, `"focused"` uses the opening behavior. A workspace rule selects the workspace index on the policy-selected monitor; sticky windows retain their opening monitor and active-workspace placement. Floating windows moved by this policy are fitted to the chosen monitor's work area before being centered. Changes apply live on config reload or Settings save only to windows that open while LeopardWM is running. Already-open windows discovered at startup or during reload/rescan keep their existing monitor and are added to its active workspace; their floating rectangles are not moved or fitted by this policy. Already-managed windows and startup persistence restores are unchanged.
 

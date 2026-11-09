@@ -967,6 +967,16 @@ input[type="range"]::-webkit-slider-thumb {
             </div>
           </div>
           <div class="field">
+            <div class="field-info"><div class="field-label" data-i18n="settings.layout.mouse_resize.label"></div><div class="field-desc" data-i18n="settings.layout.mouse_resize.description"></div></div>
+            <div class="combobox" id="cb-layout-mouse_resize">
+              <button class="combobox-trigger" type="button"><span class="combobox-text" data-i18n="settings.text.mouse_resize_presets"></span><svg class="combobox-chevron" viewBox="0 0 12 12"><path d="M2.15 4.65a.5.5 0 01.7 0L6 7.79l3.15-3.14a.5.5 0 11.7.7l-3.5 3.5a.5.5 0 01-.7 0l-3.5-3.5a.5.5 0 010-.7z"/></svg></button>
+              <div class="combobox-popup">
+                <div class="combobox-option selected" data-value="presets" data-i18n="settings.text.mouse_resize_presets"></div>
+                <div class="combobox-option" data-value="free" data-i18n="settings.text.mouse_resize_free"></div>
+              </div>
+            </div>
+          </div>
+          <div class="field">
             <div class="field-info"><div class="field-label" data-i18n="settings.layout.center_single_column.label"></div><div class="field-desc" data-i18n="settings.layout.center_single_column.description"></div></div>
             <label class="toggle"><input type="checkbox" id="layout-center_single_column"><span class="track"></span><span class="thumb"></span></label>
           </div>
@@ -1702,6 +1712,7 @@ function init(cfg) {
   document.getElementById('height-presets-body').innerHTML = '';
   (cfg.layout.height_presets || [0.333,0.5,0.667]).forEach(function(v) { addPresetRow('height', v); });
   setCb('cb-layout-centering_mode', cfg.layout.centering_mode);
+  setCb('cb-layout-mouse_resize', cfg.layout.mouse_resize || 'presets');
   setChecked('layout-center_single_column', cfg.layout.center_single_column);
   setChecked('layout-center_past_edges', cfg.layout.center_past_edges);
 
@@ -2502,6 +2513,7 @@ function readConfig() {
       height_presets: readPresets('height'),
       default_width_preset: defaultWidthPreset,
       centering_mode: cbVal('cb-layout-centering_mode'),
+      mouse_resize: cbVal('cb-layout-mouse_resize'),
       center_single_column: checked('layout-center_single_column'),
       center_past_edges: checked('layout-center_past_edges'),
       rows: {
@@ -2763,6 +2775,14 @@ mod tests {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+
+    #[test]
+    fn mouse_resize_is_wired_into_settings_config() {
+        assert!(SETTINGS_HTML.contains("id=\"cb-layout-mouse_resize\""));
+        assert!(SETTINGS_HTML
+            .contains("setCb('cb-layout-mouse_resize', cfg.layout.mouse_resize || 'presets');"));
+        assert!(SETTINGS_HTML.contains("mouse_resize: cbVal('cb-layout-mouse_resize')"));
     }
 
     #[test]
