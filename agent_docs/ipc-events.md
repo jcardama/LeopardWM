@@ -352,50 +352,7 @@ lwm subscribe | ForEach-Object { ConvertFrom-Json $_ | Format-Table -AutoSize }
 
 ## Yasb integration
 
-[Yasb](https://github.com/amnweb/yasb) ships komorebi and GlazeWM widgets in-tree but does not have LeopardWM widgets yet (will be revisited once we have user demand for it). Two paths today:
-
-### Pure config (no plugin code)
-
-Use Yasb's `custom` widget to run `lwm subscribe` as a subprocess and render the most recent line. Add this to your Yasb `config.yaml`:
-
-```yaml
-widgets:
-  leopardwm_workspace:
-    type: "yasb.custom.CustomWidget"
-    options:
-      label: "<span>WS {data}</span>"
-      class_name: "leopardwm-workspace"
-      exec_options:
-        run_cmd: ["lwm", "subscribe", "--events", "workspace"]
-        run_interval: 0   # 0 means run once, keep stdout open
-        return_format: "json"
-      callbacks:
-        on_left: "do_nothing"
-```
-
-`run_interval: 0` keeps the subscription open for the life of the bar. `return_format: "json"` parses each newline-delimited frame; `{data}` in the label references the parsed event. Replace `workspace` with any comma-separated filter from the [Event kinds table](#event-kinds).
-
-This won't render a per-workspace strip or a title with executable icon — just whatever a single `{data}` placeholder can show. For richer rendering, write a real Python plugin (sketch below) or wait until a first-class LeopardWM widget set lands in Yasb.
-
-### Plugin sketch (Python)
-
-A real Yasb plugin would consume the stream and update multiple labels:
-
-```python
-import json
-import subprocess
-
-proc = subprocess.Popen(["lwm", "subscribe", "--events", "workspace,focused_window,layout"],
-                        stdout=subprocess.PIPE, text=True, bufsize=1)
-for line in proc.stdout:
-    event = json.loads(line)
-    if event["type"] == "workspace_changed":
-        update_workspace_widget(new_index=event["new_index"])
-    elif event["type"] == "focused_window_changed":
-        update_title_widget(title=event.get("title"))
-    elif event["type"] == "layout_changed":
-        update_layout_widget(columns=event["columns"], focused=event["focused_column"])
-```
+The user-facing setup lives in [`docs/yasb.md`](../docs/yasb.md): the tested Yasb recipe, plus an "Any bar" section for other bars that subscribe to events and run `lwm` commands. Keep that page as the single source for bar setup, and keep this document as the wire contract it builds on.
 
 ## Adding new IPC events (daemon developers)
 
