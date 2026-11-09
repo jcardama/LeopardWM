@@ -18,6 +18,8 @@ Arguments in the tables are required unless marked optional. Commands that take 
 | `lwm focus-floating` | Focus the remembered floating window, or the most recently added floating window if none is remembered. |
 | `lwm focus-tiling` | Focus the tiled layer, remembering the floating window being left. |
 | `lwm switch-focus-floating-tiling` | Switch focus between the floating and tiled layers. |
+| `lwm nudge-left` | Move a floating window left, or shift tiled windows left, by `move_step`. |
+| `lwm nudge-right` | Move a floating window right, or shift tiled windows right, by `move_step`. |
 | `lwm scroll` | Choose a viewport scroll direction. |
 | `lwm scroll left` | Scroll left; optional `-p, --pixels <PIXELS>` defaults to 100. |
 | `lwm scroll right` | Scroll right; optional `-p, --pixels <PIXELS>` defaults to 100. |

@@ -454,6 +454,11 @@ pub enum IpcCommand {
         delta: i32,
     },
 
+    /// Nudge the focused window left by the configured step.
+    NudgeLeft,
+    /// Nudge the focused window right by the configured step.
+    NudgeRight,
+
     /// Scroll the viewport.
     Scroll {
         /// Scroll delta (positive = right, negative = left).

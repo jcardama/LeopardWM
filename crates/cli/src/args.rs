@@ -47,6 +47,10 @@ pub(crate) enum Commands {
     FocusTiling,
     /// Switch focus between the floating and tiled layers
     SwitchFocusFloatingTiling,
+    /// Nudge the focused window left by the configured step
+    NudgeLeft,
+    /// Nudge the focused window right by the configured step
+    NudgeRight,
     /// Scroll the viewport
     Scroll {
         #[command(subcommand)]

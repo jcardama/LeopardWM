@@ -242,6 +242,8 @@ pub fn hotkey_catalog() -> Vec<HotkeyAction> {
             "Scroll viewport right by 100 px",
             "Column layout",
         ),
+        action("nudge_left", None, "Nudge window left", "Column layout"),
+        action("nudge_right", None, "Nudge window right", "Column layout"),
         action("close_window", Some("Ctrl+Alt+W"), "Close window", "Window"),
         action(
             "toggle_floating",
@@ -429,6 +431,8 @@ pub fn command_for_action(id: &str) -> Option<crate::IpcCommand> {
         "equalize_heights" => IpcCommand::EqualizeColumnHeights,
         "scroll_left" => IpcCommand::Scroll { delta: -100.0 },
         "scroll_right" => IpcCommand::Scroll { delta: 100.0 },
+        "nudge_left" => IpcCommand::NudgeLeft,
+        "nudge_right" => IpcCommand::NudgeRight,
         "refresh" => IpcCommand::Refresh,
         "reload" => IpcCommand::Reload,
         "panic_revert" => IpcCommand::PanicRevert,
@@ -577,10 +581,44 @@ mod tests {
             ("focus_prev", IpcCommand::FocusPrev),
             ("scroll_left", IpcCommand::Scroll { delta: -100.0 }),
             ("scroll_right", IpcCommand::Scroll { delta: 100.0 }),
+            ("nudge_left", IpcCommand::NudgeLeft),
+            ("nudge_right", IpcCommand::NudgeRight),
         ] {
             let action = catalog.iter().find(|action| action.id == id).expect(id);
             assert!(action.default_key.is_none(), "{id} must remain unbound");
             assert_eq!(command_for_action(id), Some(expected));
+        }
+    }
+
+    #[test]
+    fn nudge_catalog_and_wire_contract() {
+        let catalog = hotkey_catalog();
+        let scroll_right = catalog
+            .iter()
+            .position(|action| action.id == "scroll_right")
+            .unwrap();
+        for (offset, id, label, command) in [
+            (1, "nudge_left", "Nudge window left", IpcCommand::NudgeLeft),
+            (
+                2,
+                "nudge_right",
+                "Nudge window right",
+                IpcCommand::NudgeRight,
+            ),
+        ] {
+            let action = &catalog[scroll_right + offset];
+            assert_eq!(
+                (
+                    &*action.id,
+                    &*action.label,
+                    action.group,
+                    &action.default_key
+                ),
+                (id, label, "Column layout", &None)
+            );
+            let wire = format!(r#"{{"type":"{id}"}}"#);
+            assert_eq!(serde_json::to_string(&command).unwrap(), wire);
+            assert_eq!(serde_json::from_str::<IpcCommand>(&wire).unwrap(), command);
         }
     }
 

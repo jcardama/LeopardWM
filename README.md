@@ -214,10 +214,17 @@ Settings gesture menus:
 |---|---|
 | `focus_next` / `focus_prev` | Focus the next / previous window across columns, wrapping at strip ends |
 | `scroll_left` / `scroll_right` | Move the strip viewport left / right by 100 px without changing focus |
+| `nudge_left` / `nudge_right` | Move a floating window or shift tiled windows left / right by `move_step` |
 
 `scroll_up` and `scroll_down` under `[gestures]` default to `focus_next` and
 `focus_prev`. Hold `[hotkeys].scroll_modifier` (Ctrl+Alt by default) while using
-the mouse wheel to run them.
+the mouse wheel to run them. For small window moves instead, set:
+
+```toml
+[gestures]
+scroll_up = "nudge_left"
+scroll_down = "nudge_right"
+```
 
 > The scratchpad and sticky pins are session-scoped: they are keyed by window handle and reset when the daemon restarts.
 
@@ -333,7 +340,7 @@ Enable **Settings → Layout → Center single column**, or set `center_single_c
 
 ### Layout commands
 
-Most users drive the layout via hotkeys, but many commands are also available through the CLI for scripting or AutoHotkey integration. With a floating window focused, move commands nudge it within the monitor work area by `[behavior] move_step` logical pixels (default 50, range 1–1000); width and height presets size it against that work area, and center centers it there.
+Most users drive the layout via hotkeys, but many commands are also available through the CLI for scripting or AutoHotkey integration. With a floating window focused, move commands nudge it within the monitor work area by `[behavior] move_step` logical pixels (default 50, range 1–1000); width and height presets size it against that work area, and center centers it there. Keyboard or wheel nudge commands use the same step to move floating windows or shift tiled windows.
 
 ```bash
 lwm focus left | right | up | down
@@ -344,6 +351,7 @@ lwm cycle-width                       # next width preset, wrapping at the end
 lwm cycle-height                      # next height preset, wrapping at the end
 lwm move left | right                  # move focused column
 lwm move-window up | down              # reorder within a column
+lwm nudge-left | nudge-right           # shift windows by move_step
 lwm workspace 3                        # switch to workspace 3
 lwm toggle-floating
 lwm float                              # float the focused window if tiled

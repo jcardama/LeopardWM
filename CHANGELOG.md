@@ -7,6 +7,7 @@ All notable changes to LeopardWM will be documented in this file.
 ### Features
 
 - **Yasb's stock GlazeWM workspaces widget can now connect to LeopardWM.** Enable GlazeWM compatibility in Settings or the config to use the local workspace endpoint. (#170)
+- **Nudge windows in small steps.** `nudge_left` and `nudge_right` move a focused floating window by `move_step`, or shift the strip by that amount when a tiled window has focus. Bind them to the modifier and mouse wheel under `[gestures]` or to keys. (#142)
 - **Move and size floating windows from the keyboard.** Move, width, height preset and center commands now act on focused floating windows. `move_step` controls movement in logical pixels and defaults to 50. Thanks to @ShawnChiu for the design. (#166)
 - **Switch focus between floating and tiled windows.** Use `focus_floating`, `focus_tiling`, or `switch_focus_floating_tiling` to move between layers on the current workspace. Thanks to @ShawnChiu for the design. (#166)
 - **Set a window floating or tiled directly.** The `float` and `tile` commands leave the focused window in the requested state, making them useful in scripts. Thanks to @ShawnChiu for the design. (#166)

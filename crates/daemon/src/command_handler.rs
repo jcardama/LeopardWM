@@ -91,6 +91,8 @@ fn fullscreen_policy(cmd: &IpcCommand) -> FullscreenPolicy {
         | ConsumeFromLeft | ConsumeFromRight | ToggleTabbed => FullscreenPolicy::Exit,
         Resize { .. }
         | Scroll { .. }
+        | NudgeLeft
+        | NudgeRight
         | SetColumnWidth { .. }
         | CycleWidth
         | CycleHeight
@@ -153,7 +155,9 @@ fn floating_policy(cmd: &IpcCommand) -> FloatingPolicy {
         | MoveWindowLeft
         | MoveWindowRight
         | MoveWindowUp
-        | MoveWindowDown => FloatingPolicy::Target,
+        | MoveWindowDown
+        | NudgeLeft
+        | NudgeRight => FloatingPolicy::Target,
         MaximizeColumn
         | EqualizeColumnHeights
         | ToggleTabbed
@@ -403,6 +407,8 @@ impl AppState {
             }
             IpcCommand::MoveColumnLeft
             | IpcCommand::MoveColumnRight
+            | IpcCommand::NudgeLeft
+            | IpcCommand::NudgeRight
             | IpcCommand::MoveWindowLeft
             | IpcCommand::MoveWindowRight
             | IpcCommand::MoveWindowUp
@@ -462,6 +468,14 @@ impl AppState {
         })
     }
 
+    fn nudge_tiled(&mut self, left: bool) -> IpcResponse {
+        let Some(step) = self.move_step_px(self.focused_monitor) else {
+            return IpcResponse::Ok;
+        };
+        let delta = if left { step as f64 } else { -(step as f64) };
+        self.handle_command(IpcCommand::Scroll { delta })
+    }
+
     fn handle_floating_geometry(&mut self, cmd: &IpcCommand, hwnd: u64) -> IpcResponse {
         if self
             .focused_workspace()
@@ -486,10 +500,10 @@ impl AppState {
         let width_presets = self.config.layout.width_presets.clone();
         let height_presets = self.config.layout.height_presets.clone();
         self.execute_workspace_command(true, false, |ws, _| match cmd {
-            IpcCommand::MoveColumnLeft | IpcCommand::MoveWindowLeft => {
+            IpcCommand::MoveColumnLeft | IpcCommand::MoveWindowLeft | IpcCommand::NudgeLeft => {
                 ws.move_floating(hwnd, -step, 0, area)
             }
-            IpcCommand::MoveColumnRight | IpcCommand::MoveWindowRight => {
+            IpcCommand::MoveColumnRight | IpcCommand::MoveWindowRight | IpcCommand::NudgeRight => {
                 ws.move_floating(hwnd, step, 0, area)
             }
             IpcCommand::MoveWindowUp => ws.move_floating(hwnd, 0, -step, area),
@@ -720,6 +734,8 @@ impl AppState {
                     info!("Resized column by {}", delta);
                 })
             }
+            IpcCommand::NudgeLeft => self.nudge_tiled(true),
+            IpcCommand::NudgeRight => self.nudge_tiled(false),
             IpcCommand::Scroll { delta } => {
                 self.execute_workspace_command(false, false, |ws, vw| {
                     ws.scroll_by(delta, vw);
@@ -2310,7 +2326,9 @@ mod floating_policy_tests {
         IpcCommand::FocusEnd,
     ];
 
-    const FLOATING_GEOMETRY: [IpcCommand; 14] = [
+    const FLOATING_GEOMETRY: [IpcCommand; 16] = [
+        IpcCommand::NudgeLeft,
+        IpcCommand::NudgeRight,
         IpcCommand::MoveColumnLeft,
         IpcCommand::MoveColumnRight,
         IpcCommand::MoveWindowLeft,
@@ -2422,6 +2440,12 @@ mod floating_policy_tests {
             ));
             assert!(matches!(floating_policy(&cmd), FloatingPolicy::Target));
             assert!(is_focus_navigation(&cmd));
+        }
+        for cmd in [IpcCommand::NudgeLeft, IpcCommand::NudgeRight] {
+            assert!(matches!(
+                fullscreen_policy(&cmd),
+                FullscreenPolicy::Suppress
+            ));
         }
         for cmd in [
             IpcCommand::CloseWindow,
@@ -2584,6 +2608,70 @@ mod floating_policy_tests {
             state.focused_workspace().unwrap().floating_windows()[0].rect,
             Rect::new(1420, 640, 500, 400)
         );
+    }
+
+    #[test]
+    fn nudges_move_floating_and_scroll_tiled_by_scaled_step() {
+        for (scale, step) in [(1.0, 60), (1.5, 90)] {
+            let mut monitor = monitor(1, 0);
+            monitor.scale_factor = scale;
+            let mut state = floating_focus_state_on(vec![monitor]);
+            state.config.behavior.move_step = 60;
+            for (command, x) in [
+                (IpcCommand::NudgeLeft, 100 - step),
+                (IpcCommand::NudgeRight, 100),
+            ] {
+                assert_eq!(state.handle_command(command), IpcResponse::Ok);
+                assert_eq!(
+                    state.focused_workspace().unwrap().floating_windows()[0]
+                        .rect
+                        .x,
+                    x
+                );
+            }
+            state
+                .focused_workspace_mut()
+                .unwrap()
+                .update_floating(FLOATING, Rect::new(0, 100, 500, 400));
+            assert_eq!(state.handle_command(IpcCommand::NudgeLeft), IpcResponse::Ok);
+            assert_eq!(
+                state.focused_workspace().unwrap().floating_windows()[0]
+                    .rect
+                    .x,
+                0
+            );
+            state
+                .focused_workspace_mut()
+                .unwrap()
+                .update_floating(FLOATING, Rect::new(1420, 100, 500, 400));
+            assert_eq!(
+                state.handle_command(IpcCommand::NudgeRight),
+                IpcResponse::Ok
+            );
+            assert_eq!(
+                state.focused_workspace().unwrap().floating_windows()[0]
+                    .rect
+                    .x,
+                1420
+            );
+
+            state.previous_focused_hwnd = Some(201);
+            let ws = state.focused_workspace_mut().unwrap();
+            ws.insert_window(400, Some(1000)).unwrap();
+            ws.set_scroll_offset(200.0);
+            for (command, expected) in [
+                (IpcCommand::NudgeLeft, 200.0 + step as f64),
+                (IpcCommand::NudgeRight, 200.0),
+            ] {
+                assert_eq!(state.handle_command(command), IpcResponse::Ok);
+                assert_eq!(state.focused_workspace().unwrap().scroll_offset(), expected);
+            }
+            state.focused_workspace_mut().unwrap().toggle_fullscreen();
+            for command in [IpcCommand::NudgeLeft, IpcCommand::NudgeRight] {
+                assert_eq!(state.handle_command(command), IpcResponse::Ok);
+                assert_eq!(state.focused_workspace().unwrap().scroll_offset(), 200.0);
+            }
+        }
     }
 
     #[test]

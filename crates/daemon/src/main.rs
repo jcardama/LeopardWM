@@ -2220,6 +2220,22 @@ mod gesture_dispatch_tests {
     use super::*;
 
     #[test]
+    fn configured_wheel_nudges_resolve_for_gesture_dispatch() {
+        let config: config::Config = toml::from_str(
+            "[gestures]\nscroll_up = \"nudge_left\"\nscroll_down = \"nudge_right\"\n",
+        )
+        .unwrap();
+        assert!(matches!(
+            classify_gesture_command(&config.gestures.scroll_up),
+            GestureCommand::Known(IpcCommand::NudgeLeft)
+        ));
+        assert!(matches!(
+            classify_gesture_command(&config.gestures.scroll_down),
+            GestureCommand::Known(IpcCommand::NudgeRight)
+        ));
+    }
+
+    #[test]
     fn classify_empty_known_and_unknown_commands() {
         assert!(matches!(
             classify_gesture_command(""),
