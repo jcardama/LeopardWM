@@ -6322,6 +6322,99 @@ mod tests {
     }
 
     #[test]
+    fn free_resize_height_accounts_for_minimized_sibling() {
+        let mut ws = Workspace::with_gaps(10, 0);
+        ws.insert_window(10, Some(500)).unwrap();
+        ws.insert_window_in_column(11, 0).unwrap();
+        ws.insert_window_in_column(12, 0).unwrap();
+        assert!(ws.mark_minimized(12));
+        let viewport = Rect::new(0, 0, 1000, 1000);
+        let preview = ws.preview_resize_free(10, 500, 400, viewport).unwrap();
+        ws.resize_free(10, 500, 400, viewport);
+        ws.ensure_focused_visible_animated(viewport.width);
+        ws.stop_animation();
+        let landing = ws
+            .compute_placements(viewport)
+            .into_iter()
+            .find(|p| p.window_id == 10)
+            .unwrap()
+            .rect;
+        assert_eq!(landing.height, 400);
+        assert_eq!(preview, landing);
+    }
+
+    #[test]
+    fn free_resize_clears_only_the_resized_maximized_column() {
+        let mut ws = Workspace::with_gaps(0, 0);
+        ws.insert_window(10, Some(400)).unwrap();
+        assert!(ws.toggle_maximize_column(1000));
+        ws.resize_free(10, 650, 600, Rect::new(0, 0, 1000, 1000));
+        assert!(ws.toggle_maximize_column(1000));
+        assert_eq!(ws.columns()[0].width(), 1000);
+        assert!(!ws.toggle_maximize_column(1000));
+        assert_eq!(ws.columns()[0].width(), 650);
+
+        ws.insert_window(11, Some(400)).unwrap();
+        ws.set_focus(0, 0).unwrap();
+        assert!(ws.toggle_maximize_column(1000));
+        ws.resize_free(11, 600, 600, Rect::new(0, 0, 1000, 1000));
+        assert!(!ws.toggle_maximize_column(1000));
+        assert_eq!(ws.columns()[0].width(), 650);
+        assert_eq!(ws.columns()[1].width(), 600);
+    }
+
+    #[test]
+    fn free_resize_preview_matches_release_scroll_without_mutating_workspace() {
+        for mode in [CenteringMode::Center, CenteringMode::JustInView] {
+            for reduce_motion in [false, true] {
+                let mut ws = Workspace::with_gaps(0, 0);
+                ws.set_row_layout(&[0.5, 0.5]);
+                ws.insert_window(1, Some(1000)).unwrap();
+                ws.insert_window(2, Some(1000)).unwrap();
+                ws.set_scroll_offset(1000.0);
+                ws.focus_row(1);
+                ws.insert_window(3, Some(1000)).unwrap();
+                ws.insert_window(4, Some(1000)).unwrap();
+                ws.set_scroll_offset(1100.0);
+                ws.set_centering_mode(mode);
+                ws.set_reduce_motion(reduce_motion);
+                ws.animate_scroll_to_for_row(0, 300.0, Some(200), Some(Easing::Linear));
+                ws.animate_scroll_to_for_row(1, 1000.0, Some(200), Some(Easing::Linear));
+                let before = ws.clone();
+                let viewport = Rect::new(0, 0, 1000, 1000);
+                let width = if mode == CenteringMode::Center {
+                    800
+                } else {
+                    400
+                };
+                let preview = ws.preview_resize_free(4, width, 500, viewport).unwrap();
+                for (row, original) in ws.rows.iter().zip(&before.rows) {
+                    assert_eq!(row.scroll_offset, original.scroll_offset);
+                    assert_eq!(
+                        format!("{:?}", row.active_animation),
+                        format!("{:?}", original.active_animation)
+                    );
+                    assert_eq!(row.columns, original.columns);
+                }
+                ws.resize_free(4, width, 500, viewport);
+                ws.ensure_focused_visible_animated(viewport.width);
+                ws.stop_animation();
+                assert_ne!(ws.rows()[1].scroll_offset, before.rows()[1].scroll_offset);
+                let landing = ws
+                    .compute_placements(viewport)
+                    .into_iter()
+                    .find(|p| p.window_id == 4)
+                    .unwrap()
+                    .rect;
+                assert_eq!(
+                    preview, landing,
+                    "mode={mode:?}, reduce_motion={reduce_motion}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn free_resize_preview_matches_release_with_native_minimum() {
         let mut ws = Workspace::with_directional_gaps(10, 20, 20, 40, 40);
         ws.set_row_gap(20);
