@@ -2239,17 +2239,39 @@ mod tests {
     }
 
     #[test]
+    fn test_default_and_merged_hotkeys_leave_rows_unbound() {
+        let defaults = HotkeyConfig::default();
+        let mut saved = HotkeyConfig {
+            scroll_modifier: default_scroll_modifier(),
+            disabled: Vec::new(),
+            bindings: HashMap::from([("Ctrl+Alt+X".to_string(), "focus_left".to_string())]),
+        };
+        Config::merge_default_hotkeys(&mut saved);
+        let row_actions = [
+            "focus_row_up",
+            "focus_row_down",
+            "focus_row",
+            "move_window_to_row_up",
+            "move_window_to_row_down",
+        ];
+        let mut violations = Vec::new();
+        for (label, config) in [("defaults", &defaults), ("merged", &saved)] {
+            for (key, action) in &config.bindings {
+                if row_actions.contains(&action.as_str())
+                    || ["Ctrl+Alt+PageUp", "Ctrl+Alt+PageDown"].contains(&key.as_str())
+                {
+                    violations.push(format!("{label}: {key} = {action}"));
+                }
+            }
+        }
+        violations.sort();
+        assert!(violations.is_empty(), "{}", violations.join("; "));
+    }
+
+    #[test]
     fn test_hotkey_config_default() {
         let config = HotkeyConfig::default();
-        assert_eq!(config.bindings.len(), 70);
-        assert_eq!(
-            config.bindings.get("Ctrl+Alt+PageUp"),
-            Some(&"focus_row_up".to_string())
-        );
-        assert_eq!(
-            config.bindings.get("Ctrl+Alt+PageDown"),
-            Some(&"focus_row_down".to_string())
-        );
+        assert_eq!(config.bindings.len(), 68);
         assert_eq!(
             config.bindings.get("Ctrl+Alt+Shift+PageUp"),
             Some(&"move_to_workspace_prev".to_string())

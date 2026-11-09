@@ -9213,6 +9213,11 @@ fn test_cmd_query_hotkeys_returns_catalog_order_and_defaults() {
     assert_eq!(hotkeys[0].group, catalog[0].group);
     assert_eq!(hotkeys[0].bindings, vec!["Ctrl+Alt+H"]);
     assert!(hotkeys[0].enabled);
+    for id in ["focus_row_up", "focus_row_down"] {
+        let row_action = hotkeys.iter().find(|entry| entry.action_id == id).unwrap();
+        assert!(row_action.bindings.is_empty(), "{id}");
+        assert!(!row_action.enabled, "{id}");
+    }
     assert_eq!(scroll_modifier, "Ctrl+Alt");
     assert!(issues.is_empty());
 }

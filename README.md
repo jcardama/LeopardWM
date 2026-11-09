@@ -177,7 +177,6 @@ Punctuation bindings accept `-`, `=`, `,`, `.`, `[`, `]`, `;`, `/`, `` ` ``, `\`
 | Key | Action |
 |---|---|
 | `Ctrl+Alt+H/L/J/K` | Focus left / right / down / up |
-| `Ctrl+Alt+PageUp` / `PageDown` | Focus row up / down |
 | `Ctrl+Alt+Home` / `End` | Focus start / end of strip |
 | `Ctrl+Alt+Shift+H/L` | Move column left / right |
 | `Ctrl+Alt+Shift+Home` / `End` | Move column to start / end of strip |
@@ -216,6 +215,7 @@ Settings gesture menus:
 | Command | Action |
 |---|---|
 | `focus_next` / `focus_prev` | Focus the next / previous window across columns, wrapping at strip ends |
+| `focus_row_up` / `focus_row_down` | Focus the row above / below |
 | `move_window_to_row_up` / `move_window_to_row_down` | Move the focused window to the row above / below |
 | `scroll_left` / `scroll_right` | Move the strip viewport left / right by 100 px without changing focus |
 | `nudge_left` / `nudge_right` | Move a floating window or shift tiled windows left / right by `move_step` |
@@ -237,7 +237,7 @@ scroll_down = "nudge_right"
 Multi-row layouts are off by default. Configure 1 to 4 independent horizontal scrolling rows per workspace; each row has its own scroll offset, column widths, and tabbed columns.
 
 **Basics**
-- `Ctrl+Alt+PageUp` / `Ctrl+Alt+PageDown` moves focus to the row above / below
+- `focus_row_up` / `focus_row_down` moves focus to the row above / below; these commands are unbound by default and can be bound in Settings or `[hotkeys]`
 - `lwm move-to-row up` / `lwm move-to-row down` (or bind `move_window_to_row_up` / `move_window_to_row_down` in Settings) moves the focused window into a new column immediately after the destination row's focused column, or the first column if the row is empty
 - Tiled vertical focus (`Ctrl+Alt+J` / `Ctrl+Alt+K`) crosses rows at column edges regardless of `move_window_across_rows`; setting it to `true` (default `false`) also lets `Ctrl+Alt+Shift+J` / `Ctrl+Alt+Shift+K` move windows across rows at column edges
 - Window rules can open tiled windows in a specific row using `row = 1` (1-based). Values past the workspace's row count select its last row; `row = 0` and the `row` setting on rules with `action = "float"` are ignored
@@ -261,6 +261,10 @@ split = ["1/3", "1/3", "1/3"]  # 3 rows
 
 [behavior]
 move_window_across_rows = true  # allow move_window_up/down to cross row boundaries (default false)
+
+[hotkeys]
+"Ctrl+Alt+PageUp" = "focus_row_up"       # optional example bindings
+"Ctrl+Alt+PageDown" = "focus_row_down"
 
 [[window_rules]]
 match_executable = "slack.exe"
