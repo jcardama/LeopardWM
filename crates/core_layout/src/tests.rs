@@ -6171,6 +6171,21 @@ mod tests {
     }
 
     #[test]
+    fn test_removing_first_window_of_maximized_column_preserves_restore() {
+        let mut ws = Workspace::with_gaps(0, 0);
+        ws.insert_window(1, Some(450)).unwrap();
+        ws.insert_window_in_column(2, 0).unwrap();
+        assert!(ws.toggle_maximize_column(1920));
+
+        ws.remove_window(1).unwrap();
+
+        assert_eq!(ws.columns()[0].windows(), &[2]);
+        assert_eq!(ws.columns()[0].width(), 1920);
+        assert!(!ws.toggle_maximize_column(1920));
+        assert_eq!(ws.columns()[0].width(), 450);
+    }
+
+    #[test]
     fn test_move_first_window_of_maximized_column_to_another_row_preserves_restore() {
         let mut ws = Workspace::with_gaps(0, 0);
         ws.set_row_layout(&[0.5, 0.5]);

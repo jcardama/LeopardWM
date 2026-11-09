@@ -25,6 +25,7 @@ All notable changes to LeopardWM will be documented in this file.
 ### Fixes
 
 - **Following a window to another workspace now keeps it visible and focused even when the destination has a fullscreen window or a shown scratchpad.**
+- **Maximized columns remain restorable when their first window closes or moves out.** The next window carries the maximize state, and a window expelled from a maximized column gets the column's pre-maximize width. Contributed by @azumafuji. (#150)
 - **A dragged window returns to its original place in a stacked column when its drop is cancelled or has no target.** This also applies when switching workspaces during the drag.
 - **Shortcuts recorded in Settings with punctuation keys now fire on the key you pressed on non-US layouts such as Dvorak.** Settings saves the key Windows reports, so the shortcut matches it on any keyboard layout.
 
