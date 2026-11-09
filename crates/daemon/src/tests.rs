@@ -20095,6 +20095,61 @@ fn test_two_row_workspace_edge_modes() {
 }
 
 #[test]
+fn test_empty_outer_row_allows_workspace_edge_focus_navigation() {
+    use crate::config::WorkspaceEdgeWrap::{Clamp, Wrap};
+    let mut failures = Vec::new();
+    for mode in [Wrap, Clamp] {
+        for up in [true, false] {
+            for source in [1, if up { 0 } else { 8 }] {
+                let mut state = AppState::new_with_config(test_config(), test_monitors());
+                state.config.behavior.workspace_edge_wrap = mode;
+                state.reduce_motion = true;
+                state.injected_apply_placements_behavior =
+                    Some(TestApplyPlacementsBehavior::SleepAndSucceed(Duration::ZERO));
+                state.ensure_workspace_exists(1, 8).unwrap();
+                state.active_workspace.insert(1, source);
+                let ws = state.focused_workspace_mut().unwrap();
+                ws.set_row_layout(&[0.5, 0.5]);
+                ws.set_reduce_motion(true);
+                ws.insert_window_in_row(100, if up { 1 } else { 0 }, None)
+                    .unwrap();
+                ws.focus_window(100).unwrap();
+                let focus = if up {
+                    IpcCommand::FocusUp
+                } else {
+                    IpcCommand::FocusDown
+                };
+                let move_window = if up {
+                    IpcCommand::MoveWindowUp
+                } else {
+                    IpcCommand::MoveWindowDown
+                };
+                assert_eq!(state.handle_command(focus.clone()), IpcResponse::Ok);
+                assert_eq!(state.focused_workspace().unwrap().focused_window(), None);
+                assert_eq!(state.handle_command(move_window), IpcResponse::Ok);
+                assert_eq!(state.active_workspace_idx(1), source);
+                assert!(state.focused_workspace().unwrap().contains_window(100));
+                assert_eq!(state.handle_command(focus), IpcResponse::Ok);
+                let target = match (mode, up, source) {
+                    (Wrap, true, 0) => 8,
+                    (Wrap, false, 8) => 0,
+                    (Clamp, true, 0) | (Clamp, false, 8) => source,
+                    (_, true, _) => source - 1,
+                    (_, false, _) => source + 1,
+                };
+                let actual = state.active_workspace_idx(1);
+                if actual != target {
+                    failures.push(format!(
+                        "{mode:?} up={up} source={source}: expected {target}, got {actual}"
+                    ));
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("; "));
+}
+
+#[test]
 fn test_follow_window_from_second_row_to_focused_destination_row() {
     let mut config = test_config();
     config.layout.rows.split = vec!["50%".into(), "50%".into()];

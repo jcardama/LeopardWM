@@ -1259,8 +1259,17 @@ impl AppState {
 
     fn focus_vertical(&mut self, up: bool) -> IpcResponse {
         let empty_workspace = self.focused_workspace().is_some_and(|ws| ws.is_empty());
+        let empty_outer_row = self.focused_workspace().is_some_and(|ws| {
+            ws.row_count() > 1
+                && ws.rows()[ws.focused_row()].columns().is_empty()
+                && if up {
+                    ws.focused_row() == 0
+                } else {
+                    ws.focused_row() + 1 == ws.row_count()
+                }
+        });
         if self.config.behavior.workspace_edge_wrap != WorkspaceEdgeWrap::Off
-            && (empty_workspace || self.focus_at_vertical_edge(up))
+            && (empty_workspace || empty_outer_row || self.focus_at_vertical_edge(up))
         {
             return self.handle_workspace_prev_next(
                 if up {
