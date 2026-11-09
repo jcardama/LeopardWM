@@ -12,6 +12,7 @@ All notable changes to LeopardWM will be documented in this file.
 - **Move and size floating windows from the keyboard.** Move, width, height preset and center commands now act on focused floating windows. `move_step` controls movement in logical pixels and defaults to 50. Thanks to @ShawnChiu for the design. (#166)
 - **Switch focus between floating and tiled windows.** Use `focus_floating`, `focus_tiling`, or `switch_focus_floating_tiling` to move between layers on the current workspace. Thanks to @ShawnChiu for the design. (#166)
 - **Set a window floating or tiled directly.** The `float` and `tile` commands leave the focused window in the requested state, making them useful in scripts. Thanks to @ShawnChiu for the design. (#166)
+- **Multi-row scrolling window strips.** Configure up to four independently scrolling rows per workspace, navigate and move windows between them, and assign rows with window rules. (#150)
 - **Follow windows moved to another workspace.** Enable `follow_window_to_workspace` in behavior settings to switch to the destination and keep the moved window focused. (#174)
 - **Workspace edge navigation can now stop at the ends instead of wrapping.** Set `workspace_edge_wrap` to `clamp` to keep vertical focus and moves within workspaces 1 through 9. (#155)
 - **Customize focus borders per app.** Window rules can hide the focus border or choose a color for matching windows. (#156)

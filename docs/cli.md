@@ -20,6 +20,7 @@ Arguments in the tables are required unless marked optional. Commands that take 
 | `lwm switch-focus-floating-tiling` | Switch focus between the floating and tiled layers. |
 | `lwm nudge-left` | Move a floating window left, or shift tiled windows left, by `move_step`. |
 | `lwm nudge-right` | Move a floating window right, or shift tiled windows right, by `move_step`. |
+| `lwm focus-row` | `<TARGET>` selects `up`, `down`, or a row number from 1 to 4. |
 | `lwm scroll` | Choose a viewport scroll direction. |
 | `lwm scroll left` | Scroll left; optional `-p, --pixels <PIXELS>` defaults to 100. |
 | `lwm scroll right` | Scroll right; optional `-p, --pixels <PIXELS>` defaults to 100. |
@@ -42,6 +43,9 @@ Move left/right and move-window directions nudge a focused floating window by `m
 | `lwm move-window right` | Move the focused window to the column on the right, or nudge it right if floating. |
 | `lwm move-window up` | Move the focused window up in its column, or nudge it up if floating. |
 | `lwm move-window down` | Move the focused window down in its column, or nudge it down if floating. |
+| `lwm move-to-row` | Choose a direction for moving the focused window between rows. |
+| `lwm move-to-row up` | Move the focused window to the row above. |
+| `lwm move-to-row down` | Move the focused window to the row below. |
 | `lwm expel` | Choose a side for a new column. |
 | `lwm expel left` | Expel the focused window into a new column on the left. |
 | `lwm expel right` | Expel the focused window into a new column on the right. |

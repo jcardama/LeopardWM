@@ -20,11 +20,17 @@ pub(crate) fn print_response(response: &IpcResponse) {
             total_width,
             active_workspace,
             active_workspace_name,
+            focused_row,
+            rows,
         } => {
             println!("Workspace State:");
             match active_workspace_name {
                 Some(name) => println!("  Active workspace: {} ({})", active_workspace, name),
                 None => println!("  Active workspace: {}", active_workspace),
+            }
+            if rows.len() > 1 {
+                println!("  Focused row: {}", focused_row + 1);
+                println!("  Rows: {}", rows.len());
             }
             println!("  Columns: {}", columns);
             println!("  Windows: {}", windows);
@@ -32,9 +38,22 @@ pub(crate) fn print_response(response: &IpcResponse) {
             println!("  Focused window in column: {}", focused_window);
             println!("  Scroll offset: {:.1}", scroll_offset);
             println!("  Total width: {}", total_width);
+            if rows.len() > 1 {
+                for (i, row) in rows.iter().enumerate() {
+                    let marker = if i == *focused_row { " [FOCUSED]" } else { "" };
+                    println!(
+                        "    Row {}: {} cols, scroll {:.1}{}",
+                        i + 1,
+                        row.columns.len(),
+                        row.scroll_offset,
+                        marker
+                    );
+                }
+            }
         }
         IpcResponse::FocusedWindow {
             window_id,
+            row_index,
             column_index,
             window_index,
             is_floating,
@@ -47,6 +66,7 @@ pub(crate) fn print_response(response: &IpcResponse) {
             if *is_floating {
                 println!("  Floating: yes");
             } else {
+                println!("  Row index: {}", row_index + 1);
                 println!("  Column index: {}", column_index);
                 println!("  Window index: {}", window_index);
             }
@@ -58,7 +78,8 @@ pub(crate) fn print_response(response: &IpcResponse) {
                     "floating".to_string()
                 } else {
                     format!(
-                        "col {} win {}",
+                        "row {} col {} win {}",
+                        win.row_index.map(|r| r + 1).unwrap_or(1),
                         win.column_index.unwrap_or(0),
                         win.window_index.unwrap_or(0)
                     )
@@ -84,7 +105,8 @@ pub(crate) fn print_response(response: &IpcResponse) {
                     println!("  Layout: floating");
                 } else {
                     println!(
-                        "  Layout: tiled (col {}, win {})",
+                        "  Layout: tiled (row {}, col {}, win {})",
+                        win.row_index.map(|r| r + 1).unwrap_or(1),
                         win.column_index.unwrap_or(0),
                         win.window_index.unwrap_or(0)
                     );

@@ -51,6 +51,16 @@ pub(crate) enum Commands {
     NudgeLeft,
     /// Nudge the focused window right by the configured step
     NudgeRight,
+    /// Focus row: up, down, or 1-based row number
+    FocusRow {
+        /// Target row: "up", "down", or row number (1-4)
+        target: String,
+    },
+    /// Move the focused window to row above or below
+    MoveToRow {
+        #[command(subcommand)]
+        direction: RowDirection,
+    },
     /// Scroll the viewport
     Scroll {
         #[command(subcommand)]
@@ -250,7 +260,7 @@ pub(crate) enum Commands {
     },
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FocusDirection {
     /// Focus the column to the left
     Left,
@@ -264,6 +274,14 @@ pub(crate) enum FocusDirection {
     Start,
     /// Focus the last (rightmost) column of the strip
     End,
+}
+
+#[derive(Subcommand, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RowDirection {
+    /// Move to the row above
+    Up,
+    /// Move to the row below
+    Down,
 }
 
 #[derive(Subcommand)]

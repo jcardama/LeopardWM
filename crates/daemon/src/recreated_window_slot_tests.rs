@@ -92,7 +92,7 @@ fn recreated_tab_rejoins_after_destroy_and_slot_is_single_use() {
     create(&mut state, 12, 100, "AppClass");
     let ws = state.focused_workspace().unwrap();
     assert_eq!(ws.column_count(), 2);
-    assert_eq!(ws.find_window_location(12), Some((1, 0)));
+    assert_eq!(ws.rows()[0].find_window_location(12), Some((1, 0)));
 }
 
 #[test]
@@ -125,7 +125,7 @@ fn recreated_single_window_restores_index_and_width_over_monitor_and_rules() {
     assert_eq!(state.find_window_workspace(11), Some((1, 0)));
     let ws = state.focused_workspace().unwrap();
     assert_eq!(ws.column_count(), 3);
-    assert_eq!(ws.find_window_location(11), Some((1, 0)));
+    assert_eq!(ws.rows()[0].find_window_location(11), Some((1, 0)));
     assert_eq!(ws.columns()[1].width(), width);
 }
 
@@ -176,7 +176,7 @@ fn recreated_tab_follows_moved_sibling_without_taking_focus() {
     state.previous_focused_hwnd = Some(40);
     create(&mut state, 11, 100, "AppClass");
     let ws = state.focused_workspace().unwrap();
-    assert_eq!(ws.find_window_location(11), Some((1, 1)));
+    assert_eq!(ws.rows()[0].find_window_location(11), Some((1, 1)));
     assert_eq!(ws.columns()[1].windows(), &[20, 11, 40]);
     assert_eq!(ws.focused_window(), Some(40));
     assert_eq!(state.previous_focused_hwnd, Some(40));
@@ -277,7 +277,7 @@ fn ineligible_recreations_keep_normal_new_column_admission() {
         let ws = state.focused_workspace().unwrap();
         assert_eq!(ws.column_count(), count + 1, "{case}");
         assert_eq!(
-            ws.find_window_location(hwnd),
+            ws.rows()[0].find_window_location(hwnd),
             Some((expected_column, 0)),
             "{case}"
         );
@@ -297,6 +297,7 @@ fn rule(action: WindowAction, sticky: bool) -> WindowRule {
         open_maximized: true,
         column_width: Some(0.2),
         open_in_column: Some(8),
+        row: None,
         sticky,
         ..Default::default()
     }
@@ -352,8 +353,8 @@ fn destroyed_sibling_cannot_redirect_restore_to_recycled_hwnd() {
     create(&mut state, 11, 100, "AppClass");
     let ws = state.focused_workspace().unwrap();
     assert_eq!(ws.column_count(), 4);
-    assert_eq!(ws.find_window_location(11), Some((0, 0)));
-    assert_eq!(ws.find_window_location(20), Some((3, 0)));
+    assert_eq!(ws.rows()[0].find_window_location(11), Some((0, 0)));
+    assert_eq!(ws.rows()[0].find_window_location(20), Some((3, 0)));
 }
 
 #[test]
@@ -389,7 +390,11 @@ fn missing_slot_monitor_or_workspace_uses_normal_admission() {
         );
         let ws = state.focused_workspace().unwrap();
         assert_eq!(ws.column_count(), 2, "{case}");
-        assert_eq!(ws.find_window_location(11), Some((1, 0)), "{case}");
+        assert_eq!(
+            ws.rows()[0].find_window_location(11),
+            Some((1, 0)),
+            "{case}"
+        );
     }
 }
 
@@ -453,8 +458,8 @@ fn hidden_sibling_cannot_redirect_restore_to_recycled_hwnd() {
     create(&mut state, 11, 100, "AppClass");
     let ws = state.focused_workspace().unwrap();
     assert_eq!(ws.column_count(), 4);
-    assert_eq!(ws.find_window_location(11), Some((0, 0)));
-    assert_eq!(ws.find_window_location(20), Some((3, 0)));
+    assert_eq!(ws.rows()[0].find_window_location(11), Some((0, 0)));
+    assert_eq!(ws.rows()[0].find_window_location(20), Some((3, 0)));
 }
 
 #[test]
@@ -503,6 +508,6 @@ fn pruned_sibling_cannot_redirect_restore_to_recycled_hwnd() {
     create(&mut state, 11, 100, "AppClass");
     let ws = state.focused_workspace().unwrap();
     assert_eq!(ws.column_count(), 4);
-    assert_eq!(ws.find_window_location(11), Some((0, 0)));
-    assert_eq!(ws.find_window_location(20), Some((3, 0)));
+    assert_eq!(ws.rows()[0].find_window_location(11), Some((0, 0)));
+    assert_eq!(ws.rows()[0].find_window_location(20), Some((3, 0)));
 }

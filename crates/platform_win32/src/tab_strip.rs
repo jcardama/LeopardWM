@@ -80,6 +80,7 @@ pub enum TabCloseAction {
 pub struct TabActionEvent {
     pub monitor: isize,
     pub workspace_idx: usize,
+    pub row_idx: usize,
     pub column_idx: usize,
     /// 0-based tab index targeted by the action.
     pub tab_idx: usize,
@@ -150,6 +151,7 @@ struct TabStripState {
     /// Captured at click time so the daemon doesn't race focus changes.
     target_monitor: isize,
     target_workspace_idx: usize,
+    target_row_idx: usize,
     target_column_idx: usize,
     /// `None` when settled; `Some` during a highlight slide.
     transition: Option<HighlightTransition>,
@@ -274,6 +276,7 @@ fn default_tab_strip_state() -> TabStripState {
         colors: TabStripColors::default(),
         target_monitor: 0,
         target_workspace_idx: 0,
+        target_row_idx: 0,
         target_column_idx: 0,
         transition: None,
         action_tx: None,
@@ -328,6 +331,7 @@ fn owner_strip_isize(hwnd: HWND, reg: &StripRegistry) -> isize {
 pub struct TabStripHit {
     pub monitor: isize,
     pub workspace_idx: usize,
+    pub row_idx: usize,
     pub column_idx: usize,
     pub tab_idx: usize,
 }
@@ -496,6 +500,7 @@ impl TabStripOverlay {
         bottom_gap_px: u32,
         target_monitor: isize,
         target_workspace_idx: usize,
+        target_row_idx: usize,
         target_column_idx: usize,
         scale_factor: f64,
         close_action: TabCloseAction,
@@ -520,6 +525,7 @@ impl TabStripOverlay {
             colors,
             target_monitor,
             target_workspace_idx,
+            target_row_idx,
             target_column_idx,
             scale_factor,
             close_action,
@@ -536,6 +542,7 @@ impl TabStripOverlay {
         colors: TabStripColors,
         target_monitor: isize,
         target_workspace_idx: usize,
+        target_row_idx: usize,
         target_column_idx: usize,
         scale_factor: f64,
         close_action: TabCloseAction,
@@ -632,6 +639,7 @@ impl TabStripOverlay {
             // the old hover target is no longer meaningful.
             let identity_changed = state.target_monitor != target_monitor
                 || state.target_workspace_idx != target_workspace_idx
+                || state.target_row_idx != target_row_idx
                 || state.target_column_idx != target_column_idx;
             let hover_out_of_range = state.hovered_tab_idx.is_some_and(|i| i >= tabs.len());
             if identity_changed || hover_out_of_range {
@@ -651,6 +659,7 @@ impl TabStripOverlay {
             state.colors = colors;
             state.target_monitor = target_monitor;
             state.target_workspace_idx = target_workspace_idx;
+            state.target_row_idx = target_row_idx;
             state.target_column_idx = target_column_idx;
             state.transition = transition;
             state.close_min_tab_w_px = close_min_tab_w_px;
@@ -780,6 +789,7 @@ impl TabStripOverlay {
                 Some(TabStripHit {
                     monitor: state.target_monitor,
                     workspace_idx: state.target_workspace_idx,
+                    row_idx: state.target_row_idx,
                     column_idx: state.target_column_idx,
                     tab_idx: i,
                 })
@@ -2412,6 +2422,7 @@ unsafe fn on_tab_left_click(hwnd: HWND, lparam: LPARAM) -> LRESULT {
                     ev: TabActionEvent {
                         monitor: state.target_monitor,
                         workspace_idx: state.target_workspace_idx,
+                        row_idx: state.target_row_idx,
                         column_idx: state.target_column_idx,
                         tab_idx: idx,
                         action,
@@ -2431,6 +2442,7 @@ unsafe fn on_tab_left_click(hwnd: HWND, lparam: LPARAM) -> LRESULT {
                         ev: TabActionEvent {
                             monitor: state.target_monitor,
                             workspace_idx: state.target_workspace_idx,
+                            row_idx: state.target_row_idx,
                             column_idx: state.target_column_idx,
                             tab_idx: idx,
                             action: TabAction::Activate,
@@ -2486,6 +2498,7 @@ unsafe fn on_tab_double_click(hwnd: HWND, lparam: LPARAM) -> LRESULT {
                     let _ = tx.send(TabActionEvent {
                         monitor: state.target_monitor,
                         workspace_idx: state.target_workspace_idx,
+                        row_idx: state.target_row_idx,
                         column_idx: state.target_column_idx,
                         tab_idx: idx,
                         action: TabAction::Rename,
@@ -2518,6 +2531,7 @@ unsafe fn on_tab_middle_click(hwnd: HWND, lparam: LPARAM) -> LRESULT {
                     let _ = tx.send(TabActionEvent {
                         monitor: state.target_monitor,
                         workspace_idx: state.target_workspace_idx,
+                        row_idx: state.target_row_idx,
                         column_idx: state.target_column_idx,
                         tab_idx: idx,
                         action,
@@ -2538,7 +2552,7 @@ unsafe fn on_tab_context_menu(hwnd: HWND, lparam: LPARAM) -> LRESULT {
     // Resolve the target tab index + identity under one lock, drop
     // before TrackPopupMenu (which runs a nested modal loop and may
     // re-enter the WndProc for WM_TIMER).
-    let (target_idx, monitor, ws_idx, col_idx) = {
+    let (target_idx, monitor, ws_idx, row_idx, col_idx) = {
         let reg = registry();
         let Some(state) = reg.states.get(&(hwnd.0 as isize)) else {
             return LRESULT(0);
@@ -2554,6 +2568,7 @@ unsafe fn on_tab_context_menu(hwnd: HWND, lparam: LPARAM) -> LRESULT {
             idx,
             state.target_monitor,
             state.target_workspace_idx,
+            state.target_row_idx,
             state.target_column_idx,
         )
     };
@@ -2670,6 +2685,7 @@ unsafe fn on_tab_context_menu(hwnd: HWND, lparam: LPARAM) -> LRESULT {
                 let _ = tx.send(TabActionEvent {
                     monitor,
                     workspace_idx: ws_idx,
+                    row_idx,
                     column_idx: col_idx,
                     tab_idx: idx,
                     action,
