@@ -234,22 +234,23 @@ scroll_down = "nudge_right"
 
 ## Multi-Row Layout
 
-Configure 1 to 4 independent horizontal scrolling rows per workspace. Each row behaves as its own scrolling strip, with independent horizontal scroll offset, column widths, and tabbed columns.
+Multi-row layouts are off by default. Configure 1 to 4 independent horizontal scrolling rows per workspace; each row has its own scroll offset, column widths, and tabbed columns.
 
 **Basics**
 - `Ctrl+Alt+PageUp` / `Ctrl+Alt+PageDown` moves focus to the row above / below
-- `lwm move-to-row up` / `lwm move-to-row down` (or bind `move_window_to_row_up` / `move_window_to_row_down` in Settings) moves the focused window to a new rightmost column in the row above / below
-- Vertical focus (`Ctrl+Alt+J` / `Ctrl+Alt+K`) automatically crosses row boundaries when multiple rows exist; `move_window_across_rows = true` (default `false`) also lets `Ctrl+Alt+Shift+J` / `Ctrl+Alt+Shift+K` move windows across rows at column edges
-- Window rules can direct applications to open in a specific row: `row = 1` (1-based index)
+- `lwm move-to-row up` / `lwm move-to-row down` (or bind `move_window_to_row_up` / `move_window_to_row_down` in Settings) moves the focused window into a new column immediately after the destination row's focused column, or the first column if the row is empty
+- Tiled vertical focus (`Ctrl+Alt+J` / `Ctrl+Alt+K`) crosses rows at column edges regardless of `move_window_across_rows`; setting it to `true` (default `false`) also lets `Ctrl+Alt+Shift+J` / `Ctrl+Alt+Shift+K` move windows across rows at column edges
+- Window rules can open tiled windows in a specific row using `row = 1` (1-based). Values past the workspace's row count select its last row; `row = 0` and the `row` setting on rules with `action = "float"` are ignored
 
 **Configuration**
 
 ```toml
 [layout.rows]
+split = ["100%"]        # fallback for workspaces without an override; one row by default
 gap = 8                 # vertical gap between rows in pixels (scaled per-monitor with DPI)
 
 # Configure rows per workspace (1 to 4 rows: fractions like "1/2", "1/3", or weights like "1", "2").
-# Workspaces without an explicit entry use the default [layout.rows].split.
+# Workspaces without an explicit entry use [layout.rows].split.
 [[layout.rows.workspaces]]
 workspaces = [1, 2]     # 1 or more workspaces (1-9)
 split = ["1/2", "1/2"]  # 2 equal rows
@@ -385,7 +386,7 @@ lwm focus left | right | up | down
 lwm focus-floating                     # focus the remembered floating window
 lwm focus-tiling                       # return focus to the tiled layer
 lwm switch-focus-floating-tiling       # switch between floating and tiled layers
-lwm focus-row up | down                # focus row above / below
+lwm focus-row up | down | 1..4         # focus adjacent row or select a row
 lwm cycle-width                       # next width preset, wrapping at the end
 lwm cycle-height                      # next height preset, wrapping at the end
 lwm move left | right                  # move focused column

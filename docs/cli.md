@@ -25,7 +25,7 @@ Arguments in the tables are required unless marked optional. Commands that take 
 | `lwm scroll left` | Scroll left; optional `-p, --pixels <PIXELS>` defaults to 100. |
 | `lwm scroll right` | Scroll right; optional `-p, --pixels <PIXELS>` defaults to 100. |
 
-At a vertical edge, `[behavior] workspace_edge_wrap` controls `focus up`/`focus down` and `move-window up`/`move-window down`: `"off"` (default) stays on the workspace, `"wrap"` moves to an adjacent workspace and wraps between 1 and 9, and `"clamp"` stops at workspace 1 or 9. See the [README](../README.md#layout-commands) for skip-empty behavior and details.
+Tiled vertical focus crosses rows at column edges regardless of `move_window_across_rows`. At a workspace's vertical edge, `[behavior] workspace_edge_wrap` controls `focus up`/`focus down` and `move-window up`/`move-window down`: `"off"` (default) stays on the workspace, `"wrap"` moves to an adjacent workspace and wraps between 1 and 9, and `"clamp"` stops at workspace 1 or 9. See the [README](../README.md#layout-commands) for skip-empty behavior and details.
 
 ## Move windows and columns
 
@@ -44,8 +44,8 @@ Move left/right and move-window directions nudge a focused floating window by `m
 | `lwm move-window up` | Move the focused window up in its column, or nudge it up if floating. |
 | `lwm move-window down` | Move the focused window down in its column, or nudge it down if floating. |
 | `lwm move-to-row` | Choose a direction for moving the focused window between rows. |
-| `lwm move-to-row up` | Move the focused window to the row above. |
-| `lwm move-to-row down` | Move the focused window to the row below. |
+| `lwm move-to-row up` | Move the focused window to a new column after the focused column in the row above. |
+| `lwm move-to-row down` | Move the focused window to a new column after the focused column in the row below. |
 | `lwm expel` | Choose a side for a new column. |
 | `lwm expel left` | Expel the focused window into a new column on the left. |
 | `lwm expel right` | Expel the focused window into a new column on the right. |
