@@ -62,7 +62,7 @@ A few deliberate **non-features**, so you know what you're getting:
 - **PowerToys Shortcut Guide export** — `lwm query hotkeys` lists effective bindings; `lwm export-shortcut-guide` writes a user manifest (stdout, `--output PATH`, or `--install`)
 - Smooth scroll animations with layout transition effects (vsync-locked)
 - Touchpad gestures with configurable swipe actions
-- Drag-and-drop — drag a window onto a column to merge it in; Shift+drag to reorder columns or move a column to another monitor
+- Drag-and-drop — drag a window onto a column to merge it in; Shift+drag to reorder columns or move a column to another monitor or row. Set `plain_drag_action = "reorder"` under `[behavior]` to swap these gestures.
 - **Tabbed columns** — toggle a column between vertical-stack and tab-strip mode (`Ctrl+Alt+T`); only the active tab fills the column rect, the rest sit in a clickable strip above
 - **Scratchpad** — stash the focused window out of the layout (`Ctrl+Alt+Shift+S`) and summon it back as a floating, centered overlay on demand (`Ctrl+Alt+S`); stash it again to release it back to tiling
 - **Sticky windows** — pin a window (`Ctrl+Alt+Y`) so it follows you across workspaces, keeping its current mode: a tiled window stays tiled (a column you can cycle to), a floating window stays a floating overlay

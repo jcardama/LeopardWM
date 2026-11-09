@@ -110,6 +110,10 @@ focus_follows_mouse = false
 # right) or "in_column" (stacked into the focused column).
 # new_window_placement = "new_column"
 
+# Plain drag merges a window (default) or reorders its column. Shift drag
+# does the opposite, including moves across monitors or rows.
+# plain_drag_action = "merge" # "merge" or "reorder"
+
 # Taskbar buttons: "hide_offscreen" (default, hide inactive workspaces and
 # scrolled-offscreen windows), "hide_inactive_workspaces" (keep every button
 # on each monitor's active workspace), or "show_all". Floating and minimized

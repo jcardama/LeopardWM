@@ -733,6 +733,9 @@ pub struct BehaviorConfig {
     #[serde(default)]
     pub new_window_placement: NewWindowPlacement,
 
+    #[serde(default)]
+    pub plain_drag_action: DragAction,
+
     /// Taskbar button visibility policy. Inactive workspaces hide all buttons
     /// unless ShowAll is selected. On the active workspace, HideOffscreen
     /// keeps buttons for visible, floating, and minimized windows.
@@ -798,6 +801,20 @@ pub enum NewWindowPlacement {
     InColumn,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DragAction {
+    #[default]
+    Merge,
+    Reorder,
+}
+
+impl DragAction {
+    pub(crate) fn reorders(self, shift_held: bool) -> bool {
+        (self == Self::Reorder) != shift_held
+    }
+}
+
 impl Default for BehaviorConfig {
     fn default() -> Self {
         Self {
@@ -813,6 +830,7 @@ impl Default for BehaviorConfig {
             swap_chain_ghost_animation: true,
             floating_above_tiled: false,
             new_window_placement: NewWindowPlacement::default(),
+            plain_drag_action: DragAction::default(),
             taskbar_buttons: TaskbarButtons::default(),
             workspace_edge_wrap: WorkspaceEdgeWrap::Off,
             invalid_workspace_edge_wrap: None,
@@ -2068,6 +2086,23 @@ fn dirs_home() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plain_drag_action_defaults_and_round_trips() {
+        let omitted: Config = toml::from_str("[behavior]").unwrap();
+        assert_eq!(omitted.behavior.plain_drag_action, DragAction::Merge);
+        for (name, action) in [
+            ("merge", DragAction::Merge),
+            ("reorder", DragAction::Reorder),
+        ] {
+            let config: Config =
+                toml::from_str(&format!("[behavior]\nplain_drag_action = \"{name}\"")).unwrap();
+            assert_eq!(config.behavior.plain_drag_action, action);
+            let serialized = toml::to_string(&config).unwrap();
+            let reloaded: Config = toml::from_str(&serialized).unwrap();
+            assert_eq!(reloaded.behavior.plain_drag_action, action);
+        }
+    }
 
     #[test]
     fn glazewm_compat_defaults_and_explicit_config_round_trip() {

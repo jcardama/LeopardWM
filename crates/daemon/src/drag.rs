@@ -111,8 +111,7 @@ impl AppState {
     }
 
     /// Compute and show a drag hint overlay.
-    /// Default drag = move window between columns (merge mode).
-    /// Shift+drag = move entire column (reorder mode).
+    /// The configured plain-drag action and Shift select opposite modes.
     pub(crate) fn update_drag_hint(&mut self, hwnd: u64) {
         // No drag ghost while tiling is paused.
         if self.paused {
@@ -284,7 +283,7 @@ impl AppState {
             if let Some(snapshot) = restoration_snapshot {
                 self.start_layout_transition(snapshot);
                 if let Err(e) = self.apply_layout() {
-                    warn!("Failed to restore layout before Shift drag: {}", e);
+                    warn!("Failed to restore layout before reorder drag: {}", e);
                 }
             }
             self.shift_drag_cross_monitor_hint(cursor_x, cursor_y, target_monitor_id);
@@ -323,7 +322,7 @@ impl AppState {
             None => return,
         };
 
-        if shift_held {
+        if self.config.behavior.plain_drag_action.reorders(shift_held) {
             self.update_shift_drag_hint_at(
                 hwnd,
                 cursor_x,
@@ -334,7 +333,7 @@ impl AppState {
                 source_ws_idx,
             );
         } else {
-            // --- Default drag: window merge / new-column mode with live preview ---
+            // Window merge / new-column mode with live preview.
             // Source column keeps the dragged window (preserving its space).
             // Target column gets a placeholder so its windows shift to make room.
 
@@ -680,7 +679,7 @@ impl AppState {
             if let Some(snapshot) = restoration_snapshot {
                 self.start_layout_transition(snapshot);
                 if let Err(e) = self.apply_layout() {
-                    warn!("Failed to restore layout before Shift drag: {}", e);
+                    warn!("Failed to restore layout before reorder drag: {}", e);
                 }
             }
             if let Some(rect) = current_rect {
@@ -712,7 +711,7 @@ impl AppState {
         } else if let Some(snapshot) = restoration_snapshot {
             self.start_layout_transition(snapshot);
             if let Err(e) = self.apply_layout() {
-                warn!("Failed to restore layout before Shift drag: {}", e);
+                warn!("Failed to restore layout before reorder drag: {}", e);
             }
         }
 

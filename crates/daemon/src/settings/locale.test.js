@@ -427,6 +427,24 @@ function commandFixture({ saving = false } = {}) {
   return { ctx, rows, combos, addCombo, saves, scheduledSaves: () => scheduledSaves, flush() { saveCallback(); } };
 }
 
+const dragSettings = commandFixture({ saving: true });
+dragSettings.addCombo('cb-behavior-plain_drag_action', 'merge');
+const dragDocument = dragSettings.ctx.document;
+const originalGetElement = dragDocument.getElementById;
+const initFields = {};
+dragDocument.getElementById = id => originalGetElement(id) ||
+  (id.startsWith('cb-') || id === 'workspace-names-card' || id === 'workspace-rows-body' ? null :
+    (initFields[id] ||= eventElement()));
+dragSettings.ctx.addPresetRow = () => {};
+dragSettings.ctx.refreshDefaultWidthPresetOptions = () => {};
+dragSettings.ctx.renderFailedHotkeys = () => {};
+dragSettings.ctx.updateScrollLabels = () => {};
+dragSettings.ctx.init({ layout: { width_presets: [], height_presets: [] }, appearance: {},
+  behavior: { plain_drag_action: 'reorder' }, gestures: {}, snap_hints: {} });
+dragSettings.ctx.autoSave(0);
+dragSettings.flush();
+assert.equal(dragSettings.saves.at(-1).config.behavior.plain_drag_action, 'reorder');
+
 const shortcuts = commandFixture({ saving: true });
 shortcuts.ctx.glazewmCompatPort = 17000;
 shortcuts.ctx.document.getElementById('glazewm_compat-enabled').checked = true;

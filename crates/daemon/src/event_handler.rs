@@ -3257,16 +3257,31 @@ impl AppState {
             .map(|m| m.id)
             .unwrap_or(drag.source_monitor);
 
-        let shift_held = is_shift_key_pressed();
-
-        if shift_held {
-            self.finalize_shift_drag(&drag, target_monitor, &win_info.rect);
-        } else {
-            self.finalize_drag_merge(hwnd, &drag, target_monitor, &win_info.rect);
-        }
+        self.finalize_tiled_drop(
+            hwnd,
+            &drag,
+            target_monitor,
+            &win_info.rect,
+            is_shift_key_pressed(),
+        );
         // Restore minimize/maximize transitions after placement; the temporary
         // DWM disable suppresses only the drop-to-layout slide.
         leopardwm_platform_win32::set_dwm_transitions_disabled(hwnd, false);
+    }
+
+    pub(crate) fn finalize_tiled_drop(
+        &mut self,
+        hwnd: u64,
+        drag: &DragState,
+        target_monitor: leopardwm_platform_win32::MonitorId,
+        rect: &Rect,
+        shift_held: bool,
+    ) {
+        if self.config.behavior.plain_drag_action.reorders(shift_held) {
+            self.finalize_shift_drag(drag, target_monitor, rect);
+        } else {
+            self.finalize_drag_merge(hwnd, drag, target_monitor, rect);
+        }
     }
 
     pub(crate) fn finalize_shift_drag(
@@ -4659,6 +4674,38 @@ mod failed_drop_lookup_tests {
         assert_eq!(ws.columns()[0].windows(), &[first.id(), hwnd, last.id()]);
         assert_eq!(ws.columns()[1].windows(), &[target.id()]);
         assert!(!ws.contains_window(DRAG_PLACEHOLDER_HWND));
+    }
+
+    #[test]
+    fn drag_action_selects_drop_result() {
+        use crate::config::DragAction;
+
+        for (action, shift, reorder) in [
+            (DragAction::Merge, false, false),
+            (DragAction::Merge, true, true),
+            (DragAction::Reorder, false, true),
+            (DragAction::Reorder, true, false),
+        ] {
+            let dragged = TestWindow::new();
+            let first = TestWindow::new();
+            let last = TestWindow::new();
+            let target = TestWindow::new();
+            let mut state = state_after_preview(dragged.id(), [first.id(), last.id()], target.id());
+            state.config.behavior.plain_drag_action = action;
+            let drag = state.drag_state.take().unwrap();
+            state.finalize_tiled_drop(dragged.id(), &drag, 1, &Rect::new(0, 0, 200, 100), shift);
+            let ws = state.focused_workspace().unwrap();
+            if reorder {
+                assert_eq!(
+                    ws.columns()[0].windows(),
+                    &[first.id(), dragged.id(), last.id()]
+                );
+                assert_eq!(ws.columns()[1].windows(), &[target.id()]);
+            } else {
+                assert_eq!(ws.columns()[0].windows(), &[first.id(), last.id()]);
+                assert_eq!(ws.columns()[1].windows(), &[target.id(), dragged.id()]);
+            }
+        }
     }
 
     #[test]

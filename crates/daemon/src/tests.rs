@@ -3876,6 +3876,66 @@ fn safe_band_drag_fixture() -> AppState {
 }
 
 #[test]
+fn drag_action_selects_merge_or_reorder_preview() {
+    use crate::config::DragAction;
+    use crate::state::DragPreviewMode;
+
+    for (action, shift, reorder) in [
+        (DragAction::Merge, false, false),
+        (DragAction::Merge, true, true),
+        (DragAction::Reorder, false, true),
+        (DragAction::Reorder, true, false),
+    ] {
+        let mut state = safe_band_drag_fixture();
+        state.config.behavior.plain_drag_action = action;
+        let target = *state.snapshot_layout().get(&200).unwrap();
+        state.update_drag_hint_at(100, target.x + 10, target.y + 300, 1, shift);
+        assert_eq!(
+            state.drag_state.as_ref().unwrap().preview_mode,
+            if reorder {
+                DragPreviewMode::None
+            } else {
+                DragPreviewMode::Body
+            },
+            "{action:?}, shift={shift}"
+        );
+    }
+}
+
+#[test]
+fn swapped_plain_reorder_hint_reaches_other_monitor() {
+    let mut state = safe_band_drag_fixture();
+    state.config.behavior.plain_drag_action = crate::config::DragAction::Reorder;
+    state.monitors.insert(
+        2,
+        MonitorInfo {
+            id: 2,
+            rect: Rect::new(1920, 0, 1920, 1080),
+            work_area: Rect::new(1920, 0, 1920, 1040),
+            is_primary: false,
+            device_name: "DISPLAY2".to_string(),
+            scale_factor: 1.0,
+        },
+    );
+    let mut workspace = Workspace::new();
+    workspace.insert_window(300, Some(800)).unwrap();
+    state.workspaces.insert(2, vec![workspace]);
+    let target = *state.snapshot_layout().get(&300).unwrap();
+    state.update_drag_hint_at(100, target.x + 10, target.y + 300, 2, false);
+    let drag = state.drag_state.as_ref().unwrap();
+    assert_eq!(drag.preview_mode, crate::state::DragPreviewMode::None);
+    assert_eq!(drag.last_drop_target.map(|target| target.monitor), Some(2));
+    assert_eq!(
+        drag.last_drop_target.and_then(|target| target.window_slot),
+        None
+    );
+    assert!(matches!(
+        state.pending_drag_hint,
+        Some(DragHintAction::ShowGhost { .. })
+    ));
+}
+
+#[test]
 fn test_safe_drag_band_geometry_and_lower_boundary() {
     use crate::drag::is_safe_drag_band;
 

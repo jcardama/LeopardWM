@@ -1192,6 +1192,16 @@ input[type="range"]::-webkit-slider-thumb {
             </div>
           </div>
           <div class="field">
+            <div class="field-info"><div class="field-label" data-i18n="settings.behavior.plain_drag_action.label"></div><div class="field-desc" data-i18n="settings.behavior.plain_drag_action.description"></div></div>
+            <div class="combobox" id="cb-behavior-plain_drag_action">
+              <button class="combobox-trigger" type="button"><span class="combobox-text" data-i18n="settings.text.drag_merge"></span><svg class="combobox-chevron" viewBox="0 0 12 12"><path d="M2.15 4.65a.5.5 0 01.7 0L6 7.79l3.15-3.14a.5.5 0 11.7.7l-3.5 3.5a.5.5 0 01-.7 0l-3.5-3.5a.5.5 0 010-.7z"/></svg></button>
+              <div class="combobox-popup">
+                <div class="combobox-option selected" data-value="merge" data-i18n="settings.text.drag_merge"></div>
+                <div class="combobox-option" data-value="reorder" data-i18n="settings.text.drag_reorder"></div>
+              </div>
+            </div>
+          </div>
+          <div class="field">
             <div class="field-info"><div class="field-label" data-i18n="settings.behavior.new_window_monitor.label"></div><div class="field-desc" data-i18n="settings.behavior.new_window_monitor.description"></div></div>
             <div class="combobox" id="cb-behavior-new_window_monitor">
               <button class="combobox-trigger" type="button"><span class="combobox-text" data-i18n="settings.text.opening_monitor"></span><svg class="combobox-chevron" viewBox="0 0 12 12"><path d="M2.15 4.65a.5.5 0 01.7 0L6 7.79l3.15-3.14a.5.5 0 11.7.7l-3.5 3.5a.5.5 0 01-.7 0l-3.5-3.5a.5.5 0 010-.7z"/></svg></button>
@@ -1731,6 +1741,7 @@ function init(cfg) {
   setCb('cb-behavior-log_level', cfg.behavior.log_level);
   setCb('cb-behavior-tab_close_action', cfg.behavior.tab_close_action || 'close_window');
   setCb('cb-behavior-new_window_placement', cfg.behavior.new_window_placement || 'new_column');
+  setCb('cb-behavior-plain_drag_action', cfg.behavior.plain_drag_action || 'merge');
   setCb('cb-behavior-new_window_monitor', cfg.behavior.new_window_monitor || 'opening');
   setCb('cb-overview-render', (cfg.overview && cfg.overview.render) || 'live');
 
@@ -2531,7 +2542,8 @@ function readConfig() {
       taskbar_buttons: cbVal('cb-behavior-taskbar_buttons'),
       log_level: cbVal('cb-behavior-log_level'),
       tab_close_action: cbVal('cb-behavior-tab_close_action'),
-      new_window_placement: cbVal('cb-behavior-new_window_placement')
+      new_window_placement: cbVal('cb-behavior-new_window_placement'),
+      plain_drag_action: cbVal('cb-behavior-plain_drag_action')
     },
     hotkeys: Object.assign(readHotkeys(), {
       scroll_modifier: readScrollModifier(),
