@@ -1538,9 +1538,8 @@ impl AppState {
         // If a summoned scratchpad lives on this workspace, restore
         // its focus (it would otherwise stay visible but lose focus
         // to a tiled window on the switch back).
-        if focus_target.is_none()
-            || focus_target == self.scratchpad.map(|scratchpad| scratchpad.window_id)
-        {
+        let allows_refocus = |hwnd| focus_target.is_none() || focus_target == hwnd;
+        if allows_refocus(self.scratchpad.map(|scratchpad| scratchpad.window_id)) {
             self.refocus_scratchpad_if_active();
         }
         // The user was focused on a pinned window: it followed the switch
@@ -1549,7 +1548,7 @@ impl AppState {
         // destination's windows mid-slide (e.g. a fullscreen window
         // activating) can clobber previous_focused_hwnd before the
         // landing re-sync.
-        if let Some(hwnd) = sticky_focus {
+        if let Some(hwnd) = sticky_focus.filter(|hwnd| allows_refocus(Some(*hwnd))) {
             if self.refocus_sticky_window(hwnd) && self.layout_transition.is_some() {
                 self.pending_sticky_refocus = Some(hwnd);
             }

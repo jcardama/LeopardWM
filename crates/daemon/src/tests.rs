@@ -16649,6 +16649,42 @@ fn test_follow_window_to_workspace_keeps_focus_over_shown_scratchpad() {
 }
 
 #[test]
+fn test_follow_window_to_workspace_keeps_focus_over_source_sticky() {
+    for fullscreen in [false, true] {
+        let mut state = follow_window_fullscreen_destination(false, false);
+        let monitor = state.focused_monitor;
+        if !fullscreen {
+            state.workspaces.get_mut(&monitor).unwrap()[1].clear_fullscreen_if_window(200);
+        }
+        let source = state.focused_workspace_mut().unwrap();
+        source.insert_window(101, Some(800)).unwrap();
+        source.focus_window(100).unwrap();
+        state.sticky_windows.insert(101);
+        state.reduce_motion = false;
+        state.config.behavior.fullscreen_follows_focus = true;
+
+        assert_eq!(
+            state.handle_command(IpcCommand::MoveToWorkspace { index: 2 }),
+            IpcResponse::Ok
+        );
+        assert_eq!(state.active_workspace_idx(monitor), 1);
+        assert!(state.layout_transition.is_some());
+        let destination = state.focused_workspace().unwrap();
+        assert!(destination.contains_window(101));
+        assert_eq!(
+            state.previous_focused_hwnd,
+            Some(100),
+            "source sticky window must not steal foreground focus from the followed window"
+        );
+        assert_eq!(destination.focused_window(), Some(100));
+        assert_eq!(state.pending_sticky_refocus, None);
+        if fullscreen {
+            assert_eq!(destination.fullscreen_window_id(), Some(100));
+        }
+    }
+}
+
+#[test]
 fn test_plain_workspace_switch_preserves_fullscreen_and_scratchpad_focus() {
     let mut fullscreen = follow_window_fullscreen_destination(false, false);
     assert_eq!(
