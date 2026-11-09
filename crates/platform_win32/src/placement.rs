@@ -607,7 +607,7 @@ pub(crate) fn clear_frame_refresh_at_target(
     flags: SET_WINDOW_POS_FLAGS,
 ) {
     use windows::Win32::Graphics::Gdi::{MonitorFromRect, MONITOR_DEFAULTTONULL};
-    if !flags.contains(SWP_FRAMECHANGED) {
+    if !flags.contains(SWP_FRAMECHANGED) || flags.contains(SWP_ASYNCWINDOWPOS) {
         return;
     }
     if flags.contains(SWP_NOSIZE) {
@@ -1713,7 +1713,6 @@ where
             tracing::warn!(window_id = entry.window_id, %error, "Could not queue animation endpoint");
             failures.insert(entry.window_id);
         } else {
-            entry.clear_frame_refresh();
             queued_endpoints.insert(entry.window_id, endpoint_target);
             record_async_position(entry, origin);
         }

@@ -75,24 +75,53 @@ fn is_border_color_unsupported_hresult(code: windows::core::HRESULT) -> bool {
 static FRAME_REFRESHES: Mutex<Option<HashMap<WindowId, (WindowIdentity, u64)>>> = Mutex::new(None);
 static NEXT_FRAME_REFRESH: AtomicU64 = AtomicU64::new(1);
 
-fn record_frame_change(window_id: WindowId, hwnd: HWND, identity: WindowIdentity) {
-    use windows::Win32::Graphics::Gdi::{MonitorFromWindow, MONITOR_DEFAULTTONULL};
-
-    let offscreen = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONULL).0.is_null() };
+fn mark_frame_refresh(window_id: WindowId, hwnd: HWND, identity: WindowIdentity) {
+    if identity.managed_lifetime_token.is_none() {
+        return;
+    }
     let mut guard = FRAME_REFRESHES
         .lock()
         .unwrap_or_else(crate::recover_poisoned_mutex);
-    let marks = guard.get_or_insert_with(HashMap::new);
-    if offscreen
-        && identity.managed_lifetime_token.is_some()
-        && window_identity_matches(hwnd, identity)
-    {
-        marks.insert(
-            window_id,
-            (identity, NEXT_FRAME_REFRESH.fetch_add(1, Ordering::Relaxed)),
-        );
-    } else {
-        marks.remove(&window_id);
+    if !window_identity_matches(hwnd, identity) {
+        return;
+    }
+    guard.get_or_insert_with(HashMap::new).insert(
+        window_id,
+        (identity, NEXT_FRAME_REFRESH.fetch_add(1, Ordering::Relaxed)),
+    );
+}
+
+fn frame_change_offscreen(hwnd: HWND) -> bool {
+    use windows::Win32::Graphics::Gdi::{MonitorFromWindow, MONITOR_DEFAULTTONULL};
+    unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONULL).0.is_null() }
+}
+
+fn begin_frame_change(
+    window_id: WindowId,
+    hwnd: HWND,
+    identity: WindowIdentity,
+) -> (bool, Option<u64>) {
+    let previous = frame_refresh(window_id, hwnd);
+    let offscreen = frame_change_offscreen(hwnd);
+    if offscreen {
+        mark_frame_refresh(window_id, hwnd, identity);
+    }
+    (offscreen, previous)
+}
+
+fn finish_frame_change(
+    window_id: WindowId,
+    hwnd: HWND,
+    identity: WindowIdentity,
+    before: (bool, Option<u64>),
+    completed_synchronously: bool,
+) {
+    if frame_change_offscreen(hwnd) {
+        mark_frame_refresh(window_id, hwnd, identity);
+    } else if !before.0 && completed_synchronously {
+        if let Some(generation) = before.1 {
+            clear_frame_refresh(window_id, generation);
+        }
     }
 }
 
@@ -594,6 +623,7 @@ fn apply_window_style_inner(
         log_maximizebox_geometry(operation_name, "after_style", hwnd, correlation_id, None);
 
         // Frame recalculation remains synchronous, but runs off the daemon event loop.
+        let before = begin_frame_change(window_id, hwnd, identity);
         let frame_result = SetWindowPos(
             hwnd,
             None,
@@ -603,7 +633,7 @@ fn apply_window_style_inner(
             0,
             SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
         );
-        record_frame_change(window_id, hwnd, identity);
+        finish_frame_change(window_id, hwnd, identity, before, frame_result.is_ok());
         log_maximizebox_geometry(
             operation_name,
             "after_frame",
@@ -751,7 +781,8 @@ fn recover_maximizebox(
         } else {
             SET_WINDOW_POS_FLAGS(0)
         };
-        let _ = SetWindowPos(
+        let before = begin_frame_change(window_id, hwnd, identity);
+        let result = SetWindowPos(
             hwnd,
             None,
             0,
@@ -760,7 +791,13 @@ fn recover_maximizebox(
             0,
             SWP_FRAMECHANGED | dispatch | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
         );
-        record_frame_change(window_id, hwnd, identity);
+        finish_frame_change(
+            window_id,
+            hwnd,
+            identity,
+            before,
+            result.is_ok() && !dispatch.contains(SWP_ASYNCWINDOWPOS),
+        );
     }
 }
 

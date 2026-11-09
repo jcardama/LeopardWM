@@ -133,6 +133,8 @@ impl Drop for FrameWindow {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum FrameTest {
     CachedReturn,
+    AnimatedReturn,
+    ScratchpadReturn,
     ShutdownRecovery,
     OrdinaryReturn,
 }
@@ -184,7 +186,9 @@ fn run_frame_test(kind: FrameTest) {
         Duration::from_secs(3)
     ));
     match kind {
-        FrameTest::CachedReturn => assert!(platform::remove_maximizebox(window.id).unwrap()),
+        FrameTest::CachedReturn | FrameTest::AnimatedReturn | FrameTest::ScratchpadReturn => {
+            assert!(platform::remove_maximizebox(window.id).unwrap())
+        }
         FrameTest::ShutdownRecovery => assert!(platform::restore_maximizebox(window.id).unwrap()),
         FrameTest::OrdinaryReturn => {}
     }
@@ -200,7 +204,22 @@ fn run_frame_test(kind: FrameTest) {
     } else {
         placement.rect = visible;
         placement.visibility = Visibility::Visible;
-        place(&placement, &mut cache);
+        if kind == FrameTest::ScratchpadReturn {
+            let mut parked = RECT::default();
+            unsafe { GetWindowRect(window.hwnd(), &mut parked).unwrap() };
+            platform::position_window(
+                window.id,
+                Rect::new(
+                    visible.x,
+                    visible.y,
+                    parked.right - parked.left,
+                    parked.bottom - parked.top,
+                ),
+            )
+            .unwrap();
+        } else {
+            place(&placement, &mut cache);
+        }
     }
     assert!(wait_for_fixture(
         || platform::get_window_chrome_rect(window.id)
@@ -231,12 +250,44 @@ fn run_frame_test(kind: FrameTest) {
             window.insets()
         );
     }
+    if kind == FrameTest::AnimatedReturn {
+        let after_async = NCCALCS.load(Ordering::SeqCst);
+        place(&placement, &mut cache);
+        assert!(
+            wait_for_fixture(
+                || NCCALCS.load(Ordering::SeqCst) > after_async,
+                Duration::from_secs(3)
+            ),
+            "async submission retired the refresh before landing"
+        );
+        platform::apply_placements(std::slice::from_ref(&placement), &config, None, true).unwrap();
+        let after_landing = NCCALCS.load(Ordering::SeqCst);
+        place(&placement, &mut cache);
+        thread::sleep(Duration::from_millis(100));
+        assert_eq!(
+            NCCALCS.load(Ordering::SeqCst),
+            after_landing,
+            "landing did not retire the refresh"
+        );
+    }
 }
 
 #[test]
 fn parked_style_refreshes_on_cached_return() {
     if run_in_placement_test_process("tests::display_change_regression::parked_frame_refresh::parked_style_refreshes_on_cached_return") { return; }
     run_frame_test(FrameTest::CachedReturn);
+}
+
+#[test]
+fn parked_style_refresh_survives_animation_until_landing() {
+    if run_in_placement_test_process("tests::display_change_regression::parked_frame_refresh::parked_style_refresh_survives_animation_until_landing") { return; }
+    run_frame_test(FrameTest::AnimatedReturn);
+}
+
+#[test]
+fn parked_style_refreshes_on_scratchpad_position() {
+    if run_in_placement_test_process("tests::display_change_regression::parked_frame_refresh::parked_style_refreshes_on_scratchpad_position") { return; }
+    run_frame_test(FrameTest::ScratchpadReturn);
 }
 
 #[test]

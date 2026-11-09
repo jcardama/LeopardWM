@@ -94,6 +94,13 @@ fn move_window_offscreen_with_flags(
 pub fn position_window(window_id: WindowId, rect: Rect) -> Result<(), Win32Error> {
     let hwnd = window_id_to_hwnd(window_id)?;
     crate::placement::note_synchronous_move(window_id);
+    let frame_refresh = crate::window_style::frame_refresh(window_id, hwnd);
+    let flags = SWP_NOACTIVATE
+        | if frame_refresh.is_some() {
+            SWP_FRAMECHANGED
+        } else {
+            SET_WINDOW_POS_FLAGS(0)
+        };
     unsafe {
         SetWindowPos(
             hwnd,
@@ -102,11 +109,14 @@ pub fn position_window(window_id: WindowId, rect: Rect) -> Result<(), Win32Error
             rect.y,
             rect.width,
             rect.height,
-            SWP_NOACTIVATE,
+            flags,
         )
         .map_err(|e| {
             Win32Error::SetPositionFailed(format!("Failed to position window {}: {}", window_id, e))
         })?;
+    }
+    if let Some(mark) = frame_refresh {
+        crate::placement::clear_frame_refresh_at_target(window_id, hwnd, mark, rect, flags);
     }
     Ok(())
 }
