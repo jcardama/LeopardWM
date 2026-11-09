@@ -1083,6 +1083,10 @@ input[type="range"]::-webkit-slider-thumb {
             <label class="toggle"><input type="checkbox" id="startup-auto_start" data-no-config><span class="track"></span><span class="thumb"></span></label>
           </div>
           <div class="field">
+            <div class="field-info"><div class="field-label" data-i18n="settings.glazewm_compat.enabled.label"></div><div class="field-desc" data-i18n="settings.glazewm_compat.enabled.description"></div></div>
+            <label class="toggle"><input type="checkbox" id="glazewm_compat-enabled"><span class="track"></span><span class="thumb"></span></label>
+          </div>
+          <div class="field">
             <div class="field-info"><div class="field-label" data-i18n="settings.behavior.focus_new_windows.label"></div><div class="field-desc" data-i18n="settings.behavior.focus_new_windows.description"></div></div>
             <label class="toggle"><input type="checkbox" id="behavior-focus_new_windows"><span class="track"></span><span class="thumb"></span></label>
           </div>
@@ -1635,7 +1639,10 @@ function hexToInput(hex) { return '#' + (hex || '000000').toLowerCase(); }
 function inputToHex(v) { return v.replace('#', '').toUpperCase(); }
 
 /* ── Init ────────────────────────────────────────────────────────────── */
+var glazewmCompatPort = 6123;
 function init(cfg) {
+  glazewmCompatPort = cfg.glazewm_compat ? cfg.glazewm_compat.port : 6123;
+  setChecked('glazewm_compat-enabled', cfg.glazewm_compat && cfg.glazewm_compat.enabled);
   setVal('layout-gap', cfg.layout.gap);
   setVal('layout-outer_gap_left', cfg.layout.outer_gap_left);
   setVal('layout-outer_gap_right', cfg.layout.outer_gap_right);
@@ -2432,6 +2439,10 @@ function readConfig() {
     },
     overview: {
       render: cbVal('cb-overview-render')
+    },
+    glazewm_compat: {
+      enabled: checked('glazewm_compat-enabled'),
+      port: glazewmCompatPort
     }
   };
 }

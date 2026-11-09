@@ -392,6 +392,7 @@ function commandFixture({ saving = false } = {}) {
   };
   Object.defineProperty(tbody, 'innerHTML', { set() { rows.length = 0; } });
   fields['hotkeys-body'] = tbody;
+  fields['glazewm_compat-enabled'] = eventElement();
   const presetCombo = eventElement();
   presetCombo.querySelector = () => eventElement();
   presetCombo.querySelectorAll = () => [];
@@ -427,6 +428,8 @@ function commandFixture({ saving = false } = {}) {
 }
 
 const shortcuts = commandFixture({ saving: true });
+shortcuts.ctx.glazewmCompatPort = 17000;
+shortcuts.ctx.document.getElementById('glazewm_compat-enabled').checked = true;
 const configuredShortcuts = {
   'Ctrl+Alt+N': 'focus_next', 'Ctrl+Alt+B': 'focus_next',
   'Ctrl+Alt+F21': 'focus_prev', 'Ctrl+Alt+F22': 'focus_prev',
@@ -440,6 +443,7 @@ function savedShortcuts() {
   return shortcuts.saves.at(-1).config.hotkeys;
 }
 let saved = savedShortcuts();
+assert.deepEqual(shortcuts.saves.at(-1).config.glazewm_compat, { enabled: true, port: 17000 });
 for (const [key, command] of Object.entries(configuredShortcuts)) {
   assert.equal(saved[key], command, `Settings save lost ${key} for ${command}`);
 }

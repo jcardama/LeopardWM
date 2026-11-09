@@ -34,6 +34,10 @@ wry = { workspace = true }
 raw-window-handle = { workspace = true }
 regex = "1"
 png = "0.18"
+tokio-tungstenite = { version = "=0.26.2", default-features = false, features = ["handshake"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+socket2 = { version = "0.6", features = ["all"] }
+uuid = { version = "1", features = ["v4"] }
 
 [build-dependencies]
 winresource = "0.1"

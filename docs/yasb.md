@@ -1,8 +1,35 @@
 # Yasb workspace buttons
 
-[Yasb](https://github.com/amnweb/yasb) can show and switch LeopardWM workspaces with its built-in Custom widget. This recipe adds nine clickable buttons for **one explicitly selected monitor**, using the existing CLI. It does not install a plugin or change LeopardWM's IPC protocol.
+## Stock GlazeWM workspaces widget
 
-Use a matching LeopardWM CLI and daemon with `lwm query workspaces` support (introduced in 0.2.10), and [put `lwm.exe` on the PATH inherited by Yasb](../README.md#put-lwm-on-the-path). Restart Yasb after a PATH change. Yasb's GlazeWM and komorebi widgets speak those managers' own protocols; pointing them at LeopardWM will not work.
+[Yasb](https://github.com/amnweb/yasb) can use its stock GlazeWM workspaces widget with LeopardWM's opt-in compatibility endpoint. Enable **GlazeWM compatibility** in Settings, or add this to LeopardWM's config and run `lwm reload`:
+
+```toml
+[glazewm_compat]
+enabled = true
+port = 6123
+```
+
+Add the widget to Yasb's existing `widgets` mapping and add `leopard_workspaces` to the appropriate bar's widget list:
+
+```yaml
+widgets:
+  leopard_workspaces:
+    type: "glazewm.workspaces.GlazewmWorkspacesWidget"
+    options: {}
+```
+
+The default Yasb URI is `ws://localhost:6123`. If you changed LeopardWM's port, set `glazewm_server_uri` in the widget's options to match, for example `ws://localhost:7123`. The endpoint binds IPv4 loopback only, accepts connections only from the daemon's Windows user, rejects handshakes carrying an `Origin` header, and supports workspace focus commands only. The named-pipe IPC remains unchanged.
+
+Only populated workspaces and the displayed workspace appear. Their internal names combine the screen-position monitor ordinal and workspace number, such as `1-3`; display names use `[workspaces].names` or the workspace number. The global wheel commands act on the focused monitor rather than crossing monitors. Other GlazeWM widgets and commands are not supported.
+
+LeopardWM and GlazeWM cannot share port 6123. If GlazeWM already holds it, LeopardWM logs a warning and continues without the endpoint. If LeopardWM holds it, GlazeWM fails to start. Disable the endpoint or choose another port to run both.
+
+Style the widget in Yasb's `styles.css`, not with HTML. The widget exposes `.glazewm-workspaces`, `.ws-btn` and its `empty`, `populated`, `active_empty`, `active_populated`, `focused_empty`, and `focused_populated` states, plus `.label`, `.icon`, `.icon-N`, and `.offline-status`. Yasb supports `{name}` and `{display_name}` label templates, `app_icons`, `offline_label`, and `hide_if_offline`.
+
+## Alternative: Custom widget and CLI
+
+The following polling recipe uses Yasb's built-in Custom widget to show nine buttons for **one explicitly selected monitor**. Use a matching LeopardWM CLI and daemon with `lwm query workspaces` support (introduced in 0.2.10), and [put `lwm.exe` on the PATH inherited by Yasb](../README.md#put-lwm-on-the-path). Restart Yasb after a PATH change. This alternative does not require the compatibility endpoint.
 
 ## Any bar
 

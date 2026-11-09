@@ -12523,6 +12523,7 @@ async fn test_animation_frame_handler_updates_border_once() {
         quit_fallback: &quit,
         state: &state,
         event_tx: &event_tx,
+        glazewm_compat: &mut glazewm_compat::Server::default(),
         hotkey_state: &mut HotkeyState {
             handle: None,
             hook: None,
@@ -21911,6 +21912,7 @@ async fn test_taskbar_buttons_paused_tray_selection_keeps_buttons_shown_until_re
         quit_fallback: &quit,
         state: &state,
         event_tx: &event_tx,
+        glazewm_compat: &mut glazewm_compat::Server::default(),
         hotkey_state: &mut HotkeyState {
             handle: None,
             hook: None,

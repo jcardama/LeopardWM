@@ -49,6 +49,23 @@ pub struct Config {
     /// Overview-mode configuration.
     #[serde(default)]
     pub overview: OverviewConfig,
+    pub glazewm_compat: GlazewmCompatConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GlazewmCompatConfig {
+    pub enabled: bool,
+    pub port: u16,
+}
+
+impl Default for GlazewmCompatConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            port: 6123,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1628,7 +1645,9 @@ pub fn ensure_config_on_disk() -> Result<Option<PathBuf>> {
 }
 
 fn generate_default_config_content() -> String {
-    leopardwm_ipc::config_template::render_default_config()
+    let mut content = leopardwm_ipc::config_template::render_default_config();
+    content.push_str("\n[glazewm_compat]\n# Enable the local endpoint for YASB's stock GlazeWM workspaces widget.\nenabled = false\nport = 6123\n");
+    content
 }
 
 /// Get all possible config file paths in priority order.
@@ -1657,6 +1676,36 @@ fn dirs_home() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn glazewm_compat_defaults_and_explicit_config_round_trip() {
+        let omitted: Config = toml::from_str("").unwrap();
+        assert_eq!(
+            omitted.glazewm_compat,
+            GlazewmCompatConfig {
+                enabled: false,
+                port: 6123
+            }
+        );
+        let generated: toml::Value = toml::from_str(&generate_default_config_content()).unwrap();
+        assert_eq!(
+            generated["glazewm_compat"]["enabled"].as_bool(),
+            Some(false)
+        );
+        assert_eq!(generated["glazewm_compat"]["port"].as_integer(), Some(6123));
+        let partial: Config = toml::from_str("[glazewm_compat]\nenabled = true").unwrap();
+        assert_eq!(
+            partial.glazewm_compat,
+            GlazewmCompatConfig {
+                enabled: true,
+                port: 6123
+            }
+        );
+        let configured: Config =
+            toml::from_str("[glazewm_compat]\nenabled = true\nport = 17000").unwrap();
+        let restored: Config = toml::from_str(&toml::to_string(&configured).unwrap()).unwrap();
+        assert_eq!(restored.glazewm_compat, configured.glazewm_compat);
+    }
 
     #[test]
     fn workspace_edge_wrap_config_compatibility_and_validation() {

@@ -377,7 +377,7 @@ Check `MEMORY.md` → "IPC bar-integration validation deferred" before building 
 
 - **Per-monitor filter not supported** — `--events` filters by kind only. Filter legacy events by `monitor`, or workspace-state records by `monitor_device_name`, client-side.
 - **No individual `WindowCreated` / `Destroyed` events** — opt-in workspace-state snapshots report complete membership after lifecycle changes. Consumers compare replacements if they need their own deltas.
-- **No WebSocket bridge** — the daemon serves only the named pipe. Browser-based bars need a thin bridge component.
+- **No general WebSocket bridge** — the optional loopback endpoint supports only the GlazeWM workspace subset described in the [Yasb guide](../docs/yasb.md); it rejects browser Origin headers.
 - **Stream mode is uni-directional** — after Subscribe, the pipe only flows daemon→client. Open a second pipe for command queries.
 - **Daemon shutdown** delivers EOF (`BrokenPipe` on next read). Reconnect with backoff if your bar should survive daemon restarts.
 

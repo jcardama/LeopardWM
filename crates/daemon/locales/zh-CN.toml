@@ -163,6 +163,8 @@
 "settings.appearance.tab_strip_opacity.description" = "标签栏透明程度（0 透明 → 255 不透明）"
 "settings.startup.auto_start.label" = "随 Windows 启动"
 "settings.startup.auto_start.description" = "登录 Windows 时自动启动 LeopardWM"
+"settings.glazewm_compat.enabled.label" = "GlazeWM 兼容模式"
+"settings.glazewm_compat.enabled.description" = "允许 YASB 自带的 GlazeWM 工作区小组件在本机连接"
 "settings.behavior.focus_new_windows.label" = "聚焦新窗口"
 "settings.behavior.focus_new_windows.description" = "自动聚焦新打开的窗口"
 "settings.behavior.track_focus_changes.label" = "跟踪焦点变化"

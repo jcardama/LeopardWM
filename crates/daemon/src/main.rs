@@ -10,6 +10,7 @@ mod drag;
 mod event_handler;
 mod events;
 mod gesture_diagnostics;
+mod glazewm_compat;
 mod helpers;
 mod hotkey_resolution;
 mod ipc_server;
@@ -369,6 +370,7 @@ async fn reload_config_and_hotkeys(
     tray_manager: &Option<tray::TrayManager>,
     snap_hint_overlay: &Option<OverlayWindow>,
     mouse_hook_handle: &mut Option<MouseHookHandle>,
+    glazewm_compat: &mut glazewm_compat::Server,
 ) {
     // Drop both handles BEFORE setup_hotkeys rebuilds them: assignment drops the
     // old HotkeyState last, so an unhook-then-reinstall must happen here or the
@@ -380,6 +382,9 @@ async fn reload_config_and_hotkeys(
         let state = state.lock().await;
         state.config.clone()
     };
+    glazewm_compat
+        .configure(&new_config.glazewm_compat, event_tx.clone())
+        .await;
     *hotkey_state = setup_hotkeys(&new_config, event_tx.clone());
     if was_recording {
         set_recording(true);
@@ -761,6 +766,7 @@ struct EventLoopCtx<'a> {
     display_change_apply_retry_timer: &'a mut Option<(u64, tokio::task::JoinHandle<()>)>,
     mouse_hook_handle: &'a mut Option<MouseHookHandle>,
     gestures: &'a mut GestureRuntime,
+    glazewm_compat: &'a mut glazewm_compat::Server,
 }
 
 async fn sync_pending_layout_apply_timeout_ui(
@@ -1819,6 +1825,7 @@ async fn handle_ipc_command(
             ctx.tray_manager,
             ctx.snap_hint_overlay,
             ctx.mouse_hook_handle,
+            ctx.glazewm_compat,
         )
         .await;
         info!("Hotkeys reloaded after config reload");
@@ -2341,6 +2348,7 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
                     ctx.tray_manager,
                     ctx.snap_hint_overlay,
                     ctx.mouse_hook_handle,
+                    ctx.glazewm_compat,
                 )
                 .await;
                 info!("Hotkeys reloaded after tray config reload");
@@ -3165,6 +3173,7 @@ async fn handle_settings_event(
                     ctx.tray_manager,
                     ctx.snap_hint_overlay,
                     ctx.mouse_hook_handle,
+                    ctx.glazewm_compat,
                 )
                 .await;
                 info!("Hotkeys reloaded after settings save");
@@ -3671,6 +3680,16 @@ async fn initialize_state(
     state
 }
 
+async fn start_glazewm_compat(
+    state: &Arc<Mutex<AppState>>,
+    events: mpsc::Sender<DaemonEvent>,
+) -> glazewm_compat::Server {
+    let config = state.lock().await.config.glazewm_compat.clone();
+    let mut server = glazewm_compat::Server::default();
+    server.configure(&config, events).await;
+    server
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
@@ -3819,6 +3838,8 @@ async fn main() -> Result<()> {
         run_ipc_server(ipc_tx).await;
     });
 
+    let mut glazewm_compat = start_glazewm_compat(&state, event_tx.clone()).await;
+
     info!("IPC server listening on {}", preferred_pipe_name());
 
     {
@@ -3874,6 +3895,7 @@ async fn main() -> Result<()> {
         display_change_apply_retry_timer: &mut display_change_apply_retry_timer,
         mouse_hook_handle: &mut mouse_hook_handle,
         gestures: &mut gestures,
+        glazewm_compat: &mut glazewm_compat,
     };
 
     loop {
@@ -4004,6 +4026,7 @@ async fn main() -> Result<()> {
         finish_daemon_event(&mut ctx).await;
     }
 
+    ctx.glazewm_compat.stop().await;
     update_check_cancel.store(true, std::sync::atomic::Ordering::SeqCst);
     abort_event_timers(&mut ctx);
     ctx.gestures.stop();

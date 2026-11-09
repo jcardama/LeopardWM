@@ -163,6 +163,8 @@
 "settings.appearance.tab_strip_opacity.description" = "Strip translucency (0 transparent → 255 opaque)"
 "settings.startup.auto_start.label" = "Start with Windows"
 "settings.startup.auto_start.description" = "Automatically launch LeopardWM when you sign in to Windows"
+"settings.glazewm_compat.enabled.label" = "GlazeWM compatibility"
+"settings.glazewm_compat.enabled.description" = "Allow the stock YASB GlazeWM workspaces widget to connect locally"
 "settings.behavior.focus_new_windows.label" = "Focus new windows"
 "settings.behavior.focus_new_windows.description" = "Automatically focus newly opened windows"
 "settings.behavior.track_focus_changes.label" = "Track focus changes"

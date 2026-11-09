@@ -6,6 +6,7 @@ All notable changes to LeopardWM will be documented in this file.
 
 ### Features
 
+- **Yasb's stock GlazeWM workspaces widget can now connect to LeopardWM.** Enable GlazeWM compatibility in Settings or the config to use the local workspace endpoint. (#170)
 - **Follow windows moved to another workspace.** Enable `follow_window_to_workspace` in behavior settings to switch to the destination and keep the moved window focused. (#174)
 - **Workspace edge navigation can now stop at the ends instead of wrapping.** Set `workspace_edge_wrap` to `clamp` to keep vertical focus and moves within workspaces 1 through 9. (#155)
 - **Customize focus borders per app.** Window rules can hide the focus border or choose a color for matching windows. (#156)

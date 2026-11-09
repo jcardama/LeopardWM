@@ -52,7 +52,7 @@ A few deliberate **non-features**, so you know what you're getting:
 
 - **Scroll-first, not multi-layout.** No BSP, no DWindle, no Equal/Stair/UltrawideVerticalStack — and we won't add them. niri (Wayland) and PaperWM (GNOME) stay scrolling-only by choice; the horizontal strip *is* the identity. If you want 9 layout variants, [komorebi](https://github.com/LGUG2Z/komorebi) is the right tool.
 - **No Virtual Desktop bridging.** Per-monitor workspaces don't map cleanly to Windows' global Virtual Desktops, and the only library that bridges them (`winvd`) breaks every 3-6 months on Windows feature updates. Instead, `Win+Ctrl+Arrow` is intercepted and routed to LeopardWM's workspace prev/next so the native muscle memory still works.
-- **Named-pipe IPC, not WebSocket.** Lower latency, no port allocation, no firewall prompts. If browser-based bar integration becomes a real ask, we'll add a thin bridge rather than make the daemon serve sockets directly.
+- **Named-pipe IPC by default.** An optional, local-only GlazeWM-compatible endpoint supports Yasb's stock workspaces widget; it is not a general WebSocket API.
 
 ## Features
 
@@ -421,11 +421,7 @@ use 1-based indices and transfer focus to the named monitor; snapshot indices ar
 
 ### Yasb workspace buttons
 
-Show all nine workspaces on a selected monitor and switch by clicking a button in
-[Yasb](https://github.com/amnweb/yasb), using its built-in Custom widget and the
-existing CLI. See the [complete Yasb configuration and styling recipe](docs/yasb.md).
-It includes active/occupied indicators and workspace-name tooltips; updates are
-polled every five seconds rather than streamed. No plugin or IPC change is required.
+Enable **GlazeWM compatibility** in Settings or set `enabled = true` under `[glazewm_compat]` in the config, then add Yasb's stock `glazewm.workspaces.GlazewmWorkspacesWidget`. It uses `ws://localhost:6123` by default and updates as workspaces change. If GlazeWM already holds that port, LeopardWM continues without the endpoint; if LeopardWM holds it, GlazeWM cannot start. See the [Yasb setup and styling guide](docs/yasb.md) for port configuration and the alternative CLI-based Custom widget.
 
 ### Troubleshooting
 
