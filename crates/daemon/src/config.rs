@@ -467,6 +467,9 @@ pub struct BehaviorConfig {
 
     #[serde(default = "default_false")]
     pub skip_empty_workspaces: bool,
+
+    #[serde(default = "default_false")]
+    pub follow_window_to_workspace: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -509,6 +512,7 @@ impl Default for BehaviorConfig {
             mouse_follows_focus: false,
             fullscreen_follows_focus: true,
             skip_empty_workspaces: false,
+            follow_window_to_workspace: false,
         }
     }
 }

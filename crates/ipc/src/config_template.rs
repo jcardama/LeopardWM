@@ -127,6 +127,9 @@ focus_follows_mouse = false
 # No other occupied workspace means no change. Window moves are unaffected.
 # skip_empty_workspaces = false
 
+# Switch to the destination workspace when moving the focused window.
+# follow_window_to_workspace = false
+
 # Warp the mouse cursor onto the focused window after a focus-navigation command
 # (the inverse of focus_follows_mouse). Default false.
 # mouse_follows_focus = false

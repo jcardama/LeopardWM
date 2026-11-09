@@ -16382,6 +16382,190 @@ fn test_move_to_workspace_relative_wraps_around() {
 }
 
 #[test]
+fn test_follow_window_to_workspace_config_round_trip() {
+    assert!(!Config::default().behavior.follow_window_to_workspace);
+    let omitted: Config = toml::from_str("[behavior]\nworkspace_edge_wrap = true").unwrap();
+    assert!(!omitted.behavior.follow_window_to_workspace);
+    for enabled in [false, true] {
+        let json = serde_json::json!({"behavior": {"follow_window_to_workspace": enabled}});
+        let from_settings: Config = serde_json::from_value(json).unwrap();
+        let saved = toml::to_string_pretty(&from_settings).unwrap();
+        let reloaded: Config = toml::from_str(&saved).unwrap();
+        assert_eq!(reloaded.behavior.follow_window_to_workspace, enabled);
+        assert_eq!(
+            serde_json::to_value(reloaded).unwrap()["behavior"]["follow_window_to_workspace"],
+            enabled
+        );
+    }
+}
+
+#[test]
+fn test_follow_window_to_workspace_tiled_commands() {
+    use crate::config::WorkspaceEdgeWrap;
+    for enabled in [false, true] {
+        for (source, target, command, edge) in [
+            (
+                0,
+                1,
+                IpcCommand::MoveToWorkspace { index: 2 },
+                WorkspaceEdgeWrap::Off,
+            ),
+            (
+                0,
+                8,
+                IpcCommand::MoveToWorkspacePrev,
+                WorkspaceEdgeWrap::Off,
+            ),
+            (
+                8,
+                0,
+                IpcCommand::MoveToWorkspaceNext,
+                WorkspaceEdgeWrap::Off,
+            ),
+            (0, 8, IpcCommand::MoveWindowUp, WorkspaceEdgeWrap::Wrap),
+            (8, 0, IpcCommand::MoveWindowDown, WorkspaceEdgeWrap::Wrap),
+            (1, 0, IpcCommand::MoveWindowUp, WorkspaceEdgeWrap::Clamp),
+            (7, 8, IpcCommand::MoveWindowDown, WorkspaceEdgeWrap::Clamp),
+        ] {
+            let mut state = AppState::new_with_config(test_config(), test_monitors());
+            let mon = state.focused_monitor;
+            state.handle_command(IpcCommand::SwitchWorkspace {
+                index: (source + 1) as u8,
+            });
+            state
+                .injected_window_info
+                .insert(100, make_test_window_info(100));
+            state.handle_window_event(WindowEvent::Created(100, 0));
+            state.ensure_workspace_exists(mon, target);
+            state.workspaces.get_mut(&mon).unwrap()[target]
+                .add_floating(200, Rect::new(0, 0, 300, 300))
+                .unwrap();
+            state.floating_focus.insert((mon, target), 200);
+            state.config.behavior.follow_window_to_workspace = enabled;
+            state.config.behavior.workspace_edge_wrap = edge;
+            state.config.behavior.skip_empty_workspaces = true;
+            assert!(matches!(state.handle_command(command), IpcResponse::Ok));
+            assert!(state.workspaces[&mon][target].contains_window(100));
+            assert_eq!(
+                state.active_workspace_idx(mon),
+                if enabled { target } else { source }
+            );
+            if enabled {
+                assert_eq!(
+                    state.focused_workspace().unwrap().focused_window(),
+                    Some(100)
+                );
+                assert_eq!(state.previous_focused_hwnd, Some(100));
+            }
+        }
+    }
+}
+
+#[test]
+fn test_follow_window_to_workspace_wrap_slide_direction() {
+    for (source, target, command, forward) in [
+        (8, 0, IpcCommand::MoveToWorkspaceNext, true),
+        (0, 8, IpcCommand::MoveToWorkspacePrev, false),
+        (8, 0, IpcCommand::MoveWindowDown, true),
+        (0, 8, IpcCommand::MoveWindowUp, false),
+    ] {
+        let mut state = AppState::new_with_config(test_config(), test_monitors());
+        let mon = state.focused_monitor;
+        state.handle_command(IpcCommand::SwitchWorkspace {
+            index: (source + 1) as u8,
+        });
+        state
+            .injected_window_info
+            .insert(100, make_test_window_info(100));
+        state.handle_window_event(WindowEvent::Created(100, 0));
+        state.reduce_motion = false;
+        state.config.behavior.follow_window_to_workspace = true;
+        state.config.behavior.workspace_edge_wrap = crate::config::WorkspaceEdgeWrap::Wrap;
+        state.handle_command(command);
+        let destination = state
+            .workspace_placements(mon, target)
+            .into_iter()
+            .find(|p| p.window_id == 100)
+            .unwrap()
+            .rect;
+        let start = state.layout_transition.as_ref().unwrap().start_rects[&100];
+        assert_eq!(
+            start.y.cmp(&destination.y),
+            if forward {
+                std::cmp::Ordering::Greater
+            } else {
+                std::cmp::Ordering::Less
+            }
+        );
+    }
+}
+
+#[test]
+fn test_follow_window_to_workspace_noops() {
+    use crate::config::WorkspaceEdgeWrap;
+    for (source, command, edge) in [
+        (
+            0,
+            IpcCommand::MoveToWorkspace { index: 1 },
+            WorkspaceEdgeWrap::Off,
+        ),
+        (0, IpcCommand::MoveWindowUp, WorkspaceEdgeWrap::Clamp),
+        (8, IpcCommand::MoveWindowDown, WorkspaceEdgeWrap::Clamp),
+    ] {
+        let mut state = AppState::new_with_config(test_config(), test_monitors());
+        let mon = state.focused_monitor;
+        state.handle_command(IpcCommand::SwitchWorkspace {
+            index: (source + 1) as u8,
+        });
+        state
+            .injected_window_info
+            .insert(100, make_test_window_info(100));
+        state.handle_window_event(WindowEvent::Created(100, 0));
+        state.config.behavior.follow_window_to_workspace = true;
+        state.config.behavior.workspace_edge_wrap = edge;
+        state.handle_command(command);
+        assert_eq!(state.active_workspace_idx(mon), source);
+        assert!(state.workspaces[&mon][source].contains_window(100));
+    }
+    let mut empty = AppState::new_with_config(test_config(), test_monitors());
+    empty.config.behavior.follow_window_to_workspace = true;
+    let mon = empty.focused_monitor;
+    empty.handle_command(IpcCommand::MoveToWorkspace { index: 2 });
+    assert_eq!(empty.active_workspace_idx(mon), 0);
+}
+
+#[test]
+fn test_follow_window_to_workspace_floating_focus() {
+    for enabled in [false, true] {
+        for command in [
+            IpcCommand::MoveToWorkspace { index: 2 },
+            IpcCommand::MoveToWorkspaceNext,
+        ] {
+            let mut state = AppState::new_with_config(test_config(), test_monitors());
+            let mon = state.focused_monitor;
+            state.workspaces.get_mut(&mon).unwrap()[0]
+                .add_floating(100, Rect::new(0, 0, 300, 300))
+                .unwrap();
+            state.ensure_workspace_exists(mon, 1);
+            state.workspaces.get_mut(&mon).unwrap()[1]
+                .add_floating(200, Rect::new(0, 0, 300, 300))
+                .unwrap();
+            state.floating_focus.insert((mon, 1), 200);
+            state.previous_focused_hwnd = Some(100);
+            state.config.behavior.follow_window_to_workspace = enabled;
+            state.handle_command(command);
+            assert!(state.workspaces[&mon][1].is_floating(100));
+            assert_eq!(state.active_workspace_idx(mon), if enabled { 1 } else { 0 });
+            if enabled {
+                assert_eq!(state.previous_focused_hwnd, Some(100));
+                assert_eq!(state.floating_focus.get(&(mon, 1)), Some(&100));
+                assert_ne!(state.floating_focus.get(&(mon, 0)), Some(&100));
+            }
+        }
+    }
+}
+
+#[test]
 fn test_skip_empty_workspace_config_round_trip() {
     assert!(!Config::default().behavior.skip_empty_workspaces);
     let omitted: Config = toml::from_str("[behavior]\nworkspace_edge_wrap = true").unwrap();

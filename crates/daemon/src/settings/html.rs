@@ -1118,6 +1118,10 @@ input[type="range"]::-webkit-slider-thumb {
             <label class="toggle"><input type="checkbox" id="behavior-skip_empty_workspaces"><span class="track"></span><span class="thumb"></span></label>
           </div>
           <div class="field">
+            <div class="field-info"><div class="field-label" data-i18n="settings.behavior.follow_window_to_workspace.label"></div><div class="field-desc" data-i18n="settings.behavior.follow_window_to_workspace.description"></div></div>
+            <label class="toggle"><input type="checkbox" id="behavior-follow_window_to_workspace"><span class="track"></span><span class="thumb"></span></label>
+          </div>
+          <div class="field">
             <div class="field-info"><div class="field-label" data-i18n="settings.behavior.fullscreen_follows_focus.label"></div><div class="field-desc" data-i18n="settings.behavior.fullscreen_follows_focus.description"></div></div>
             <label class="toggle"><input type="checkbox" id="behavior-fullscreen_follows_focus"><span class="track"></span><span class="thumb"></span></label>
           </div>
@@ -1671,6 +1675,7 @@ function init(cfg) {
   setChecked('behavior-mouse_follows_focus', cfg.behavior.mouse_follows_focus === true);
   setCb('cb-behavior-workspace_edge_wrap', cfg.behavior.workspace_edge_wrap || 'off');
   setChecked('behavior-skip_empty_workspaces', cfg.behavior.skip_empty_workspaces === true);
+  setChecked('behavior-follow_window_to_workspace', cfg.behavior.follow_window_to_workspace === true);
   setChecked('behavior-fullscreen_follows_focus', cfg.behavior.fullscreen_follows_focus !== false);
   setChecked('behavior-disable_snap_layouts', cfg.behavior.disable_snap_layouts !== false);
   setChecked('behavior-swap_chain_ghost_animation', cfg.behavior.swap_chain_ghost_animation === true);
@@ -2385,6 +2390,7 @@ function readConfig() {
       mouse_follows_focus: checked('behavior-mouse_follows_focus'),
       workspace_edge_wrap: cbVal('cb-behavior-workspace_edge_wrap'),
       skip_empty_workspaces: checked('behavior-skip_empty_workspaces'),
+      follow_window_to_workspace: checked('behavior-follow_window_to_workspace'),
       fullscreen_follows_focus: checked('behavior-fullscreen_follows_focus'),
       disable_snap_layouts: checked('behavior-disable_snap_layouts'),
       swap_chain_ghost_animation: checked('behavior-swap_chain_ghost_animation'),

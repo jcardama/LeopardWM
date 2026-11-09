@@ -360,7 +360,9 @@ Set `workspace_edge_wrap` under `[behavior]` or in Settings to `"off"` (default)
 
 Set `skip_empty_workspaces = true` under `[behavior]` or enable **Settings → Behavior → Skip empty workspaces** (off by default) to skip empty slots on the same monitor. This applies to `workspace_next` / `workspace_prev`, which always wrap, and to `focus_down` / `focus_up` when `workspace_edge_wrap` switches workspaces. With clamp, focus stops at the first or last occupied workspace; if no other occupied workspace is reachable, it does nothing.
 
-Tiled, floating, and minimized managed windows count as occupancy; sticky windows do not. Explicit numbered selection, all move-to-workspace commands (including edge-wrap moves), overview, and horizontal focus are unchanged. Closing or moving away the last window does not automatically switch workspaces.
+Tiled, floating, and minimized managed windows count as occupancy; sticky windows do not. Explicit numbered selection, all move-to-workspace commands (including edge-wrap moves), overview, and horizontal focus are unchanged. Closing the last window does not automatically switch workspaces. Moving it away switches only when following moved windows is enabled.
+
+Set `follow_window_to_workspace = true` under `[behavior]` or enable **Settings → Behavior → Follow moved windows** (off by default) to switch to the destination and keep focus on a window moved to another workspace. This also applies to moves at a workspace edge, but not overview drag.
 
 `cycle_width` and `cycle_height` are unbound by default; assign each a shortcut in Settings or `[hotkeys]`. Height cycling applies only to vertically stacked multi-window columns.
 

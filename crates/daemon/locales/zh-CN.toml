@@ -175,6 +175,8 @@
 "settings.behavior.mouse_follows_focus.description" = "执行聚焦命令后将鼠标指针移到焦点窗口（与“焦点跟随鼠标”相反）"
 "settings.behavior.workspace_edge_wrap.label" = "跨边缘切换工作区"
 "settings.behavior.workspace_edge_wrap.description" = "在列边缘时，停留在当前工作区（关闭）、循环切换（循环），或在两端停止（限制）"
+"settings.behavior.follow_window_to_workspace.label" = "跟随移动的窗口"
+"settings.behavior.follow_window_to_workspace.description" = "移动焦点窗口时切换到目标工作区"
 "settings.behavior.skip_empty_workspaces.label" = "跳过空工作区"
 "settings.behavior.skip_empty_workspaces.description" = "上一个／下一个工作区及跨边缘聚焦会跳过没有平铺或浮动窗口的工作区（不计固定窗口）"
 "settings.behavior.fullscreen_follows_focus.label" = "全屏跟随焦点"

@@ -358,15 +358,15 @@ impl AppState {
                 Some(IpcResponse::Ok)
             }
             IpcCommand::MoveToWorkspace { index } => {
-                Some(self.move_window_from_active_workspace(hwnd, index))
+                Some(self.move_window_from_active_workspace(hwnd, index, None))
             }
             IpcCommand::MoveToWorkspacePrev => {
                 let index = self.relative_workspace_index(false);
-                Some(self.move_window_from_active_workspace(hwnd, index))
+                Some(self.move_window_from_active_workspace(hwnd, index, Some(false)))
             }
             IpcCommand::MoveToWorkspaceNext => {
                 let index = self.relative_workspace_index(true);
-                Some(self.move_window_from_active_workspace(hwnd, index))
+                Some(self.move_window_from_active_workspace(hwnd, index, Some(true)))
             }
             IpcCommand::MoveWindowToMonitorLeft => {
                 Some(self.move_to_monitor(Some(hwnd), monitor_to_left, "left"))
@@ -969,7 +969,10 @@ impl AppState {
     }
 
     fn handle_move_to_workspace_relative(&mut self, forward: bool) -> IpcResponse {
-        self.handle_move_to_workspace(self.relative_workspace_index(forward))
+        self.handle_move_to_workspace_with_direction(
+            self.relative_workspace_index(forward),
+            Some(forward),
+        )
     }
 
     /// The 1-based index of the workspace next to the active one, wrapping.
@@ -1562,6 +1565,14 @@ impl AppState {
     }
 
     fn handle_move_to_workspace(&mut self, index: u8) -> IpcResponse {
+        self.handle_move_to_workspace_with_direction(index, None)
+    }
+
+    fn handle_move_to_workspace_with_direction(
+        &mut self,
+        index: u8,
+        direction: Option<bool>,
+    ) -> IpcResponse {
         if !(1..=9).contains(&index) {
             return IpcResponse::error("Workspace index must be 1-9");
         }
@@ -1590,13 +1601,35 @@ impl AppState {
             }
         };
 
-        self.move_window_to_workspace(monitor, current_idx, focused_hwnd, index, true)
+        self.move_window_from_active_workspace(focused_hwnd, index, direction)
     }
 
-    fn move_window_from_active_workspace(&mut self, hwnd: u64, index: u8) -> IpcResponse {
+    fn move_window_from_active_workspace(
+        &mut self,
+        hwnd: u64,
+        index: u8,
+        direction: Option<bool>,
+    ) -> IpcResponse {
         let monitor = self.focused_monitor;
         let current_idx = self.active_workspace_idx(monitor);
-        self.move_window_to_workspace(monitor, current_idx, hwnd, index, true)
+        let response = self.move_window_to_workspace(monitor, current_idx, hwnd, index, true);
+        if !self.config.behavior.follow_window_to_workspace || !(1..=9).contains(&index) {
+            return response;
+        }
+        let idx = usize::from(index - 1);
+        let target = self.workspaces.get(&monitor).and_then(|v| v.get(idx));
+        if idx == current_idx || !target.is_some_and(|ws| ws.contains_window(hwnd)) {
+            return response;
+        }
+        if !matches!(response, IpcResponse::Ok) {
+            return response;
+        }
+        if target.is_some_and(|ws| ws.is_floating(hwnd)) {
+            self.floating_focus.insert((monitor, idx), hwnd);
+        } else {
+            self.floating_focus.remove(&(monitor, idx));
+        }
+        self.handle_switch_workspace_with_direction(index, direction)
     }
 
     pub(crate) fn move_window_to_workspace(

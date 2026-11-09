@@ -175,6 +175,8 @@
 "settings.behavior.mouse_follows_focus.description" = "Move the cursor onto the focused window after focus commands (inverse of focus follows mouse)"
 "settings.behavior.workspace_edge_wrap.label" = "Workspace edge wrap"
 "settings.behavior.workspace_edge_wrap.description" = "At a column edge, stay on the workspace (off), switch and wrap (wrap), or stop at the ends (clamp)"
+"settings.behavior.follow_window_to_workspace.label" = "Follow moved windows"
+"settings.behavior.follow_window_to_workspace.description" = "Switch to the destination workspace when moving a focused window"
 "settings.behavior.skip_empty_workspaces.label" = "Skip empty workspaces"
 "settings.behavior.skip_empty_workspaces.description" = "Previous/next workspace and edge-wrap focus skip workspaces without tiled or floating windows (sticky windows do not count)"
 "settings.behavior.fullscreen_follows_focus.label" = "Fullscreen follows focus"
