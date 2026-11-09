@@ -46,7 +46,7 @@ jobs:
           name: test-output-log
           path: test-output.log
       - name: Verify offline desktop acceptance helpers
-        run: python -m unittest discover -s tools -p test_desktop_acceptance.py -v
+        run: python -m unittest discover -s tools -p test_*.py -v
       - run: cargo clippy --all --target x86_64-pc-windows-msvc -- -D warnings
 
   arm64:

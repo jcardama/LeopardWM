@@ -100,17 +100,68 @@ jobs:
   publish-winget:
     needs: build
     runs-on: windows-latest
-    # WINGET_TOKEN must be a CLASSIC PAT with the `public_repo` and `workflow`
-    # scopes. Fork sync may import upstream workflow files, which GitHub rejects
-    # without `workflow`; fine-grained PATs can't open the upstream PR. The action
-    # forks microsoft/winget-pkgs, then opens a version-bump PR from that fork.
+    timeout-minutes: 15
+    # WINGET_TOKEN is a classic PAT with public_repo and workflow scopes.
+    # The new fork ref may include upstream workflow changes absent from the fork.
     if: ${{ !github.event.repository.fork }}
     steps:
-      - uses: vedantmgoyal9/winget-releaser@b7370d4d152efdce803a26cc6ca9eee58cb2ad54 # main 2026-07-28
-        with:
-          identifier: jcardama.LeopardWM
-          installers-regex: '\.msi$'
-          token: ${{ secrets.WINGET_TOKEN }}
-        # No continue-on-error: a winget failure should surface as a failed
-        # job (the GitHub Release is already published by the `build` job, so
-        # this can't block the release) rather than silently no-op for months.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Download verified komac
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $url = 'https://github.com/russellbanks/Komac/releases/download/v2.17.1/komac-2.17.1-x86_64-pc-windows-msvc.exe'
+          $exe = Join-Path $env:RUNNER_TEMP 'komac.exe'
+          Invoke-WebRequest -Uri $url -OutFile $exe
+          if ((Get-FileHash $exe -Algorithm SHA256).Hash -ne 'a97c002c5ffa15f232af117efac6774e755d27acc47eba00f1661033267d7438') {
+            throw 'komac SHA256 mismatch'
+          }
+      # Python and gh are provided by the GitHub-hosted runner image.
+      - name: Generate Winget manifests
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.WINGET_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $version = $env:GITHUB_REF_NAME.Substring(1)
+          $base = "https://github.com/jcardama/LeopardWM/releases/download/$env:GITHUB_REF_NAME"
+          $exe = Join-Path $env:RUNNER_TEMP 'komac.exe'
+          & $exe update jcardama.LeopardWM --version $version --urls "$base/LeopardWM-$version-x86_64.msi" "$base/LeopardWM-$version-arm64.msi" --dry-run > (Join-Path $env:RUNNER_TEMP 'komac-stdout.txt')
+          python tools/winget_manifest.py (Join-Path $env:RUNNER_TEMP 'komac-stdout.txt') (Join-Path $env:RUNNER_TEMP 'winget-manifests')
+      - name: Submit Winget pull request
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.WINGET_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $version = $env:GITHUB_REF_NAME.Substring(1)
+          $title = "New version: jcardama.LeopardWM version $version"
+          $query = "repo:microsoft/winget-pkgs is:pr is:open in:title `"$title`""
+          $titles = @(gh api --paginate --method GET search/issues -f q="$query" -f per_page=100 --jq '.items[].title')
+          if ($titles -ccontains $title) { throw "An open pull request already has title: $title" }
+          $upstream = gh api repos/microsoft/winget-pkgs | ConvertFrom-Json
+          $head = gh api "repos/microsoft/winget-pkgs/commits/$($upstream.default_branch)" | ConvertFrom-Json
+          $fork = gh api repos/jcardama/winget-pkgs | ConvertFrom-Json
+          $branch = "jcardama.LeopardWM-$version-$([guid]::NewGuid().ToString('N').ToUpperInvariant())"
+          $graphqlFile = Join-Path $env:RUNNER_TEMP 'graphql-input.json'
+          $ref = @{
+            query = 'mutation($input: CreateRefInput!) { createRef(input: $input) { ref { name } } }'
+            variables = @{ input = @{ repositoryId = $fork.node_id; name = "refs/heads/$branch"; oid = $head.sha } }
+          }
+          $ref | ConvertTo-Json -Depth 20 | Set-Content -Path $graphqlFile -Encoding utf8
+          gh api graphql --input $graphqlFile
+          $directory = Join-Path $env:RUNNER_TEMP 'winget-manifests'
+          $additions = @(Get-ChildItem -Path $directory -File | ForEach-Object {
+            @{ path = "manifests/j/jcardama/LeopardWM/$version/$($_.Name)"; contents = [Convert]::ToBase64String([IO.File]::ReadAllBytes($_.FullName)) }
+          })
+          $commit = @{
+            query = 'mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid } } }'
+            variables = @{ input = @{ branch = @{ repositoryNameWithOwner = 'jcardama/winget-pkgs'; branchName = $branch }; expectedHeadOid = $head.sha; message = @{ headline = $title }; fileChanges = @{ additions = $additions } } }
+          }
+          $commit | ConvertTo-Json -Depth 20 | Set-Content -Path $graphqlFile -Encoding utf8
+          gh api graphql --input $graphqlFile
+          $body = "Created by the [LeopardWM release workflow]($env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID)."
+          gh pr create --repo microsoft/winget-pkgs --base $upstream.default_branch --head "jcardama:$branch" --title $title --body $body
+        # No continue-on-error: failure must surface after the release is published.

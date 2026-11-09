@@ -23,7 +23,7 @@ The workflow:
 7. Extracts the matching version section from `CHANGELOG.md` for release notes.
 8. Generates `checksums.txt` with SHA-256 hashes for all ZIPs and MSIs.
 9. Creates the GitHub Release with the ZIPs, MSIs, checksums, and release notes.
-10. Runs the dependent Winget job, which opens a public `microsoft/winget-pkgs` PR for `jcardama.LeopardWM` using the released MSIs.
+10. Runs the dependent Winget job. It verifies pinned komac, generates and adjusts the manifests from both released MSIs, and opens a `microsoft/winget-pkgs` PR from the existing fork. See [Distribution Setup](distribution_setup.md) for verification and recovery.
 
 Binary paths: `target/x86_64-pc-windows-msvc/release/` and `target/aarch64-pc-windows-msvc/release/`.
 

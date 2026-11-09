@@ -1,0 +1,1 @@
+tools/testdata/winget/* -text whitespace=cr-at-eol,-blank-at-eof

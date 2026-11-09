@@ -42,4 +42,4 @@ function Invoke-Stage([string]$Label, [string]$FilePath, [string[]]$ArgumentList
 
 Invoke-Stage 'Clippy' 'cargo' @('clippy', '--workspace', '--all-targets', '--', '-D', 'warnings')
 Invoke-Stage 'Test' 'cargo' @('test', '--workspace')
-Invoke-Stage 'Tools tests' 'python' @('-m', 'unittest', 'discover', '-s', 'tools', '-p', 'test_desktop_acceptance.py')
+Invoke-Stage 'Tools tests' 'python' @('-m', 'unittest', 'discover', '-s', 'tools', '-p', 'test_*.py')

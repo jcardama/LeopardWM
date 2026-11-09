@@ -28,7 +28,7 @@ Run commands from the repository root.
 | `cargo build --release` | Build release binaries |
 | `cargo test --workspace` | Run the workspace tests |
 | `cargo clippy --workspace --all-targets -- -D warnings` | Lint with warnings as errors |
-| `python -m unittest discover -s tools -p test_desktop_acceptance.py` | Test the desktop acceptance tooling |
+| `python -m unittest discover -s tools -p test_*.py` | Test the tools |
 
 </important>
 

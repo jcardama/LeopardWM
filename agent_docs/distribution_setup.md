@@ -4,24 +4,24 @@ Manual one-time steps to enable winget auto-publishing and code signing. Each se
 
 ## winget — `WINGET_TOKEN` secret
 
-The `publish-winget` job in `.github/workflows/release.yml` uses the `vedantmgoyal9/winget-releaser` action to fork `microsoft/winget-pkgs`, generate a manifest from the released MSI, and open a PR. The action requires a classic personal access token with the `public_repo` and `workflow` scopes; fork synchronization can import upstream workflow files, which GitHub rejects without `workflow`. Fine-grained tokens cannot open the upstream PR.
+The `publish-winget` job in `.github/workflows/release.yml` verifies pinned komac 2.17.1, generates manifests from both released MSIs, and adjusts the installer metadata for winget-pkgs. It creates a branch and one manifest commit on the existing `jcardama/winget-pkgs` fork, then opens a PR to `microsoft/winget-pkgs`. The fork must already exist.
 
-1. Go to https://github.com/settings/tokens/new
-2. **Note:** `LeopardWM winget releaser`
-3. **Expiration:** `1 year` (renew when it expires)
-4. Select the `public_repo` and `workflow` scopes.
-5. Click **Generate token** and copy the value.
-6. Add it as the repository secret:
+Use a classic personal access token with `public_repo` and `workflow`. The new fork ref can include upstream workflow changes absent from the fork, which requires `workflow`. Fine-grained tokens cannot open the upstream PR.
+
+1. Go to https://github.com/settings/tokens/new.
+2. Set the note to `LeopardWM winget releaser` and expiration to `1 year` (renew when it expires).
+3. Select `public_repo` and `workflow`, generate the token, and copy it.
+4. Add it as the repository secret:
    ```
    gh secret set WINGET_TOKEN --repo jcardama/LeopardWM
    # (paste the token when prompted)
    ```
 
-The next tagged release that includes the MSI will trigger the action and open a PR to `microsoft/winget-pkgs` automatically.
+**Bootstrap:** komac update requires `jcardama.LeopardWM` to exist upstream already. The first manual submission in v0.1.11 seeded it.
 
-**One-time bootstrap caveat:** `winget-releaser` only updates *existing* packages. Before the first time it runs, the package identifier (`jcardama.LeopardWM`) must already exist somewhere in `microsoft/winget-pkgs`. v0.1.11's first manual submission was done via `komac` to seed the package; from v0.1.12 onward the action picks up automatically.
+**Verify:** after pushing a `v*` tag, check the `publish-winget` job at https://github.com/jcardama/LeopardWM/actions. It prints the PR URL on success. Check that PR and its validation results; a successful GitHub Release alone does not prove the Winget job succeeded.
 
-**Verifying it worked:** after pushing the next `v*` tag, check the `publish-winget` job in the run at https://github.com/jcardama/LeopardWM/actions. On success it logs the PR URL.
+**Manual fallback:** if the job fails, inspect the job log and any existing open PR or fork branch before retrying. Run the pinned komac `update jcardama.LeopardWM --version <version> --urls <x64-msi-url> <arm64-msi-url> --dry-run` locally with `GITHUB_TOKEN` set, preserving stdout bytes in a file. Run `python tools/winget_manifest.py <stdout-file> <output-directory>`, then `winget validate --manifest <output-directory>`. Submit the validated files by hand to `microsoft/winget-pkgs`. Do not use `komac submit`; it rewrites the installer layout.
 
 ---
 
