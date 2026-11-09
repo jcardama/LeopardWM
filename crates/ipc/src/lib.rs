@@ -29,11 +29,9 @@ const MAX_PIPE_SCOPE_SEGMENT_LEN: usize = 64;
 ///   associated binding/diagnostic records.
 /// - v4: complete workspace-state snapshots and monitor-targeted
 ///   workspace switching. `ReleaseAllWindows` and `ToggleIgnore` are
-///   additive and retain v4 compatibility.
-/// - v5: multi-row scrolling strips — `RowSummary`, `row_index` on `WindowInfo`
-///   and `FocusedWindow`, `rows` and `focused_row` on `LayoutChanged` and
-///   `WorkspaceState`, new row focus and movement commands.
-pub const IPC_PROTOCOL_VERSION: u32 = 5;
+///   additive and retain v4 compatibility. Multi-row commands and optional row
+///   fields are also additive v4 extensions.
+pub const IPC_PROTOCOL_VERSION: u32 = 4;
 /// Minimum protocol version this crate supports.
 pub const IPC_MIN_SUPPORTED_PROTOCOL_VERSION: u32 = 1;
 
@@ -279,6 +277,7 @@ pub struct ColumnSummary {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RowSummary {
     /// Columns in the row, left to right.
+    #[serde(default)]
     pub columns: Vec<ColumnSummary>,
     /// Index of the focused column in this row, or `None` if no column is focused.
     #[serde(default)]
@@ -331,10 +330,10 @@ pub enum IpcEvent {
         focused_column: Option<usize>,
         /// Columns in left-to-right order (in the focused row).
         columns: Vec<ColumnSummary>,
-        /// Index of the focused row (0-based). Added in protocol v5.
+        /// Index of the focused row (0-based). An additive v4 extension.
         #[serde(default)]
         focused_row: usize,
-        /// All rows in the workspace. Added in protocol v5.
+        /// All rows in the workspace. An additive v4 extension.
         #[serde(default)]
         rows: Vec<RowSummary>,
     },
@@ -429,11 +428,11 @@ pub enum IpcCommand {
     FocusTiling,
     /// Switch focus between the floating and tiled layers.
     SwitchFocusFloatingTiling,
-    /// Focus the row above. Added in protocol v5.
+    /// Focus the row above. An additive v4 extension.
     FocusRowUp,
-    /// Focus the row below. Added in protocol v5.
+    /// Focus the row below. An additive v4 extension.
     FocusRowDown,
-    /// Focus a specific row by 0-based index (0..4). Added in protocol v5.
+    /// Focus a specific row by 0-based index (0..4). An additive v4 extension.
     FocusRow { index: usize },
 
     /// Move the focused column left.
@@ -461,9 +460,9 @@ pub enum IpcCommand {
     MoveWindowUp,
     /// Move the focused window down within the column.
     MoveWindowDown,
-    /// Move the focused window to the row above. Added in protocol v5.
+    /// Move the focused window to the row above. An additive v4 extension.
     MoveWindowToRowUp,
-    /// Move the focused window to the row below. Added in protocol v5.
+    /// Move the focused window to the row below. An additive v4 extension.
     MoveWindowToRowDown,
 
     /// Focus the monitor to the left.
@@ -759,10 +758,10 @@ pub enum IpcResponse {
         /// Display name of the active workspace, or `None` if unnamed.
         #[serde(default)]
         active_workspace_name: Option<String>,
-        /// Index of the focused row (0-based). Added in protocol v5.
+        /// Index of the focused row (0-based). An additive v4 extension.
         #[serde(default)]
         focused_row: usize,
-        /// All rows in the workspace. Added in protocol v5.
+        /// All rows in the workspace. An additive v4 extension.
         #[serde(default)]
         rows: Vec<RowSummary>,
     },
@@ -770,7 +769,7 @@ pub enum IpcResponse {
     FocusedWindow {
         /// Window ID of the focused window, if any.
         window_id: Option<u64>,
-        /// Row index of the focused window (0-based). Added in protocol v5.
+        /// Row index of the focused window (0-based). An additive v4 extension.
         #[serde(default)]
         row_index: usize,
         /// Column index of the focused tiled window. When `is_floating` is
@@ -894,6 +893,9 @@ impl IpcResponse {
         }
     }
 }
+
+#[cfg(test)]
+mod compatibility_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1441,7 +1443,7 @@ mod tests {
     }
 
     #[test]
-    fn test_event_layout_changed_multi_row_v5_round_trip() {
+    fn test_event_layout_changed_multi_row_round_trip() {
         let ev = IpcEvent::LayoutChanged {
             monitor: 1,
             workspace_index: 0,
@@ -1530,14 +1532,13 @@ mod tests {
     }
 
     #[test]
-    fn test_protocol_version_is_v5_for_multi_row() {
-        assert_eq!(IPC_PROTOCOL_VERSION, 5);
+    fn test_protocol_version_remains_v4_for_additive_rows() {
+        assert_eq!(IPC_PROTOCOL_VERSION, 4);
         assert!(is_protocol_version_supported(1));
         assert!(is_protocol_version_supported(2));
         assert!(is_protocol_version_supported(3));
         assert!(is_protocol_version_supported(4));
-        assert!(is_protocol_version_supported(5));
-        assert!(!is_protocol_version_supported(6));
+        assert!(!is_protocol_version_supported(5));
     }
 
     #[test]
