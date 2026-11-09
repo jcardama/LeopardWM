@@ -434,7 +434,7 @@ impl AppState {
         // composition change occurring during an active animation would leave
         // stale per-sibling constraints in effect for the remaining frames.
         self.commit_pending_min_size_clears();
-        self.reconcile_single_column_scroll_bounds();
+        self.reconcile_workspace_scroll_bounds();
         let mut all_placements = Vec::new();
         for (monitor_id, ws_vec) in &self.workspaces {
             let idx = self.active_workspace_idx(*monitor_id);
@@ -595,7 +595,7 @@ impl AppState {
         // here rather than eagerly at the mutation site so that a timed-out /
         // paused apply path cannot leave constraints cleared indefinitely.
         self.commit_pending_min_size_clears();
-        self.reconcile_single_column_scroll_bounds();
+        self.reconcile_workspace_scroll_bounds();
 
         let mut all_placements = self.collect_apply_placements();
         let logically_empty = all_placements.is_empty();
@@ -1205,13 +1205,15 @@ impl AppState {
         }
     }
 
-    fn reconcile_single_column_scroll_bounds(&mut self) {
+    fn reconcile_workspace_scroll_bounds(&mut self) {
         for (&monitor_id, workspaces) in &mut self.workspaces {
             let Some(monitor) = self.monitors.get(&monitor_id) else {
                 continue;
             };
             for workspace in workspaces {
-                if workspace.center_single_column() && workspace.fullscreen_window_id().is_none() {
+                if (workspace.center_single_column() || workspace.row_count() > 1)
+                    && workspace.fullscreen_window_id().is_none()
+                {
                     workspace.reconcile_scroll_bounds(monitor.work_area.width);
                 }
             }

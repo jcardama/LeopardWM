@@ -19745,6 +19745,38 @@ fn assert_source_row_revealed(state: &AppState) {
 }
 
 #[test]
+fn test_departure_from_unfocused_row_repairs_scroll_on_apply() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = false;
+    state.reduce_motion = true;
+    state.injected_foreground_hwnd = Some(None);
+    state.injected_apply_placements_behavior =
+        Some(TestApplyPlacementsBehavior::SleepAndSucceed(Duration::ZERO));
+    let ws = state.focused_workspace_mut().unwrap();
+    ws.set_row_layout(&[0.5, 0.5]);
+    ws.set_reduce_motion(true);
+    ws.insert_window_in_row(100, 0, Some(300)).unwrap();
+    ws.insert_window_in_row(0, 0, Some(2800)).unwrap();
+    ws.insert_window_in_row(200, 1, Some(300)).unwrap();
+    ws.scroll_row_by(0, 10000.0, 1920);
+    ws.focus_window(200).unwrap();
+    assert!(ws.scroll_offset_for_row(0) > 0.0);
+
+    state.handle_window_event(WindowEvent::Destroyed(0));
+
+    assert!(
+        state
+            .injected_apply_placements_call_count
+            .load(Ordering::SeqCst)
+            > 0
+    );
+    let ws = state.focused_workspace().unwrap();
+    assert!(!ws.contains_window(0));
+    assert_eq!(ws.focused_window(), Some(200));
+    assert_source_row_revealed(&state);
+}
+
+#[test]
 fn test_focus_down_reveals_focused_window_in_scrolled_row() {
     let mut state = scrolled_cross_row_fixture();
     state.handle_command(IpcCommand::FocusDown);
