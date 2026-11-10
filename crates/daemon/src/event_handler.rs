@@ -4349,7 +4349,7 @@ impl AppState {
             .get_mut(&monitor_id)
             .and_then(|v| v.get_mut(ws_idx))
         {
-            if let Some((row_idx, col_idx, win_idx)) = ws.find_window_location_rc(hwnd) {
+            if let Some((row_idx, col_idx, _)) = ws.find_window_location_rc(hwnd) {
                 if free_resize {
                     ws.resize_free(
                         hwnd,
@@ -4358,28 +4358,14 @@ impl AppState {
                         leopardwm_core_layout::Rect::new(0, 0, viewport_width, viewport_height),
                     );
                 } else {
-                    ws.snap_column_width_to_preset_in_row(
-                        row_idx,
-                        col_idx,
+                    ws.resize_snap(
+                        hwnd,
                         visible_rect.width,
+                        visible_rect.height,
                         &width_presets,
-                        viewport_width,
+                        &height_presets,
+                        leopardwm_core_layout::Rect::new(0, 0, viewport_width, viewport_height),
                     );
-
-                    let col_len = ws
-                        .column_for_row(row_idx, col_idx)
-                        .map(|c| c.len())
-                        .unwrap_or(0);
-                    if col_len > 1 {
-                        ws.snap_window_height_to_preset_in_row(
-                            row_idx,
-                            col_idx,
-                            win_idx,
-                            visible_rect.height,
-                            &height_presets,
-                            viewport_height,
-                        );
-                    }
                 }
 
                 ws.ensure_focused_visible_animated(viewport_width);

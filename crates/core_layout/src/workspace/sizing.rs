@@ -768,10 +768,40 @@ impl Workspace {
             .map(|p| p.rect)
     }
 
-    /// Compute the placement rect a window would occupy after snapping its
-    /// column width and height to the nearest presets.
-    pub fn preview_resize_snap(
+    pub fn resize_snap(
         &mut self,
+        window_id: WindowId,
+        width: i32,
+        height: i32,
+        width_presets: &[f64],
+        height_presets: &[f64],
+        viewport: Rect,
+    ) {
+        let Some((row_idx, col_idx, win_idx)) = self.find_window_location_rc(window_id) else {
+            return;
+        };
+        self.snap_column_width_to_preset_in_row(
+            row_idx,
+            col_idx,
+            width,
+            width_presets,
+            viewport.width,
+        );
+        if self.rows[row_idx].columns[col_idx].len() > 1 {
+            self.snap_window_height_to_preset_in_row(
+                row_idx,
+                col_idx,
+                win_idx,
+                height,
+                height_presets,
+                viewport.height,
+            );
+        }
+    }
+
+    /// Compute the placement rect after snapping and scrolling the focused column into view.
+    pub fn preview_resize_snap(
+        &self,
         window_id: WindowId,
         current_width: i32,
         current_height: i32,
@@ -779,42 +809,22 @@ impl Workspace {
         height_presets: &[f64],
         viewport: Rect,
     ) -> Option<Rect> {
-        let (row_idx, col_idx, win_idx) = self.find_window_location_rc(window_id)?;
-
-        let snapped_width = self.nearest_preset_width_in_row(
-            row_idx,
-            col_idx,
+        self.find_window_location_rc(window_id)?;
+        let mut preview = self.clone();
+        preview.resize_snap(
+            window_id,
             current_width,
-            width_presets,
-            viewport.width,
-        );
-        let snapped_weight = self.nearest_preset_height_weight_in_row(
-            row_idx,
-            col_idx,
             current_height,
+            width_presets,
             height_presets,
-            viewport.height,
+            viewport,
         );
-
-        let original_width = self.rows[row_idx].columns[col_idx].width;
-        let original_weights = self.rows[row_idx].columns[col_idx].height_weights.clone();
-
-        if let Some(w) = snapped_width {
-            self.rows[row_idx].columns[col_idx].set_width(w);
-        }
-        if let Some(weight) = snapped_weight {
-            self.rows[row_idx].columns[col_idx].set_height_weight(win_idx, weight);
-        }
-
-        let placements = self.compute_placements(viewport);
-        let rect = placements
+        preview.ensure_focused_visible_animated(viewport.width);
+        preview.stop_animation();
+        preview
+            .compute_placements(viewport)
             .iter()
             .find(|p| p.window_id == window_id)
-            .map(|p| p.rect);
-
-        self.rows[row_idx].columns[col_idx].width = original_width;
-        self.rows[row_idx].columns[col_idx].height_weights = original_weights;
-
-        rect
+            .map(|p| p.rect)
     }
 }

@@ -6438,6 +6438,67 @@ mod tests {
     }
 
     #[test]
+    fn preset_resize_preview_matches_release_scroll_without_mutating_workspace() {
+        let mut previews = Vec::new();
+        let mut landings = Vec::new();
+        for mode in [
+            CenteringMode::Center,
+            CenteringMode::JustInView,
+            CenteringMode::OnOverflow,
+        ] {
+            let mut ws = Workspace::with_gaps(0, 0);
+            ws.set_row_layout(&[0.5, 0.5]);
+            ws.insert_window(1, Some(1000)).unwrap();
+            ws.insert_window(2, Some(1000)).unwrap();
+            ws.set_scroll_offset(1000.0);
+            ws.focus_row(1);
+            ws.insert_window(3, Some(1000)).unwrap();
+            ws.insert_window(4, Some(1000)).unwrap();
+            ws.set_scroll_offset(1100.0);
+            ws.set_centering_mode(mode);
+            ws.animate_scroll_to_for_row(0, 300.0, Some(200), Some(Easing::Linear));
+            ws.animate_scroll_to_for_row(1, 1000.0, Some(200), Some(Easing::Linear));
+            let before = ws.clone();
+            let viewport = Rect::new(0, 0, 1000, 1000);
+            let width = if mode == CenteringMode::Center {
+                800
+            } else {
+                400
+            };
+            let width_presets = [0.4, 0.8];
+            let height_presets = [0.5];
+            let preview = ws
+                .preview_resize_snap(4, width, 500, &width_presets, &height_presets, viewport)
+                .unwrap();
+            for (row, original) in ws.rows.iter().zip(&before.rows) {
+                assert_eq!(row.scroll_offset, original.scroll_offset);
+                assert_eq!(
+                    format!("{:?}", row.active_animation),
+                    format!("{:?}", original.active_animation)
+                );
+                assert_eq!(row.columns, original.columns);
+            }
+            ws.resize_snap(4, width, 500, &width_presets, &height_presets, viewport);
+            ws.ensure_focused_visible_animated(viewport.width);
+            ws.stop_animation();
+            assert_ne!(
+                ws.rows()[1].scroll_offset,
+                before.rows()[1].scroll_offset,
+                "mode={mode:?}"
+            );
+            let landing = ws
+                .compute_placements(viewport)
+                .into_iter()
+                .find(|p| p.window_id == 4)
+                .unwrap()
+                .rect;
+            previews.push((mode, preview));
+            landings.push((mode, landing));
+        }
+        assert_eq!(previews, landings);
+    }
+
+    #[test]
     fn free_resize_preview_matches_release_with_native_minimum() {
         let mut ws = Workspace::with_directional_gaps(10, 20, 20, 40, 40);
         ws.set_row_gap(20);
@@ -6484,8 +6545,9 @@ mod tests {
             .preview_resize_snap(10, 900, 315, &width_presets, &height_presets, viewport)
             .unwrap();
 
-        ws.snap_column_width_to_preset_in_row(1, 0, 900, &width_presets, viewport.width);
-        ws.snap_window_height_to_preset_in_row(1, 0, 0, 315, &height_presets, viewport.height);
+        ws.resize_snap(10, 900, 315, &width_presets, &height_presets, viewport);
+        ws.ensure_focused_visible_animated(viewport.width);
+        ws.stop_animation();
         let released = ws
             .compute_placements(viewport)
             .into_iter()
