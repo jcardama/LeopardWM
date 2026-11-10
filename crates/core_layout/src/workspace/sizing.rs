@@ -461,6 +461,13 @@ impl Workspace {
         {
             if let Some(row) = self.rows.get_mut(row_idx) {
                 if let Some(column) = row.columns.get_mut(col_idx) {
+                    if row
+                        .maximized_column
+                        .as_ref()
+                        .is_some_and(|state| column.contains(state.sentinel_window))
+                    {
+                        row.maximized_column = None;
+                    }
                     column.set_width(new_w);
                 }
                 if let Some(column) = row.columns.get(col_idx) {

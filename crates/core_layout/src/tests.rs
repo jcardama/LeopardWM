@@ -6364,6 +6364,29 @@ mod tests {
     }
 
     #[test]
+    fn preset_resize_preserves_other_maximized_columns_and_noop_state() {
+        let mut ws = Workspace::with_gaps(0, 0);
+        ws.set_row_layout(&[0.5, 0.5]);
+        ws.insert_window(10, Some(400)).unwrap();
+        ws.insert_window(11, Some(400)).unwrap();
+        ws.set_focus(0, 0).unwrap();
+        assert!(ws.toggle_maximize_column(1000));
+
+        ws.snap_column_width_to_preset_in_row(0, 0, 600, &[], 1000);
+        ws.snap_column_width_to_preset_in_row(0, 1, 600, &[0.5, 0.75], 1000);
+        assert_eq!(ws.rows()[0].columns()[1].width(), 500);
+
+        ws.focus_row(1);
+        ws.insert_window(12, Some(400)).unwrap();
+        ws.snap_column_width_to_preset_in_row(1, 0, 700, &[0.5, 0.75], 1000);
+        assert_eq!(ws.rows()[1].columns()[0].width(), 750);
+
+        ws.focus_row(0);
+        assert!(!ws.toggle_maximize_column(1000));
+        assert_eq!(ws.rows()[0].columns()[0].width(), 400);
+    }
+
+    #[test]
     fn free_resize_preview_matches_release_scroll_without_mutating_workspace() {
         for mode in [CenteringMode::Center, CenteringMode::JustInView] {
             for reduce_motion in [false, true] {

@@ -5190,6 +5190,35 @@ fn test_resize_narrowing_clamps_scroll_reveals_column_and_syncs_taskbar() {
 }
 
 #[test]
+fn preset_resize_complete_unmaximizes_column_before_next_toggle() {
+    let _desktop = display_change_regression::FixtureDesktop::enter();
+    let fixture = ResizeTestWindow::new(960);
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.reduce_motion = true;
+    state
+        .injected_window_info
+        .insert(fixture.id(), make_test_window_info(fixture.id()));
+    let viewport_width = state.viewport_width_for(state.focused_monitor);
+    let workspace = state.focused_workspace_mut().unwrap();
+    workspace.set_reduce_motion(true);
+    workspace.insert_window(fixture.id(), Some(500)).unwrap();
+    assert!(workspace.toggle_maximize_column(viewport_width));
+    let maximized_width = workspace.columns()[0].width();
+
+    seed_resize_session(&mut state, fixture.id());
+    state.handle_window_event(WindowEvent::MoveSizeEnd(fixture.id()));
+
+    let workspace = state.focused_workspace_mut().unwrap();
+    assert_eq!(workspace.columns()[0].width(), 945);
+    workspace.toggle_maximize_column(viewport_width);
+    assert_eq!(
+        workspace.columns()[0].width(),
+        maximized_width,
+        "the next toggle must maximize rather than restore the original width"
+    );
+}
+
+#[test]
 fn free_resize_complete_keeps_dragged_width_and_stacked_height() {
     let _desktop = display_change_regression::FixtureDesktop::enter();
     for width in [777, 2400] {
