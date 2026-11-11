@@ -1831,6 +1831,14 @@ impl AppState {
             }
             return false;
         }
+        let source_width = self.viewport_width_for(from_mid);
+        if let Some(ws) = self
+            .workspaces
+            .get_mut(&from_mid)
+            .and_then(|v| v.get_mut(from_widx))
+        {
+            ws.reconcile_scroll_bounds(source_width);
+        }
         if let Some(ws) = self
             .workspaces
             .get_mut(&to_mid)

@@ -173,6 +173,7 @@ impl Workspace {
             });
 
         let _ = self.remove_window(wid);
+        self.reconcile_scroll_bounds(viewport.width);
 
         if let Some(origin) = origin {
             self.float_origin_column.insert(wid, origin);

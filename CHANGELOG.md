@@ -26,6 +26,7 @@ All notable changes to LeopardWM will be documented in this file.
 
 ### Fixes
 
+- **Floating a window no longer leaves the tiled strip scrolled past its last column.**
 - **The tiled window resize preview now shows where the window lands when the strip scrolls on release.**
 - **Resizing a maximized column with the mouse now unmaximizes it at the snapped preset width.** The next maximize toggle maximizes it again.
 - **Chromium-based apps such as Edge, Chrome, and Beeper no longer lose their window frame when LeopardWM changes their style while they are off-screen.** This can happen during pause, resume, configuration reload, or quit.

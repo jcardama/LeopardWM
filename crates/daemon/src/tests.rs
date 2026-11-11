@@ -15431,6 +15431,31 @@ fn test_fullscreen_focus_guard() {
 }
 
 #[test]
+fn pulling_window_repairs_visible_source_workspace_scroll() {
+    let mut monitors = test_monitors();
+    let mut second = monitors[0].clone();
+    second.id = 2;
+    second.is_primary = false;
+    monitors.push(second);
+    let mut state = AppState::new_with_config(test_config(), monitors);
+    state.paused = true;
+    state.reduce_motion = true;
+    let width = state.viewport_width_for(2);
+    let source = &mut state.workspaces.get_mut(&2).unwrap()[0];
+    for id in [100, 200, 0] {
+        source.insert_window(id, Some(1000)).unwrap();
+    }
+    source.scroll_by(10_000.0, width);
+    let old_offset = source.scroll_offset();
+
+    assert!(state.pull_window_to_workspace(0, 2, 0, 1, 0));
+    let source = &state.workspaces[&2][0];
+    let max_scroll = (source.total_width() - source.visible_width(width)).max(0) as f64;
+    assert!(old_offset > max_scroll);
+    assert!((0.0..=max_scroll).contains(&source.scroll_offset()));
+}
+
+#[test]
 fn test_pull_window_to_workspace() {
     // The Edit Config pull moves a tiled window from another workspace onto the
     // active one and focuses it (#57).

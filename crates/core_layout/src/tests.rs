@@ -2862,6 +2862,23 @@ mod tests {
     }
 
     #[test]
+    fn floating_last_column_repairs_scroll_bounds() {
+        let mut ws = Workspace::with_gaps(10, 10);
+        let viewport = Rect::new(0, 0, 800, 600);
+        for id in 1..=4 {
+            ws.insert_window(id, Some(400)).unwrap();
+        }
+        ws.focus_end();
+        ws.scroll_by(10_000.0, viewport.width);
+        let old_offset = ws.scroll_offset();
+
+        assert_eq!(ws.toggle_floating(viewport), Some(4));
+        let max_scroll = (ws.total_width() - ws.visible_width(viewport.width)).max(0) as f64;
+        assert!(old_offset > max_scroll);
+        assert!((0.0..=max_scroll).contains(&ws.scroll_offset()));
+    }
+
+    #[test]
     fn test_toggle_floating_clears_fullscreen_for_focused_window() {
         let mut ws = Workspace::new();
         let viewport = Rect::new(0, 0, 1920, 1080);
