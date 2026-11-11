@@ -352,6 +352,8 @@
 "hotkeys.command.move_to_monitor_up" = "移到上显示器"
 "hotkeys.command.move_to_monitor_down" = "移到下显示器"
 "hotkeys.command.center_column" = "列居中"
+"hotkeys.command.align_column_left" = "列靠左对齐"
+"hotkeys.command.align_column_right" = "列靠右对齐"
 "hotkeys.command.maximize_column" = "最大化列"
 "hotkeys.command.scroll_left" = "视口向左滚动 100 像素"
 "hotkeys.command.scroll_right" = "视口向右滚动 100 像素"

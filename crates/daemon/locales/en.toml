@@ -352,6 +352,8 @@
 "hotkeys.command.move_to_monitor_up" = "Move to monitor up"
 "hotkeys.command.move_to_monitor_down" = "Move to monitor down"
 "hotkeys.command.center_column" = "Center column"
+"hotkeys.command.align_column_left" = "Align column left"
+"hotkeys.command.align_column_right" = "Align column right"
 "hotkeys.command.maximize_column" = "Maximize column"
 "hotkeys.command.scroll_left" = "Scroll viewport left by 100 px"
 "hotkeys.command.scroll_right" = "Scroll viewport right by 100 px"

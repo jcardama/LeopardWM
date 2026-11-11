@@ -69,7 +69,7 @@ A few deliberate **non-features**, so you know what you're getting:
 - **Overview mode** — `Ctrl+Alt+Space` opens a map of the monitor's non-empty workspaces; click a window card to jump to it, click a row to switch workspace, or navigate with arrows or your configured keyboard `focus_left` / `focus_right` / `focus_up` / `focus_down` bindings while keeping the overview open. Your configured keyboard `move_window_up` / `move_window_down` bindings move the selected window to the previous / next numbered workspace on that monitor, including empty workspaces, without switching workspace or closing the overview; selection follows the moved window. Moves stop at workspace 1 or 9, sticky windows stay put, and `move_window_left` / `move_window_right` do nothing while the overview is open. Enter selects, digits switch workspace, and Esc cancels without undoing moves. Other bound actions and gesture bindings keep their normal behavior.
 - **Per-app window rules** — float, ignore, or tile by class/title/executable, plus per-app open behavior: target workspace, initial column width, open maximized
 - Floating and fullscreen toggles
-- Width and height presets with column equalization, maximize-column, center-column, and optional free mouse resizing
+- Width and height presets with column equalization, maximize-column, center-column, align-column-left/right, and optional free mouse resizing
 - Active focus border with auto-detected rounded corners
 - System tray with pause, reload, settings, and diagnostics
 - WebView-based settings GUI (Mica backdrop, live theme switching, dark mode)

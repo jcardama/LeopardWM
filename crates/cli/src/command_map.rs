@@ -99,6 +99,8 @@ pub(crate) fn to_ipc_command(cmd: &Commands) -> IpcCommand {
             fraction: *fraction,
         },
         Commands::CenterColumn => IpcCommand::CenterColumn,
+        Commands::AlignColumnLeft => IpcCommand::AlignColumnLeft,
+        Commands::AlignColumnRight => IpcCommand::AlignColumnRight,
         Commands::MaximizeColumn => IpcCommand::MaximizeColumn,
         Commands::EqualizeWidths => IpcCommand::EqualizeColumnWidths,
         Commands::CycleWidth => IpcCommand::CycleWidth,

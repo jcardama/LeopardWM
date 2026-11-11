@@ -560,6 +560,10 @@ pub enum IpcCommand {
     },
     /// Center the focused column in the viewport.
     CenterColumn,
+    /// Align the focused column with the left edge.
+    AlignColumnLeft,
+    /// Align the focused column with the right edge.
+    AlignColumnRight,
     /// Toggle the focused column to fill the viewport width.
     MaximizeColumn,
     /// Equalize all column widths.

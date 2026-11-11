@@ -37,7 +37,7 @@ workspace switching. `ReleaseAllWindows` (`{"type":"release_all_windows"}`) is
 an additive v4 command that pauses tiling and cascades every managed window while
 retaining workspace membership. It has no prompt; a failed recovery or live
 placement outcome returns an error and leaves tiling paused.
-`CycleWidth` (`cycle_width`) and `CycleHeight` (`cycle_height`) are additive v4 commands that cycle to the next larger preset, wrapping to the smallest at the end.
+`CycleWidth` (`cycle_width`) and `CycleHeight` (`cycle_height`) are additive v4 commands that cycle to the next larger preset, wrapping to the smallest at the end. `AlignColumnLeft` (`align_column_left`) and `AlignColumnRight` (`align_column_right`) are additive v4 commands that align the focused column or floating window to the corresponding work-area edge.
 Multi-row support is an additive v4 extension: `FocusRow` (`{"type":"focus_row","index":0}`), `FocusRowUp` (`{"type":"focus_row_up"}`), `FocusRowDown` (`{"type":"focus_row_down"}`), `MoveWindowToRowUp` (`{"type":"move_window_to_row_up"}`), and `MoveWindowToRowDown` (`{"type":"move_window_to_row_down"}`). The zero-based `focused_row` and `rows` fields are optional additions to `LayoutChanged` events and `WorkspaceState` query responses; `row_index` is an optional addition to `FocusedWindow` responses and `WindowInfo` records. Older clients ignore these fields; newer clients must tolerate their absence. Complete workspace-state snapshot records do not contain row data.
 See [the hotkey query contract](shortcut-guide.md#ipc-contract) for ordering,
 collision resolution, and the distinction between configuration and runtime

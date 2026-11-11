@@ -29,7 +29,7 @@ an empty binding list. A valid non-catalog command uses a generated label and
 the `Other` group so custom bindings never disappear from the query.
 
 `focus_next`, `focus_prev`, `scroll_left`, `scroll_right`, `nudge_left`,
-`nudge_right`, `float`, `tile`, `focus_floating`, `focus_tiling`, and
+`nudge_right`, `align_column_left`, `align_column_right`, `float`, `tile`, `focus_floating`, `focus_tiling`, and
 `switch_focus_floating_tiling` are catalog
 actions with no default keyboard binding. They appear in Settings hotkey and gesture
 menus and in the hotkeys query even when unbound; Shortcut Guide exports them

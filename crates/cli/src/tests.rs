@@ -37,6 +37,8 @@ fn cli_reference_lists_every_command_path() {
 #[test]
 fn test_simple_verbs_map_to_ipc() {
     for (verb, expected) in [
+        ("align-column-left", IpcCommand::AlignColumnLeft),
+        ("align-column-right", IpcCommand::AlignColumnRight),
         ("nudge-left", IpcCommand::NudgeLeft),
         ("nudge-right", IpcCommand::NudgeRight),
         ("cycle-width", IpcCommand::CycleWidth),

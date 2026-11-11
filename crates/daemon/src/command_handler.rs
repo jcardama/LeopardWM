@@ -6,7 +6,7 @@ use crate::state::{
 };
 use leopardwm_core_layout::workspace::sizing::PresetCycle;
 use leopardwm_core_layout::{
-    FloatingFocus, LayoutError, Rect, Visibility, WindowPlacement, Workspace,
+    ColumnAlignment, FloatingFocus, LayoutError, Rect, Visibility, WindowPlacement, Workspace,
 };
 use leopardwm_ipc::{
     ElevationBlockReason, ElevationBlockedWindow, HotkeyBindingInfo, IpcCommand, IpcResponse,
@@ -114,6 +114,8 @@ fn fullscreen_policy(cmd: &IpcCommand) -> FullscreenPolicy {
         | CycleHeightUp
         | CycleHeightDown
         | CenterColumn
+        | AlignColumnLeft
+        | AlignColumnRight
         | MaximizeColumn
         | EqualizeColumnWidths
         | EqualizeColumnHeights
@@ -163,6 +165,8 @@ fn floating_policy(cmd: &IpcCommand) -> FloatingPolicy {
         | CycleHeightUp
         | CycleHeightDown
         | CenterColumn
+        | AlignColumnLeft
+        | AlignColumnRight
         | MoveColumnLeft
         | MoveColumnRight
         | MoveWindowLeft
@@ -441,7 +445,9 @@ impl AppState {
             | IpcCommand::CycleHeight
             | IpcCommand::CycleHeightUp
             | IpcCommand::CycleHeightDown
-            | IpcCommand::CenterColumn => Some(self.handle_floating_geometry(cmd, hwnd)),
+            | IpcCommand::CenterColumn
+            | IpcCommand::AlignColumnLeft
+            | IpcCommand::AlignColumnRight => Some(self.handle_floating_geometry(cmd, hwnd)),
             IpcCommand::Resize { delta } => {
                 if self
                     .focused_workspace()
@@ -566,6 +572,8 @@ impl AppState {
                 );
             }
             IpcCommand::CenterColumn => ws.center_floating(hwnd, area),
+            IpcCommand::AlignColumnLeft => ws.align_floating(hwnd, area, ColumnAlignment::Left),
+            IpcCommand::AlignColumnRight => ws.align_floating(hwnd, area, ColumnAlignment::Right),
             _ => unreachable!(),
         })
     }
@@ -872,6 +880,12 @@ impl AppState {
             IpcCommand::CenterColumn => self.execute_workspace_command(false, false, |ws, vw| {
                 ws.center_focused_column_animated(vw);
                 info!("Centered focused column");
+            }),
+            IpcCommand::AlignColumnLeft => self.execute_workspace_command(false, false, |ws, vw| {
+                ws.align_focused_column_animated(ColumnAlignment::Left, vw);
+            }),
+            IpcCommand::AlignColumnRight => self.execute_workspace_command(false, false, |ws, vw| {
+                ws.align_focused_column_animated(ColumnAlignment::Right, vw);
             }),
             IpcCommand::MaximizeColumn => self.execute_workspace_command(true, false, |ws, vw| {
                 let entering = ws.toggle_maximize_column(vw);
@@ -2472,7 +2486,9 @@ mod floating_policy_tests {
         IpcCommand::FocusEnd,
     ];
 
-    const FLOATING_GEOMETRY: [IpcCommand; 16] = [
+    const FLOATING_GEOMETRY: [IpcCommand; 18] = [
+        IpcCommand::AlignColumnLeft,
+        IpcCommand::AlignColumnRight,
         IpcCommand::NudgeLeft,
         IpcCommand::NudgeRight,
         IpcCommand::MoveColumnLeft,
@@ -2592,7 +2608,12 @@ mod floating_policy_tests {
             assert!(matches!(floating_policy(&cmd), FloatingPolicy::Target));
             assert!(is_focus_navigation(&cmd));
         }
-        for cmd in [IpcCommand::NudgeLeft, IpcCommand::NudgeRight] {
+        for cmd in [
+            IpcCommand::NudgeLeft,
+            IpcCommand::NudgeRight,
+            IpcCommand::AlignColumnLeft,
+            IpcCommand::AlignColumnRight,
+        ] {
             assert!(matches!(
                 fullscreen_policy(&cmd),
                 FullscreenPolicy::Suppress
@@ -2846,6 +2867,8 @@ mod floating_policy_tests {
             (IpcCommand::CycleHeight, Rect::new(100, 100, 480, 780)),
             (IpcCommand::CycleHeight, Rect::new(100, 100, 480, 260)),
             (IpcCommand::CenterColumn, Rect::new(720, 390, 480, 260)),
+            (IpcCommand::AlignColumnLeft, Rect::new(0, 390, 480, 260)),
+            (IpcCommand::AlignColumnRight, Rect::new(1440, 390, 480, 260)),
         ] {
             assert_eq!(
                 state.handle_command(cmd.clone()),

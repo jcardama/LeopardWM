@@ -910,6 +910,15 @@ impl Workspace {
 
     /// Center the focused column in the viewport with animation.
     pub fn center_focused_column_animated(&mut self, viewport_width: i32) {
+        self.align_focused_column_animated(ColumnAlignment::Center, viewport_width);
+    }
+
+    /// Align the focused column with animation, exposing the named edge when oversized.
+    pub fn align_focused_column_animated(
+        &mut self,
+        alignment: ColumnAlignment,
+        viewport_width: i32,
+    ) {
         let fr = self.focused_row;
         let Some(row) = self.rows.get(fr) else {
             return;
@@ -923,9 +932,13 @@ impl Workspace {
         };
 
         let vis_w = self.visible_width(viewport_width);
-        let col_center = col_x.saturating_add(col_width / 2);
+        let raw_target = match alignment {
+            ColumnAlignment::Left => col_x,
+            ColumnAlignment::Center => col_x.saturating_add(col_width / 2) - vis_w / 2,
+            ColumnAlignment::Right => col_x.saturating_add(col_width).saturating_sub(vis_w),
+        };
         let target = self.clamp_scroll_offset(
-            (col_center - vis_w / 2) as f64,
+            raw_target as f64,
             viewport_width,
             f64::NEG_INFINITY,
             f64::INFINITY,

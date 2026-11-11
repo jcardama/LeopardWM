@@ -20019,6 +20019,8 @@ fn floating_geometry_commands_preserve_scrolled_rows() {
         (IpcCommand::CycleHeightUp, Rect::new(100, 100, 500, 520)),
         (IpcCommand::CycleHeightDown, Rect::new(100, 100, 500, 260)),
         (IpcCommand::CenterColumn, Rect::new(710, 320, 500, 400)),
+        (IpcCommand::AlignColumnLeft, Rect::new(0, 100, 500, 400)),
+        (IpcCommand::AlignColumnRight, Rect::new(1420, 100, 500, 400)),
     ] {
         let mut state = scrolled_rows_with_floating_focus();
         state.config.layout.width_presets = vec![0.25, 0.5, 0.75];

@@ -239,6 +239,18 @@ pub fn hotkey_catalog() -> Vec<HotkeyAction> {
             "Column layout",
         ),
         action(
+            "align_column_left",
+            None,
+            "Align column left",
+            "Column layout",
+        ),
+        action(
+            "align_column_right",
+            None,
+            "Align column right",
+            "Column layout",
+        ),
+        action(
             "maximize_column",
             Some("Ctrl+Alt+M"),
             "Maximize column",
@@ -470,6 +482,8 @@ pub fn command_for_action(id: &str) -> Option<crate::IpcCommand> {
         "width_half" => IpcCommand::SetColumnWidth { fraction: 0.5 },
         "width_two_thirds" => IpcCommand::SetColumnWidth { fraction: 0.667 },
         "center_column" => IpcCommand::CenterColumn,
+        "align_column_left" => IpcCommand::AlignColumnLeft,
+        "align_column_right" => IpcCommand::AlignColumnRight,
         "maximize_column" => IpcCommand::MaximizeColumn,
         "equalize_widths" => IpcCommand::EqualizeColumnWidths,
         "move_window_left" => IpcCommand::MoveWindowLeft,
@@ -599,12 +613,51 @@ mod tests {
             ("focus_prev", IpcCommand::FocusPrev),
             ("scroll_left", IpcCommand::Scroll { delta: -100.0 }),
             ("scroll_right", IpcCommand::Scroll { delta: 100.0 }),
+            ("align_column_left", IpcCommand::AlignColumnLeft),
+            ("align_column_right", IpcCommand::AlignColumnRight),
             ("nudge_left", IpcCommand::NudgeLeft),
             ("nudge_right", IpcCommand::NudgeRight),
         ] {
             let action = catalog.iter().find(|action| action.id == id).expect(id);
             assert!(action.default_key.is_none(), "{id} must remain unbound");
             assert_eq!(command_for_action(id), Some(expected));
+        }
+    }
+
+    #[test]
+    fn alignment_catalog_and_wire_contract() {
+        let catalog = hotkey_catalog();
+        let center = catalog
+            .iter()
+            .position(|action| action.id == "center_column")
+            .unwrap();
+        for (offset, id, label, command) in [
+            (
+                1,
+                "align_column_left",
+                "Align column left",
+                IpcCommand::AlignColumnLeft,
+            ),
+            (
+                2,
+                "align_column_right",
+                "Align column right",
+                IpcCommand::AlignColumnRight,
+            ),
+        ] {
+            let action = &catalog[center + offset];
+            assert_eq!(
+                (
+                    &*action.id,
+                    &*action.label,
+                    action.group,
+                    &action.default_key
+                ),
+                (id, label, "Column layout", &None)
+            );
+            let wire = format!(r#"{{"type":"{id}"}}"#);
+            assert_eq!(serde_json::to_string(&command).unwrap(), wire);
+            assert_eq!(serde_json::from_str::<IpcCommand>(&wire).unwrap(), command);
         }
     }
 

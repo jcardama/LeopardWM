@@ -25,6 +25,57 @@ mod tests {
     }
 
     #[test]
+    fn explicit_column_alignment_obeys_edges_and_scroll_bounds() {
+        for reduce_motion in [false, true] {
+            for mode in [
+                CenteringMode::Center,
+                CenteringMode::JustInView,
+                CenteringMode::OnOverflow,
+            ] {
+                for (middle_width, focused, alignment, past_edges, expected) in [
+                    (800, 2, ColumnAlignment::Left, false, 810.0),
+                    (800, 2, ColumnAlignment::Right, false, 650.0),
+                    (800, 1, ColumnAlignment::Left, false, 0.0),
+                    (800, 1, ColumnAlignment::Right, false, 0.0),
+                    (800, 3, ColumnAlignment::Left, false, 1460.0),
+                    (800, 3, ColumnAlignment::Right, false, 1460.0),
+                    (800, 1, ColumnAlignment::Right, true, -160.0),
+                    (800, 3, ColumnAlignment::Left, true, 1620.0),
+                    (1200, 2, ColumnAlignment::Left, false, 810.0),
+                    (1200, 2, ColumnAlignment::Right, false, 1050.0),
+                ] {
+                    let mut ws = Workspace::with_gaps(10, 20);
+                    ws.set_centering_mode(mode);
+                    ws.set_center_past_edges(past_edges);
+                    ws.set_reduce_motion(reduce_motion);
+                    ws.insert_window(1, Some(800)).unwrap();
+                    ws.insert_window(2, Some(middle_width)).unwrap();
+                    ws.insert_window(3, Some(800)).unwrap();
+                    ws.focus_window(focused).unwrap();
+                    ws.align_focused_column_animated(alignment, 1000);
+                    ws.tick_animation(1000);
+                    assert_eq!(
+                        ws.scroll_offset(),
+                        expected,
+                        "{mode:?} {alignment:?} {focused} {past_edges} {reduce_motion}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn floating_alignment_preserves_vertical_position_and_named_edge() {
+        let mut ws = Workspace::with_gaps(10, 20);
+        let area = Rect::new(100, 50, 1000, 600);
+        ws.add_floating(1, Rect::new(300, -20, 1200, 400)).unwrap();
+        for (alignment, x) in [(ColumnAlignment::Left, 100), (ColumnAlignment::Right, -100)] {
+            ws.align_floating(1, area, alignment);
+            assert_eq!(ws.floating_windows()[0].rect, Rect::new(x, -20, 1200, 400));
+        }
+    }
+
+    #[test]
     fn test_center_single_column_modes_scroll_and_default() {
         let viewport = Rect::new(100, 50, 1000, 600);
         for mode in [
@@ -68,6 +119,12 @@ mod tests {
                         ws.center_focused_column_animated(viewport.width);
                         ws.stop_animation();
                         assert_eq!(ws.compute_placements(viewport)[0].rect.x, center_x);
+                        for alignment in [ColumnAlignment::Left, ColumnAlignment::Right] {
+                            ws.set_scroll_offset(137.0);
+                            ws.align_focused_column_animated(alignment, viewport.width);
+                            ws.stop_animation();
+                            assert_eq!(ws.compute_placements(viewport)[0].rect.x, center_x);
+                        }
                     }
                     ws.set_center_single_column(false);
                     ws.scroll_by(0.0, viewport.width);

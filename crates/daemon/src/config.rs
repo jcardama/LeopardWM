@@ -1086,8 +1086,9 @@ impl CornerStyle {
 /// (e.g., "focus_left"). Available actions and labels come from
 /// `leopardwm_ipc::hotkeys::hotkey_catalog`.
 /// Unbound actions include focus_next/focus_prev (linear window navigation)
-/// scroll_left/scroll_right (move the strip viewport by 100 px), and
-/// nudge_left/nudge_right (move windows by the configured step).
+/// scroll_left/scroll_right (move the strip viewport by 100 px),
+/// nudge_left/nudge_right (move windows by the configured step), and
+/// align_column_left/align_column_right (align to a work-area edge).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HotkeyConfig {

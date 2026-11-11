@@ -26,6 +26,14 @@ pub enum CenteringMode {
     OnOverflow,
 }
 
+/// Horizontal alignment; oversized columns expose the named edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColumnAlignment {
+    Left,
+    Center,
+    Right,
+}
+
 /// A window positioned independently of the tiled strip and its scroll offset.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FloatingWindow {
@@ -435,27 +443,30 @@ impl Workspace {
         &mut self,
         window_id: WindowId,
         area: Rect,
+        constrain: bool,
         change: impl FnOnce(&mut Rect),
     ) {
         if let Some(window) = self.floating_windows.iter_mut().find(|f| f.id == window_id) {
             let rect = &mut window.rect;
             change(rect);
-            rect.x = rect.x.clamp(
-                area.x,
-                area.x
-                    .saturating_add(area.width.saturating_sub(rect.width).max(0)),
-            );
-            rect.y = rect.y.clamp(
-                area.y,
-                area.y
-                    .saturating_add(area.height.saturating_sub(rect.height).max(0)),
-            );
+            if constrain {
+                rect.x = rect.x.clamp(
+                    area.x,
+                    area.x
+                        .saturating_add(area.width.saturating_sub(rect.width).max(0)),
+                );
+                rect.y = rect.y.clamp(
+                    area.y,
+                    area.y
+                        .saturating_add(area.height.saturating_sub(rect.height).max(0)),
+                );
+            }
         }
     }
 
     /// Move a floating window by physical pixels and constrain it to the work area.
     pub fn move_floating(&mut self, window_id: WindowId, dx: i32, dy: i32, area: Rect) {
-        self.change_floating_rect(window_id, area, |rect| {
+        self.change_floating_rect(window_id, area, true, |rect| {
             rect.x = rect.x.saturating_add(dx);
             rect.y = rect.y.saturating_add(dy);
         });
@@ -469,7 +480,7 @@ impl Workspace {
         horizontal: bool,
         area: Rect,
     ) {
-        self.change_floating_rect(window_id, area, |rect| {
+        self.change_floating_rect(window_id, area, true, |rect| {
             let dimension = if horizontal {
                 &mut rect.width
             } else {
@@ -481,13 +492,28 @@ impl Workspace {
 
     /// Center a floating window in the work area.
     pub fn center_floating(&mut self, window_id: WindowId, area: Rect) {
-        self.change_floating_rect(window_id, area, |rect| {
+        self.change_floating_rect(window_id, area, true, |rect| {
             rect.x = area
                 .x
                 .saturating_add(area.width.saturating_sub(rect.width) / 2);
             rect.y = area
                 .y
                 .saturating_add(area.height.saturating_sub(rect.height) / 2);
+        });
+    }
+
+    /// Align a floating window horizontally while preserving its vertical position.
+    pub fn align_floating(&mut self, window_id: WindowId, area: Rect, alignment: ColumnAlignment) {
+        self.change_floating_rect(window_id, area, false, |rect| {
+            rect.x = match alignment {
+                ColumnAlignment::Left => area.x,
+                ColumnAlignment::Center => area
+                    .x
+                    .saturating_add(area.width.saturating_sub(rect.width) / 2),
+                ColumnAlignment::Right => {
+                    area.x.saturating_add(area.width).saturating_sub(rect.width)
+                }
+            };
         });
     }
 

@@ -86,6 +86,8 @@ With a floating window focused, `set-width` and width/height preset commands siz
 | `lwm resize` | Required `-d, --delta <PIXELS>` changes focused column width in pixels. Use `--delta=-50` for a negative delta. |
 | `lwm set-width` | Required `-f, --fraction <FRACTION>` sets column width as a finite fraction of the viewport, or floating width as a fraction of the work area, from 0.1 to 1.0 inclusive. Example: `lwm set-width --fraction 0.5`. |
 | `lwm center-column` | Center the focused column, or center a floating window in the work area. |
+| `lwm align-column-left` | Align the focused column or floating window to the left edge. |
+| `lwm align-column-right` | Align the focused column or floating window to the right edge. |
 | `lwm maximize-column` | Toggle the focused column filling the viewport width. |
 | `lwm equalize-widths` | Equalize column widths. |
 | `lwm cycle-width` | Cycle column or floating window width to the next preset, wrapping at the end. |
