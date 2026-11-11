@@ -661,30 +661,39 @@ impl Workspace {
         );
     }
 
+    fn past_edge_scroll_bounds_for_row(&self, row_idx: usize, vis_w: i32) -> (f64, f64) {
+        let mut min_scroll = 0.0_f64;
+        let mut max_scroll = (self.total_width_for_row(row_idx) - vis_w).max(0) as f64;
+        let row = &self.rows[row_idx];
+        let mut active = row
+            .columns
+            .iter()
+            .enumerate()
+            .filter(|(_, column)| self.is_column_active(column));
+        if let Some((first_idx, first)) = active.next() {
+            let (last_idx, last) = active.next_back().unwrap_or((first_idx, first));
+            let first_center = self.effective_column_width(first) / 2;
+            let last_center = self
+                .column_x_for_row(row_idx, last_idx)
+                .saturating_add(self.effective_column_width(last) / 2);
+            min_scroll = min_scroll.min(first_center.saturating_sub(vis_w / 2) as f64);
+            max_scroll = max_scroll.max(last_center.saturating_sub(vis_w / 2) as f64);
+        }
+        (min_scroll, max_scroll)
+    }
+
     /// Repair bounds without revealing focus across all rows.
     pub fn reconcile_scroll_bounds(&mut self, viewport_width: i32) {
         let vis_w = self.visible_width(viewport_width);
         for row_idx in 0..self.rows.len() {
-            let row_total_w = self.total_width_for_row(row_idx);
-            let mut min_scroll = 0.0_f64;
-            let mut max_scroll = (row_total_w - vis_w).max(0) as f64;
-            if self.center_past_edges {
-                let row = &self.rows[row_idx];
-                let mut active = row
-                    .columns
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, column)| self.is_column_active(column));
-                if let Some((first_idx, first)) = active.next() {
-                    let (last_idx, last) = active.next_back().unwrap_or((first_idx, first));
-                    let first_center = self.effective_column_width(first) / 2;
-                    let last_center = self
-                        .column_x_for_row(row_idx, last_idx)
-                        .saturating_add(self.effective_column_width(last) / 2);
-                    min_scroll = min_scroll.min(first_center.saturating_sub(vis_w / 2) as f64);
-                    max_scroll = max_scroll.max(last_center.saturating_sub(vis_w / 2) as f64);
-                }
-            }
+            let (min_scroll, max_scroll) = if self.center_past_edges {
+                self.past_edge_scroll_bounds_for_row(row_idx, vis_w)
+            } else {
+                (
+                    0.0,
+                    (self.total_width_for_row(row_idx) - vis_w).max(0) as f64,
+                )
+            };
             let (min_scroll, max_scroll) =
                 self.scroll_bounds_for_row(row_idx, viewport_width, min_scroll, max_scroll);
             let current = self.effective_scroll_offset_for_row(row_idx);
@@ -937,12 +946,14 @@ impl Workspace {
             ColumnAlignment::Center => col_x.saturating_add(col_width / 2) - vis_w / 2,
             ColumnAlignment::Right => col_x.saturating_add(col_width).saturating_sub(vis_w),
         };
-        let target = self.clamp_scroll_offset(
-            raw_target as f64,
-            viewport_width,
-            f64::NEG_INFINITY,
-            f64::INFINITY,
-        );
+        let (min_scroll, max_scroll) =
+            if self.center_past_edges && alignment != ColumnAlignment::Center {
+                self.past_edge_scroll_bounds_for_row(fr, vis_w)
+            } else {
+                (f64::NEG_INFINITY, f64::INFINITY)
+            };
+        let target =
+            self.clamp_scroll_offset(raw_target as f64, viewport_width, min_scroll, max_scroll);
 
         if self.center_past_edges {
             if self.reduce_motion {

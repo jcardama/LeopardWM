@@ -39,20 +39,42 @@ mod tests {
                     (800, 1, ColumnAlignment::Right, false, 0.0),
                     (800, 3, ColumnAlignment::Left, false, 1460.0),
                     (800, 3, ColumnAlignment::Right, false, 1460.0),
-                    (800, 1, ColumnAlignment::Right, true, -160.0),
-                    (800, 3, ColumnAlignment::Left, true, 1620.0),
+                    (800, 1, ColumnAlignment::Right, true, -80.0),
+                    (800, 3, ColumnAlignment::Left, true, 1540.0),
                     (1200, 2, ColumnAlignment::Left, false, 810.0),
                     (1200, 2, ColumnAlignment::Right, false, 1050.0),
                 ] {
                     let mut ws = Workspace::with_gaps(10, 20);
                     ws.set_centering_mode(mode);
                     ws.set_center_past_edges(past_edges);
+                    ws.set_center_single_column(true);
                     ws.set_reduce_motion(reduce_motion);
                     ws.insert_window(1, Some(800)).unwrap();
                     ws.insert_window(2, Some(middle_width)).unwrap();
                     ws.insert_window(3, Some(800)).unwrap();
                     ws.focus_window(focused).unwrap();
                     ws.align_focused_column_animated(alignment, 1000);
+                    if past_edges {
+                        let row = &ws.rows[ws.focused_row];
+                        let target = row
+                            .active_animation
+                            .as_ref()
+                            .map_or(row.scroll_offset, |anim| anim.target());
+                        ws.reconcile_scroll_bounds(1000);
+                        let row = &ws.rows[ws.focused_row];
+                        if !reduce_motion {
+                            assert!(
+                                row.active_animation.is_some(),
+                                "reconciliation canceled {alignment:?} animation"
+                            );
+                        }
+                        assert_eq!(
+                            row.active_animation
+                                .as_ref()
+                                .map_or(row.scroll_offset, |anim| anim.target()),
+                            target
+                        );
+                    }
                     ws.tick_animation(1000);
                     assert_eq!(
                         ws.scroll_offset(),
