@@ -8843,6 +8843,54 @@ fn rule_reload_state(action: Option<crate::config::WindowAction>) -> AppState {
     state
 }
 
+fn assert_rule_removal_repairs_scroll(action: crate::config::WindowAction) {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = true;
+    state.reduce_motion = true;
+    let width = state.viewport_width_for(1);
+    for id in [100, 200, 0] {
+        let mut info = make_test_window_info(id);
+        info.process_id = std::process::id();
+        if id != 0 {
+            info.class_name = "OtherClass".into();
+        }
+        state.injected_window_info.insert(id, info);
+        state.workspaces.get_mut(&1).unwrap()[0]
+            .insert_window(id, Some(1000))
+            .unwrap();
+    }
+    let workspace = &mut state.workspaces.get_mut(&1).unwrap()[0];
+    workspace.scroll_by(10_000.0, width);
+    let old_offset = workspace.scroll_offset();
+    let previous_rules = state.compiled_rules.clone();
+    state.config.window_rules = vec![crate::config::WindowRule {
+        match_class: Some("^TestWindowClass$".into()),
+        action,
+        ..Default::default()
+    }];
+    state.compiled_rules = state.config.compile_window_rules();
+
+    state.reapply_window_rules(&previous_rules);
+
+    let workspace = &state.workspaces[&1][0];
+    let max_scroll = (workspace.total_width() - workspace.visible_width(width)).max(0) as f64;
+    assert!(old_offset > max_scroll);
+    assert!((0.0..=max_scroll).contains(&workspace.scroll_offset()));
+    let floated = action == crate::config::WindowAction::Float;
+    assert_eq!(workspace.contains_window(0), floated);
+    assert_eq!(workspace.is_floating(0), floated);
+}
+
+#[test]
+fn rule_float_repairs_scroll_bounds() {
+    assert_rule_removal_repairs_scroll(crate::config::WindowAction::Float);
+}
+
+#[test]
+fn rule_ignore_repairs_scroll_bounds() {
+    assert_rule_removal_repairs_scroll(crate::config::WindowAction::Ignore);
+}
+
 #[test]
 fn test_rule_reload_preserves_hand_floated_window() {
     let mut state = rule_reload_state(None);
@@ -19112,6 +19160,28 @@ fn test_broadcast_focused_window_emits_on_clear() {
         "should emit both set and clear events"
     );
     assert_eq!(state.last_broadcast_focused, Some((1, None)));
+}
+
+#[test]
+fn scratchpad_stash_repairs_scroll_bounds() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = true;
+    state.reduce_motion = true;
+    let width = state.viewport_width_for(1);
+    let workspace = &mut state.workspaces.get_mut(&1).unwrap()[0];
+    for id in [100, 200, 0] {
+        workspace.insert_window(id, Some(1000)).unwrap();
+    }
+    workspace.scroll_by(10_000.0, width);
+    let old_offset = workspace.scroll_offset();
+
+    state.scratchpad_stash();
+
+    let workspace = &state.workspaces[&1][0];
+    let max_scroll = (workspace.total_width() - workspace.visible_width(width)).max(0) as f64;
+    assert_eq!(state.scratchpad.unwrap().window_id, 0);
+    assert!(old_offset > max_scroll);
+    assert!((0.0..=max_scroll).contains(&workspace.scroll_offset()));
 }
 
 #[test]

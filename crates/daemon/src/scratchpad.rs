@@ -99,6 +99,7 @@ impl AppState {
         let Some((mon, ws_idx)) = self.find_window_workspace(wid) else {
             return false;
         };
+        let viewport_width = self.viewport_width_for(mon);
         if let Some(ws) = self
             .workspaces
             .get_mut(&mon)
@@ -106,8 +107,8 @@ impl AppState {
         {
             if ws.is_floating(wid) {
                 ws.remove_floating(wid);
-            } else {
-                let _ = ws.remove_window(wid);
+            } else if ws.remove_window(wid).is_ok() {
+                ws.reconcile_scroll_bounds(viewport_width);
             }
             return true;
         }

@@ -69,6 +69,7 @@ impl AppState {
             .collect();
 
         for (wid, monitor_id, ws_idx, action, is_floating) in transitions {
+            let viewport_width = self.viewport_width_for(monitor_id);
             match action {
                 config::WindowAction::Float if !is_floating => {
                     self.restore_snap_for_window(wid);
@@ -92,7 +93,9 @@ impl AppState {
                         .get_mut(&monitor_id)
                         .and_then(|v| v.get_mut(ws_idx))
                     {
-                        let _ = workspace.remove_window(wid);
+                        if workspace.remove_window(wid).is_ok() {
+                            workspace.reconcile_scroll_bounds(viewport_width);
+                        }
                         let _ = workspace.add_floating(wid, rect);
                         info!("Rule change: moved window {} to floating", wid);
                     }
@@ -117,8 +120,8 @@ impl AppState {
                     {
                         if is_floating {
                             workspace.remove_floating(wid);
-                        } else {
-                            let _ = workspace.remove_window(wid);
+                        } else if workspace.remove_window(wid).is_ok() {
+                            workspace.reconcile_scroll_bounds(viewport_width);
                         }
                         self.window_managed_at.remove(&wid);
                         self.window_last_maximized_at.remove(&wid);
