@@ -196,6 +196,12 @@ impl AppState {
             );
         }
         if frame_result.apply_result.is_ok() {
+            self.reconcile_floating_landing_sizes(
+                frame_result.physical_request_id,
+                frame_result.physical_invalidation_id,
+                &frame_result.landings,
+                &frame_result.maximized_skipped_window_ids,
+            );
             self.propagate_size_violations(&width_violations, &height_violations);
         }
         AnimationPlacementResult::Current
@@ -716,6 +722,12 @@ impl AppState {
                 } else {
                     self.handle_maximized_placement_skips(&maximized_skipped_window_ids);
                     self.consume_physical_landings(
+                        physical_request_id,
+                        physical_invalidation_id,
+                        &landings,
+                        &maximized_skipped_window_ids,
+                    );
+                    self.reconcile_floating_landing_sizes(
                         physical_request_id,
                         physical_invalidation_id,
                         &landings,

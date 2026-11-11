@@ -762,6 +762,73 @@ impl AppState {
         }
     }
 
+    pub(crate) fn reconcile_floating_landing_sizes(
+        &mut self,
+        request_id: u64,
+        invalidation_id: u64,
+        landings: &[PlacementLanding],
+        skipped_window_ids: &[u64],
+    ) {
+        if invalidation_id != self.physical_invalidation_id.load(Ordering::SeqCst) {
+            return;
+        }
+        for landing in landings {
+            let id = landing.window_id;
+            let Some(presentation) = self.last_physical_presentations.get(&id) else {
+                continue;
+            };
+            if presentation.request_id != request_id
+                || presentation.invalidation_id != invalidation_id
+                || !presentation.confirmed
+                || presentation.kind != PhysicalKind::Unchanged
+                || presentation.physical.visibility != Visibility::Visible
+                || landing.requested_visibility != Visibility::Visible
+                || landing.failed
+                || landing.unreadable
+                || landing.measurement_deferred
+                || skipped_window_ids.contains(&id)
+                || self.is_application_fullscreen(id)
+                || self.native_window_is_maximized(id)
+                || leopardwm_platform_win32::window_minimized_state(id) == Some(true)
+                || leopardwm_platform_win32::is_placement_parked(id)
+            {
+                continue;
+            }
+            let (Some(actual), Some((monitor_id, ws_idx))) =
+                (landing.actual_visible_rect, self.find_window_workspace(id))
+            else {
+                continue;
+            };
+            if ws_idx != self.active_workspace_idx(monitor_id) {
+                continue;
+            }
+            let workspace = &mut self.workspaces.get_mut(&monitor_id).unwrap()[ws_idx];
+            if workspace.is_minimized(id) || workspace.fullscreen_window_id() == Some(id) {
+                continue;
+            }
+            let Some(floating) = workspace.floating_windows().iter().find(|f| f.id == id) else {
+                continue;
+            };
+            let mut rect = floating.rect;
+            if rect != presentation.physical.rect || rect != landing.requested_rect {
+                continue;
+            }
+            if actual.width > rect.width.saturating_add(2) {
+                rect.width = actual.width;
+            }
+            if actual.height > rect.height.saturating_add(2) {
+                rect.height = actual.height;
+            }
+            workspace.update_floating(id, rect);
+            // Keep acknowledged placement feedback from being mistaken for a user move.
+            self.last_physical_presentations
+                .get_mut(&id)
+                .unwrap()
+                .physical
+                .rect = rect;
+        }
+    }
+
     pub(crate) fn acknowledge_empty_physical_state(
         &mut self,
         request_id: u64,

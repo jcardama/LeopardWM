@@ -560,6 +560,39 @@ fn classify_non_draining_owner(owner: &PlacementOwner) -> (AppState, Vec<WindowP
 }
 
 #[test]
+fn floating_resize_adopts_native_minimum_width() {
+    if run_in_placement_test_process(
+        "tests::display_change_regression::floating_resize_adopts_native_minimum_width",
+    ) {
+        return;
+    }
+    let _desktop = FixtureDesktop::enter();
+    for (initial_width, minimum, delta) in [(320, 240, -200), (700, 600, -600)] {
+        let owner =
+            PlacementOwner::spawn_with(Rect::new(48, 48, initial_width, 200), minimum, false);
+        owner.resume();
+        let mut state = placement_state(&[]);
+        let initial = leopardwm_platform_win32::get_window_visible_rect(owner.window_id).unwrap();
+        state.workspaces.get_mut(&1).unwrap()[0]
+            .add_floating(owner.window_id, initial)
+            .unwrap();
+        state.previous_focused_hwnd = Some(owner.window_id);
+        assert_eq!(
+            state.handle_command(IpcCommand::Resize { delta }),
+            IpcResponse::Ok
+        );
+        let actual = leopardwm_platform_win32::get_window_visible_rect(owner.window_id).unwrap();
+        assert!(actual.width > initial.width + delta);
+        let stored = state.workspaces[&1][0].floating_windows()[0].rect;
+        assert_eq!(stored.width, actual.width);
+        assert_eq!(
+            (stored.x, stored.y, stored.height),
+            (initial.x, initial.y, initial.height)
+        );
+    }
+}
+
+#[test]
 fn test_completed_mover_landing_is_measured_and_confirmed_without_another_move() {
     if run_in_placement_test_process("tests::display_change_regression::test_completed_mover_landing_is_measured_and_confirmed_without_another_move") { return; }
     let owner =
