@@ -20,6 +20,10 @@ const BUILTIN_IGNORE_EXECUTABLES: &[&str] = &[
     "SnippingTool.exe",       // Screen capture overlay — breaks when repositioned
 ];
 
+const BUILTIN_FLOAT_RULES: &[(&str, &str)] = &[
+    ("Audacity.exe", "^Importing"), // Audacity import progress popup
+];
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -1947,15 +1951,28 @@ impl Config {
             });
         }
 
-        // Append built-in ignore rules (after user rules so user can override)
-        for exe in BUILTIN_IGNORE_EXECUTABLES {
+        // Append built-in rules after user rules so users can override them.
+        let builtin_rules = BUILTIN_IGNORE_EXECUTABLES
+            .iter()
+            .map(|&exe| (exe, None, WindowAction::Ignore))
+            .chain(
+                BUILTIN_FLOAT_RULES
+                    .iter()
+                    .map(|&(exe, title)| (exe, Some(title), WindowAction::Float)),
+            );
+        for (exe, title, action) in builtin_rules {
             compiled.push(CompiledWindowRule {
                 class_regex: None,
-                title_regex: None,
+                title_regex: title.map(|pattern| {
+                    regex::RegexBuilder::new(pattern)
+                        .size_limit(1_000_000)
+                        .build()
+                        .expect("invalid built-in window rule title regex")
+                }),
                 match_executable: Some(exe.to_string()),
                 match_max_width: None,
                 match_max_height: None,
-                action: WindowAction::Ignore,
+                action,
                 width: None,
                 height: None,
                 x: None,
@@ -3050,7 +3067,10 @@ mod tests {
             ..Default::default()
         };
         let compiled = config.compile_window_rules();
-        assert_eq!(compiled.len(), BUILTIN_IGNORE_EXECUTABLES.len());
+        assert_eq!(
+            compiled.len(),
+            BUILTIN_IGNORE_EXECUTABLES.len() + BUILTIN_FLOAT_RULES.len()
+        );
         assert!(!compiled.iter().any(|rule| rule.matches(
             "AnyClass",
             "Any Title",
@@ -3490,7 +3510,10 @@ mod tests {
         };
 
         let compiled = config.compile_window_rules();
-        assert_eq!(compiled.len(), 2 + BUILTIN_IGNORE_EXECUTABLES.len());
+        assert_eq!(
+            compiled.len(),
+            2 + BUILTIN_IGNORE_EXECUTABLES.len() + BUILTIN_FLOAT_RULES.len()
+        );
 
         assert!(compiled[0].matches(
             "Chrome_WidgetWin_1",
@@ -3504,6 +3527,44 @@ mod tests {
         assert!(compiled[1].matches("AnyClass", "Any Title", "notepad.exe", None));
         assert!(compiled[1].matches("AnyClass", "Any Title", "NOTEPAD.EXE", None));
         assert!(!compiled[1].matches("AnyClass", "Any Title", "wordpad.exe", None));
+    }
+
+    #[test]
+    fn audacity_import_float_rule_and_user_override() {
+        let defaults = Config::default().compile_window_rules();
+        let override_rules = Config {
+            window_rules: vec![WindowRule {
+                match_executable: Some("Audacity.exe".into()),
+                match_title: Some("^Importing".into()),
+                action: WindowAction::Tile,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+        .compile_window_rules();
+
+        for (rules, title, executable, expected) in [
+            (
+                &defaults,
+                "Importing WAV (Microsoft)",
+                "Audacity.exe",
+                Some(WindowAction::Float),
+            ),
+            (&defaults, "Audacity", "Audacity.exe", None),
+            (&defaults, "Importing WAV (Microsoft)", "other.exe", None),
+            (
+                &override_rules,
+                "Importing WAV (Microsoft)",
+                "Audacity.exe",
+                Some(WindowAction::Tile),
+            ),
+        ] {
+            let action = rules
+                .iter()
+                .find(|rule| rule.matches("AnyClass", title, executable, None))
+                .map(|rule| rule.action);
+            assert_eq!(action, expected, "title={title}, executable={executable}");
+        }
     }
 
     #[test]
@@ -3555,7 +3616,10 @@ mod tests {
         };
 
         let compiled = config.compile_window_rules();
-        assert_eq!(compiled.len(), 1 + BUILTIN_IGNORE_EXECUTABLES.len());
+        assert_eq!(
+            compiled.len(),
+            1 + BUILTIN_IGNORE_EXECUTABLES.len() + BUILTIN_FLOAT_RULES.len()
+        );
         assert!(compiled[0].matches("ValidClass", "Any Title", "any.exe", None));
     }
 

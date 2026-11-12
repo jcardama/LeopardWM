@@ -27,6 +27,7 @@ All notable changes to LeopardWM will be documented in this file.
 
 ### Fixes
 
+- **Audacity's import progress window now floats by default, so it no longer pulls the strip back to it while an import runs.** Thanks to @KeronCyst for the report. (#176)
 - **Resizing a floating window below the size its app allows now keeps LeopardWM's stored size in step with the actual window.**
 - **Floating a tiled window, stashing it to the scratchpad, or moving it out with a window rule or Edit Config no longer leaves the strip scrolled past its last column.**
 - **The tiled window resize preview now shows where the window lands when the strip scrolls on release.**
