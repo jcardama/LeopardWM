@@ -598,8 +598,8 @@ impl Workspace {
                 }
             } else {
                 let cur = row.focused_window_in_column;
-                for target in (cur + 1)..column.len() {
-                    if !self.minimized_windows.contains(&column.windows[target]) {
+                for (target, &wid) in column.windows.iter().enumerate().skip(cur + 1) {
+                    if !self.minimized_windows.contains(&wid) {
                         self.rows[fr].focused_window_in_column = target;
                         self.sync_active_tab_to_focus();
                         return;
@@ -1034,8 +1034,8 @@ impl Workspace {
         if cur < col.len() && !self.minimized_windows.contains(&col.windows[cur]) {
             return;
         }
-        for i in cur..col.len() {
-            if !self.minimized_windows.contains(&col.windows[i]) {
+        for (i, &wid) in col.windows.iter().enumerate().skip(cur) {
+            if !self.minimized_windows.contains(&wid) {
                 self.rows[fr].focused_window_in_column = i;
                 return;
             }
@@ -1061,9 +1061,9 @@ impl Workspace {
             }
         }
 
-        for i in cur..col.len() {
-            if !self.minimized_windows.contains(&col.windows[i]) {
-                return Some(col.windows[i]);
+        for &wid in col.windows.iter().skip(cur) {
+            if !self.minimized_windows.contains(&wid) {
+                return Some(wid);
             }
         }
         for i in (0..cur).rev() {

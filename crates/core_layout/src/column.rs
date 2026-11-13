@@ -251,9 +251,9 @@ impl Column {
         self.height_weights[index] = weight;
         let remainder = 1.0 - weight;
         let per_sibling = remainder / siblings as f64;
-        for i in 0..n {
+        for (i, w) in self.height_weights.iter_mut().enumerate().take(n) {
             if i != index {
-                self.height_weights[i] = per_sibling;
+                *w = per_sibling;
             }
         }
     }
