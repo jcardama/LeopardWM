@@ -158,6 +158,7 @@ async fn connected_clients_share_snapshot_and_receive_only_subscribed_revisions(
                 monitor_device_name: monitor.device_name,
                 workspace_index: 0,
                 name: None,
+                rows: None,
             },
         ],
     };

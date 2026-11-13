@@ -57,13 +57,15 @@ impl AppState {
                 active_workspace_index: self.active_workspace_idx(monitor.id) as u8,
             });
             for index in 0..9 {
+                let workspace = self.workspaces.get(&monitor.id).and_then(|w| w.get(index));
+                let rows = workspace.map(|w| w.row_count()).filter(|&count| count > 1);
                 records.push(WorkspaceStateRecord::Workspace {
                     monitor_device_name: device.clone(),
                     workspace_index: index as u8,
                     name: self.config.workspaces.name_for(index),
+                    rows,
                 });
-                let Some(workspace) = self.workspaces.get(&monitor.id).and_then(|w| w.get(index))
-                else {
+                let Some(workspace) = workspace else {
                     continue;
                 };
                 let mut windows = workspace.all_window_ids();
@@ -90,6 +92,16 @@ impl AppState {
                             || detached_drag
                                 .is_some_and(|drag| drag.hwnd == hwnd && !drag.is_tiled),
                         is_sticky: self.sticky_windows.contains(&hwnd),
+                        row_index: rows.and_then(|_| {
+                            workspace
+                                .find_window_location_rc(hwnd)
+                                .map(|(row, _, _)| row)
+                                .or_else(|| {
+                                    detached_drag
+                                        .filter(|drag| drag.hwnd == hwnd && drag.is_tiled)
+                                        .map(|drag| drag.source_row)
+                                })
+                        }),
                     });
                 }
             }

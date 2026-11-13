@@ -117,6 +117,7 @@ fn monitors_dto(
                 monitor_device_name,
                 workspace_index,
                 name,
+                ..
             } = record
             {
                 if monitor_device_name != monitor.device {
@@ -207,6 +208,7 @@ mod tests {
                     monitor_device_name: device.into(),
                     workspace_index: index,
                     name: (index == 0).then(|| "code".into()),
+                    rows: None,
                 });
             }
         }
@@ -216,6 +218,7 @@ mod tests {
             hwnd: 42,
             is_floating: true,
             is_sticky: true,
+            row_index: None,
         });
         records.push(WorkspaceStateRecord::Window {
             monitor_device_name: "DISPLAY2".into(),
@@ -223,6 +226,7 @@ mod tests {
             hwnd: 43,
             is_floating: false,
             is_sticky: false,
+            row_index: None,
         });
         (
             WorkspaceStateSnapshot {

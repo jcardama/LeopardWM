@@ -250,6 +250,7 @@ fn released_035_client_decodes_additive_rows_and_snapshot() {
                 monitor_device_name: "DISPLAY1".into(),
                 workspace_index: 0,
                 name: None,
+                rows: Some(2),
             },
             WorkspaceStateRecord::Window {
                 monitor_device_name: "DISPLAY1".into(),
@@ -257,9 +258,31 @@ fn released_035_client_decodes_additive_rows_and_snapshot() {
                 hwnd: 42,
                 is_floating: false,
                 is_sticky: false,
+                row_index: Some(1),
             },
         ],
     };
+    for (record, field, expected) in [
+        (&snapshot.records[1], "rows", 2),
+        (&snapshot.records[2], "row_index", 1),
+    ] {
+        let mut wire = serde_json::to_value(record).unwrap();
+        assert_eq!(wire[field], expected);
+        assert_eq!(
+            serde_json::from_value::<WorkspaceStateRecord>(wire.clone()).unwrap(),
+            *record
+        );
+        wire.as_object_mut().unwrap().remove(field);
+        let old = serde_json::from_value::<WorkspaceStateRecord>(wire).unwrap();
+        assert!(matches!(
+            old,
+            WorkspaceStateRecord::Workspace { rows: None, .. }
+                | WorkspaceStateRecord::Window {
+                    row_index: None,
+                    ..
+                }
+        ));
+    }
     let events = snapshot.events().unwrap();
     let decoded: Vec<OldEvent> = events
         .iter()

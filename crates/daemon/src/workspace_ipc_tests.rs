@@ -164,6 +164,7 @@ fn complete_membership_includes_inactive_and_floating_excludes_placeholders() {
                 hwnd,
                 is_floating,
                 is_sticky,
+                ..
             } => {
                 assert_eq!(monitor_device_name, "DISPLAY2");
                 assert_eq!(*workspace_index, 3);
@@ -179,6 +180,75 @@ fn complete_membership_includes_inactive_and_floating_excludes_placeholders() {
     assert!(all.iter().any(
         |r| matches!(r, R::Workspace { workspace_index: 0, name: Some(n), .. } if n == "code")
     ));
+}
+
+#[test]
+fn snapshot_rows_follow_workspace_structure() {
+    use leopardwm_ipc::WorkspaceStateRecord as R;
+    let mut state = fixture();
+    let ws = &mut state.workspaces.get_mut(&1).unwrap()[0];
+    ws.insert_window(10, None).unwrap();
+    ws.add_floating(30, Rect::new(0, 0, 100, 100)).unwrap();
+    let single = state.project_workspace_state();
+    assert!(single.records.iter().any(|r| matches!(r, R::Workspace { monitor_device_name, workspace_index: 0, rows: None, .. } if monitor_device_name == "DISPLAY1")));
+    assert!(single
+        .records
+        .iter()
+        .filter(|r| matches!(r, R::Window { .. }))
+        .all(|r| matches!(
+            r,
+            R::Window {
+                row_index: None,
+                ..
+            }
+        )));
+    for record in &single.records {
+        let json = serde_json::to_value(record).unwrap();
+        assert!(json.get("rows").is_none());
+        assert!(json.get("row_index").is_none());
+    }
+
+    let ws = &mut state.workspaces.get_mut(&1).unwrap()[0];
+    ws.set_row_layout(&[0.5, 0.5]);
+    ws.insert_window_in_row(20, 1, None).unwrap();
+    let multi = state.project_workspace_state();
+    assert!(multi.records.iter().any(|r| matches!(r, R::Workspace { monitor_device_name, workspace_index: 0, rows: Some(2), .. } if monitor_device_name == "DISPLAY1")));
+    assert!(multi.records.iter().any(|r| matches!(r, R::Workspace { monitor_device_name, workspace_index: 8, rows: None, .. } if monitor_device_name == "DISPLAY1")));
+    for (hwnd, row) in [(10, Some(0)), (20, Some(1)), (30, None)] {
+        assert!(multi.records.iter().any(|r| matches!(r, R::Window { hwnd: id, row_index, .. } if *id == hwnd && *row_index == row)));
+    }
+}
+
+#[test]
+fn workspace_revision_tracks_rows_but_not_scroll_or_focus() {
+    let mut state = fixture();
+    let ws = &mut state.workspaces.get_mut(&1).unwrap()[0];
+    ws.insert_window(10, None).unwrap();
+    state.publish_workspace_state_if_changed();
+    let revision = |state: &AppState| match &state.workspace_snapshot_events()[0] {
+        leopardwm_ipc::IpcEvent::WorkspaceSnapshotBegin { revision, .. } => *revision,
+        _ => panic!("missing snapshot begin"),
+    };
+    let start = revision(&state);
+    state.workspaces.get_mut(&1).unwrap()[0].set_row_layout(&[0.5, 0.5]);
+    state.publish_workspace_state_if_changed();
+    assert_eq!(revision(&state), start + 1);
+    state.workspaces.get_mut(&1).unwrap()[0]
+        .insert_window_in_row(20, 0, None)
+        .unwrap();
+    state.publish_workspace_state_if_changed();
+    let before_move = revision(&state);
+    state.workspaces.get_mut(&1).unwrap()[0]
+        .move_window_to_row(10, 1)
+        .unwrap();
+    state.publish_workspace_state_if_changed();
+    assert_eq!(revision(&state), before_move + 1);
+    let ws = &mut state.workspaces.get_mut(&1).unwrap()[0];
+    ws.set_scroll_offset_for_row(1, 123.0);
+    ws.focus_row(0);
+    state.previous_focused_hwnd = Some(20);
+    state.publish_workspace_state_if_changed();
+    assert_eq!(revision(&state), before_move + 1);
 }
 
 #[test]
@@ -435,7 +505,8 @@ fn membership_moves_and_scratchpad_visibility_replace_the_whole_model() {
             workspace_index: 4,
             hwnd: 10,
             is_floating: true,
-            is_sticky: false
+            is_sticky: false,
+            row_index: None,
         }]
     );
     state.scratchpad = Some(ScratchpadState {
@@ -490,8 +561,9 @@ fn oversize_label_fails_before_begin_and_can_recover() {
 fn drag_preview_keeps_temporarily_detached_window_in_source_workspace() {
     use leopardwm_ipc::WorkspaceStateRecord as R;
     let mut state = fixture();
+    state.workspaces.get_mut(&1).unwrap()[0].set_row_layout(&[0.5, 0.5]);
     state.workspaces.get_mut(&1).unwrap()[0]
-        .insert_window(10, None)
+        .insert_window_in_row(10, 1, None)
         .unwrap();
     state.publish_workspace_state_if_changed();
     let mut rx = state.workspace_event_broadcaster.subscribe();
@@ -506,7 +578,7 @@ fn drag_preview_keeps_temporarily_detached_window_in_source_workspace() {
         is_tiled: true,
         source_monitor: 1,
         source_workspace_idx: 0,
-        source_row: 0,
+        source_row: 1,
         source_window_slot: 0,
         current_row_index: 0,
         current_column_index: 0,
@@ -519,7 +591,7 @@ fn drag_preview_keeps_temporarily_detached_window_in_source_workspace() {
         source_column_width: None,
     });
     state.publish_workspace_state_if_changed();
-    assert!(records(&state).iter().any(|r| matches!(r, R::Window { monitor_device_name, hwnd: 10, .. } if monitor_device_name == "DISPLAY1")));
+    assert!(records(&state).iter().any(|r| matches!(r, R::Window { monitor_device_name, hwnd: 10, row_index: Some(1), .. } if monitor_device_name == "DISPLAY1")));
     assert!(
         rx.try_recv().is_err(),
         "drag preview alone is not a membership change"

@@ -25,6 +25,9 @@ pub enum WorkspaceStateRecord {
         workspace_index: u8,
         /// Configured display name, if any.
         name: Option<String>,
+        /// Number of rows, present only for multi-row workspaces.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rows: Option<usize>,
     },
     /// A managed window's owning workspace.
     Window {
@@ -38,6 +41,9 @@ pub enum WorkspaceStateRecord {
         is_floating: bool,
         /// Whether the window is pinned across its monitor workspaces.
         is_sticky: bool,
+        /// Zero-based tiled row, present only for multi-row workspaces.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        row_index: Option<usize>,
     },
 }
 
@@ -156,6 +162,7 @@ mod tests {
                 monitor_device_name: r"\\.\DISPLAY2".to_string(),
                 workspace_index: 1,
                 name: Some("開発".to_string()),
+                rows: None,
             },
             WorkspaceStateRecord::Window {
                 monitor_device_name: r"\\.\DISPLAY2".to_string(),
@@ -163,6 +170,7 @@ mod tests {
                 hwnd: 123_456,
                 is_floating: true,
                 is_sticky: false,
+                row_index: None,
             },
         ]
     }
@@ -214,6 +222,7 @@ mod tests {
                 monitor_device_name: r"\\.\DISPLAY2".to_string(),
                 workspace_index: (index % 9) as u8,
                 name: Some(format!("開発-{}", "界".repeat(120))),
+                rows: None,
             })
             .collect();
         let snapshot = WorkspaceStateSnapshot {
@@ -244,6 +253,7 @@ mod tests {
                 monitor_device_name: r"\\.\DISPLAY2".to_string(),
                 workspace_index: 0,
                 name: Some("界".repeat(MAX_IPC_MESSAGE_SIZE)),
+                rows: None,
             }],
         };
 

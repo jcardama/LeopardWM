@@ -38,7 +38,7 @@ an additive v4 command that pauses tiling and cascades every managed window whil
 retaining workspace membership. It has no prompt; a failed recovery or live
 placement outcome returns an error and leaves tiling paused.
 `CycleWidth` (`cycle_width`) and `CycleHeight` (`cycle_height`) are additive v4 commands that cycle to the next larger preset, wrapping to the smallest at the end. `AlignColumnLeft` (`align_column_left`) and `AlignColumnRight` (`align_column_right`) are additive v4 commands that align the focused column or floating window to the corresponding work-area edge.
-Multi-row support is an additive v4 extension: `FocusRow` (`{"type":"focus_row","index":0}`), `FocusRowUp` (`{"type":"focus_row_up"}`), `FocusRowDown` (`{"type":"focus_row_down"}`), `MoveWindowToRowUp` (`{"type":"move_window_to_row_up"}`), and `MoveWindowToRowDown` (`{"type":"move_window_to_row_down"}`). The zero-based `focused_row` and `rows` fields are optional additions to `LayoutChanged` events and `WorkspaceState` query responses; `row_index` is an optional addition to `FocusedWindow` responses and `WindowInfo` records. Older clients ignore these fields; newer clients must tolerate their absence. Complete workspace-state snapshot records do not contain row data.
+Multi-row support is an additive v4 extension: `FocusRow` (`{"type":"focus_row","index":0}`), `FocusRowUp` (`{"type":"focus_row_up"}`), `FocusRowDown` (`{"type":"focus_row_down"}`), `MoveWindowToRowUp` (`{"type":"move_window_to_row_up"}`), and `MoveWindowToRowDown` (`{"type":"move_window_to_row_down"}`). The zero-based `focused_row` and `rows` fields are optional additions to `LayoutChanged` events and `WorkspaceState` query responses; `row_index` is an optional addition to `FocusedWindow` responses and `WindowInfo` records. Older clients ignore these fields; newer clients must tolerate their absence. Complete workspace-state snapshots also include optional row counts and tiled-window row indices for multi-row workspaces, as described below.
 See [the hotkey query contract](shortcut-guide.md#ipc-contract) for ordering,
 collision resolution, and the distinction between configuration and runtime
 registration health.
@@ -132,14 +132,18 @@ The example abbreviates the records. A real snapshot includes:
   transient Win32 HMONITOR value, retained for correlation with older events.
 - Nine `workspace` records per monitor, including empty, lazily unallocated slots.
   Workspace indices are **zero-based**. Names use the existing global
-  `[workspaces].names` configuration; unnamed slots contain `null`.
+  `[workspaces].names` configuration; unnamed slots contain `null`. Allocated
+  multi-row workspaces include `rows`, the row count; single-row and lazily
+  unallocated workspaces omit it.
 - One `window` record per managed window in its owning workspace, including
   inactive workspaces, floating windows, minimized windows, and inactive tabs.
   Sticky windows report their actual current ownership with `is_sticky: true`;
   consumers must not count them once on every workspace. Hidden scratchpads and
   drag placeholders are excluded; shown scratchpads are ordinary floating members.
   A dragged window temporarily detached for a preview retains source ownership
-  until the drop commits its new workspace.
+  until the drop commits its new workspace. Tiled windows in multi-row workspaces
+  include `row_index`, a zero-based row index; floating windows and windows in
+  single-row workspaces omit it. Older daemons can omit both row fields.
 - Deterministic order: monitors by device name, workspaces by index, and windows
   within each workspace by HWND. HWNDs are transient and can be reused; consumers
   must invalidate cached metadata appropriately. Icons, titles, geometry and
@@ -155,7 +159,8 @@ produces `{"type":"workspace_snapshot_error","message":"..."}` and closes the pi
 Consumers must accumulate a replacement model and install it **only after the
 matching end**. A new session invalidates all previous revision assumptions.
 Revisions start at zero and advance only when membership, names, monitor topology,
-active workspace or focused monitor changes. Geometry/animation and focus changes
+active workspace or focused monitor changes, a window moves to another row, or
+a workspace's row count changes. Scroll, geometry, animation and focus changes
 within the same monitor do not advance this revision. These are complete
 replacements, so a consumer does not need intervening revisions to reconstruct state.
 
