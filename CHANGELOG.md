@@ -30,6 +30,7 @@ All notable changes to LeopardWM will be documented in this file.
 - **Audacity's import progress window now floats by default, so it no longer pulls the strip back to it while an import runs.** Thanks to @KeronCyst for the report. (#176)
 - **Resizing a floating window below the size its app allows now keeps LeopardWM's stored size in step with the actual window.**
 - **Floating a tiled window, stashing it to the scratchpad, or moving it out with a window rule or Edit Config no longer leaves the strip scrolled past its last column.**
+- **Dragging a tiled window to another monitor or workspace no longer leaves the strip it left scrolled past its last column.** Contributed by @azumafuji. (#150)
 - **The tiled window resize preview now shows where the window lands when the strip scrolls on release.**
 - **Resizing a maximized column with the mouse now unmaximizes it at the snapped preset width.** The next maximize toggle maximizes it again.
 - **Chromium-based apps such as Edge, Chrome, and Beeper no longer lose their window frame when LeopardWM changes their style while they are off-screen.** This can happen during pause, resume, configuration reload, or quit.

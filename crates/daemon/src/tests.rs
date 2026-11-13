@@ -4305,6 +4305,57 @@ fn test_body_preview_shift_restores_multi_window_source_before_cross_monitor_dro
     );
 }
 
+fn assert_drag_to_other_workspace_repairs_source_scroll(
+    target_monitor: MonitorId,
+    target_idx: usize,
+) {
+    let mut state = AppState::new_with_config(test_config(), two_monitors());
+    state.paused = true;
+    state.reduce_motion = true;
+    let viewport_width = state.viewport_width_for(1);
+    let source = &mut state.workspaces.get_mut(&1).unwrap()[0];
+    for hwnd in [100, 200, 0] {
+        source.insert_window(hwnd, Some(1000)).unwrap();
+    }
+    source.scroll_by(10_000.0, viewport_width);
+    let old_offset = source.scroll_offset();
+    assert!(old_offset > 0.0);
+    if target_idx == 1 {
+        state
+            .workspaces
+            .get_mut(&target_monitor)
+            .unwrap()
+            .push(Workspace::new());
+    }
+
+    seed_drag_session(&mut state, 0);
+    state.clear_drag_placeholder();
+    let drag = state.drag_state.take().unwrap();
+    state.active_workspace.insert(target_monitor, target_idx);
+    state.execute_cross_monitor_drag(0, &drag, target_monitor, 0, &Rect::new(0, 0, 500, 500));
+
+    let source = &state.workspaces[&1][0];
+    let max_scroll = (source.total_width() - source.visible_width(viewport_width)).max(0) as f64;
+    assert!(!source.contains_window(0));
+    assert!(state.workspaces[&target_monitor][target_idx].contains_window(0));
+    assert!(old_offset > max_scroll);
+    assert!(
+        (0.0..=max_scroll).contains(&source.scroll_offset()),
+        "source scroll {} exceeds new maximum {max_scroll}",
+        source.scroll_offset()
+    );
+}
+
+#[test]
+fn test_drag_to_other_monitor_repairs_source_scroll() {
+    assert_drag_to_other_workspace_repairs_source_scroll(2, 0);
+}
+
+#[test]
+fn test_drag_to_other_workspace_repairs_source_scroll() {
+    assert_drag_to_other_workspace_repairs_source_scroll(1, 1);
+}
+
 #[test]
 fn test_body_to_safe_band_then_shift_restores_multi_window_source() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());

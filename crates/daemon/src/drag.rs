@@ -1199,6 +1199,12 @@ impl AppState {
                     self.abandon_tiled_drop(drag);
                     return;
                 }
+                self.reconcile_drag_source_scroll(
+                    source_monitor,
+                    src_ws_idx,
+                    target_monitor,
+                    tgt_check_idx,
+                );
             }
         }
 
@@ -1386,7 +1392,14 @@ impl AppState {
                     .get_mut(&source_monitor)
                     .and_then(|v| v.get_mut(src_ws_idx))
                 {
-                    let _ = ws.remove_window(hwnd);
+                    if ws.remove_window(hwnd).is_ok() {
+                        self.reconcile_drag_source_scroll(
+                            source_monitor,
+                            src_ws_idx,
+                            target_monitor,
+                            tgt_idx,
+                        );
+                    }
                 }
             }
 
@@ -1594,6 +1607,8 @@ impl AppState {
             }
         };
 
+        self.reconcile_drag_source_scroll(source_monitor, src_idx, target_monitor, tgt_idx);
+
         debug!(
             "Cross-monitor drag: column with {} window(s) from monitor {} (row {}) → monitor {} (row {}) at index {}",
             column.len(),
@@ -1633,6 +1648,26 @@ impl AppState {
             warn!("Failed to apply layout after cross-monitor drag: {}", e);
         }
         self.sync_foreground_window();
+    }
+
+    fn reconcile_drag_source_scroll(
+        &mut self,
+        source_monitor: MonitorId,
+        source_idx: usize,
+        target_monitor: MonitorId,
+        target_idx: usize,
+    ) {
+        if (source_monitor, source_idx) == (target_monitor, target_idx) {
+            return;
+        }
+        let viewport_width = self.viewport_width_for(source_monitor);
+        if let Some(workspace) = self
+            .workspaces
+            .get_mut(&source_monitor)
+            .and_then(|workspaces| workspaces.get_mut(source_idx))
+        {
+            workspace.reconcile_scroll_bounds(viewport_width);
+        }
     }
 
     /// Snap a tiled window back to its layout position with animation.
