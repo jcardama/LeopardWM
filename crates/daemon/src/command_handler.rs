@@ -162,7 +162,12 @@ fn floating_policy(cmd: &IpcCommand) -> FloatingPolicy {
         | ConsumeFromLeft
         | ConsumeFromRight
         | ExpelToLeft
-        | ExpelToRight => FloatingPolicy::Ignore,
+        | ExpelToRight
+        | FocusRowUp
+        | FocusRowDown
+        | FocusRow { .. }
+        | MoveWindowToRowUp
+        | MoveWindowToRowDown => FloatingPolicy::Ignore,
         _ => FloatingPolicy::Unchanged,
     }
 }
@@ -574,13 +579,21 @@ impl AppState {
                 })
             }
             IpcCommand::MoveWindowToRowUp => self.execute_workspace_command(true, true, |ws, vw| {
+                let prev_row = ws.focused_row();
                 let _ = ws.move_window_to_row_up();
-                ws.ensure_focused_visible_animated(vw);
+                if ws.focused_row() != prev_row {
+                    ws.reconcile_scroll_bounds(vw);
+                    ws.ensure_focused_visible_animated(vw);
+                }
                 info!("Moved window to row up -> row {}", ws.focused_row());
             }),
             IpcCommand::MoveWindowToRowDown => self.execute_workspace_command(true, true, |ws, vw| {
+                let prev_row = ws.focused_row();
                 let _ = ws.move_window_to_row_down();
-                ws.ensure_focused_visible_animated(vw);
+                if ws.focused_row() != prev_row {
+                    ws.reconcile_scroll_bounds(vw);
+                    ws.ensure_focused_visible_animated(vw);
+                }
                 info!("Moved window to row down -> row {}", ws.focused_row());
             }),
             IpcCommand::FocusMonitorLeft => self.focus_monitor(monitor_to_left, "left"),
@@ -1088,11 +1101,16 @@ impl AppState {
             return self.handle_move_to_workspace_relative(!up);
         }
         let move_across_rows = self.config.behavior.move_window_across_rows;
-        self.execute_workspace_command(true, true, move |ws, _vw| {
+        self.execute_workspace_command(true, true, move |ws, vw| {
+            let prev_row = ws.focused_row();
             if up {
                 ws.move_window_up(move_across_rows);
             } else {
                 ws.move_window_down(move_across_rows);
+            }
+            if ws.focused_row() != prev_row {
+                ws.reconcile_scroll_bounds(vw);
+                ws.ensure_focused_visible_animated(vw);
             }
             info!("Moved window {} in column", if up { "up" } else { "down" });
         })
@@ -2114,7 +2132,10 @@ impl AppState {
             });
         }
         self.sync_foreground_window();
-        info!("Set active tab: row={}, column={}, tab={}", row, column, tab);
+        info!(
+            "Set active tab: row={}, column={}, tab={}",
+            row, column, tab
+        );
         IpcResponse::Ok
     }
 }
@@ -2188,7 +2209,7 @@ mod floating_policy_tests {
         IpcCommand::FocusEnd,
     ];
 
-    const IGNORED: [IpcCommand; 23] = [
+    const IGNORED: [IpcCommand; 28] = [
         IpcCommand::SetColumnWidth { fraction: 0.5 },
         IpcCommand::CycleWidth,
         IpcCommand::CycleWidthUp,
@@ -2212,6 +2233,11 @@ mod floating_policy_tests {
         IpcCommand::ConsumeFromRight,
         IpcCommand::ExpelToLeft,
         IpcCommand::ExpelToRight,
+        IpcCommand::FocusRowUp,
+        IpcCommand::FocusRowDown,
+        IpcCommand::FocusRow { index: 1 },
+        IpcCommand::MoveWindowToRowUp,
+        IpcCommand::MoveWindowToRowDown,
     ];
 
     fn monitor(id: MonitorId, x: i32) -> MonitorInfo {
@@ -2987,5 +3013,164 @@ mod wrap_cycle_tests {
         assert_eq!(ws.columns()[0].width(), 300);
         assert!((ws.columns()[0].height_weights()[0] - 0.3).abs() < 1e-9);
         assert!(ws.is_fullscreen());
+    }
+
+    #[test]
+    fn test_move_window_to_row_down_reconciles_scrolled_source_row() {
+        let mut config = Config::default();
+        config.layout.gap = 0;
+        config.layout.outer_gap_left = 0;
+        config.layout.outer_gap_right = 0;
+        config.layout.outer_gap_top = 0;
+        config.layout.outer_gap_bottom = 0;
+        config.layout.rows.split = vec!["50%".to_string(), "50%".to_string()];
+        let mut state = AppState::new_with_config(
+            config,
+            vec![MonitorInfo {
+                id: 1,
+                rect: Rect::new(0, 0, 1000, 1000),
+                work_area: Rect::new(0, 0, 1000, 1000),
+                is_primary: true,
+                device_name: "DISPLAY1".to_string(),
+                scale_factor: 1.0,
+            }],
+        );
+        let ws = state.focused_workspace_mut().unwrap();
+        // Narrow column + wide column in row 0 so focusing the wide column scrolls row 0 right.
+        ws.insert_window_in_row(100, 0, Some(600)).unwrap();
+        ws.insert_window_in_row(200, 0, Some(900)).unwrap();
+        ws.ensure_focused_visible(1000);
+        assert!(
+            ws.effective_scroll_offset_for_row(0) > 0.0,
+            "row 0 should be scrolled right before moving wide column"
+        );
+
+        assert_eq!(
+            state.handle_command(IpcCommand::MoveWindowToRowDown),
+            IpcResponse::Ok
+        );
+
+        let ws = state.focused_workspace().unwrap();
+        assert_eq!(ws.focused_row(), 1);
+        assert_eq!(ws.rows()[0].column_count(), 1);
+        assert_eq!(
+            ws.effective_scroll_offset_for_row(0),
+            0.0,
+            "row 0 scroll offset must reconcile back to 0 so the remaining narrow column is visible"
+        );
+    }
+
+    #[test]
+    fn test_move_window_down_across_rows_reconciles_source_and_reveals_target() {
+        let mut config = Config::default();
+        config.layout.gap = 0;
+        config.layout.outer_gap_left = 0;
+        config.layout.outer_gap_right = 0;
+        config.layout.outer_gap_top = 0;
+        config.layout.outer_gap_bottom = 0;
+        config.layout.rows.split = vec!["50%".to_string(), "50%".to_string()];
+        config.behavior.move_window_across_rows = true;
+        let mut state = AppState::new_with_config(
+            config,
+            vec![MonitorInfo {
+                id: 1,
+                rect: Rect::new(0, 0, 1000, 1000),
+                work_area: Rect::new(0, 0, 1000, 1000),
+                is_primary: true,
+                device_name: "DISPLAY1".to_string(),
+                scale_factor: 1.0,
+            }],
+        );
+        let ws = state.focused_workspace_mut().unwrap();
+        // Row 1: two wide columns scrolled to the right-hand column (col 1).
+        ws.insert_window_in_row(300, 1, Some(800)).unwrap();
+        ws.insert_window_in_row(400, 1, Some(800)).unwrap();
+        ws.ensure_focused_visible(1000);
+        let row1_scroll_before = ws.effective_scroll_offset_for_row(1);
+        assert!(row1_scroll_before > 0.0);
+
+        // Now move row 1 focus to col 0 and scroll row 1 to col 0? Wait: keep row 1 scrolled right
+        // at col 1, or insert into col 0 when row 1 is scrolled right:
+        // If row 1 is scrolled to col 1 (offset 600), and row 0 inserts a window after row 1's
+        // focused col 1, it lands at col 2 (x = 1600..2400), which is off-screen unless revealed!
+        ws.insert_window_in_row(100, 0, Some(600)).unwrap();
+        ws.insert_window_in_row(200, 0, Some(900)).unwrap();
+        ws.ensure_focused_visible(1000);
+        assert!(ws.effective_scroll_offset_for_row(0) > 0.0);
+
+        assert_eq!(
+            state.handle_command(IpcCommand::MoveWindowDown),
+            IpcResponse::Ok
+        );
+
+        let ws = state.focused_workspace().unwrap();
+        assert_eq!(ws.focused_row(), 1);
+        assert_eq!(ws.focused_window(), Some(200));
+        assert_eq!(
+            ws.effective_scroll_offset_for_row(0),
+            0.0,
+            "source row 0 scroll offset must reconcile back to 0"
+        );
+        assert!(
+            ws.rows()[1].is_animating()
+                || ws.effective_scroll_offset_for_row(1) > row1_scroll_before,
+            "target row 1 must scroll to reveal newly moved column 2 (before={row1_scroll_before})"
+        );
+    }
+
+    #[test]
+    fn test_cross_row_drag_reconciles_scrolled_source_row() {
+        let mut config = Config::default();
+        config.layout.gap = 0;
+        config.layout.outer_gap_left = 0;
+        config.layout.outer_gap_right = 0;
+        config.layout.outer_gap_top = 0;
+        config.layout.outer_gap_bottom = 0;
+        config.layout.rows.split = vec!["50%".to_string(), "50%".to_string()];
+        let mut state = AppState::new_with_config(
+            config,
+            vec![MonitorInfo {
+                id: 1,
+                rect: Rect::new(0, 0, 1000, 1000),
+                work_area: Rect::new(0, 0, 1000, 1000),
+                is_primary: true,
+                device_name: "DISPLAY1".to_string(),
+                scale_factor: 1.0,
+            }],
+        );
+        let ws = state.focused_workspace_mut().unwrap();
+        ws.insert_window_in_row(100, 0, Some(600)).unwrap();
+        ws.insert_window_in_row(200, 0, Some(900)).unwrap();
+        ws.ensure_focused_visible(1000);
+        assert!(ws.effective_scroll_offset_for_row(0) > 0.0);
+
+        let drag = crate::state::DragState {
+            hwnd: 200,
+            is_tiled: true,
+            source_monitor: 1,
+            source_workspace_idx: 0,
+            source_row: 0,
+            source_window_slot: 0,
+            current_row_index: 1,
+            current_column_index: 1,
+            last_drop_target: None,
+            last_hint_update: None,
+            removed_from_source: false,
+            preview_mode: crate::state::DragPreviewMode::None,
+            target_column_peers: Vec::new(),
+            source_column_peers: Vec::new(),
+            source_column_width: Some(900),
+        };
+        let drop_rect = Rect::new(100, 550, 900, 450);
+        state.execute_cross_monitor_drag(200, &drag, 1, 1, &drop_rect);
+
+        let ws = state.focused_workspace().unwrap();
+        assert_eq!(ws.focused_row(), 1);
+        assert_eq!(ws.rows()[0].column_count(), 1);
+        assert_eq!(
+            ws.effective_scroll_offset_for_row(0),
+            0.0,
+            "source row 0 scroll offset must reconcile back to 0 after cross-row drag"
+        );
     }
 }

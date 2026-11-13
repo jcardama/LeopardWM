@@ -461,10 +461,9 @@ impl Workspace {
         }
         let source_col = row.focused_column;
         let (width, cache) = match &row.maximized_column {
-            Some(state) if row.columns[source_col].contains(state.sentinel_window) => (
-                state.original_width,
-                state.width_fraction_cache.clone(),
-            ),
+            Some(state) if row.columns[source_col].contains(state.sentinel_window) => {
+                (state.original_width, state.width_fraction_cache.clone())
+            }
             _ => (
                 row.columns[source_col].width(),
                 row.columns[source_col].width_fraction_cache.clone(),
@@ -494,10 +493,9 @@ impl Workspace {
         }
         let source_col = row.focused_column;
         let (width, cache) = match &row.maximized_column {
-            Some(state) if row.columns[source_col].contains(state.sentinel_window) => (
-                state.original_width,
-                state.width_fraction_cache.clone(),
-            ),
+            Some(state) if row.columns[source_col].contains(state.sentinel_window) => {
+                (state.original_width, state.width_fraction_cache.clone())
+            }
             _ => (
                 row.columns[source_col].width(),
                 row.columns[source_col].width_fraction_cache.clone(),

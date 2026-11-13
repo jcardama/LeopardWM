@@ -27,13 +27,14 @@ const MAX_PIPE_SCOPE_SEGMENT_LEN: usize = 64;
 ///   subscribers using `serde(default)` parse v1 payloads cleanly.
 /// - v3: effective hotkey query — `QueryHotkeys`, `HotkeyList`, and the
 ///   associated binding/diagnostic records.
-/// - v4: complete workspace-state snapshots and monitor-targeted
-///   workspace switching. `ReleaseAllWindows` and `ToggleIgnore` are
-///   additive and retain v4 compatibility.
-/// - v5: multi-row scrolling strips — `RowSummary`, `row_index` on `WindowInfo`
-///   and `FocusedWindow`, `rows` and `focused_row` on `LayoutChanged` and
-///   `WorkspaceState`, new row focus and movement commands.
-pub const IPC_PROTOCOL_VERSION: u32 = 5;
+/// - v4: complete workspace-state snapshots, monitor-targeted workspace
+///   switching, and additive multi-row fields (`RowSummary`, `row_index` on
+///   `WindowInfo` and `FocusedWindow`, `rows` and `focused_row` on
+///   `LayoutChanged` and `WorkspaceState`, plus row focus/move commands).
+///   `ReleaseAllWindows`, `ToggleIgnore`, `CycleWidth`, `CycleHeight`, and
+///   multi-row extensions are additive with `serde(default)` and retain v4
+///   compatibility.
+pub const IPC_PROTOCOL_VERSION: u32 = 4;
 /// Minimum protocol version this crate supports.
 pub const IPC_MIN_SUPPORTED_PROTOCOL_VERSION: u32 = 1;
 
@@ -331,10 +332,10 @@ pub enum IpcEvent {
         focused_column: Option<usize>,
         /// Columns in left-to-right order (in the focused row).
         columns: Vec<ColumnSummary>,
-        /// Index of the focused row (0-based). Added in protocol v5.
+        /// Index of the focused row (0-based).
         #[serde(default)]
         focused_row: usize,
-        /// All rows in the workspace. Added in protocol v5.
+        /// All rows in the workspace.
         #[serde(default)]
         rows: Vec<RowSummary>,
     },
@@ -744,10 +745,10 @@ pub enum IpcResponse {
         /// Display name of the active workspace, or `None` if unnamed.
         #[serde(default)]
         active_workspace_name: Option<String>,
-        /// Index of the focused row (0-based). Added in protocol v5.
+        /// Index of the focused row (0-based).
         #[serde(default)]
         focused_row: usize,
-        /// All rows in the workspace. Added in protocol v5.
+        /// All rows in the workspace.
         #[serde(default)]
         rows: Vec<RowSummary>,
     },
@@ -755,7 +756,7 @@ pub enum IpcResponse {
     FocusedWindow {
         /// Window ID of the focused window, if any.
         window_id: Option<u64>,
-        /// Row index of the focused window (0-based). Added in protocol v5.
+        /// Row index of the focused window (0-based).
         #[serde(default)]
         row_index: usize,
         /// Column index of the focused tiled window. When `is_floating` is
@@ -1510,14 +1511,46 @@ mod tests {
     }
 
     #[test]
-    fn test_protocol_version_is_v5_for_multi_row() {
-        assert_eq!(IPC_PROTOCOL_VERSION, 5);
+    fn test_protocol_version_remains_v4_with_multi_row() {
+        assert_eq!(IPC_PROTOCOL_VERSION, 4);
         assert!(is_protocol_version_supported(1));
         assert!(is_protocol_version_supported(2));
         assert!(is_protocol_version_supported(3));
         assert!(is_protocol_version_supported(4));
-        assert!(is_protocol_version_supported(5));
-        assert!(!is_protocol_version_supported(6));
+        assert!(!is_protocol_version_supported(5));
+    }
+
+    #[test]
+    fn test_v4_wire_payloads_without_multi_row_fields_deserialize() {
+        let layout_json = r#"{"type":"layout_changed","monitor":1,"workspace_index":0,"focused_column":0,"columns":[]}"#;
+        let event: IpcEvent = serde_json::from_str(layout_json).unwrap();
+        assert!(matches!(
+            event,
+            IpcEvent::LayoutChanged {
+                focused_row: 0,
+                rows,
+                ..
+            } if rows.is_empty()
+        ));
+
+        let ws_json = r#"{"status":"workspace_state","columns":1,"windows":2,"focused_column":0,"focused_window":0,"scroll_offset":0.0,"total_width":1920}"#;
+        let resp: IpcResponse = serde_json::from_str(ws_json).unwrap();
+        assert!(matches!(
+            resp,
+            IpcResponse::WorkspaceState {
+                focused_row: 0,
+                rows,
+                ..
+            } if rows.is_empty()
+        ));
+
+        let focused_json =
+            r#"{"status":"focused_window","window_id":42,"column_index":1,"window_index":0}"#;
+        let focused: IpcResponse = serde_json::from_str(focused_json).unwrap();
+        assert!(matches!(
+            focused,
+            IpcResponse::FocusedWindow { row_index: 0, .. }
+        ));
     }
 
     #[test]

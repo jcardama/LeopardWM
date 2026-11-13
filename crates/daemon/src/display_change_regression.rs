@@ -70,7 +70,6 @@ impl FixtureDesktop {
             }
         }
     }
-
 }
 
 impl Drop for FixtureDesktop {

@@ -6323,7 +6323,10 @@ mod tests {
         assert_eq!(ws.columns()[0].windows(), &[1, 2]);
         assert_eq!(ws.columns()[1].windows(), &[3]);
         assert_eq!(
-            ws.rows()[0].maximized_column.as_ref().map(|m| m.sentinel_window),
+            ws.rows()[0]
+                .maximized_column
+                .as_ref()
+                .map(|m| m.sentinel_window),
             Some(3)
         );
 

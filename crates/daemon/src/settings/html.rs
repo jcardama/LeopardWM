@@ -2844,7 +2844,8 @@ mod tests {
         assert!(SETTINGS_HTML.contains("if (rowv >= 1 && rowv <= 4) r.row = rowv;"));
         assert!(SETTINGS_HTML
             .contains("parts.push(t('settings.text.row_index', {index:rowEl.value.trim()}));"));
-        assert!(SETTINGS_HTML
-            .contains("for (var i = Math.max(1, start); i <= Math.min(9, end); i++)"));
+        assert!(
+            SETTINGS_HTML.contains("for (var i = Math.max(1, start); i <= Math.min(9, end); i++)")
+        );
     }
 }

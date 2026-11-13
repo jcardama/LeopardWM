@@ -2800,15 +2800,15 @@ async fn handle_tab_action_with_restore(
             {
                 debug!("Rename popup already active, ignoring duplicate request");
             } else {
-                let initial =
-                    s.tab_title_for(monitor, workspace_idx, row_idx, column_idx, tab_idx);
-                let (tab_rect, colors) = match s
-                    .tab_strip_overlays
-                    .get(&(monitor, workspace_idx, row_idx, column_idx))
-                {
-                    Some(strip) => (strip.tab_screen_rect(tab_idx), strip.current_colors()),
-                    None => (None, None),
-                };
+                let initial = s.tab_title_for(monitor, workspace_idx, row_idx, column_idx, tab_idx);
+                let (tab_rect, colors) =
+                    match s
+                        .tab_strip_overlays
+                        .get(&(monitor, workspace_idx, row_idx, column_idx))
+                    {
+                        Some(strip) => (strip.tab_screen_rect(tab_idx), strip.current_colors()),
+                        None => (None, None),
+                    };
                 // Capture the HWND before opening the popup: column closes, reorders,
                 // or untabs during the dialog must not retarget the title override.
                 let target_hwnd_opt = s

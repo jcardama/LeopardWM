@@ -481,12 +481,12 @@ impl AppState {
                         continue;
                     };
                     let stored_active = col.active_tab_idx().unwrap_or(visible_tab);
-                    let active_idx =
-                        if col.get(stored_active).is_some_and(|w| !ws.is_minimized(w)) {
-                            stored_active
-                        } else {
-                            visible_tab
-                        };
+                    let active_idx = if col.get(stored_active).is_some_and(|w| !ws.is_minimized(w))
+                    {
+                        stored_active
+                    } else {
+                        visible_tab
+                    };
                     let tabs: Vec<TabLabel> = col
                         .windows()
                         .iter()

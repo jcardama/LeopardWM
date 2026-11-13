@@ -215,8 +215,7 @@ impl AppState {
                             .is_ok(),
                     };
                     if inserted {
-                        let new_col_idx =
-                            ws.find_window_location_rc(hwnd).map(|(_, col, _)| col);
+                        let new_col_idx = ws.find_window_location_rc(hwnd).map(|(_, col, _)| col);
                         if let Some(drag) = self.drag_state.as_mut() {
                             drag.removed_from_source = false;
                             if let Some(col) = new_col_idx {
@@ -1162,6 +1161,7 @@ impl AppState {
 
         // Remove the window from its source column (skip if already removed during drag).
         if !already_removed {
+            let source_viewport_width = self.viewport_width_for(source_monitor);
             if let Some(workspace) = self
                 .workspaces
                 .get_mut(&source_monitor)
@@ -1172,6 +1172,7 @@ impl AppState {
                     self.snap_back_tiled(source_monitor, drag.source_workspace_idx);
                     return;
                 }
+                workspace.reconcile_scroll_bounds(source_viewport_width);
             }
         }
 
@@ -1344,12 +1345,14 @@ impl AppState {
 
             // Remove real window from source (if not already removed during drag).
             if !drag.removed_from_source {
+                let source_viewport_width = self.viewport_width_for(source_monitor);
                 if let Some(ws) = self
                     .workspaces
                     .get_mut(&source_monitor)
                     .and_then(|v| v.get_mut(src_ws_idx))
                 {
                     let _ = ws.remove_window(hwnd);
+                    ws.reconcile_scroll_bounds(source_viewport_width);
                 }
             }
 
@@ -1548,6 +1551,15 @@ impl AppState {
                 return;
             }
         };
+
+        let source_viewport_width = self.viewport_width_for(source_monitor);
+        if let Some(source_ws) = self
+            .workspaces
+            .get_mut(&source_monitor)
+            .and_then(|v| v.get_mut(src_idx))
+        {
+            source_ws.reconcile_scroll_bounds(source_viewport_width);
+        }
 
         debug!(
             "Cross-monitor drag: column with {} window(s) from monitor {} (row {}) → monitor {} (row {}) at index {}",

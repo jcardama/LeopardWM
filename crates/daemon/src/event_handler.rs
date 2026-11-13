@@ -53,6 +53,20 @@ fn is_transient_console_host(title: &str, class_name: &str, executable: &str) ->
             || (!executable.is_empty() && title_lower == executable.to_ascii_lowercase()))
 }
 
+fn resolve_tile_row_and_in_column(
+    workspace: &Workspace,
+    rule_row: Option<usize>,
+    placement: config::NewWindowPlacement,
+) -> (Option<usize>, bool) {
+    let clamped_row = rule_row.map(|r| r.min(workspace.row_count().saturating_sub(1)));
+    let in_column = placement == config::NewWindowPlacement::InColumn
+        && clamped_row.map_or_else(
+            || workspace.column_count() > 0,
+            |r| workspace.column_count_for_row(r) > 0,
+        );
+    (clamped_row, in_column)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn insert_admitted_tile(
     workspace: &mut Workspace,
@@ -971,7 +985,10 @@ impl AppState {
         outcome
     }
 
-    fn default_centered_floating_rect(&self, monitor_id: leopardwm_platform_win32::MonitorId) -> Rect {
+    fn default_centered_floating_rect(
+        &self,
+        monitor_id: leopardwm_platform_win32::MonitorId,
+    ) -> Rect {
         let viewport = self
             .monitors
             .get(&monitor_id)
@@ -1191,18 +1208,17 @@ impl AppState {
                         workspace.add_floating(hwnd, rect).is_ok()
                     }
                     config::WindowAction::Tile => {
-                        let in_column = self.config.behavior.new_window_placement
-                            == config::NewWindowPlacement::InColumn
-                            && rule_row.map_or_else(
-                                || workspace.column_count() > 0,
-                                |r| workspace.column_count_for_row(r) > 0,
-                            );
+                        let (clamped_row, in_column) = resolve_tile_row_and_in_column(
+                            workspace,
+                            rule_row,
+                            self.config.behavior.new_window_placement,
+                        );
                         let ok = insert_admitted_tile(
                             workspace,
                             hwnd,
                             rule_width_px,
                             rule_slot,
-                            rule_row,
+                            clamped_row,
                             in_column,
                             take_workspace_focus,
                             recreated_slot.as_ref(),
@@ -4577,6 +4593,33 @@ mod edit_config_match_tests {
             None,
             Some(1),
             true,
+            true,
+            None,
+        ));
+        assert_eq!(ws.column_count_for_row(1), 1);
+        assert_eq!(ws.column_for_row(1, 0).unwrap().windows(), &[100, 101]);
+    }
+
+    #[test]
+    fn rule_row_past_last_row_clamps_before_in_column_check() {
+        let mut ws = super::Workspace::new();
+        ws.set_row_layout(&[0.5, 0.5]);
+        ws.insert_window_in_row(100, 1, Some(800)).unwrap();
+
+        let (clamped_row, in_column) = super::resolve_tile_row_and_in_column(
+            &ws,
+            Some(3),
+            crate::config::NewWindowPlacement::InColumn,
+        );
+        assert_eq!(clamped_row, Some(1));
+        assert!(in_column);
+        assert!(super::insert_admitted_tile(
+            &mut ws,
+            101,
+            Some(800),
+            None,
+            clamped_row,
+            in_column,
             true,
             None,
         ));
