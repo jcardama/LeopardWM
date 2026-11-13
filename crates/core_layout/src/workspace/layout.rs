@@ -3,50 +3,144 @@ use crate::*;
 use crate::workspace::Workspace;
 
 impl Workspace {
-    /// Computes target rectangles and visibility; negative gaps are treated as zero.
-    pub fn compute_placements(&self, viewport: Rect) -> Vec<WindowPlacement> {
-        // Use rounding instead of truncation to prevent sub-pixel jitter
-        let viewport_left = self.scroll_offset.round() as i32;
-
-        if let Some(fs_wid) = self.fullscreen_window {
-            return self.compute_fullscreen_placements(fs_wid, viewport, viewport_left);
+    /// Calculate the sub-viewport rectangles for each row in the workspace.
+    pub fn row_rects(&self, viewport: Rect) -> Vec<Rect> {
+        let num_rows = self.rows.len();
+        if num_rows == 0 {
+            return Vec::new();
         }
 
-        self.compute_non_fullscreen_placements(viewport, viewport_left)
+        let row_gap = self.row_gap.max(0);
+        let outer_top = self.outer_gap_top.max(0);
+        let outer_bottom = self.outer_gap_bottom.max(0);
+        let total_row_gaps = row_gap.saturating_mul(num_rows.saturating_sub(1) as i32);
+        let available_height = viewport
+            .height
+            .saturating_sub(outer_top)
+            .saturating_sub(outer_bottom)
+            .saturating_sub(total_row_gaps)
+            .max(0);
+
+        let total_shares: f64 = self.row_shares.iter().map(|&s| s.max(0.0)).sum();
+        let total_shares = if total_shares > 0.0 {
+            total_shares
+        } else {
+            num_rows as f64
+        };
+
+        let mut row_heights = Vec::with_capacity(num_rows);
+        let mut allocated_height = 0;
+        for i in 0..num_rows {
+            if i == num_rows - 1 {
+                row_heights.push((available_height - allocated_height).max(0));
+            } else {
+                let share = self.row_shares.get(i).copied().unwrap_or(1.0).max(0.0);
+                let h = ((available_height as f64) * (share / total_shares)).round() as i32;
+                let h = h.max(0);
+                allocated_height += h;
+                row_heights.push(h);
+            }
+        }
+
+        let mut rects = Vec::with_capacity(num_rows);
+        let mut cur_y = viewport.y + outer_top;
+        for h in row_heights {
+            rects.push(Rect::new(viewport.x, cur_y, viewport.width, h));
+            cur_y = cur_y.saturating_add(h).saturating_add(row_gap);
+        }
+        rects
     }
 
-    /// Computes non-fullscreen placements with scroll pinned to zero for the workspace overview.
-    /// The caller supplies a viewport wide enough for the strip.
+    /// Compute placements for all windows given a viewport.
+    ///
+    /// Returns a list of WindowPlacement structs indicating where each window
+    /// should be positioned and whether it's visible or off-screen.
+    ///
+    /// Note: Negative gaps are treated as zero for calculation purposes.
+    pub fn compute_placements(&self, viewport: Rect) -> Vec<WindowPlacement> {
+        let offsets: Vec<i32> = self
+            .rows
+            .iter()
+            .map(|r| r.scroll_offset.round() as i32)
+            .collect();
+
+        if let Some(fs_wid) = self.fullscreen_window {
+            return self.compute_fullscreen_placements(fs_wid, viewport, &offsets);
+        }
+
+        self.compute_non_fullscreen_placements(viewport, &offsets)
+    }
+
+    /// Compute placements for the ENTIRE strip, ignoring scroll: viewport
+    /// left is pinned to 0 for all rows and the caller supplies a viewport wide enough
+    /// for every column, so nothing is marked off-screen. Used by the
+    /// workspace overview to miniaturize the whole strip.
     pub fn placements_for_full_strip(&self, viewport: Rect) -> Vec<WindowPlacement> {
-        self.compute_non_fullscreen_placements(viewport, 0)
+        let offsets = vec![0; self.rows.len()];
+        self.compute_non_fullscreen_placements(viewport, &offsets)
     }
 
+    /// Compute non-fullscreen placements for specific viewport-left offsets per row.
+    /// Used by both static and animated placement paths.
     fn compute_non_fullscreen_placements(
         &self,
         viewport: Rect,
-        viewport_left: i32,
+        viewport_lefts: &[i32],
     ) -> Vec<WindowPlacement> {
         let mut placements = Vec::new();
+        let row_rects = self.row_rects(viewport);
 
+        for (row_idx, row) in self.rows.iter().enumerate() {
+            let row_rect = row_rects.get(row_idx).copied().unwrap_or(viewport);
+            let viewport_left = viewport_lefts.get(row_idx).copied().unwrap_or(0);
+            self.compute_row_placements(row_idx, row, row_rect, viewport_left, &mut placements);
+        }
+
+        // Add floating windows (visible unless minimized, at their absolute positions)
+        for floating in &self.floating_windows {
+            if self.minimized_windows.contains(&floating.id) {
+                continue;
+            }
+            placements.push(WindowPlacement {
+                window_id: floating.id,
+                rect: floating.rect,
+                visibility: Visibility::Visible,
+                column_index: usize::MAX, // Sentinel for floating windows
+                row_index: usize::MAX,
+            });
+        }
+
+        placements
+    }
+
+    /// Compute placements for a single row within its allocated row rectangle.
+    fn compute_row_placements(
+        &self,
+        row_idx: usize,
+        row: &WorkspaceRow,
+        row_rect: Rect,
+        viewport_left: i32,
+        placements: &mut Vec<WindowPlacement>,
+    ) {
         let gap = self.gap.max(0);
         let outer_left = self.outer_gap_left.max(0);
-        let outer_top = self.outer_gap_top.max(0);
-        let outer_bottom = self.outer_gap_bottom.max(0);
 
-        let vis_w = self.visible_width(viewport.width);
+        // Visible strip area inside viewport padding
+        let vis_w = self.visible_width(row_rect.width);
         let visible_right = viewport_left.saturating_add(vis_w);
 
         // Strip starts at 0 — outer gaps are viewport padding
         let mut current_x: i32 = 0;
 
-        for (col_idx, column) in self.columns.iter().enumerate() {
+        for (col_idx, column) in row.columns.iter().enumerate() {
             let eff_width = self.effective_column_width(column);
 
             let col_strip_x = current_x;
             let col_strip_right = col_strip_x.saturating_add(eff_width);
 
-            // Signed arithmetic preserves negative positions for partially scrolled columns.
-            let natural_screen_x = col_strip_x - viewport_left + viewport.x + outer_left;
+            // Transform to screen coordinates:
+            // strip_x → screen_x = strip_x - scroll_offset + row_rect.x + outer_left
+            let natural_screen_x = col_strip_x - viewport_left + row_rect.x + outer_left;
 
             let visibility = if col_strip_right <= viewport_left {
                 Visibility::OffScreenLeft
@@ -56,16 +150,12 @@ impl Workspace {
                 Visibility::Visible
             };
 
-            // Keep off-screen columns beyond viewport padding when DWM cloaking is delayed or
-            // ineffective.
-            // The clamp boundary matches the cloak boundary in platform_win32 apply_placements, so
-            // the jump is hidden.
             let col_screen_x = match visibility {
                 Visibility::OffScreenRight => {
-                    natural_screen_x.max(viewport.x.saturating_add(viewport.width))
+                    natural_screen_x.max(row_rect.x.saturating_add(row_rect.width))
                 }
                 Visibility::OffScreenLeft => {
-                    natural_screen_x.min(viewport.x.saturating_sub(eff_width))
+                    natural_screen_x.min(row_rect.x.saturating_sub(eff_width))
                 }
                 Visibility::Visible => natural_screen_x,
             };
@@ -78,25 +168,21 @@ impl Workspace {
                     .filter(|(_, w)| !self.minimized_windows.contains(w))
                     .map(|(i, &w)| (i, w))
                     .collect(),
-                crate::ColumnMode::Tabbed { .. } => {
-                    // Rendering and the tab-strip overlay must select the same visible tab.
-                    column
-                        .effective_visible_tab(|w| self.minimized_windows.contains(&w))
-                        .and_then(|i| column.windows().get(i).map(|&w| (i, w)))
-                        .into_iter()
-                        .collect()
-                }
+                crate::ColumnMode::Tabbed { .. } => column
+                    .effective_visible_tab(|w| self.minimized_windows.contains(&w))
+                    .and_then(|i| column.windows().get(i).map(|&w| (i, w)))
+                    .into_iter()
+                    .collect(),
             };
 
             if !self.is_column_active(column) {
                 continue;
             }
 
-            // Fallback when cloaking fails: park hidden tabs a viewport width left, since SWP_NOSIZE
-            // keeps their size.
+            // In Tabbed mode, off-screen tabs get an off-screen placement
             if column.is_tabbed() {
                 let on_screen_idx = visible_windows.first().map(|(i, _)| *i);
-                let offscreen_x = viewport.x.saturating_sub(viewport.width.max(1));
+                let offscreen_x = row_rect.x.saturating_sub(row_rect.width.max(1));
                 for (i, &wid) in column.windows().iter().enumerate() {
                     if Some(i) == on_screen_idx {
                         continue;
@@ -106,27 +192,21 @@ impl Workspace {
                     }
                     placements.push(WindowPlacement {
                         window_id: wid,
-                        rect: Rect::new(offscreen_x, viewport.y, 0, 0),
+                        rect: Rect::new(offscreen_x, row_rect.y, 0, 0),
                         visibility: Visibility::OffScreenLeft,
                         column_index: col_idx,
+                        row_index: row_idx,
                     });
                 }
             }
 
-            // Reserve overlay space inside the column so the tab strip cannot land above the work
-            // area.
             let column_top_reserve = if column.is_tabbed() {
                 self.tab_strip_reserve_px.max(0)
             } else {
                 0
             };
 
-            let usable_height = viewport
-                .height
-                .saturating_sub(outer_top)
-                .saturating_sub(outer_bottom)
-                .saturating_sub(column_top_reserve)
-                .max(0);
+            let usable_height = row_rect.height.saturating_sub(column_top_reserve).max(0);
             let window_count = visible_windows.len() as i32;
             let window_gaps = if window_count > 1 {
                 gap.saturating_mul(window_count - 1)
@@ -135,8 +215,6 @@ impl Workspace {
             };
             let available_height = (usable_height - window_gaps).max(0);
 
-            // Recorded minima take priority; flexible windows share the remaining height by weight.
-            // The last window absorbs leftover space.
             let visible_weights: Vec<f64> = if column.height_weights.len() == column.windows().len()
             {
                 visible_windows
@@ -151,26 +229,25 @@ impl Workspace {
                 .iter()
                 .map(|(_, wid)| self.window_min_heights.get(wid).copied().unwrap_or(0))
                 .collect();
-            let total_min: i32 = min_heights.iter().sum();
-            let flex_height = (available_height - total_min).max(0);
 
-            let flex_weight_sum: f64 = visible_weights
+            let pinned_sum: i32 = min_heights.iter().sum();
+            let has_flex = min_heights.contains(&0);
+            let flex_height = (available_height - pinned_sum).max(0);
+            let flex_weight_sum: f64 = visible_windows
                 .iter()
-                .zip(min_heights.iter())
-                .filter(|(_, m)| **m == 0)
-                .map(|(w, _)| *w)
-                .sum();
-            let has_flex = flex_weight_sum > 0.0;
+                .enumerate()
+                .filter(|(idx, _)| min_heights[*idx] == 0)
+                .map(|(idx, _)| visible_weights[idx])
+                .sum::<f64>()
+                .max(0.001);
 
-            let mut current_y = viewport.y + outer_top + column_top_reserve;
+            let mut current_y = row_rect.y + column_top_reserve;
+            let mut allocated_height = 0;
 
             for (win_idx, &(_, window_id)) in visible_windows.iter().enumerate() {
                 let is_last = win_idx == visible_windows.len() - 1;
                 let height = if is_last {
-                    // Honor the last window's minimum even when it overflows the viewport.
-                    let remainder =
-                        (viewport.y + viewport.height - outer_bottom - current_y).max(0);
-                    remainder.max(min_heights[win_idx])
+                    (available_height - allocated_height).max(min_heights[win_idx])
                 } else if min_heights[win_idx] > 0 {
                     min_heights[win_idx]
                 } else if has_flex {
@@ -185,54 +262,54 @@ impl Workspace {
                     rect: Rect::new(col_screen_x, current_y, eff_width, height),
                     visibility,
                     column_index: col_idx,
+                    row_index: row_idx,
                 });
 
                 current_y = current_y.saturating_add(height).saturating_add(gap);
+                allocated_height = allocated_height.saturating_add(height);
             }
 
             current_x = current_x.saturating_add(eff_width).saturating_add(gap);
         }
-
-        for floating in &self.floating_windows {
-            if self.minimized_windows.contains(&floating.id) {
-                continue;
-            }
-            placements.push(WindowPlacement {
-                window_id: floating.id,
-                rect: floating.rect,
-                visibility: Visibility::Visible,
-                column_index: usize::MAX, // Sentinel for floating windows
-            });
-        }
-
-        placements
     }
 
-    /// Computes placements using the animated scroll offset when an animation is active.
+    /// Compute placements for all windows, using animated scroll offset if active.
+    ///
+    /// This is similar to `compute_placements` but uses `effective_scroll_offset()`
+    /// per row to support smooth scrolling animations.
     pub fn compute_placements_animated(&self, viewport: Rect) -> Vec<WindowPlacement> {
-        let viewport_left = self.effective_scroll_offset().round() as i32;
+        let offsets: Vec<i32> = self
+            .rows
+            .iter()
+            .map(|r| match &r.active_animation {
+                Some(anim) => anim.current_offset().round() as i32,
+                None => r.scroll_offset.round() as i32,
+            })
+            .collect();
 
         if let Some(fs_wid) = self.fullscreen_window {
-            return self.compute_fullscreen_placements(fs_wid, viewport, viewport_left);
+            return self.compute_fullscreen_placements(fs_wid, viewport, &offsets);
         }
 
-        self.compute_non_fullscreen_placements(viewport, viewport_left)
+        self.compute_non_fullscreen_placements(viewport, &offsets)
     }
 
-    // Hidden windows keep their real rects: they move with SWP_NOSIZE, so a zeroed rect would snap
-    // them to the top-left.
-    // Pinned floating windows remain visible above fullscreen.
+    /// Compute placements when a window is fullscreen.
+    ///
+    /// The fullscreen window gets the full viewport; all others are marked
+    /// off-screen but KEEP their real layout rects. Pinned floating windows stay
+    /// Visible at their floating rect, above fullscreen.
     fn compute_fullscreen_placements(
         &self,
         fs_wid: WindowId,
         viewport: Rect,
-        viewport_left: i32,
+        viewport_lefts: &[i32],
     ) -> Vec<WindowPlacement> {
         if !self.contains_window(fs_wid) || self.minimized_windows.contains(&fs_wid) {
-            return self.compute_non_fullscreen_placements(viewport, viewport_left);
+            return self.compute_non_fullscreen_placements(viewport, viewport_lefts);
         }
 
-        let mut placements = self.compute_non_fullscreen_placements(viewport, viewport_left);
+        let mut placements = self.compute_non_fullscreen_placements(viewport, viewport_lefts);
 
         for placement in &mut placements {
             if placement.window_id == fs_wid {

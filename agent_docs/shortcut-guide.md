@@ -44,6 +44,16 @@ protected chords, and recorder suspension have different runtime semantics. A fu
 should therefore use a descriptive enum rather than a misleading per-binding
 boolean.
 
+### Multi-row navigation actions
+
+The hotkey catalog includes four row actions:
+- `focus_row_up` (`Ctrl+Alt+PageUp` default, group "Focus")
+- `focus_row_down` (`Ctrl+Alt+PageDown` default, group "Focus")
+- `move_window_to_row_up` (unbound by default, group "Move window within column")
+- `move_window_to_row_down` (unbound by default, group "Move window within column")
+
+`move_to_workspace_prev` and `move_to_workspace_next` retain their `Ctrl+Alt+Shift+PageUp` / `Ctrl+Alt+Shift+PageDown` default chords; `move_window_to_row_up` and `move_window_to_row_down` have no default chords bound (`None`) and are available for custom binding in `config.toml` or Settings.
+
 ## Shared resolution and collision precedence
 
 `daemon::hotkey_resolution::resolve_hotkeys` is a pure resolver used by both

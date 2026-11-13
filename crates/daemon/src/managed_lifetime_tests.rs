@@ -112,6 +112,7 @@ fn seed_recycled_lifetime_caches(state: &mut AppState, hwnd: u64) {
         MoveOrigin {
             monitor: 1,
             ws_idx: 0,
+            row: 0,
             column: 0,
             sibling: None,
         },
@@ -121,6 +122,7 @@ fn seed_recycled_lifetime_caches(state: &mut AppState, hwnd: u64) {
         MoveOrigin {
             monitor: 1,
             ws_idx: 0,
+            row: 0,
             column: 0,
             sibling: Some(hwnd),
         },
@@ -168,7 +170,7 @@ fn focused_column_width(state: &AppState, hwnd: u64) -> i32 {
     let workspace = state
         .focused_workspace()
         .unwrap_or_else(|| panic!("hwnd {hwnd} should be on the focused workspace"));
-    let (column, _) = workspace
+    let (column, _) = workspace.rows()[0]
         .find_window_location(hwnd)
         .unwrap_or_else(|| panic!("hwnd {hwnd} should occupy a column"));
     workspace.columns()[column].width()
@@ -567,7 +569,9 @@ fn removed_tiled_drag(hwnd: u64) -> DragState {
         is_tiled: true,
         source_monitor: 1,
         source_workspace_idx: 0,
+        source_row: 0,
         source_window_slot: 0,
+        current_row_index: 0,
         current_column_index: 0,
         last_drop_target: None,
         last_hint_update: None,
@@ -575,6 +579,7 @@ fn removed_tiled_drag(hwnd: u64) -> DragState {
         preview_mode: DragPreviewMode::None,
         target_column_peers: Vec::new(),
         source_column_peers: Vec::new(),
+        source_column_width: None,
     }
 }
 

@@ -164,17 +164,22 @@ fn complete_membership_includes_inactive_and_floating_excludes_placeholders() {
                 hwnd,
                 is_floating,
                 is_sticky,
+                row_index,
             } => {
                 assert_eq!(monitor_device_name, "DISPLAY2");
                 assert_eq!(*workspace_index, 3);
-                Some((*hwnd, *is_floating, *is_sticky))
+                Some((*hwnd, *is_floating, *is_sticky, *row_index))
             }
             _ => None,
         })
         .collect();
     assert_eq!(
         windows,
-        vec![(100, false, false), (101, false, false), (200, true, true)]
+        vec![
+            (100, false, false, Some(0)),
+            (101, false, false, Some(0)),
+            (200, true, true, None)
+        ]
     );
     assert!(all.iter().any(
         |r| matches!(r, R::Workspace { workspace_index: 0, name: Some(n), .. } if n == "code")
@@ -435,7 +440,8 @@ fn membership_moves_and_scratchpad_visibility_replace_the_whole_model() {
             workspace_index: 4,
             hwnd: 10,
             is_floating: true,
-            is_sticky: false
+            is_sticky: false,
+            row_index: None,
         }]
     );
     state.scratchpad = Some(ScratchpadState {
@@ -443,6 +449,7 @@ fn membership_moves_and_scratchpad_visibility_replace_the_whole_model() {
         shown: false,
         saved_rect: None,
         frame_insets: None,
+        origin_row: 0,
         origin_column: 0,
         origin_sibling: None,
     });
@@ -505,7 +512,9 @@ fn drag_preview_keeps_temporarily_detached_window_in_source_workspace() {
         is_tiled: true,
         source_monitor: 1,
         source_workspace_idx: 0,
+        source_row: 0,
         source_window_slot: 0,
+        current_row_index: 0,
         current_column_index: 0,
         last_drop_target: None,
         last_hint_update: None,
@@ -513,6 +522,7 @@ fn drag_preview_keeps_temporarily_detached_window_in_source_workspace() {
         preview_mode: DragPreviewMode::Body,
         target_column_peers: Vec::new(),
         source_column_peers: Vec::new(),
+        source_column_width: None,
     });
     state.publish_workspace_state_if_changed();
     assert!(records(&state).iter().any(|r| matches!(r, R::Window { monitor_device_name, hwnd: 10, .. } if monitor_device_name == "DISPLAY1")));
@@ -529,4 +539,67 @@ fn drag_preview_keeps_temporarily_detached_window_in_source_workspace() {
     state.drag_state = None;
     state.publish_workspace_state_if_changed();
     assert!(records(&state).iter().any(|r| matches!(r, R::Window { monitor_device_name, hwnd: 10, .. } if monitor_device_name == "DISPLAY2")));
+}
+
+#[test]
+fn multi_row_workspace_snapshot_includes_focused_row_rows_and_window_row_index() {
+    use leopardwm_ipc::WorkspaceStateRecord as R;
+    let mut state = fixture();
+    let ws = &mut state.workspaces.get_mut(&1).unwrap()[0];
+    ws.set_row_layout(&[0.5, 0.5]);
+    ws.insert_window_in_row(100, 0, Some(600)).unwrap();
+    ws.insert_window_in_row(200, 1, Some(700)).unwrap();
+    ws.add_floating(300, Rect::new(0, 0, 100, 100)).unwrap();
+    ws.focus_row(1);
+    state.publish_workspace_state_if_changed();
+
+    let all = records(&state);
+    let ws_record = all
+        .iter()
+        .find(|r| {
+            matches!(
+                r,
+                R::Workspace {
+                    monitor_device_name,
+                    workspace_index: 0,
+                    ..
+                } if monitor_device_name == "DISPLAY1"
+            )
+        })
+        .expect("workspace 0 record on DISPLAY1");
+
+    match ws_record {
+        R::Workspace {
+            focused_row, rows, ..
+        } => {
+            assert_eq!(*focused_row, 1);
+            assert_eq!(rows.len(), 2);
+            assert_eq!(rows[0].columns.len(), 1);
+            assert_eq!(rows[0].columns[0].window_ids, vec![100]);
+            assert_eq!(rows[0].columns[0].width_px, 600);
+            assert_eq!(rows[1].columns.len(), 1);
+            assert_eq!(rows[1].columns[0].window_ids, vec![200]);
+            assert_eq!(rows[1].columns[0].width_px, 700);
+        }
+        _ => unreachable!(),
+    }
+
+    let mut row_indices: Vec<(u64, Option<usize>)> = all
+        .iter()
+        .filter_map(|r| match r {
+            R::Window {
+                monitor_device_name,
+                workspace_index: 0,
+                hwnd,
+                row_index,
+                ..
+            } if monitor_device_name == "DISPLAY1" => Some((*hwnd, *row_index)),
+            _ => None,
+        })
+        .collect();
+    row_indices.sort_by_key(|(hwnd, _)| *hwnd);
+    assert_eq!(
+        row_indices,
+        vec![(100, Some(0)), (200, Some(1)), (300, None)]
+    );
 }

@@ -57,13 +57,118 @@ impl AppState {
                 active_workspace_index: self.active_workspace_idx(monitor.id) as u8,
             });
             for index in 0..9 {
+                let workspace = self.workspaces.get(&monitor.id).and_then(|w| w.get(index));
+                let (focused_row, rows) = if let Some(workspace) = workspace {
+                    let matching_drag = detached_drag.filter(|drag| {
+                        drag.source_monitor == monitor.id
+                            && drag.source_workspace_idx == index
+                            && drag.is_tiled
+                    });
+                    let rows = workspace
+                        .rows()
+                        .iter()
+                        .enumerate()
+                        .map(|(r_idx, row)| {
+                            let mut columns: Vec<leopardwm_ipc::ColumnSummary> = row
+                                .columns()
+                                .iter()
+                                .filter_map(|col| {
+                                    let window_ids: Vec<u64> = col
+                                        .windows()
+                                        .iter()
+                                        .copied()
+                                        .filter(|&hwnd| {
+                                            hwnd != DRAG_PLACEHOLDER_HWND
+                                                && !self.scratchpad.is_some_and(|s| {
+                                                    !s.shown && s.window_id == hwnd
+                                                })
+                                        })
+                                        .collect();
+                                    if window_ids.is_empty() {
+                                        return None;
+                                    }
+                                    let height_weights = if window_ids.len() == col.windows().len()
+                                    {
+                                        col.height_weights().to_vec()
+                                    } else {
+                                        vec![1.0 / window_ids.len() as f64; window_ids.len()]
+                                    };
+                                    let mode = match col.mode() {
+                                        leopardwm_core_layout::ColumnMode::Vertical => {
+                                            leopardwm_ipc::ColumnSummaryMode::Vertical
+                                        }
+                                        leopardwm_core_layout::ColumnMode::Tabbed {
+                                            active_idx,
+                                        } => leopardwm_ipc::ColumnSummaryMode::Tabbed {
+                                            active_idx: (*active_idx)
+                                                .min(window_ids.len().saturating_sub(1)),
+                                        },
+                                    };
+                                    Some(leopardwm_ipc::ColumnSummary {
+                                        window_ids,
+                                        width_px: workspace.effective_column_width(col),
+                                        height_weights,
+                                        mode,
+                                    })
+                                })
+                                .collect();
+                            if let Some(drag) = matching_drag.filter(|d| d.source_row == r_idx) {
+                                let merged_into_peer = !drag.source_column_peers.is_empty()
+                                    && if let Some(col) = columns.iter_mut().find(|c| {
+                                        c.window_ids
+                                            .iter()
+                                            .any(|w| drag.source_column_peers.contains(w))
+                                    }) {
+                                        let slot =
+                                            drag.source_window_slot.min(col.window_ids.len());
+                                        col.window_ids.insert(slot, drag.hwnd);
+                                        col.height_weights = vec![
+                                            1.0 / col.window_ids.len() as f64;
+                                            col.window_ids.len()
+                                        ];
+                                        true
+                                    } else {
+                                        false
+                                    };
+                                if !merged_into_peer {
+                                    let idx = drag.current_column_index.min(columns.len());
+                                    columns.insert(
+                                        idx,
+                                        leopardwm_ipc::ColumnSummary {
+                                            window_ids: vec![drag.hwnd],
+                                            width_px: drag.source_column_width.unwrap_or_else(
+                                                || workspace.default_column_width(),
+                                            ),
+                                            height_weights: vec![1.0],
+                                            mode: leopardwm_ipc::ColumnSummaryMode::Vertical,
+                                        },
+                                    );
+                                }
+                            }
+                            let focused_column = if columns.is_empty() {
+                                None
+                            } else {
+                                Some(row.focused_column().min(columns.len() - 1))
+                            };
+                            leopardwm_ipc::RowSummary {
+                                columns,
+                                focused_column,
+                                scroll_offset: row.scroll_offset(),
+                            }
+                        })
+                        .collect();
+                    (workspace.focused_row(), rows)
+                } else {
+                    (0, Vec::new())
+                };
                 records.push(WorkspaceStateRecord::Workspace {
                     monitor_device_name: device.clone(),
                     workspace_index: index as u8,
                     name: self.config.workspaces.name_for(index),
+                    focused_row,
+                    rows,
                 });
-                let Some(workspace) = self.workspaces.get(&monitor.id).and_then(|w| w.get(index))
-                else {
+                let Some(workspace) = workspace else {
                     continue;
                 };
                 let mut windows = workspace.all_window_ids();
@@ -82,14 +187,27 @@ impl AppState {
                     {
                         continue;
                     }
+                    let is_floating = workspace.is_floating(hwnd)
+                        || detached_drag.is_some_and(|drag| drag.hwnd == hwnd && !drag.is_tiled);
+                    let row_index = if is_floating {
+                        None
+                    } else {
+                        workspace
+                            .find_window_location_rc(hwnd)
+                            .map(|(r, _, _)| r)
+                            .or_else(|| {
+                                detached_drag
+                                    .filter(|drag| drag.hwnd == hwnd && drag.is_tiled)
+                                    .map(|drag| drag.source_row)
+                            })
+                    };
                     records.push(WorkspaceStateRecord::Window {
                         monitor_device_name: device.clone(),
                         workspace_index: index as u8,
                         hwnd,
-                        is_floating: workspace.is_floating(hwnd)
-                            || detached_drag
-                                .is_some_and(|drag| drag.hwnd == hwnd && !drag.is_tiled),
+                        is_floating,
                         is_sticky: self.sticky_windows.contains(&hwnd),
+                        row_index,
                     });
                 }
             }

@@ -72,8 +72,8 @@ pub(crate) enum DaemonEvent {
     UpdateAvailable(String),
     /// User invoked an action on a tab in the tab strip overlay. The
     /// strip captures the column identity (`monitor`, `workspace_idx`,
-    /// `column_idx`) at `show()` time so the action routes to the column
-    /// the user *saw* — not whatever happens to be focused when the main
+    /// `row_idx`, `column_idx`) at `show()` time so the action routes to the
+    /// column the user *saw* — not whatever happens to be focused when the main
     /// loop processes this event. (Focus can change between the
     /// originating WM_* arriving in the strip's WndProc and the main loop
     /// draining the channel.) `action` discriminates left-click vs.
@@ -81,6 +81,7 @@ pub(crate) enum DaemonEvent {
     TabAction {
         monitor: isize,
         workspace_idx: usize,
+        row_idx: usize,
         column_idx: usize,
         tab_idx: usize,
         action: TabAction,
@@ -103,10 +104,11 @@ pub(crate) enum DaemonEvent {
     TabRenameSubmitted {
         monitor: isize,
         workspace_idx: usize,
+        row_idx: usize,
         column_idx: usize,
         tab_idx: usize,
         /// HWND captured when the popup was spawned. Authoritative
-        /// rename target — independent of the (monitor/ws/col/tab)
+        /// rename target — independent of the (monitor/ws/row/col/tab)
         /// indices in case the column mutated while the popup was open.
         target_hwnd: u64,
         new_title: Option<String>,
@@ -132,12 +134,13 @@ pub(crate) enum DaemonEvent {
 ///
 /// `target_hwnd` is captured at spawn time so the rename override lands
 /// on the *original* window even if the column mutates (tab closed,
-/// reordered, untabbed) while the popup is open. The monitor/ws/col/tab
+/// reordered, untabbed) while the popup is open. The monitor/ws/row/col/tab
 /// indices are kept for diagnostics + strip refresh routing.
 #[derive(Debug, Clone)]
 pub(crate) struct TabRenameResult {
     pub(crate) monitor: isize,
     pub(crate) workspace_idx: usize,
+    pub(crate) row_idx: usize,
     pub(crate) column_idx: usize,
     pub(crate) tab_idx: usize,
     pub(crate) target_hwnd: u64,
