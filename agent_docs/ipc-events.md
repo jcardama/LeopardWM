@@ -38,7 +38,7 @@ an additive v4 command that pauses tiling and cascades every managed window whil
 retaining workspace membership. It has no prompt; a failed recovery or live
 placement outcome returns an error and leaves tiling paused.
 `CycleWidth` (`cycle_width`) and `CycleHeight` (`cycle_height`) are additive v4 commands that cycle to the next larger preset, wrapping to the smallest at the end.
-Multi-row layout support adds additive v4 commands — `FocusRow` (`{"type":"focus_row","index":0}`), `FocusRowUp` (`{"type":"focus_row_up"}`), `FocusRowDown` (`{"type":"focus_row_down"}`), `MoveWindowToRowUp` (`{"type":"move_window_to_row_up"}`), and `MoveWindowToRowDown` (`{"type":"move_window_to_row_down"}`) — and optional `focused_row` and `rows` (`Vec<RowSummary>`) fields on `LayoutChanged` events and `WorkspaceState` query responses. Legacy `columns` and `focused_column` are preserved for backward compatibility reflecting the active row.
+Multi-row layout support adds additive v4 commands — `FocusRow` (`{"type":"focus_row","index":0}`), `FocusRowUp` (`{"type":"focus_row_up"}`), `FocusRowDown` (`{"type":"focus_row_down"}`), `MoveWindowToRowUp` (`{"type":"move_window_to_row_up"}`), and `MoveWindowToRowDown` (`{"type":"move_window_to_row_down"}`) — and optional (`serde(default)`) `focused_row` and `rows` (`Vec<RowSummary>`) fields on `LayoutChanged` events, `WorkspaceState` query responses, and `WorkspaceStateRecord::Workspace` snapshot records, plus optional `row_index` on `WorkspaceStateRecord::Window`. Legacy `columns` and `focused_column` are preserved for backward compatibility reflecting the active row.
 See [the hotkey query contract](shortcut-guide.md#ipc-contract) for ordering,
 collision resolution, and the distinction between configuration and runtime
 registration health.
@@ -121,7 +121,7 @@ A workspace subscription retains the existing `subscribed` response and echoes
 
 ```json
 {"type":"workspace_snapshot_begin","protocol_version":4,"session_id":"opaque-daemon-session","revision":42,"focused_monitor_device_name":"\\\\.\\DISPLAY2"}
-{"type":"workspace_snapshot_chunk","revision":42,"records":[{"kind":"monitor","monitor_device_name":"\\\\.\\DISPLAY2","monitor_id":65537,"active_workspace_index":1},{"kind":"workspace","monitor_device_name":"\\\\.\\DISPLAY2","workspace_index":1,"name":"code"},{"kind":"window","monitor_device_name":"\\\\.\\DISPLAY2","workspace_index":1,"hwnd":123456,"is_floating":true,"is_sticky":false}]}
+{"type":"workspace_snapshot_chunk","revision":42,"records":[{"kind":"monitor","monitor_device_name":"\\\\.\\DISPLAY2","monitor_id":65537,"active_workspace_index":1},{"kind":"workspace","monitor_device_name":"\\\\.\\DISPLAY2","workspace_index":1,"name":"code","focused_row":0,"rows":[{"columns":[],"focused_column":null,"scroll_offset":0.0}]},{"kind":"window","monitor_device_name":"\\\\.\\DISPLAY2","workspace_index":1,"hwnd":123456,"is_floating":true,"is_sticky":false,"row_index":null}]}
 {"type":"workspace_snapshot_end","revision":42}
 ```
 
@@ -132,9 +132,14 @@ The example abbreviates the records. A real snapshot includes:
   transient Win32 HMONITOR value, retained for correlation with older events.
 - Nine `workspace` records per monitor, including empty, lazily unallocated slots.
   Workspace indices are **zero-based**. Names use the existing global
-  `[workspaces].names` configuration; unnamed slots contain `null`.
+  `[workspaces].names` configuration; unnamed slots contain `null`. Optional
+  `focused_row` and `rows` (`Vec<RowSummary>`, each with `columns`,
+  `focused_column`, and `scroll_offset`) use `serde(default)` for v4
+  compatibility and are empty for unallocated workspaces.
 - One `window` record per managed window in its owning workspace, including
   inactive workspaces, floating windows, minimized windows, and inactive tabs.
+  Optional `row_index` (`serde(default)`) reports the zero-based owning row when
+  tiled and `null` when floating.
   Sticky windows report their actual current ownership with `is_sticky: true`;
   consumers must not count them once on every workspace. Hidden scratchpads and
   drag placeholders are excluded; shown scratchpads are ordinary floating members.

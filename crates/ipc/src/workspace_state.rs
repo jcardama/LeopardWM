@@ -2,10 +2,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{IpcEvent, IPC_PROTOCOL_VERSION, MAX_IPC_MESSAGE_SIZE};
+use crate::{IpcEvent, RowSummary, IPC_PROTOCOL_VERSION, MAX_IPC_MESSAGE_SIZE};
 
 /// One semantic record in a complete workspace-state snapshot.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum WorkspaceStateRecord {
     /// A connected monitor and its active zero-based workspace index.
@@ -25,6 +25,12 @@ pub enum WorkspaceStateRecord {
         workspace_index: u8,
         /// Configured display name, if any.
         name: Option<String>,
+        /// Focused row index, zero-based.
+        #[serde(default)]
+        focused_row: usize,
+        /// Rows in this workspace, top to bottom.
+        #[serde(default)]
+        rows: Vec<RowSummary>,
     },
     /// A managed window's owning workspace.
     Window {
@@ -38,11 +44,14 @@ pub enum WorkspaceStateRecord {
         is_floating: bool,
         /// Whether the window is pinned across its monitor workspaces.
         is_sticky: bool,
+        /// Owning row index when tiled, zero-based; `None` when floating.
+        #[serde(default)]
+        row_index: Option<usize>,
     },
 }
 
 /// An immutable, coherent view of workspace membership across all monitors.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WorkspaceStateSnapshot {
     /// Opaque daemon-instance identifier; changes after daemon restart.
     pub session_id: String,
@@ -156,6 +165,8 @@ mod tests {
                 monitor_device_name: r"\\.\DISPLAY2".to_string(),
                 workspace_index: 1,
                 name: Some("開発".to_string()),
+                focused_row: 0,
+                rows: Vec::new(),
             },
             WorkspaceStateRecord::Window {
                 monitor_device_name: r"\\.\DISPLAY2".to_string(),
@@ -163,6 +174,7 @@ mod tests {
                 hwnd: 123_456,
                 is_floating: true,
                 is_sticky: false,
+                row_index: None,
             },
         ]
     }
@@ -214,6 +226,8 @@ mod tests {
                 monitor_device_name: r"\\.\DISPLAY2".to_string(),
                 workspace_index: (index % 9) as u8,
                 name: Some(format!("開発-{}", "界".repeat(120))),
+                focused_row: 0,
+                rows: Vec::new(),
             })
             .collect();
         let snapshot = WorkspaceStateSnapshot {
@@ -244,6 +258,8 @@ mod tests {
                 monitor_device_name: r"\\.\DISPLAY2".to_string(),
                 workspace_index: 0,
                 name: Some("界".repeat(MAX_IPC_MESSAGE_SIZE)),
+                focused_row: 0,
+                rows: Vec::new(),
             }],
         };
 
@@ -265,5 +281,29 @@ mod tests {
         let error = snapshot.events().unwrap_err();
         assert!(error.contains("workspace snapshot begin"));
         assert!(error.len() < 256);
+    }
+
+    #[test]
+    fn legacy_v4_snapshot_records_deserialize_without_row_fields() {
+        let ws_json = r#"{"kind":"workspace","monitor_device_name":"\\\\.\\DISPLAY1","workspace_index":0,"name":"code"}"#;
+        let ws_record: WorkspaceStateRecord = serde_json::from_str(ws_json).unwrap();
+        assert!(matches!(
+            ws_record,
+            WorkspaceStateRecord::Workspace {
+                focused_row: 0,
+                rows,
+                ..
+            } if rows.is_empty()
+        ));
+
+        let win_json = r#"{"kind":"window","monitor_device_name":"\\\\.\\DISPLAY1","workspace_index":0,"hwnd":42,"is_floating":false,"is_sticky":false}"#;
+        let win_record: WorkspaceStateRecord = serde_json::from_str(win_json).unwrap();
+        assert!(matches!(
+            win_record,
+            WorkspaceStateRecord::Window {
+                row_index: None,
+                ..
+            }
+        ));
     }
 }
