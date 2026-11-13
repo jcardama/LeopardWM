@@ -4308,6 +4308,7 @@ fn test_body_preview_shift_restores_multi_window_source_before_cross_monitor_dro
 fn assert_drag_to_other_workspace_repairs_source_scroll(
     target_monitor: MonitorId,
     target_idx: usize,
+    merge: bool,
 ) {
     let mut state = AppState::new_with_config(test_config(), two_monitors());
     state.paused = true;
@@ -4332,7 +4333,18 @@ fn assert_drag_to_other_workspace_repairs_source_scroll(
     state.clear_drag_placeholder();
     let drag = state.drag_state.take().unwrap();
     state.active_workspace.insert(target_monitor, target_idx);
-    state.execute_cross_monitor_drag(0, &drag, target_monitor, 0, &Rect::new(0, 0, 500, 500));
+    let drop_rect = Rect::new(0, 0, 500, 500);
+    if merge {
+        state.workspaces.get_mut(&target_monitor).unwrap()[target_idx]
+            .insert_window(DRAG_PLACEHOLDER_HWND, Some(1000))
+            .unwrap();
+        state.finalize_drag_merge(0, &drag, target_monitor, &drop_rect);
+        assert!(
+            !state.workspaces[&target_monitor][target_idx].contains_window(DRAG_PLACEHOLDER_HWND)
+        );
+    } else {
+        state.execute_cross_monitor_drag(0, &drag, target_monitor, 0, &drop_rect);
+    }
 
     let source = &state.workspaces[&1][0];
     let max_scroll = (source.total_width() - source.visible_width(viewport_width)).max(0) as f64;
@@ -4348,12 +4360,22 @@ fn assert_drag_to_other_workspace_repairs_source_scroll(
 
 #[test]
 fn test_drag_to_other_monitor_repairs_source_scroll() {
-    assert_drag_to_other_workspace_repairs_source_scroll(2, 0);
+    assert_drag_to_other_workspace_repairs_source_scroll(2, 0, false);
 }
 
 #[test]
 fn test_drag_to_other_workspace_repairs_source_scroll() {
-    assert_drag_to_other_workspace_repairs_source_scroll(1, 1);
+    assert_drag_to_other_workspace_repairs_source_scroll(1, 1, false);
+}
+
+#[test]
+fn test_merge_to_other_monitor_repairs_source_scroll() {
+    assert_drag_to_other_workspace_repairs_source_scroll(2, 0, true);
+}
+
+#[test]
+fn test_merge_to_other_workspace_repairs_source_scroll() {
+    assert_drag_to_other_workspace_repairs_source_scroll(1, 1, true);
 }
 
 #[test]
