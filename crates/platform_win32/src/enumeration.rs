@@ -561,11 +561,7 @@ pub(crate) fn should_emit_window_event_with_policy(
         String::new()
     };
 
-    if should_skip_window_by_class(&class_name) {
-        return false;
-    }
-
-    true
+    !should_skip_window_by_class(&class_name)
 }
 
 pub(crate) fn should_emit_window_event(hwnd: HWND) -> bool {
