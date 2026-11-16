@@ -671,6 +671,30 @@ pub(crate) fn format_file_section(heading: &str, path: &Path, tail_lines: Option
             if let Some(n) = tail_lines {
                 let lines: Vec<&str> = content.lines().collect();
                 let start = lines.len().saturating_sub(n);
+                if lines.len() < n {
+                    let previous_path = leopardwm_ipc::bounded_log::previous_log_path(path);
+                    if let Ok(previous) = fs::read_to_string(&previous_path) {
+                        let previous_lines: Vec<&str> = previous.lines().collect();
+                        let previous_start = previous_lines.len().saturating_sub(n - lines.len());
+                        if previous_start < previous_lines.len() {
+                            out.push_str(&format!(
+                                "  Previous log ({}):\n",
+                                previous_path.display()
+                            ));
+                            if previous_start > 0 {
+                                out.push_str(&format!(
+                                    "  ... ({} earlier lines omitted)\n",
+                                    previous_start
+                                ));
+                            }
+                            for line in &previous_lines[previous_start..] {
+                                out.push_str(line);
+                                out.push('\n');
+                            }
+                            out.push_str("  Current log:\n");
+                        }
+                    }
+                }
                 for line in &lines[start..] {
                     out.push_str(line);
                     out.push('\n');

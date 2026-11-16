@@ -1660,6 +1660,74 @@ fn collect_logs_report_includes_full_gesture_capture_not_last_100() {
 }
 
 #[test]
+fn collect_logs_report_combines_previous_and_current_log_tails() {
+    let dir = std::env::temp_dir().join(format!(
+        "leopardwm-collect-rotated-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&dir).unwrap();
+    for name in ["daemon", "watchdog"] {
+        let current = dir.join(format!("leopardwm-{name}.log"));
+        let previous = dir.join(format!("leopardwm-{name}.old.log"));
+        let previous_body: String = (0..110).map(|i| format!("{name}-old-{i}\n")).collect();
+        let current_body: String = (0..3).map(|i| format!("{name}-current-{i}\n")).collect();
+        fs::write(previous, previous_body).unwrap();
+        fs::write(current, current_body).unwrap();
+    }
+    let config = dir.join("missing.toml");
+    let mut output = Vec::new();
+    write_collect_logs_report(
+        &mut output,
+        (None, config),
+        &dir,
+        CollectLogsDaemon::NotRunning,
+        None,
+    )
+    .unwrap();
+    let report = String::from_utf8(output).unwrap();
+    assert!(report.contains(&format!(
+        "Daemon log file read: {}",
+        dir.join("leopardwm-daemon.log").display()
+    )));
+    for (name, heading, next_heading) in [
+        ("daemon", "## Daemon Log (", "## Daemon Error Log ("),
+        ("watchdog", "## Watchdog Log (", "## Watchdog Error Log ("),
+    ] {
+        let section = report
+            .split_once(heading)
+            .unwrap()
+            .1
+            .split_once(next_heading)
+            .unwrap()
+            .0;
+        assert!(section.contains(&format!(
+            "Previous log ({}):",
+            dir.join(format!("leopardwm-{name}.old.log")).display()
+        )));
+        assert!(!section.contains(&format!("{name}-old-12\n")));
+        assert!(section.contains(&format!("{name}-old-13\n")));
+        assert!(
+            section.find(&format!("{name}-old-109\n")).unwrap()
+                < section.find(&format!("{name}-current-0\n")).unwrap()
+        );
+        assert!(section.contains(&format!("{name}-current-2\n")));
+        assert_eq!(
+            section
+                .lines()
+                .filter(|line| line.starts_with(&format!("{name}-old-"))
+                    || line.starts_with(&format!("{name}-current-")))
+                .count(),
+            100
+        );
+    }
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn test_generate_profile_config_laptop() {
     let config = generate_profile_config("laptop");
     assert!(config.contains("laptop profile"));

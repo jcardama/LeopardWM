@@ -2,13 +2,16 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-/// Maximum size of each daemon or watchdog log file, except for an oversized event.
+/// Target maximum size of each daemon or watchdog log file.
 pub const LOG_FILE_MAX_BYTES: u64 = 20 * 1024 * 1024;
 
 /// An append-only current log with one previous file.
 ///
-/// An existing file at or over the limit is moved to the previous file on open.
+/// An existing file at or over the limit is rolled over on open when possible.
 /// An oversized old log remains there until the next rollover replaces it.
+/// If a rollover fails, both files are preserved and writes keep appending; the
+/// current file can exceed the limit until a later rollover succeeds. A single
+/// write larger than the limit can also exceed it.
 pub struct BoundedLogFile {
     path: PathBuf,
     previous_path: PathBuf,
@@ -17,18 +20,23 @@ pub struct BoundedLogFile {
     max_bytes: u64,
 }
 
+/// Return the previous-file path for a current log path.
+pub fn previous_log_path(path: &Path) -> PathBuf {
+    match path.extension() {
+        Some(extension) => {
+            let mut previous_extension = std::ffi::OsString::from("old.");
+            previous_extension.push(extension);
+            path.with_extension(previous_extension)
+        }
+        None => path.with_extension("old"),
+    }
+}
+
 impl BoundedLogFile {
     pub fn open(dir: &Path, file_name: &str, max_bytes: u64) -> io::Result<Self> {
         fs::create_dir_all(dir)?;
         let path = dir.join(file_name);
-        let previous_path = match path.extension() {
-            Some(extension) => {
-                let mut previous_extension = std::ffi::OsString::from("old.");
-                previous_extension.push(extension);
-                path.with_extension(previous_extension)
-            }
-            None => path.with_extension("old"),
-        };
+        let previous_path = previous_log_path(&path);
         let file = Self::open_append(&path)?;
         let length = file.metadata()?.len();
         let mut log = Self {
@@ -50,19 +58,10 @@ impl BoundedLogFile {
 
     fn rollover(&mut self) -> io::Result<()> {
         drop(self.file.take());
-        let remove_previous = fs::remove_file(&self.previous_path);
-        let can_rename = match remove_previous {
-            Ok(()) => true,
-            Err(error) => error.kind() == io::ErrorKind::NotFound,
-        };
-        if !can_rename || fs::rename(&self.path, &self.previous_path).is_err() {
-            OpenOptions::new()
-                .write(true)
-                .truncate(true)
-                .open(&self.path)?;
-        }
-        self.length = 0;
-        self.file = Some(Self::open_append(&self.path)?);
+        let _ = fs::rename(&self.path, &self.previous_path);
+        let file = Self::open_append(&self.path)?;
+        self.length = file.metadata()?.len();
+        self.file = Some(file);
         Ok(())
     }
 }
@@ -130,7 +129,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn locked_previous_file_falls_back_to_truncating_current() {
+    fn locked_previous_file_preserves_both_logs_and_retries_rollover() {
         use std::os::windows::fs::OpenOptionsExt;
         let dir = temp_dir();
         fs::create_dir_all(&dir).unwrap();
@@ -145,9 +144,13 @@ mod tests {
         let mut log = BoundedLogFile::open(&dir, "example.log", 4).unwrap();
         log.write_all(b"abcd").unwrap();
         log.write_all(b"ef").unwrap();
-        assert_eq!(fs::read(&current).unwrap(), b"ef");
+        assert_eq!(fs::read(&current).unwrap(), b"abcdef");
         assert_eq!(fs::read(&previous).unwrap(), b"old");
-        drop((log, locked));
+        drop(locked);
+        log.write_all(b"gh").unwrap();
+        assert_eq!(fs::read(&current).unwrap(), b"gh");
+        assert_eq!(fs::read(&previous).unwrap(), b"abcdef");
+        drop(log);
         fs::remove_dir_all(dir).unwrap();
     }
 }
