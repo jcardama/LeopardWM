@@ -1,11 +1,12 @@
 //! Physical presentation for tiled HWNDs at shared monitor edges.
 //!
 //! Logical layout (requested widths, membership, scroll) stays unchanged.
-//! Applications retain that full geometry, including where it bleeds onto an
-//! exactly adjacent monitor. Decorations use the shared projection below to
-//! remain clipped at protected owner edges; applications are parked only when
-//! no positive owner-visible slice remains.
+//! Applications retain their full geometry by default, including where it bleeds
+//! onto an adjacent monitor. Park mode instead moves whole fitting columns away
+//! when they overlap another monitor or leave their owner. Decorations use the
+//! shared projection below to remain clipped at protected owner edges.
 
+use crate::config::OffscreenMode;
 use crate::state::*;
 use leopardwm_core_layout::{Rect, Visibility, WindowPlacement};
 use leopardwm_platform_win32::{MonitorId, MonitorInfo, PlacementLanding};
@@ -293,6 +294,7 @@ pub(crate) fn park_offscreen_avoiding_neighbors(
     placements: &mut [WindowPlacement],
     owner_id: MonitorId,
     monitors: &HashMap<MonitorId, MonitorInfo>,
+    mode: OffscreenMode,
 ) {
     if !monitors.contains_key(&owner_id) {
         return;
@@ -306,7 +308,7 @@ pub(crate) fn park_offscreen_avoiding_neighbors(
             .iter()
             .filter(|(id, _)| **id != owner_id)
             .any(|(_, monitor)| placement.rect.intersects(&monitor.rect));
-        if bleeds {
+        if mode == OffscreenMode::Park || bleeds {
             placement.rect =
                 offscreen_park_rect(placement.rect, &rects, native_insets(placement.window_id));
         }
@@ -530,6 +532,39 @@ impl AppState {
             .actual_visible_rect
     }
 
+    pub(crate) fn repark_interpolated_nonvisible(&self, placements: &mut [WindowPlacement]) {
+        if self.config.layout.offscreen_mode != OffscreenMode::Park {
+            return;
+        }
+        for placement in placements {
+            if placement.visibility == Visibility::Visible {
+                continue;
+            }
+            if let Some(owner_id) = self.owner_id_for_window(placement.window_id) {
+                park_offscreen_avoiding_neighbors(
+                    std::slice::from_mut(placement),
+                    owner_id,
+                    &self.monitors,
+                    OffscreenMode::Park,
+                );
+            }
+        }
+    }
+
+    fn is_transition_exit(&self, window_id: u64) -> bool {
+        self.layout_transition
+            .as_ref()
+            .is_some_and(|transition| transition.exit_rects.contains_key(&window_id))
+    }
+
+    fn park_mode_requires_parking(&self, rect: Rect, owner_id: MonitorId, owner: Rect) -> bool {
+        !rects_overlap_positive(rect, owner)
+            || self
+                .monitors
+                .iter()
+                .any(|(id, monitor)| *id != owner_id && rects_overlap_positive(rect, monitor.rect))
+    }
+
     pub(crate) fn apply_physical_projection(
         &mut self,
         placements: Vec<WindowPlacement>,
@@ -543,6 +578,38 @@ impl AppState {
         let rects = monitor_rects(&self.monitors);
         let mut presentations = HashMap::new();
         let mut physical = Vec::with_capacity(placements.len());
+        let mut columns = HashMap::new();
+        if self.config.layout.offscreen_mode == OffscreenMode::Park {
+            for placement in &placements {
+                if placement.visibility != Visibility::Visible
+                    || placement.column_index == usize::MAX
+                    || placement.rect.width <= 0
+                    || placement.rect.height <= 0
+                    || self.is_transition_exit(placement.window_id)
+                {
+                    continue;
+                }
+                let Some((owner_id, workspace)) = self.find_window_workspace(placement.window_id)
+                else {
+                    continue;
+                };
+                let Some(owner) = self.monitors.get(&owner_id).map(|monitor| monitor.rect) else {
+                    continue;
+                };
+                let entry = columns
+                    .entry((
+                        owner_id,
+                        workspace,
+                        placement.row_index,
+                        placement.column_index,
+                    ))
+                    .or_insert((false, false));
+                entry.0 |=
+                    placement.rect.width > owner.width || placement.rect.height > owner.height;
+                entry.1 |= !self.is_projection_exempt(placement)
+                    && self.park_mode_requires_parking(placement.rect, owner_id, owner);
+            }
+        }
 
         for logical in placements {
             if logical.visibility == Visibility::Visible
@@ -558,8 +625,37 @@ impl AppState {
                 physical.push(logical);
                 continue;
             };
+            let should_park = if self.config.layout.offscreen_mode == OffscreenMode::Park {
+                if self.is_transition_exit(logical.window_id) {
+                    // Synthetic exit placements do not retain their source column indices.
+                    logical.rect.width <= owner.width
+                        && logical.rect.height <= owner.height
+                        && self.park_mode_requires_parking(logical.rect, owner_id, owner)
+                } else {
+                    self.find_window_workspace(logical.window_id)
+                        .and_then(|(_, workspace)| {
+                            columns.get(&(
+                                owner_id,
+                                workspace,
+                                logical.row_index,
+                                logical.column_index,
+                            ))
+                        })
+                        .is_some_and(|&(oversized, park)| !oversized && park)
+                }
+            } else {
+                false
+            };
             let decision = if self.is_projection_exempt(&logical) {
                 PhysicalDecision::Unchanged
+            } else if should_park {
+                PhysicalDecision::Parked {
+                    rect: offscreen_park_rect(
+                        logical.rect,
+                        &rects,
+                        native_insets(logical.window_id),
+                    ),
+                }
             } else {
                 decide_physical_rect(
                     logical.rect,
@@ -866,8 +962,17 @@ impl AppState {
             return false;
         };
         let rects = monitor_rects(&self.monitors);
+        let swept = union_rects(start, target);
+        if self.config.layout.offscreen_mode == OffscreenMode::Park
+            && self
+                .monitors
+                .iter()
+                .any(|(id, monitor)| *id != owner_id && rects_overlap_positive(swept, monitor.rect))
+        {
+            return true;
+        }
         !matches!(
-            project_physical_rect(union_rects(start, target), owner, &rects),
+            project_physical_rect(swept, owner, &rects),
             PhysicalDecision::Unchanged
         )
     }
@@ -2199,7 +2304,7 @@ mod tests {
             placement(20, non_bleed, Visibility::OffScreenLeft),
             placement(30, bleeding, Visibility::OffScreenRight),
         ];
-        park_offscreen_avoiding_neighbors(&mut placements, 1, &monitors);
+        park_offscreen_avoiding_neighbors(&mut placements, 1, &monitors, OffscreenMode::Bleed);
         assert_eq!(placements[0].rect, visible, "visible placement untouched");
         assert_eq!(
             placements[1].rect, non_bleed,
@@ -2219,12 +2324,400 @@ mod tests {
     }
 
     #[test]
+    fn park_mode_projects_monitor_arrangements_without_changing_bleed() {
+        let cases = [
+            (
+                "touching partial",
+                monitor(1, 0, 0, 1000, 1000),
+                monitor(2, 1000, 0, 1000, 1000),
+                Rect::new(900, 100, 300, 300),
+                true,
+                false,
+            ),
+            (
+                "touching outside",
+                monitor(1, 0, 0, 1000, 1000),
+                monitor(2, 1000, 0, 1000, 1000),
+                Rect::new(1000, 100, 300, 300),
+                true,
+                true,
+            ),
+            (
+                "stacked peek",
+                monitor(1, 0, 0, 1000, 1000),
+                monitor(2, 0, 1000, 1000, 1000),
+                Rect::new(900, 100, 300, 300),
+                false,
+                false,
+            ),
+            (
+                "offset overlap",
+                monitor(1, 0, 0, 1000, 1000),
+                monitor(2, 1000, 500, 1000, 1000),
+                Rect::new(900, 600, 300, 300),
+                true,
+                false,
+            ),
+            (
+                "gap peek",
+                monitor(1, 0, 0, 1000, 1000),
+                monitor(2, 1200, 0, 1000, 1000),
+                Rect::new(900, 100, 200, 300),
+                false,
+                false,
+            ),
+            (
+                "outside owner in gap",
+                monitor(1, 0, 0, 1000, 1000),
+                monitor(2, 1500, 0, 1000, 1000),
+                Rect::new(1050, 100, 200, 300),
+                true,
+                false,
+            ),
+            (
+                "gap neighbor",
+                monitor(1, 0, 0, 1000, 1000),
+                monitor(2, 1200, 0, 1000, 1000),
+                Rect::new(900, 100, 350, 300),
+                true,
+                false,
+            ),
+            (
+                "corner contact",
+                monitor(1, 0, 0, 1000, 1000),
+                monitor(2, 1000, 1000, 1000, 1000),
+                Rect::new(900, 700, 200, 300),
+                false,
+                false,
+            ),
+            (
+                "corner overlap",
+                monitor(1, 0, 0, 1000, 1000),
+                monitor(2, 1000, 1000, 1000, 1000),
+                Rect::new(900, 900, 200, 200),
+                true,
+                false,
+            ),
+            (
+                "mixed dpi",
+                MonitorInfo {
+                    scale_factor: 1.25,
+                    ..monitor(1, 0, 0, 1920, 1080)
+                },
+                monitor(2, 1920, 0, 2560, 1440),
+                Rect::new(1700, 100, 600, 700),
+                true,
+                false,
+            ),
+        ];
+        for (name, owner, neighbor, rect, park_expected, bleed_expected) in cases {
+            for (mode, expected) in [
+                (OffscreenMode::Park, park_expected),
+                (OffscreenMode::Bleed, bleed_expected),
+            ] {
+                let mut config = crate::config::Config::default();
+                config.layout.offscreen_mode = mode;
+                let mut state =
+                    AppState::new_with_config(config, vec![owner.clone(), neighbor.clone()]);
+                state.workspaces.get_mut(&1).unwrap()[0]
+                    .insert_window(100, Some(300))
+                    .unwrap();
+                state.injected_window_maximized.insert(100, false);
+                let result = state.apply_physical_projection(vec![placement(
+                    100,
+                    rect,
+                    Visibility::Visible,
+                )]);
+                assert_eq!(
+                    result[0].visibility != Visibility::Visible,
+                    expected,
+                    "{name} {mode:?}"
+                );
+                if expected {
+                    assert!(
+                        parking_clears_monitors(result[0].rect, &[owner.rect, neighbor.rect]),
+                        "{name} {mode:?}"
+                    );
+                } else {
+                    assert_eq!(result[0].rect, rect, "{name} {mode:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn park_mode_groups_only_members_of_the_same_row_column() {
+        let mut config = crate::config::Config::default();
+        config.layout.offscreen_mode = OffscreenMode::Park;
+        let mut state = AppState::new_with_config(
+            config,
+            vec![
+                monitor(1, 0, 0, 1000, 1000),
+                monitor(2, 1000, 500, 1000, 500),
+            ],
+        );
+        let ws = &mut state.workspaces.get_mut(&1).unwrap()[0];
+        ws.set_row_layout(&[0.5, 0.5]);
+        ws.insert_window_in_row(100, 0, Some(300)).unwrap();
+        ws.insert_window_in_row_column(200, 0, 0).unwrap();
+        ws.insert_window_in_row(300, 1, Some(300)).unwrap();
+        for id in [100, 200, 300] {
+            state.injected_window_maximized.insert(id, false);
+        }
+        let mut row_one = placement(300, Rect::new(900, 100, 300, 300), Visibility::Visible);
+        row_one.row_index = 1;
+        let result = state.apply_physical_projection(vec![
+            placement(100, Rect::new(900, 100, 300, 300), Visibility::Visible),
+            placement(200, Rect::new(900, 600, 300, 300), Visibility::Visible),
+            row_one,
+        ]);
+        assert_ne!(result[0].visibility, Visibility::Visible);
+        assert_ne!(result[1].visibility, Visibility::Visible);
+        assert_eq!(result[2].visibility, Visibility::Visible);
+    }
+
+    #[test]
+    fn park_mode_treats_synthetic_exit_windows_individually() {
+        let mut config = crate::config::Config::default();
+        config.layout.offscreen_mode = OffscreenMode::Park;
+        let mut state = AppState::new_with_config(
+            config,
+            vec![
+                monitor(1, 0, 0, 1000, 1000),
+                monitor(2, 1000, 0, 1000, 1000),
+            ],
+        );
+        let ws = &mut state.workspaces.get_mut(&1).unwrap()[0];
+        ws.insert_window(100, Some(300)).unwrap();
+        ws.insert_window(200, Some(300)).unwrap();
+        for id in [100, 200] {
+            state.injected_window_maximized.insert(id, false);
+        }
+        state.reduce_motion = false;
+        let starts = HashMap::from([
+            (100, Rect::new(900, 0, 300, 300)),
+            (200, Rect::new(100, 0, 300, 300)),
+        ]);
+        state.start_workspace_switch_transition(starts.clone(), starts, 100);
+        let result = state.apply_physical_projection(vec![
+            placement(100, Rect::new(900, 0, 300, 300), Visibility::Visible),
+            placement(200, Rect::new(100, 0, 300, 300), Visibility::Visible),
+        ]);
+        assert_ne!(result[0].visibility, Visibility::Visible);
+        assert_eq!(result[1].visibility, Visibility::Visible);
+    }
+
+    #[test]
+    fn park_mode_oversized_column_keeps_bleed_behavior() {
+        let mut config = crate::config::Config::default();
+        config.layout.offscreen_mode = OffscreenMode::Park;
+        let mut state = AppState::new_with_config(
+            config,
+            vec![
+                monitor(1, 0, 0, 1000, 1000),
+                monitor(2, 1000, 0, 1000, 1000),
+            ],
+        );
+        let ws = &mut state.workspaces.get_mut(&1).unwrap()[0];
+        ws.insert_window(100, Some(1100)).unwrap();
+        ws.insert_window_in_column(200, 0).unwrap();
+        for id in [100, 200] {
+            state.injected_window_maximized.insert(id, false);
+        }
+        for oversized in [Rect::new(100, 0, 1100, 500), Rect::new(100, 0, 300, 1100)] {
+            let logical = vec![
+                placement(100, oversized, Visibility::Visible),
+                placement(200, Rect::new(900, 500, 300, 500), Visibility::Visible),
+            ];
+            let result = state.apply_physical_projection(logical.clone());
+            assert_eq!(result[0].rect, logical[0].rect);
+            assert_eq!(result[1].rect, logical[1].rect);
+            assert!(result.iter().all(|p| p.visibility == Visibility::Visible));
+        }
+    }
+
+    #[test]
+    fn park_mode_projects_every_scroll_and_layout_transition_frame() {
+        for layout_transition in [false, true] {
+            let mut config = crate::config::Config::default();
+            config.layout.offscreen_mode = OffscreenMode::Park;
+            config.layout.gap = 0;
+            config.layout.outer_gap_left = 0;
+            config.layout.outer_gap_right = 0;
+            config.layout.outer_gap_top = 0;
+            config.layout.outer_gap_bottom = 0;
+            config.behavior.swap_chain_ghost_animation = false;
+            config.animation.easing = leopardwm_core_layout::Easing::Linear;
+            let neighbor = monitor(2, 1000, 0, 1000, 1000);
+            let mut state = AppState::new_with_config(
+                config,
+                vec![monitor(1, 0, 0, 1000, 1000), neighbor.clone()],
+            );
+            state.injected_window_maximized.insert(0, false);
+            state.reduce_motion = false;
+            state.workspaces.get_mut(&1).unwrap()[0]
+                .insert_window(0, Some(400))
+                .unwrap();
+            if layout_transition {
+                state.start_layout_transition_with_duration(
+                    HashMap::from([(0, Rect::new(800, 0, 400, 1000))]),
+                    100,
+                );
+            } else {
+                let ws = &mut state.workspaces.get_mut(&1).unwrap()[0];
+                ws.set_scroll_offset(-800.0);
+                ws.animate_scroll_to(0.0, Some(100), Some(leopardwm_core_layout::Easing::Linear));
+            }
+            for (frame, delta) in [0, 20, 20, 20, 20, 20].into_iter().enumerate() {
+                if delta != 0 {
+                    state.tick_animations(delta);
+                }
+                let viewport = state.layout_viewport(1);
+                let mut logical = state.workspaces[&1][0].compute_placements_animated(viewport);
+                park_offscreen_avoiding_neighbors(
+                    &mut logical,
+                    1,
+                    &state.monitors,
+                    OffscreenMode::Park,
+                );
+                if let Some(transition) = &state.layout_transition {
+                    AppState::apply_transition_interpolation(transition, &mut logical);
+                }
+                let logical_rect = logical[0].rect;
+                let dispatched = state.prepare_physical_placements_with_parked(
+                    logical,
+                    &Default::default(),
+                    |_| false,
+                );
+                assert_eq!(dispatched.len(), 1);
+                let physical = &dispatched[0];
+                if physical.visibility == Visibility::Visible {
+                    assert!(
+                        !rects_overlap_positive(physical.rect, neighbor.rect),
+                        "transition={layout_transition} frame={frame}"
+                    );
+                } else {
+                    assert!(state.is_physically_parked(0));
+                    assert_eq!(state.project_decoration_rect(0, logical_rect), None);
+                    assert!(!state.physical_landing_is_safe_to_expose(0));
+                    assert_eq!(state.acknowledged_visible_rect(0), None);
+                }
+                if frame == 0 {
+                    assert_ne!(
+                        physical.visibility,
+                        Visibility::Visible,
+                        "transition={layout_transition} logical={logical_rect:?}"
+                    );
+                }
+                if frame == 5 {
+                    assert_eq!(physical.visibility, Visibility::Visible);
+                    assert_eq!(physical.rect, Rect::new(0, 0, 400, 1000));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn park_mode_reparks_interpolated_nonvisible_frames() {
+        let mut config = crate::config::Config::default();
+        config.layout.offscreen_mode = OffscreenMode::Park;
+        config.animation.easing = leopardwm_core_layout::Easing::Linear;
+        config.behavior.swap_chain_ghost_animation = false;
+        let neighbor = monitor(2, 1000, 0, 1000, 1000);
+        let mut state =
+            AppState::new_with_config(config, vec![monitor(1, 0, 0, 1000, 1000), neighbor.clone()]);
+        state.workspaces.get_mut(&1).unwrap()[0]
+            .insert_window(0, Some(300))
+            .unwrap();
+        state.reduce_motion = false;
+        state.start_layout_transition_with_duration(
+            HashMap::from([(0, Rect::new(1100, 0, 300, 300))]),
+            10000,
+        );
+        let sentinel = leopardwm_platform_win32::MOVE_OFFSCREEN_SENTINEL_COORD;
+        let mut frame = vec![placement(
+            0,
+            Rect::new(sentinel, sentinel, 300, 300),
+            Visibility::OffScreenRight,
+        )];
+        AppState::apply_transition_interpolation(
+            state.layout_transition.as_ref().unwrap(),
+            &mut frame,
+        );
+        assert!(rects_overlap_positive(frame[0].rect, neighbor.rect));
+        state.repark_interpolated_nonvisible(&mut frame);
+        assert!(!rects_overlap_positive(frame[0].rect, neighbor.rect));
+        assert!(frame[0].rect.x <= sentinel && frame[0].rect.y <= sentinel);
+    }
+
+    #[test]
+    fn park_mode_parks_nonvisible_placements_even_without_neighbor_overlap() {
+        let monitors = [(1, monitor(1, 0, 0, 1000, 1000))].into_iter().collect();
+        let logical = placement(10, Rect::new(-400, 20, 300, 300), Visibility::OffScreenLeft);
+        for mode in [OffscreenMode::Bleed, OffscreenMode::Park] {
+            let mut placements = vec![logical.clone()];
+            park_offscreen_avoiding_neighbors(&mut placements, 1, &monitors, mode);
+            if mode == OffscreenMode::Park {
+                assert!(
+                    placements[0].rect.x <= leopardwm_platform_win32::MOVE_OFFSCREEN_SENTINEL_COORD
+                );
+                assert!(
+                    placements[0].rect.y <= leopardwm_platform_win32::MOVE_OFFSCREEN_SENTINEL_COORD
+                );
+            } else {
+                assert_eq!(placements[0].rect, logical.rect);
+            }
+        }
+    }
+
+    #[test]
+    fn changing_offscreen_mode_invalidates_the_physical_fast_path() {
+        let mut state = AppState::new_with_config(
+            crate::config::Config::default(),
+            vec![monitor(1, 0, 0, 1000, 1000)],
+        );
+        state.injected_enumerated_windows = Some(Vec::new());
+        state.last_applied_physical_invalidation =
+            state.physical_invalidation_id.load(Ordering::SeqCst);
+        state.last_topology_signature = topology_signature(&state.monitors);
+        assert!(state.physical_fast_path_ok());
+        let mut config = state.config.clone();
+        config.layout.offscreen_mode = OffscreenMode::Park;
+        state.apply_config(config);
+        assert!(!state.physical_fast_path_ok());
+    }
+
+    #[test]
+    fn park_mode_suppresses_ghost_sweeps_across_a_gapped_neighbor() {
+        let mut state = AppState::new_with_config(
+            crate::config::Config::default(),
+            vec![
+                monitor(1, 0, 0, 1000, 1000),
+                monitor(2, 1200, 0, 1000, 1000),
+            ],
+        );
+        state.workspaces.get_mut(&1).unwrap()[0]
+            .insert_window(100, Some(300))
+            .unwrap();
+        let start = Rect::new(700, 100, 300, 300);
+        let target = Rect::new(1250, 100, 300, 300);
+        assert!(!state.swept_rect_meets_protected_boundary(100, start, target));
+        state.config.layout.offscreen_mode = OffscreenMode::Park;
+        assert!(state.swept_rect_meets_protected_boundary(100, start, target));
+        assert!(!state.swept_rect_meets_protected_boundary(
+            100,
+            start,
+            Rect::new(900, 100, 300, 300)
+        ));
+    }
+
+    #[test]
     fn wrapper_is_a_no_op_when_the_owner_monitor_is_missing() {
         let right = monitor(2, 5120, 0, 1920, 1080);
         let monitors: HashMap<MonitorId, MonitorInfo> = [(2, right)].into_iter().collect();
         let orig = Rect::new(5300, 10, 400, 400);
         let mut placements = vec![placement(30, orig, Visibility::OffScreenRight)];
-        park_offscreen_avoiding_neighbors(&mut placements, 1, &monitors);
+        park_offscreen_avoiding_neighbors(&mut placements, 1, &monitors, OffscreenMode::Bleed);
         assert_eq!(placements[0].rect, orig);
     }
 

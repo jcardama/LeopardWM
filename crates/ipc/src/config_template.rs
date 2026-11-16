@@ -45,6 +45,9 @@ width_presets = [0.333, 0.5, 0.667]
 # Mouse resize: "presets" (default) or "free".
 # mouse_resize = "presets"
 
+# Off-screen columns: "bleed" (default) or "park" to avoid neighboring monitors.
+# offscreen_mode = "bleed"
+
 # Which preset new columns open at (1-based index into width_presets).
 # 1 = first preset. Out-of-range values fall back to the first preset.
 default_width_preset = 1

@@ -162,6 +162,9 @@ pub struct LayoutConfig {
     #[serde(default)]
     pub mouse_resize: MouseResize,
 
+    #[serde(default)]
+    pub offscreen_mode: OffscreenMode,
+
     /// Width presets for cycling (fractions of usable viewport width).
     #[serde(default = "default_width_presets")]
     pub width_presets: Vec<f64>,
@@ -492,6 +495,7 @@ impl Default for LayoutConfig {
             center_past_edges: false,
             center_single_column: false,
             mouse_resize: MouseResize::default(),
+            offscreen_mode: OffscreenMode::default(),
             width_presets: default_width_presets(),
             default_width_preset: default_width_preset(),
             height_presets: default_height_presets(),
@@ -555,6 +559,14 @@ pub enum MouseResize {
     #[default]
     Presets,
     Free,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OffscreenMode {
+    #[default]
+    Bleed,
+    Park,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -2290,6 +2302,15 @@ mod tests {
         assert_eq!(free.layout.mouse_resize, MouseResize::Free);
         assert!(toml::from_str::<Config>("[layout]\nmouse_resize = 'invalid'").is_err());
         assert!(toml::from_str::<Config>("[layout]\ncentering_mode = 'invalid'").is_err());
+    }
+
+    #[test]
+    fn offscreen_mode_config_defaults_and_rejects_invalid_values() {
+        let default: Config = toml::from_str("[layout]").unwrap();
+        assert_eq!(default.layout.offscreen_mode, OffscreenMode::Bleed);
+        let park: Config = toml::from_str("[layout]\noffscreen_mode = 'park'").unwrap();
+        assert_eq!(park.layout.offscreen_mode, OffscreenMode::Park);
+        assert!(toml::from_str::<Config>("[layout]\noffscreen_mode = 'invalid'").is_err());
     }
 
     #[test]

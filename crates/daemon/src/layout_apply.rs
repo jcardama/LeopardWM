@@ -452,6 +452,7 @@ impl AppState {
                         &mut placements,
                         *monitor_id,
                         &self.monitors,
+                        self.config.layout.offscreen_mode,
                     );
                     all_placements.extend(placements);
                 }
@@ -468,6 +469,7 @@ impl AppState {
 
         if let Some(ref transition) = self.layout_transition {
             Self::apply_transition_interpolation(transition, &mut all_placements);
+            self.repark_interpolated_nonvisible(&mut all_placements);
         }
 
         // Filter out the dragged window and placeholder so SetWindowPos doesn't
@@ -608,6 +610,7 @@ impl AppState {
 
         if let Some(ref transition) = self.layout_transition {
             Self::apply_transition_interpolation(transition, &mut all_placements);
+            self.repark_interpolated_nonvisible(&mut all_placements);
         }
 
         // Filter out the dragged window and placeholder so SetWindowPos doesn't
@@ -904,6 +907,7 @@ impl AppState {
                         &mut placements,
                         *monitor_id,
                         &self.monitors,
+                        self.config.layout.offscreen_mode,
                     );
                     debug!(
                         "Monitor {}: {} placements for viewport {}x{} (animating: {}, scroll: {:.1}, minimized: {})",

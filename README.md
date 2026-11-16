@@ -168,6 +168,8 @@ A default config is created automatically at `%APPDATA%\leopardwm\config\config.
 
 By default, resizing a tiled window with the mouse snaps to width and height presets. Set `mouse_resize = "free"` under `[layout]`, or choose Free under Settings → Layout → Mouse resize, to keep the dragged size instead.
 
+By default, partially visible tiled columns can overlap another monitor. Set `offscreen_mode = "park"` under `[layout]`, or choose Park off-screen under Settings → Layout → Off-screen columns, to move columns that would overlap another monitor outside the virtual screen. Oversized columns retain the default behavior.
+
 Set `new_window_monitor = "focused"` under `[behavior]` or choose Settings → Behavior → New window monitor → Focused monitor to open new windows on the focused monitor's active workspace, including an empty workspace. The default, `"opening"`, uses the monitor where Windows opened the window, falling back to the focused monitor when it opens outside all monitors. If no focused monitor is known, `"focused"` uses the opening behavior. A workspace rule selects the workspace index on the policy-selected monitor; sticky windows retain their opening monitor and active-workspace placement. Floating windows moved by this policy are fitted to the chosen monitor's work area before being centered. Changes apply live on config reload or Settings save only to windows that open while LeopardWM is running. Already-open windows discovered at startup or during reload/rescan keep their existing monitor and are added to its active workspace; their floating rectangles are not moved or fitted by this policy. Already-managed windows and startup persistence restores are unchanged.
 
 ## Default Hotkeys
