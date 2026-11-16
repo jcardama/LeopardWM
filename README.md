@@ -215,14 +215,14 @@ Punctuation bindings accept `-`, `=`, `,`, `.`, `[`, `]`, `;`, `/`, `` ` ``, `\`
 
 ### Turning off a default hotkey
 
-List the action ID in `[hotkeys].disabled` to turn off its default binding:
+To turn off a default hotkey in `config.toml`, delete its binding line and list its action ID in `disabled` under `[hotkeys]`. For example, after removing the `close_window` binding:
 
 ```toml
 [hotkeys]
 disabled = ["close_window"]
 ```
 
-Alternatively, clear its binding in Settings → Hotkeys, where commands are grouped by category; Settings writes `disabled` for you. Deleting the binding line alone is not enough: defaults are merged back on load unless the action is disabled, already bound elsewhere, or its default chord is used by another binding.
+Deleting the line alone is not enough: defaults are merged back on load unless the action is disabled, already bound elsewhere, or its default chord is used by another binding. Alternatively, clear the binding in Settings → Hotkeys, which does both for you.
 
 These commands have no default keyboard binding and are also available in the
 Settings gesture menus:

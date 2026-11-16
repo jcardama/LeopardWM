@@ -357,9 +357,14 @@ html, body {
 .input-wrap:focus-within::after { transform: scaleX(1); }
 
 /* ── Hotkey recorder field ───────────────────────────────────────── */
-.hk-group td { padding: 0 !important; background: var(--card-bg-secondary); }
-.hk-group button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 10px 12px; border: 0; background: transparent; color: var(--text-primary); font: inherit; font-weight: 600; text-align: left; cursor: pointer; }
+#sec-hotkeys table { table-layout: fixed; }
+#sec-hotkeys th:first-child { width: 50%; }
+.hk-group td { padding: 0 !important; background: var(--subtle-secondary); }
+.hk-group button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 12px; border: 0; background: transparent; color: var(--text-primary); font: inherit; font-size: 15px; font-weight: 600; text-align: left; cursor: pointer; }
+.hk-group button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.hk-group button .combobox-chevron { fill: var(--text-secondary); }
 .hk-group button[aria-expanded="false"] .combobox-chevron { transform: rotate(-90deg); }
+#hotkeys-body .hk-cmd-label { padding-left: 32px !important; }
 .hk-record { cursor: pointer; }
 .hk-record.recording { box-shadow: inset 0 0 0 1px var(--accent); }
 .hk-cmd-label[title] { cursor: help; }
