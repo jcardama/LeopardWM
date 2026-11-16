@@ -3820,6 +3820,7 @@ fn seed_drag_session(state: &mut AppState, hwnd: u64) {
         hwnd,
         is_tiled: true,
         float_on_drop: false,
+        start_visible_rect: None,
         source_monitor: monitor,
         source_workspace_idx: ws_idx,
         source_row: 0,
@@ -3860,6 +3861,7 @@ fn safe_band_drag_fixture() -> AppState {
         hwnd: 100,
         is_tiled: true,
         float_on_drop: false,
+        start_visible_rect: None,
         source_monitor: 1,
         source_workspace_idx: 0,
         source_row: 0,
@@ -4088,6 +4090,7 @@ fn test_body_preview_shift_restores_multi_window_source_before_same_monitor_reor
         hwnd: 100,
         is_tiled: true,
         float_on_drop: false,
+        start_visible_rect: None,
         source_monitor: 1,
         source_workspace_idx: 0,
         source_row: 0,
@@ -4157,6 +4160,7 @@ fn test_body_preview_shift_restores_multi_window_source_without_reorder() {
         hwnd: 100,
         is_tiled: true,
         float_on_drop: false,
+        start_visible_rect: None,
         source_monitor: 1,
         source_workspace_idx: 0,
         source_row: 0,
@@ -4231,6 +4235,7 @@ fn test_body_preview_shift_restores_multi_window_source_before_cross_monitor_dro
         hwnd: 100,
         is_tiled: true,
         float_on_drop: false,
+        start_visible_rect: None,
         source_monitor: 1,
         source_workspace_idx: 0,
         source_row: 0,
@@ -4401,6 +4406,7 @@ fn test_body_to_safe_band_then_shift_restores_multi_window_source() {
         hwnd: 100,
         is_tiled: true,
         float_on_drop: false,
+        start_visible_rect: None,
         source_monitor: 1,
         source_workspace_idx: 0,
         source_row: 0,
@@ -4524,6 +4530,7 @@ fn test_body_to_no_target_then_cross_monitor_shift_restores_multi_window_source(
         hwnd: 100,
         is_tiled: true,
         float_on_drop: false,
+        start_visible_rect: None,
         source_monitor: 1,
         source_workspace_idx: 0,
         source_row: 0,
@@ -4640,6 +4647,7 @@ fn test_body_preview_shift_restores_same_column_reordered_slot() {
         hwnd: 100,
         is_tiled: true,
         float_on_drop: false,
+        start_visible_rect: None,
         source_monitor: 1,
         source_workspace_idx: 0,
         source_row: 0,
@@ -4796,6 +4804,7 @@ fn test_safe_band_drop_follows_surviving_target_column_after_peer_lifecycle_shif
         hwnd: 100,
         is_tiled: true,
         float_on_drop: false,
+        start_visible_rect: None,
         source_monitor: 1,
         source_workspace_idx: 0,
         source_row: 0,
@@ -4869,6 +4878,7 @@ fn test_safe_band_drop_snaps_back_when_target_identity_vanishes_entirely() {
         hwnd: 100,
         is_tiled: true,
         float_on_drop: false,
+        start_visible_rect: None,
         source_monitor: 1,
         source_workspace_idx: 0,
         source_row: 0,
@@ -4930,6 +4940,7 @@ fn test_shift_restore_follows_surviving_source_column_after_peer_lifecycle_shift
         hwnd: 100,
         is_tiled: true,
         float_on_drop: false,
+        start_visible_rect: None,
         source_monitor: 1,
         source_workspace_idx: 0,
         source_row: 0,
@@ -5019,6 +5030,7 @@ fn test_shift_restore_creates_new_column_when_no_source_peer_survives() {
         hwnd: 100,
         is_tiled: true,
         float_on_drop: false,
+        start_visible_rect: None,
         source_monitor: 1,
         source_workspace_idx: 0,
         source_row: 0,
@@ -5234,8 +5246,10 @@ fn test_visible_hidden_suppression_preserves_resize_and_drag_sessions() {
 #[test]
 fn float_drag_drop_keeps_visible_rect_and_leaves_tiling() {
     let _desktop = display_change_regression::FixtureDesktop::enter();
-    let fixture = ResizeTestWindow::new(960);
-    let hwnd = fixture.id();
+    let fixture =
+        display_change_regression::PlacementOwner::spawn_at(Rect::new(100, 100, 960, 600));
+    fixture.resume();
+    let hwnd = fixture.window_id;
     let dropped = leopardwm_platform_win32::get_window_visible_rect(hwnd).unwrap();
     let mut state = AppState::new_with_config(test_config(), test_monitors());
     state.paused = false;
@@ -5249,7 +5263,14 @@ fn float_drag_drop_keeps_visible_rect_and_leaves_tiling() {
         .insert_window(hwnd, Some(500))
         .unwrap();
     seed_drag_session(&mut state, hwnd);
-    state.drag_state.as_mut().unwrap().float_on_drop = true;
+    let drag = state.drag_state.as_mut().unwrap();
+    drag.float_on_drop = true;
+    drag.start_visible_rect = Some(Rect::new(
+        dropped.x - 20,
+        dropped.y,
+        dropped.width,
+        dropped.height,
+    ));
 
     state.handle_window_event(WindowEvent::MoveSizeEnd(hwnd));
 
@@ -5269,10 +5290,45 @@ fn float_drag_drop_keeps_visible_rect_and_leaves_tiling() {
 }
 
 #[test]
+fn cancelled_float_drag_stays_tiled() {
+    let _desktop = display_change_regression::FixtureDesktop::enter();
+    for has_start in [true, false] {
+        let fixture =
+            display_change_regression::PlacementOwner::spawn_at(Rect::new(100, 100, 960, 600));
+        fixture.resume();
+        let hwnd = fixture.window_id;
+        let start = leopardwm_platform_win32::get_window_visible_rect(hwnd).unwrap();
+        let mut state = AppState::new_with_config(test_config(), test_monitors());
+        state.paused = false;
+        state.reduce_motion = true;
+        state
+            .injected_window_info
+            .insert(hwnd, make_test_window_info(hwnd));
+        state
+            .focused_workspace_mut()
+            .unwrap()
+            .insert_window(hwnd, Some(500))
+            .unwrap();
+        seed_drag_session(&mut state, hwnd);
+        let drag = state.drag_state.as_mut().unwrap();
+        drag.float_on_drop = true;
+        drag.start_visible_rect = has_start.then_some(start);
+
+        state.handle_window_event(WindowEvent::MoveSizeEnd(hwnd));
+
+        let workspace = state.focused_workspace().unwrap();
+        assert!(workspace.find_window_location_rc(hwnd).is_some());
+        assert!(!workspace.is_floating(hwnd));
+    }
+}
+
+#[test]
 fn float_drag_uses_active_workspace_on_drop_monitor() {
     let _desktop = display_change_regression::FixtureDesktop::enter();
-    let fixture = ResizeTestWindow::new(960);
-    let hwnd = fixture.id();
+    let fixture =
+        display_change_regression::PlacementOwner::spawn_at(Rect::new(100, 100, 960, 600));
+    fixture.resume();
+    let hwnd = fixture.window_id;
     let mut state = AppState::new_with_config(test_config(), two_monitors());
     state.paused = false;
     state.reduce_motion = true;
@@ -5309,8 +5365,10 @@ fn float_drag_uses_active_workspace_on_drop_monitor() {
 #[test]
 fn float_drag_switch_clears_preview_and_restores_removed_source() {
     let _desktop = display_change_regression::FixtureDesktop::enter();
-    let fixture = ResizeTestWindow::new(960);
-    let hwnd = fixture.id();
+    let fixture =
+        display_change_regression::PlacementOwner::spawn_at(Rect::new(100, 100, 960, 600));
+    fixture.resume();
+    let hwnd = fixture.window_id;
     let mut state = AppState::new_with_config(test_config(), test_monitors());
     state.reduce_motion = true;
     state
@@ -13768,6 +13826,7 @@ fn test_floating_placement_and_special_states_preserve_stored_geometry() {
                     hwnd: owner.hwnd,
                     is_tiled: false,
                     float_on_drop: false,
+                    start_visible_rect: None,
                     source_monitor: 1,
                     source_workspace_idx: 0,
                     source_row: 0,
@@ -20753,6 +20812,7 @@ fn test_drag_restore_rejoins_second_row_original_slot() {
         hwnd: 201,
         is_tiled: true,
         float_on_drop: false,
+        start_visible_rect: None,
         source_monitor: 1,
         source_workspace_idx: 0,
         source_row: 1,
@@ -20816,6 +20876,7 @@ fn test_drag_window_to_empty_row_creates_column() {
         hwnd: 100,
         is_tiled: true,
         float_on_drop: false,
+        start_visible_rect: None,
         source_monitor: mon,
         source_workspace_idx: 0,
         source_row: 0,
@@ -20864,6 +20925,7 @@ fn test_drag_window_merge_into_existing_column_in_target_row() {
         hwnd: 100,
         is_tiled: true,
         float_on_drop: false,
+        start_visible_rect: None,
         source_monitor: mon,
         source_workspace_idx: 0,
         source_row: 0,
@@ -20919,6 +20981,7 @@ fn test_drag_window_to_new_column_in_target_row_with_existing_columns() {
         hwnd: 100,
         is_tiled: true,
         float_on_drop: false,
+        start_visible_rect: None,
         source_monitor: mon,
         source_workspace_idx: 0,
         source_row: 0,
@@ -20980,6 +21043,7 @@ fn test_shift_drag_column_to_another_row_on_same_monitor() {
         hwnd: 100,
         is_tiled: true,
         float_on_drop: false,
+        start_visible_rect: None,
         source_monitor: mon,
         source_workspace_idx: 0,
         source_row: 0,
@@ -21044,6 +21108,7 @@ fn test_drag_window_to_new_row_preserves_column_width() {
         hwnd: 100,
         is_tiled: true,
         float_on_drop: false,
+        start_visible_rect: None,
         source_monitor: mon,
         source_workspace_idx: 0,
         source_row: 0,
@@ -24178,6 +24243,7 @@ fn test_cross_monitor_drag_uses_cursor_target_row_not_window_center() {
         hwnd: 100,
         is_tiled: true,
         float_on_drop: false,
+        start_visible_rect: None,
         source_monitor: 1,
         source_workspace_idx: 0,
         source_row: 0,

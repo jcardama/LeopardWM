@@ -3164,6 +3164,9 @@ impl AppState {
             hwnd,
             is_tiled,
             float_on_drop: false,
+            start_visible_rect: is_tiled
+                .then(|| leopardwm_platform_win32::get_window_visible_rect(hwnd))
+                .flatten(),
             source_monitor,
             source_workspace_idx: source_ws_idx,
             source_row,
@@ -3264,8 +3267,10 @@ impl AppState {
         let requested = leopardwm_platform_win32::take_drag_float_request(hwnd);
         if !self.paused
             && (drag.float_on_drop || requested)
-            && leopardwm_platform_win32::get_window_visible_rect(hwnd)
-                .is_some_and(|rect| self.finalize_float_drag(&drag, rect))
+            && leopardwm_platform_win32::get_window_visible_rect(hwnd).is_some_and(|rect| {
+                drag.start_visible_rect.is_some_and(|start| start != rect)
+                    && self.finalize_float_drag(&drag, rect)
+            })
         {
             leopardwm_platform_win32::set_dwm_transitions_disabled(hwnd, false);
             return;
@@ -4647,6 +4652,7 @@ mod failed_drop_lookup_tests {
             hwnd,
             is_tiled: true,
             float_on_drop: false,
+            start_visible_rect: None,
             source_monitor: 1,
             source_workspace_idx: 0,
             source_row: 0,

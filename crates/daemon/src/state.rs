@@ -24,6 +24,7 @@ pub(crate) struct DragState {
     pub(crate) hwnd: u64,
     pub(crate) is_tiled: bool,
     pub(crate) float_on_drop: bool,
+    pub(crate) start_visible_rect: Option<Rect>,
     pub(crate) source_monitor: MonitorId,
     pub(crate) source_workspace_idx: usize,
     /// Original row index at drag start.

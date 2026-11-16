@@ -99,6 +99,7 @@ fn in_membership_drag(hwnd: u64) -> DragState {
         hwnd,
         is_tiled: true,
         float_on_drop: false,
+        start_visible_rect: None,
         source_monitor: 1,
         source_workspace_idx: 0,
         source_row: 0,

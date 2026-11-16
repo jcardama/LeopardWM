@@ -18,6 +18,7 @@ static MOUSE_OBSERVER_GENERATION: AtomicU64 = AtomicU64::new(0);
 static DRAG_FLOAT_ARMED: AtomicU64 = AtomicU64::new(0);
 static DRAG_FLOAT_REQUESTED: AtomicU64 = AtomicU64::new(0);
 static SWALLOW_SECONDARY_UP: AtomicBool = AtomicBool::new(false);
+static PRIMARY_BUTTON_HELD: AtomicBool = AtomicBool::new(false);
 
 pub fn arm_drag_float(hwnd: u64) {
     DRAG_FLOAT_REQUESTED.store(0, Ordering::SeqCst);
@@ -45,7 +46,8 @@ enum DragFloatDecision {
     Request(u64),
     ClearSwallow,
     SwallowUp,
-    Disarm,
+    PrimaryDown,
+    PrimaryUp,
 }
 
 fn drag_float_decision(
@@ -55,27 +57,66 @@ fn drag_float_decision(
     swapped: bool,
     armed: u64,
     swallow_up: bool,
+    primary_held: bool,
 ) -> DragFloatDecision {
     if ncode < 0 || self_injected {
         return DragFloatDecision::Pass;
     }
-    let (secondary_down, secondary_up, primary_up) = if swapped {
-        (WM_LBUTTONDOWN, WM_LBUTTONUP, WM_RBUTTONUP)
+    let (secondary_down, secondary_up, primary_down, primary_up) = if swapped {
+        (WM_LBUTTONDOWN, WM_LBUTTONUP, WM_RBUTTONDOWN, WM_RBUTTONUP)
     } else {
-        (WM_RBUTTONDOWN, WM_RBUTTONUP, WM_LBUTTONUP)
+        (WM_RBUTTONDOWN, WM_RBUTTONUP, WM_LBUTTONDOWN, WM_LBUTTONUP)
     };
     if message == secondary_down {
-        if armed == 0 {
+        if armed == 0 || !primary_held {
             DragFloatDecision::ClearSwallow
         } else {
             DragFloatDecision::Request(armed)
         }
     } else if message == secondary_up && swallow_up {
         DragFloatDecision::SwallowUp
-    } else if message == primary_up && armed != 0 {
-        DragFloatDecision::Disarm
+    } else if message == primary_down {
+        DragFloatDecision::PrimaryDown
+    } else if message == primary_up {
+        DragFloatDecision::PrimaryUp
     } else {
         DragFloatDecision::Pass
+    }
+}
+
+fn handle_drag_float_mouse(ncode: i32, message: u32, self_injected: bool, swapped: bool) -> bool {
+    match drag_float_decision(
+        ncode,
+        message,
+        self_injected,
+        swapped,
+        DRAG_FLOAT_ARMED.load(Ordering::SeqCst),
+        SWALLOW_SECONDARY_UP.load(Ordering::SeqCst),
+        PRIMARY_BUTTON_HELD.load(Ordering::SeqCst),
+    ) {
+        DragFloatDecision::Request(hwnd) => {
+            DRAG_FLOAT_REQUESTED.store(hwnd, Ordering::SeqCst);
+            SWALLOW_SECONDARY_UP.store(true, Ordering::SeqCst);
+            true
+        }
+        DragFloatDecision::ClearSwallow => {
+            SWALLOW_SECONDARY_UP.store(false, Ordering::SeqCst);
+            false
+        }
+        DragFloatDecision::SwallowUp => {
+            SWALLOW_SECONDARY_UP.store(false, Ordering::SeqCst);
+            true
+        }
+        DragFloatDecision::PrimaryDown => {
+            PRIMARY_BUTTON_HELD.store(true, Ordering::SeqCst);
+            false
+        }
+        DragFloatDecision::PrimaryUp => {
+            PRIMARY_BUTTON_HELD.store(false, Ordering::SeqCst);
+            disarm_drag_float();
+            false
+        }
+        DragFloatDecision::Pass => false,
     }
 }
 
@@ -210,26 +251,13 @@ unsafe extern "system" fn mouse_press_hook_proc(
         )
     {
         let mouse = &*(lparam.0 as *const MSLLHOOKSTRUCT);
-        match drag_float_decision(
+        if handle_drag_float_mouse(
             ncode,
             wparam.0 as u32,
             mouse.dwExtraInfo == SELF_INJECTED_INPUT_TAG,
             GetSystemMetrics(SM_SWAPBUTTON) != 0,
-            DRAG_FLOAT_ARMED.load(Ordering::SeqCst),
-            SWALLOW_SECONDARY_UP.load(Ordering::SeqCst),
         ) {
-            DragFloatDecision::Request(hwnd) => {
-                DRAG_FLOAT_REQUESTED.store(hwnd, Ordering::SeqCst);
-                SWALLOW_SECONDARY_UP.store(true, Ordering::SeqCst);
-                return LRESULT(1);
-            }
-            DragFloatDecision::ClearSwallow => SWALLOW_SECONDARY_UP.store(false, Ordering::SeqCst),
-            DragFloatDecision::SwallowUp => {
-                SWALLOW_SECONDARY_UP.store(false, Ordering::SeqCst);
-                return LRESULT(1);
-            }
-            DragFloatDecision::Disarm => disarm_drag_float(),
-            DragFloatDecision::Pass => {}
+            return LRESULT(1);
         }
     }
     CallNextHookEx(None, ncode, wparam, lparam)
@@ -248,23 +276,85 @@ mod tests {
     #[test]
     fn drag_float_mouse_decisions_respect_buttons_and_hook_boundaries() {
         use DragFloatDecision::*;
-        for (ncode, message, injected, swapped, armed, swallow, expected) in [
-            (0, WM_RBUTTONDOWN, false, false, 42, false, Request(42)),
-            (0, WM_RBUTTONUP, false, false, 42, true, SwallowUp),
-            (0, WM_RBUTTONUP, false, false, 42, false, Pass),
-            (0, WM_RBUTTONDOWN, false, false, 0, true, ClearSwallow),
-            (0, WM_LBUTTONUP, false, false, 42, false, Disarm),
-            (0, WM_LBUTTONDOWN, false, true, 42, false, Request(42)),
-            (0, WM_LBUTTONUP, false, true, 42, true, SwallowUp),
-            (0, WM_RBUTTONUP, false, true, 42, false, Disarm),
-            (0, WM_RBUTTONDOWN, true, false, 42, false, Pass),
-            (-1, WM_RBUTTONDOWN, false, false, 42, false, Pass),
+        for (ncode, message, injected, swapped, armed, swallow, held, expected) in [
+            (
+                0,
+                WM_RBUTTONDOWN,
+                false,
+                false,
+                42,
+                false,
+                true,
+                Request(42),
+            ),
+            (
+                0,
+                WM_RBUTTONDOWN,
+                false,
+                false,
+                42,
+                true,
+                false,
+                ClearSwallow,
+            ),
+            (0, WM_RBUTTONUP, false, false, 42, true, true, SwallowUp),
+            (0, WM_RBUTTONUP, false, false, 42, false, true, Pass),
+            (0, WM_RBUTTONDOWN, false, false, 0, true, true, ClearSwallow),
+            (
+                0,
+                WM_LBUTTONDOWN,
+                false,
+                false,
+                0,
+                false,
+                false,
+                PrimaryDown,
+            ),
+            (0, WM_LBUTTONUP, false, false, 42, false, true, PrimaryUp),
+            (0, WM_LBUTTONDOWN, false, true, 42, false, true, Request(42)),
+            (
+                0,
+                WM_LBUTTONDOWN,
+                false,
+                true,
+                42,
+                true,
+                false,
+                ClearSwallow,
+            ),
+            (0, WM_LBUTTONUP, false, true, 42, true, true, SwallowUp),
+            (0, WM_RBUTTONDOWN, false, true, 0, false, false, PrimaryDown),
+            (0, WM_RBUTTONUP, false, true, 42, false, true, PrimaryUp),
+            (0, WM_RBUTTONDOWN, true, false, 42, false, true, Pass),
+            (-1, WM_RBUTTONDOWN, false, false, 42, false, true, Pass),
         ] {
             assert_eq!(
-                drag_float_decision(ncode, message, injected, swapped, armed, swallow),
+                drag_float_decision(ncode, message, injected, swapped, armed, swallow, held),
                 expected
             );
         }
+    }
+
+    #[test]
+    fn late_arming_after_primary_release_does_not_request_or_swallow() {
+        let _guard = PRESS_COUNT_TEST_LOCK.lock().unwrap();
+        disarm_drag_float();
+        DRAG_FLOAT_REQUESTED.store(0, Ordering::SeqCst);
+        PRIMARY_BUTTON_HELD.store(false, Ordering::SeqCst);
+        SWALLOW_SECONDARY_UP.store(false, Ordering::SeqCst);
+        assert!(!handle_drag_float_mouse(0, WM_LBUTTONDOWN, false, false));
+        assert!(!handle_drag_float_mouse(0, WM_LBUTTONUP, false, false));
+        arm_drag_float(42);
+        assert!(!handle_drag_float_mouse(0, WM_RBUTTONDOWN, false, false));
+        assert!(!drag_float_requested(42));
+        assert!(!handle_drag_float_mouse(0, WM_RBUTTONUP, false, false));
+        assert!(!handle_drag_float_mouse(0, WM_LBUTTONDOWN, false, false));
+        arm_drag_float(42);
+        assert!(handle_drag_float_mouse(0, WM_RBUTTONDOWN, false, false));
+        assert!(take_drag_float_request(42));
+        assert!(handle_drag_float_mouse(0, WM_RBUTTONUP, false, false));
+        assert!(!handle_drag_float_mouse(0, WM_LBUTTONUP, false, false));
+        disarm_drag_float();
     }
 
     #[test]

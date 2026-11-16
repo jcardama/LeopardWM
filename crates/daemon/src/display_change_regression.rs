@@ -323,8 +323,8 @@ impl MoveControl {
     }
 }
 
-struct PlacementOwner {
-    window_id: u64,
+pub(crate) struct PlacementOwner {
+    pub(crate) window_id: u64,
     thread_id: u32,
     release: mpsc::Sender<()>,
     pumping: mpsc::Receiver<()>,
@@ -337,7 +337,7 @@ impl PlacementOwner {
         Self::spawn_at(Rect::new(48, 48, 160, 120))
     }
 
-    fn spawn_at(rect: Rect) -> Self {
+    pub(crate) fn spawn_at(rect: Rect) -> Self {
         Self::spawn_with(rect, 0, false)
     }
 
@@ -468,7 +468,7 @@ impl PlacementOwner {
         }
     }
 
-    fn resume(&self) {
+    pub(crate) fn resume(&self) {
         self.release.send(()).unwrap();
         self.pumping.recv_timeout(Duration::from_secs(5)).unwrap();
     }

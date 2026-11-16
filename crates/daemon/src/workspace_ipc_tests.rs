@@ -577,6 +577,7 @@ fn drag_preview_keeps_temporarily_detached_window_in_source_workspace() {
         hwnd: 10,
         is_tiled: true,
         float_on_drop: false,
+        start_visible_rect: None,
         source_monitor: 1,
         source_workspace_idx: 0,
         source_row: 1,
