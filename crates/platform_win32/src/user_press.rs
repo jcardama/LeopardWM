@@ -1,5 +1,7 @@
 use crate::{Win32Error, WM_QUIT_LLHOOK_THREAD};
+use leopardwm_core_layout::Rect;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Mutex;
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -16,13 +18,51 @@ static NEXT_OBSERVER_GENERATION: AtomicU64 = AtomicU64::new(1);
 static KEYBOARD_OBSERVER_GENERATION: AtomicU64 = AtomicU64::new(0);
 static MOUSE_OBSERVER_GENERATION: AtomicU64 = AtomicU64::new(0);
 static DRAG_FLOAT_ARMED: AtomicU64 = AtomicU64::new(0);
+static DRAG_FLOAT_ARMED_GENERATION: AtomicU64 = AtomicU64::new(0);
 static DRAG_FLOAT_REQUESTED: AtomicU64 = AtomicU64::new(0);
 static SWALLOW_SECONDARY_UP: AtomicBool = AtomicBool::new(false);
 static PRIMARY_BUTTON_HELD: AtomicBool = AtomicBool::new(false);
+static PRIMARY_PRESS_GENERATION: AtomicU64 = AtomicU64::new(0);
+static MOVE_SIZE_START: Mutex<Option<(u64, Rect, u64)>> = Mutex::new(None);
 
-pub fn arm_drag_float(hwnd: u64) {
+pub(crate) fn primary_button_held() -> bool {
+    PRIMARY_BUTTON_HELD.load(Ordering::SeqCst)
+}
+
+pub fn capture_move_size_start(hwnd: u64) {
+    let generation = PRIMARY_PRESS_GENERATION.load(Ordering::SeqCst);
+    let captured = (hwnd != 0)
+        .then(|| crate::get_window_visible_rect(hwnd))
+        .flatten()
+        .map(|rect| (hwnd, rect, generation));
+    *MOVE_SIZE_START
+        .lock()
+        .unwrap_or_else(crate::recover_poisoned_mutex) = captured;
+}
+
+pub fn take_move_size_start(hwnd: u64) -> Option<(Rect, u64)> {
+    let mut captured = MOVE_SIZE_START
+        .lock()
+        .unwrap_or_else(crate::recover_poisoned_mutex);
+    if captured.as_ref().is_some_and(|(id, _, _)| *id == hwnd) {
+        captured
+            .take()
+            .map(|(_, rect, generation)| (rect, generation))
+    } else {
+        None
+    }
+}
+
+pub fn arm_drag_float(hwnd: u64, generation: u64) {
+    disarm_drag_float();
     DRAG_FLOAT_REQUESTED.store(0, Ordering::SeqCst);
+    DRAG_FLOAT_ARMED_GENERATION.store(generation, Ordering::SeqCst);
     DRAG_FLOAT_ARMED.store(hwnd, Ordering::SeqCst);
+    if !PRIMARY_BUTTON_HELD.load(Ordering::SeqCst)
+        || PRIMARY_PRESS_GENERATION.load(Ordering::SeqCst) != generation
+    {
+        let _ = DRAG_FLOAT_ARMED.compare_exchange(hwnd, 0, Ordering::SeqCst, Ordering::SeqCst);
+    }
 }
 
 pub fn disarm_drag_float() {
@@ -85,21 +125,35 @@ fn drag_float_decision(
 }
 
 fn handle_drag_float_mouse(ncode: i32, message: u32, self_injected: bool, swapped: bool) -> bool {
+    let armed = DRAG_FLOAT_ARMED.load(Ordering::SeqCst);
     match drag_float_decision(
         ncode,
         message,
         self_injected,
         swapped,
-        DRAG_FLOAT_ARMED.load(Ordering::SeqCst),
+        armed,
         SWALLOW_SECONDARY_UP.load(Ordering::SeqCst),
         PRIMARY_BUTTON_HELD.load(Ordering::SeqCst),
     ) {
         DragFloatDecision::Request(hwnd) => {
+            if DRAG_FLOAT_ARMED_GENERATION.load(Ordering::SeqCst)
+                != PRIMARY_PRESS_GENERATION.load(Ordering::SeqCst)
+                || DRAG_FLOAT_ARMED.load(Ordering::SeqCst) != hwnd
+            {
+                let _ =
+                    DRAG_FLOAT_ARMED.compare_exchange(hwnd, 0, Ordering::SeqCst, Ordering::SeqCst);
+                SWALLOW_SECONDARY_UP.store(false, Ordering::SeqCst);
+                return false;
+            }
             DRAG_FLOAT_REQUESTED.store(hwnd, Ordering::SeqCst);
             SWALLOW_SECONDARY_UP.store(true, Ordering::SeqCst);
             true
         }
         DragFloatDecision::ClearSwallow => {
+            if armed != 0 {
+                let _ =
+                    DRAG_FLOAT_ARMED.compare_exchange(armed, 0, Ordering::SeqCst, Ordering::SeqCst);
+            }
             SWALLOW_SECONDARY_UP.store(false, Ordering::SeqCst);
             false
         }
@@ -109,6 +163,8 @@ fn handle_drag_float_mouse(ncode: i32, message: u32, self_injected: bool, swappe
         }
         DragFloatDecision::PrimaryDown => {
             PRIMARY_BUTTON_HELD.store(true, Ordering::SeqCst);
+            PRIMARY_PRESS_GENERATION.fetch_add(1, Ordering::SeqCst);
+            disarm_drag_float();
             false
         }
         DragFloatDecision::PrimaryUp => {
@@ -343,13 +399,23 @@ mod tests {
         PRIMARY_BUTTON_HELD.store(false, Ordering::SeqCst);
         SWALLOW_SECONDARY_UP.store(false, Ordering::SeqCst);
         assert!(!handle_drag_float_mouse(0, WM_LBUTTONDOWN, false, false));
+        let original_generation = PRIMARY_PRESS_GENERATION.load(Ordering::SeqCst);
         assert!(!handle_drag_float_mouse(0, WM_LBUTTONUP, false, false));
-        arm_drag_float(42);
+        arm_drag_float(42, original_generation);
+        assert_eq!(DRAG_FLOAT_ARMED.load(Ordering::SeqCst), 0);
+        assert!(!handle_drag_float_mouse(0, WM_LBUTTONDOWN, false, false));
+        arm_drag_float(42, original_generation);
         assert!(!handle_drag_float_mouse(0, WM_RBUTTONDOWN, false, false));
         assert!(!drag_float_requested(42));
         assert!(!handle_drag_float_mouse(0, WM_RBUTTONUP, false, false));
+        let current_generation = PRIMARY_PRESS_GENERATION.load(Ordering::SeqCst);
+        arm_drag_float(42, current_generation);
         assert!(!handle_drag_float_mouse(0, WM_LBUTTONDOWN, false, false));
-        arm_drag_float(42);
+        assert_eq!(DRAG_FLOAT_ARMED.load(Ordering::SeqCst), 0);
+        assert!(!handle_drag_float_mouse(0, WM_RBUTTONDOWN, false, false));
+        assert!(!drag_float_requested(42));
+        assert!(!handle_drag_float_mouse(0, WM_RBUTTONUP, false, false));
+        arm_drag_float(42, PRIMARY_PRESS_GENERATION.load(Ordering::SeqCst));
         assert!(handle_drag_float_mouse(0, WM_RBUTTONDOWN, false, false));
         assert!(take_drag_float_request(42));
         assert!(handle_drag_float_mouse(0, WM_RBUTTONUP, false, false));

@@ -365,7 +365,15 @@ fn win_event_callback_inner(
         }
         EVENT_SYSTEM_MINIMIZESTART => WindowEvent::Minimized(window_id, dwms_event_time),
         EVENT_SYSTEM_MINIMIZEEND => WindowEvent::Restored(window_id),
-        EVENT_SYSTEM_MOVESIZESTART => WindowEvent::MoveSizeStart(window_id),
+        EVENT_SYSTEM_MOVESIZESTART => {
+            let capture_hwnd = if crate::user_press::primary_button_held() {
+                window_id
+            } else {
+                0
+            };
+            crate::capture_move_size_start(capture_hwnd);
+            WindowEvent::MoveSizeStart(window_id)
+        }
         EVENT_SYSTEM_MOVESIZEEND => WindowEvent::MoveSizeEnd(window_id),
         EVENT_OBJECT_LOCATIONCHANGE => WindowEvent::MovedOrResized(window_id),
         EVENT_OBJECT_NAMECHANGE => WindowEvent::TitleChanged(window_id),

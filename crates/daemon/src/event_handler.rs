@@ -3097,6 +3097,7 @@ impl AppState {
 
     fn on_move_size_start(&mut self, hwnd: u64) {
         debug!("User started dragging/resizing window {}", hwnd);
+        let start_capture = leopardwm_platform_win32::take_move_size_start(hwnd);
 
         // Distinguish resize (border drag) from move (title bar drag).
         // Only create drag state for moves — resizes should not trigger
@@ -3164,9 +3165,7 @@ impl AppState {
             hwnd,
             is_tiled,
             float_on_drop: false,
-            start_visible_rect: is_tiled
-                .then(|| leopardwm_platform_win32::get_window_visible_rect(hwnd))
-                .flatten(),
+            start_visible_rect: start_capture.filter(|_| is_tiled).map(|(rect, _)| rect),
             source_monitor,
             source_workspace_idx: source_ws_idx,
             source_row,
@@ -3182,7 +3181,9 @@ impl AppState {
             source_column_width,
         });
         if is_tiled && !self.paused {
-            leopardwm_platform_win32::arm_drag_float(hwnd);
+            if let Some((_, generation)) = start_capture {
+                leopardwm_platform_win32::arm_drag_float(hwnd, generation);
+            }
         }
         // Disable DWM-managed position interpolation on the
         // dragged window so its final SetWindowPos on drop

@@ -51,8 +51,9 @@ pub use hotkeys::*;
 pub use keyboard_hook::*;
 pub use mouse_hook::*;
 pub use user_press::{
-    arm_drag_float, disarm_drag_float, drag_float_requested, install_mouse_press_hook,
-    take_drag_float_request, user_press_count, MousePressHookHandle,
+    arm_drag_float, capture_move_size_start, disarm_drag_float, drag_float_requested,
+    install_mouse_press_hook, take_drag_float_request, take_move_size_start, user_press_count,
+    MousePressHookHandle,
 };
 
 pub use elevation::{

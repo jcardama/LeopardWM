@@ -5243,14 +5243,51 @@ fn test_visible_hidden_suppression_preserves_resize_and_drag_sessions() {
     assert!(state.window_managed_at.contains_key(&100));
 }
 
+static FLOAT_DRAG_CAPTURE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn float_drag_fixture_bounds() -> Rect {
+    // Keep every possible cursor position away from the fixture's resize border.
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
+        SM_YVIRTUALSCREEN,
+    };
+    unsafe {
+        Rect::new(
+            GetSystemMetrics(SM_XVIRTUALSCREEN) - 500,
+            GetSystemMetrics(SM_YVIRTUALSCREEN) - 500,
+            GetSystemMetrics(SM_CXVIRTUALSCREEN) + 1000,
+            GetSystemMetrics(SM_CYVIRTUALSCREEN) + 1000,
+        )
+    }
+}
+
+fn move_float_drag_fixture(hwnd: u64, x: i32, y: i32) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SetWindowPos, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
+    };
+    unsafe {
+        SetWindowPos(
+            HWND(hwnd as *mut _),
+            None,
+            x,
+            y,
+            0,
+            0,
+            SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER,
+        )
+        .unwrap();
+    }
+}
+
 #[test]
 fn float_drag_drop_keeps_visible_rect_and_leaves_tiling() {
+    let _capture_guard = FLOAT_DRAG_CAPTURE_TEST_LOCK.lock().unwrap();
     let _desktop = display_change_regression::FixtureDesktop::enter();
-    let fixture =
-        display_change_regression::PlacementOwner::spawn_at(Rect::new(100, 100, 960, 600));
+    let fixture = display_change_regression::PlacementOwner::spawn_at(float_drag_fixture_bounds());
     fixture.resume();
     let hwnd = fixture.window_id;
-    let dropped = leopardwm_platform_win32::get_window_visible_rect(hwnd).unwrap();
+    let start = leopardwm_platform_win32::get_window_visible_rect(hwnd).unwrap();
     let mut state = AppState::new_with_config(test_config(), test_monitors());
     state.paused = false;
     state.reduce_motion = true;
@@ -5262,15 +5299,17 @@ fn float_drag_drop_keeps_visible_rect_and_leaves_tiling() {
         .unwrap()
         .insert_window(hwnd, Some(500))
         .unwrap();
-    seed_drag_session(&mut state, hwnd);
-    let drag = state.drag_state.as_mut().unwrap();
+    leopardwm_platform_win32::capture_move_size_start(hwnd);
+    move_float_drag_fixture(hwnd, start.x + 100, start.y);
+    let dropped = leopardwm_platform_win32::get_window_visible_rect(hwnd).unwrap();
+    assert_ne!(start, dropped);
+    state.handle_window_event(WindowEvent::MoveSizeStart(hwnd));
+    let drag = state
+        .drag_state
+        .as_mut()
+        .expect("fixture must be classified as a move");
+    assert_eq!(drag.start_visible_rect, Some(start));
     drag.float_on_drop = true;
-    drag.start_visible_rect = Some(Rect::new(
-        dropped.x - 20,
-        dropped.y,
-        dropped.width,
-        dropped.height,
-    ));
 
     state.handle_window_event(WindowEvent::MoveSizeEnd(hwnd));
 
@@ -5291,10 +5330,11 @@ fn float_drag_drop_keeps_visible_rect_and_leaves_tiling() {
 
 #[test]
 fn cancelled_float_drag_stays_tiled() {
+    let _capture_guard = FLOAT_DRAG_CAPTURE_TEST_LOCK.lock().unwrap();
     let _desktop = display_change_regression::FixtureDesktop::enter();
     for has_start in [true, false] {
         let fixture =
-            display_change_regression::PlacementOwner::spawn_at(Rect::new(100, 100, 960, 600));
+            display_change_regression::PlacementOwner::spawn_at(float_drag_fixture_bounds());
         fixture.resume();
         let hwnd = fixture.window_id;
         let start = leopardwm_platform_win32::get_window_visible_rect(hwnd).unwrap();
@@ -5309,11 +5349,26 @@ fn cancelled_float_drag_stays_tiled() {
             .unwrap()
             .insert_window(hwnd, Some(500))
             .unwrap();
-        seed_drag_session(&mut state, hwnd);
-        let drag = state.drag_state.as_mut().unwrap();
+        leopardwm_platform_win32::capture_move_size_start(if has_start { hwnd } else { 0 });
+        move_float_drag_fixture(hwnd, start.x + 100, start.y);
+        assert_ne!(
+            leopardwm_platform_win32::get_window_visible_rect(hwnd),
+            Some(start)
+        );
+        state.handle_window_event(WindowEvent::MoveSizeStart(hwnd));
+        let drag = state
+            .drag_state
+            .as_mut()
+            .expect("fixture must be classified as a move");
+        assert_eq!(drag.start_visible_rect, has_start.then_some(start));
         drag.float_on_drop = true;
-        drag.start_visible_rect = has_start.then_some(start);
-
+        if has_start {
+            move_float_drag_fixture(hwnd, start.x, start.y);
+            assert_eq!(
+                leopardwm_platform_win32::get_window_visible_rect(hwnd),
+                Some(start)
+            );
+        }
         state.handle_window_event(WindowEvent::MoveSizeEnd(hwnd));
 
         let workspace = state.focused_workspace().unwrap();
