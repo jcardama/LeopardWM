@@ -23,10 +23,12 @@ static PRIMARY_BUTTON_HELD: AtomicBool = AtomicBool::new(false);
 static PRIMARY_PRESS_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) fn capture_move_size_start(hwnd: u64) -> Option<crate::event_hooks::MoveStartCapture> {
+    // Read the generation before the held flag: a release and new press between
+    // the two reads then changes the generation and fails the recheck below.
+    let generation = PRIMARY_PRESS_GENERATION.load(Ordering::SeqCst);
     if !PRIMARY_BUTTON_HELD.load(Ordering::SeqCst) {
         return None;
     }
-    let generation = PRIMARY_PRESS_GENERATION.load(Ordering::SeqCst);
     let rect = crate::get_window_visible_rect(hwnd)?;
     if !PRIMARY_BUTTON_HELD.load(Ordering::SeqCst)
         || PRIMARY_PRESS_GENERATION.load(Ordering::SeqCst) != generation
