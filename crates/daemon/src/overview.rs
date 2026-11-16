@@ -459,34 +459,45 @@ impl AppState {
                     .chain(any_out.then_some(viewport_region)),
             )
         });
-        let float_gap =
+        let boundary_reserve = boundary_gap * (i32::from(has_left) + i32::from(has_right));
+        let has_group_gap = !floats.is_empty() && tiled_content.is_some();
+        let gap_units = floats.len().saturating_sub(1) as i32 + 3 * i32::from(has_group_gap);
+        let mut float_gap =
             VIEWPORT_RING_PAD + self.config.appearance.active_border_width.max(1) as i32 + 4;
-        let group_gap = if !floats.is_empty() && tiled_content.is_some() {
-            float_gap
-        } else {
-            0
-        };
+        if gap_units > 0 {
+            float_gap = float_gap.min((strip.width - boundary_reserve - 1).max(0) / gap_units);
+        }
+        let group_gap = 3 * float_gap * i32::from(has_group_gap);
         let packed_gaps = floats.len().saturating_sub(1) as i32 * float_gap;
-        let reserve =
-            boundary_gap * (i32::from(has_left) + i32::from(has_right)) + group_gap + packed_gaps;
+        let reserve = boundary_reserve + group_gap + packed_gaps;
 
         // DWM thumbnails cover painted cards, so floats must not overlap tiles.
-        let group_width: i32 = floats
-            .iter()
-            .map(|f| f.rect.width.clamp(1, work_area.width.max(1)))
-            .sum();
+        let floats: Vec<_> = floats
+            .into_iter()
+            .map(|f| {
+                let width = f.rect.width.max(1);
+                let height = f.rect.height.max(1);
+                let scale = 1.0_f64
+                    .min(f64::from(work_area.width.max(1)) / f64::from(width))
+                    .min(f64::from(work_area.height.max(1)) / f64::from(height));
+                (
+                    f,
+                    (f64::from(width) * scale).round().max(1.0) as i32,
+                    (f64::from(height) * scale).round().max(1.0) as i32,
+                )
+            })
+            .collect();
+        let group_width: i32 = floats.iter().map(|(_, width, _)| width).sum();
         let mut x = tiled_content.map_or(0, |r| r.x) - group_width;
         let packed_floats: Vec<_> = floats
             .into_iter()
-            .map(|f| {
+            .map(|(f, width, height)| {
                 let real = Rect::new(
                     f.rect.x - work_area.x + scroll,
                     f.rect.y - work_area.y,
                     f.rect.width,
                     f.rect.height,
                 );
-                let width = f.rect.width.clamp(1, work_area.width.max(1));
-                let height = f.rect.height.clamp(1, work_area.height.max(1));
                 let y = real.y.clamp(0, (work_area.height - height).max(0));
                 let packed = Rect::new(x, y, width, height);
                 x += width;
@@ -542,17 +553,7 @@ impl AppState {
                 // the work-area origin). Filled for EVERY row — the
                 // close animation may zoom toward any workspace's
                 // would-be placements, not just the active one.
-                let from_rect = if Some(wid) == fullscreen && ws.is_floating(wid) {
-                    let f = ws.floating_windows().iter().find(|f| f.id == wid).unwrap();
-                    Rect::new(
-                        f.rect.x - work_area.x,
-                        f.rect.y - work_area.y,
-                        f.rect.width,
-                        f.rect.height,
-                    )
-                } else {
-                    Rect::new(r.x - scroll, r.y, r.width, r.height)
-                };
+                let from_rect = Rect::new(r.x - scroll, r.y, r.width, r.height);
                 OverviewCard {
                     window_id: wid,
                     title: self
@@ -2317,7 +2318,16 @@ mod tests {
             assert!(pair[0].rect.x + pair[0].rect.width < pair[1].rect.x);
         }
         let last = row.cards.last().unwrap();
-        assert!(last.rect.x + last.rect.width < row.cards[0].rect.x);
+        let float_gap = row.cards[3].rect.x - (row.cards[2].rect.x + row.cards[2].rect.width);
+        let group_gap = row.cards[0].rect.x - (last.rect.x + last.rect.width);
+        assert!(
+            group_gap >= 2 * float_gap,
+            "group {group_gap}, float {float_gap}"
+        );
+        let oversized = row.cards[1].rect;
+        let width = oversized.width + 2 * CARD_INSET;
+        let height = oversized.height + 2 * CARD_INSET;
+        assert!((2 * width - 3 * height).abs() <= 5);
         for card in &row.cards[1..] {
             assert!(card.rect.x >= row.panel.x + ROW_INNER_PAD);
             assert!(card.rect.x + card.rect.width <= row.panel.x + row.panel.width - ROW_INNER_PAD);
@@ -2334,7 +2344,38 @@ mod tests {
     }
 
     #[test]
-    fn fullscreen_float_appears_once_and_keeps_real_origin() {
+    fn many_floats_stay_inside_panel_and_backdrop() {
+        for with_tile in [false, true] {
+            let mut state = test_state();
+            state.monitors.get_mut(&1).unwrap().work_area = Rect::new(0, 0, 800, 600);
+            if with_tile {
+                add_windows(&mut state, 0, &[101]);
+            }
+            let ws = &mut state.workspaces.get_mut(&1).unwrap()[0];
+            for id in 1000..1100 {
+                ws.add_floating(id, Rect::new(0, 0, 100, 100)).unwrap();
+            }
+            let (_, model) = state.build_overview_model().unwrap();
+            let row = &model.rows[0];
+            assert_eq!(row.cards.len(), 100 + usize::from(with_tile));
+            for card in &row.cards {
+                for bounds in [row.panel, model.backdrop] {
+                    assert!(
+                        card.rect.x >= bounds.x
+                            && card.rect.y >= bounds.y
+                            && card.rect.x + card.rect.width <= bounds.x + bounds.width
+                            && card.rect.y + card.rect.height <= bounds.y + bounds.height,
+                        "card {:?} outside {:?} (with_tile={with_tile})",
+                        card.rect,
+                        bounds
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fullscreen_float_appears_once_with_viewport_origin() {
         let mut state = test_state();
         let ws = &mut state.workspaces.get_mut(&1).unwrap()[0];
         ws.add_floating(301, Rect::new(100, 150, 500, 400)).unwrap();
@@ -2348,7 +2389,7 @@ mod tests {
             row.cards.iter().map(|c| c.window_id).collect::<Vec<_>>(),
             vec![301, 302]
         );
-        assert_eq!(row.cards[0].from_rect, Some(Rect::new(100, 150, 500, 400)));
+        assert_eq!(row.cards[0].from_rect, Some(Rect::new(0, 0, 1920, 1040)));
         assert_float_before_tiles(row, 302);
     }
 
