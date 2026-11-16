@@ -6445,7 +6445,10 @@ fn test_last_window_newer_same_or_different_replacement_activation_wins() {
         .pending_last_window_departure
         .unwrap()
         .armed_at_event_time_ms;
-    same.handle_window_event(WindowEvent::Focused(200, armed_at.wrapping_add(1)));
+    same.handle_window_event(WindowEvent::Focused(200, armed_at.wrapping_add(16)));
+    assert_eq!(same.active_workspace_idx(mon), 0);
+    assert_eq!(same.previous_focused_hwnd, None);
+    same.handle_window_event(WindowEvent::Focused(200, armed_at.wrapping_add(501)));
     assert_eq!(same.active_workspace_idx(mon), 1);
     assert_eq!(same.previous_focused_hwnd, Some(200));
     assert_eq!(same.pending_last_window_departure, None);
@@ -6458,7 +6461,10 @@ fn test_last_window_newer_same_or_different_replacement_activation_wins() {
         .insert_window(300, Some(800))
         .unwrap();
     different.handle_window_event(WindowEvent::Destroyed(100));
-    different.handle_window_event(WindowEvent::Focused(300, 1_000));
+    different.handle_window_event(WindowEvent::Focused(200, 1_016));
+    assert_eq!(different.active_workspace_idx(mon), 0);
+    assert_eq!(different.previous_focused_hwnd, None);
+    different.handle_window_event(WindowEvent::Focused(300, 1_017));
     assert_eq!(different.active_workspace_idx(mon), 1);
     assert_eq!(different.previous_focused_hwnd, Some(300));
     assert_eq!(different.pending_last_window_departure, None);
@@ -6538,7 +6544,7 @@ fn test_last_window_stale_tracking_still_allows_newer_activation() {
     state.handle_window_event(WindowEvent::Destroyed(100));
     assert_eq!(state.previous_focused_hwnd, None);
 
-    state.handle_window_event(WindowEvent::Focused(200, 1_001));
+    state.handle_window_event(WindowEvent::Focused(200, 1_501));
     assert_eq!(state.active_workspace_idx(mon), 1);
     assert_eq!(state.previous_focused_hwnd, Some(200));
     assert_eq!(state.pending_last_window_departure, None);
@@ -6645,7 +6651,7 @@ fn test_last_window_empty_reconciles_tab_strips_without_global_hide() {
         );
 
         if matches!(departure, Departure::DirectWithReplacement) {
-            state.handle_window_event(WindowEvent::Focused(200, 1_001));
+            state.handle_window_event(WindowEvent::Focused(200, 1_501));
             assert_eq!(state.focused_monitor, 2);
             assert_eq!(state.previous_focused_hwnd, Some(200));
             assert_eq!(state.pending_last_window_departure, None);
@@ -6764,6 +6770,11 @@ fn test_last_window_departure_guard_equality_wrap_and_expiry() {
     wrap.handle_window_event(WindowEvent::Focused(200, u32::MAX));
     assert_eq!(wrap.active_workspace_idx(mon), 0);
     wrap.handle_window_event(WindowEvent::Focused(200, 0));
+    assert_eq!(wrap.active_workspace_idx(mon), 0);
+    assert_eq!(wrap.previous_focused_hwnd, None);
+    wrap.handle_window_event(WindowEvent::Focused(200, 499));
+    assert_eq!(wrap.active_workspace_idx(mon), 0);
+    wrap.handle_window_event(WindowEvent::Focused(200, 500));
     assert_eq!(wrap.active_workspace_idx(mon), 1);
     assert_eq!(wrap.previous_focused_hwnd, Some(200));
 
@@ -6880,22 +6891,51 @@ fn test_last_window_unsampled_newer_tick_activation_wins() {
 
 #[test]
 fn test_last_window_unsampled_duplicate_inferred_replacement_stays() {
-    let mut state = last_window_rule_slot_unsampled_state();
-    let mon = state.focused_monitor;
-    state.handle_window_event(WindowEvent::Destroyed(100));
-    let armed_at = state
-        .pending_last_window_departure
-        .unwrap()
-        .armed_at_event_time_ms;
+    for floating in [true, false] {
+        for event in [WindowEvent::Hidden(0, 1_000), WindowEvent::Destroyed(0)] {
+            let mut state = AppState::new_with_config(test_config(), test_monitors());
+            let mon = state.focused_monitor;
+            state.last_prune_at = Some(std::time::Instant::now());
+            state.injected_event_time_ms = Some(1_000);
+            state.ensure_workspace_exists(mon, 1);
+            let workspaces = state.workspaces.get_mut(&mon).unwrap();
+            if floating {
+                workspaces[0]
+                    .add_floating(0, Rect::new(100, 100, 400, 300))
+                    .unwrap();
+            } else {
+                workspaces[0].insert_window(0, Some(800)).unwrap();
+            }
+            workspaces[1].insert_window(200, Some(800)).unwrap();
+            state.previous_focused_hwnd = Some(0);
+            state.injected_foreground_hwnd = Some(None);
+            state.handle_window_event(event);
+            let armed_at = state
+                .pending_last_window_departure
+                .unwrap()
+                .armed_at_event_time_ms;
 
-    state.handle_window_event(WindowEvent::Focused(200, armed_at));
-    let bound = state.pending_last_window_departure.unwrap();
-    assert_eq!(bound.replacement_hwnd, Some(200));
-    state.handle_window_event(WindowEvent::Focused(200, armed_at));
+            state.handle_window_event(WindowEvent::Focused(200, armed_at));
+            let bound = state.pending_last_window_departure.unwrap();
+            assert_eq!(bound.replacement_hwnd, Some(200));
+            state.handle_window_event(WindowEvent::Focused(200, armed_at.wrapping_add(16)));
 
-    assert_eq!(state.active_workspace_idx(mon), 2);
-    assert_eq!(state.previous_focused_hwnd, None);
-    assert_eq!(state.pending_last_window_departure, Some(bound));
+            assert_eq!(state.active_workspace_idx(mon), 0, "floating={floating}");
+            assert_eq!(state.previous_focused_hwnd, None);
+            assert_eq!(state.pending_last_window_departure, Some(bound));
+            assert!(crate::event_handler::workspace_is_genuinely_empty(
+                &state.workspaces[&mon][0]
+            ));
+
+            state.workspaces.get_mut(&mon).unwrap()[1]
+                .insert_window(300, Some(800))
+                .unwrap();
+            state.handle_window_event(WindowEvent::Focused(300, armed_at.wrapping_add(17)));
+            assert_eq!(state.active_workspace_idx(mon), 1);
+            assert_eq!(state.previous_focused_hwnd, Some(300));
+            assert_eq!(state.pending_last_window_departure, None);
+        }
+    }
 }
 
 #[test]
@@ -7136,7 +7176,7 @@ fn test_last_window_throttled_unmanaged_focus_then_user_activation_follows() {
 }
 
 #[test]
-fn test_last_window_focus_prune_newer_than_trigger_follows_despite_handler_delay() {
+fn test_last_window_focus_prune_repeat_and_expiry_use_trigger_time() {
     let mut state = last_window_focus_prune_state();
     let mon = state.focused_monitor;
 
@@ -7148,7 +7188,7 @@ fn test_last_window_focus_prune_newer_than_trigger_follows_despite_handler_delay
     assert_eq!(intent.armed_at_event_time_ms, 1_000);
     assert_ne!(intent.armed_at_event_time_ms, 5_000);
 
-    state.handle_window_event(WindowEvent::Focused(200, 1_000));
+    state.handle_window_event(WindowEvent::Focused(200, 1_016));
     assert_eq!(state.active_workspace_idx(mon), 0);
     assert_eq!(state.previous_focused_hwnd, None);
     assert_eq!(
@@ -7159,7 +7199,7 @@ fn test_last_window_focus_prune_newer_than_trigger_follows_despite_handler_delay
         1_000
     );
 
-    state.handle_window_event(WindowEvent::Focused(200, 1_001));
+    state.handle_window_event(WindowEvent::Focused(200, 1_501));
     assert_eq!(state.active_workspace_idx(mon), 1);
     assert_eq!(state.previous_focused_hwnd, Some(200));
     assert_eq!(state.pending_last_window_departure, None);
@@ -7926,7 +7966,7 @@ fn test_last_window_liveness_check_then_newer_activation_follows() {
     assert!(state.injected_stale_hwnds.is_empty());
     assert!(state.last_prune_at.is_some());
 
-    state.handle_window_event(WindowEvent::Focused(200, 5_001));
+    state.handle_window_event(WindowEvent::Focused(200, 5_501));
     assert_eq!(state.active_workspace_idx(mon), 1);
     assert_eq!(state.previous_focused_hwnd, Some(200));
     assert_eq!(state.pending_last_window_departure, None);

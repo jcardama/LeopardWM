@@ -30,6 +30,7 @@ All notable changes to LeopardWM will be documented in this file.
 ### Fixes
 
 - **Daemon and watchdog logs now normally stay around 20 MB each, with one previous file kept.** If another process prevents rollover, the current log can grow until rollover succeeds. On first start, an existing oversized log moves to its `.old.log` file when possible and is replaced at the next successful rollover.
+- **Closing the last window on a workspace no longer sends you back to another workspace when Windows activates a parked window there.** Thanks to @Daiivy for the report. (#179)
 - **Audacity's import progress window now floats by default, so it no longer pulls the strip back to it while an import runs.** Thanks to @KeronCyst for the report. (#176)
 - **Resizing a floating window below the size its app allows now keeps LeopardWM's stored size in step with the actual window.**
 - **Floating a tiled window, stashing it to the scratchpad, or moving it out with a window rule or Edit Config no longer leaves the strip scrolled past its last column.**

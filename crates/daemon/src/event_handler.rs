@@ -2204,20 +2204,18 @@ impl AppState {
             .get(&monitor_id)
             .and_then(|workspaces| workspaces.get(ws_idx))
             .is_some_and(|workspace| workspace.is_minimized(hwnd));
-        // Keep Windows' departure handoff from undoing selection: suppress exact replacements and
-        // bind eligible other-workspace handoffs; Minimized allows a 500 ms OS timestamp window.
-        let event_is_eligible = match intent.origin {
-            LastWindowDepartureOrigin::Minimized => event_time_is_no_later_than(
-                event_time_ms,
-                intent
-                    .armed_at_event_time_ms
-                    .wrapping_add(MINIMIZE_HANDOFF_WINDOW_MS),
-            ),
-            LastWindowDepartureOrigin::DirectDestroyedOrHidden
-            | LastWindowDepartureOrigin::EventlessPrune => {
-                event_time_is_no_later_than(event_time_ms, intent.armed_at_event_time_ms)
-            }
+        // Exact replacements and Minimized handoffs have a 500 ms timestamp window;
+        // other direct departure events must be no later than the arm tick.
+        let has_handoff_window = intent.origin == LastWindowDepartureOrigin::Minimized
+            || intent.replacement_hwnd == Some(hwnd);
+        let cutoff = if has_handoff_window {
+            intent
+                .armed_at_event_time_ms
+                .wrapping_add(MINIMIZE_HANDOFF_WINDOW_MS)
+        } else {
+            intent.armed_at_event_time_ms
         };
+        let event_is_eligible = event_time_is_no_later_than(event_time_ms, cutoff);
         let outcome = if !intent.is_fresh() {
             self.pending_last_window_departure = None;
             "stale_ttl"
@@ -2228,7 +2226,7 @@ impl AppState {
             "monitor_or_workspace_changed"
         } else if !event_is_eligible {
             self.pending_last_window_departure = None;
-            if intent.origin == LastWindowDepartureOrigin::Minimized {
+            if has_handoff_window {
                 "later_than_handoff_window"
             } else {
                 "later_than_arm"

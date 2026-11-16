@@ -889,13 +889,13 @@ pub(crate) enum LastWindowDepartureOrigin {
 /// Evidence that the focused monitor's selected workspace lost its tracked
 /// focus because the window departed or was minimized.
 ///
-/// An exact replacement HWND is attributable auto-activation while this guard
-/// is fresh. Direct Destroyed/Hidden and EventlessPrune suppress only Focused
-/// events no later than the arm tick. A real Minimized event uses its OS event
-/// time and accepts Focused handoff events through 500 ms after that tick;
-/// reconciliation-sourced Minimized calls use handler time. If the departing
-/// window still appears live or pruning is throttled, follow-focus cannot
-/// attribute the sequence.
+/// A Focused event for the exact replacement HWND is attributable auto-activation
+/// while this guard is fresh and through 500 ms after the arm tick. Direct
+/// Destroyed/Hidden inference requires an event no later than the arm tick.
+/// A real Minimized event uses its OS event time and accepts handoff events
+/// through 500 ms after that tick; reconciliation-sourced Minimized calls use
+/// handler time. If the departing window still appears live or pruning is
+/// throttled, follow-focus cannot attribute the sequence.
 ///
 /// A prune reached from `Focused(X, t)` stamps `t`. It samples a replacement
 /// only when the tracked focus HWND was stale and was removed from the
