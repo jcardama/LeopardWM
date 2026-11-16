@@ -3084,6 +3084,7 @@ impl AppState {
             return (false, false, false, None);
         }
         let drag_hwnd = drag.hwnd;
+        leopardwm_platform_win32::disarm_drag_float();
         let removed_from_source = drag.removed_from_source;
         let drag_source = Some((drag.source_monitor, drag.source_workspace_idx));
         self.drag_state = None;
@@ -3158,9 +3159,11 @@ impl AppState {
                 None,
             )
         };
+        leopardwm_platform_win32::take_drag_float_request(hwnd);
         self.drag_state = Some(DragState {
             hwnd,
             is_tiled,
+            float_on_drop: false,
             source_monitor,
             source_workspace_idx: source_ws_idx,
             source_row,
@@ -3175,6 +3178,9 @@ impl AppState {
             source_column_peers: Vec::new(),
             source_column_width,
         });
+        if is_tiled && !self.paused {
+            leopardwm_platform_win32::arm_drag_float(hwnd);
+        }
         // Disable DWM-managed position interpolation on the
         // dragged window so its final SetWindowPos on drop
         // lands instantly. Without this, DWM smooths the
@@ -3200,6 +3206,9 @@ impl AppState {
         self.last_placed_layout_rects.remove(&hwnd);
 
         if self.resize_hwnd == Some(hwnd) {
+            if self.drag_state.is_none() {
+                leopardwm_platform_win32::disarm_drag_float();
+            }
             self.resize_hwnd = None;
             self.handle_resize_complete(hwnd);
             // Restore DWM transitions on this early-return path so they cannot
@@ -3222,6 +3231,7 @@ impl AppState {
             return;
         }
 
+        leopardwm_platform_win32::disarm_drag_float();
         let drag = self.drag_state.take();
         self.pending_drag_hint = Some(DragHintAction::Hide);
 
@@ -3247,6 +3257,16 @@ impl AppState {
                     }
                 }
             }
+            leopardwm_platform_win32::set_dwm_transitions_disabled(hwnd, false);
+            return;
+        }
+
+        let requested = leopardwm_platform_win32::take_drag_float_request(hwnd);
+        if !self.paused
+            && (drag.float_on_drop || requested)
+            && leopardwm_platform_win32::get_window_visible_rect(hwnd)
+                .is_some_and(|rect| self.finalize_float_drag(&drag, rect))
+        {
             leopardwm_platform_win32::set_dwm_transitions_disabled(hwnd, false);
             return;
         }
@@ -3763,33 +3783,8 @@ impl AppState {
             }
             return;
         }
-        if let Some(ref mut drag) = self.drag_state {
-            if drag.hwnd == hwnd {
-                if drag.is_tiled {
-                    // Throttle hint updates to ~60fps
-                    let now = std::time::Instant::now();
-                    if drag
-                        .last_hint_update
-                        .is_some_and(|t| now.duration_since(t).as_millis() < 16)
-                    {
-                        return;
-                    }
-                    drag.last_hint_update = Some(now);
-                    self.update_drag_hint(hwnd);
-                } else {
-                    // Floating window drag — throttle border updates to ~60fps
-                    let now = std::time::Instant::now();
-                    if drag
-                        .last_hint_update
-                        .is_some_and(|t| now.duration_since(t).as_millis() < 16)
-                    {
-                        return;
-                    }
-                    drag.last_hint_update = Some(now);
-                    self.show_border(hwnd);
-                }
-                return;
-            }
+        if self.update_active_drag(hwnd) {
+            return;
         }
         if let Some((monitor_id, ws_idx)) = self.find_window_workspace(hwnd) {
             if self.on_inactive_workspace_window_moved(hwnd, monitor_id, ws_idx, &mut is_maximized)
@@ -4651,6 +4646,7 @@ mod failed_drop_lookup_tests {
         state.drag_state = Some(DragState {
             hwnd,
             is_tiled: true,
+            float_on_drop: false,
             source_monitor: 1,
             source_workspace_idx: 0,
             source_row: 0,

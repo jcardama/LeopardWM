@@ -576,6 +576,7 @@ fn drag_preview_keeps_temporarily_detached_window_in_source_workspace() {
     state.drag_state = Some(DragState {
         hwnd: 10,
         is_tiled: true,
+        float_on_drop: false,
         source_monitor: 1,
         source_workspace_idx: 0,
         source_row: 1,

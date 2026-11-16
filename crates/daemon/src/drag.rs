@@ -83,9 +83,105 @@ impl AppState {
 
     pub(crate) fn cancel_drag_for_workspace_switch(&mut self) {
         if let Some(drag) = self.drag_state.take() {
+            leopardwm_platform_win32::disarm_drag_float();
             self.clear_drag_placeholder();
             self.restore_removed_drag_source(&drag);
         }
+    }
+
+    pub(crate) fn update_active_drag(&mut self, hwnd: u64) -> bool {
+        if !self.paused
+            && self
+                .drag_state
+                .as_ref()
+                .is_some_and(|drag| drag.hwnd == hwnd && drag.is_tiled && !drag.float_on_drop)
+            && leopardwm_platform_win32::drag_float_requested(hwnd)
+        {
+            self.switch_drag_to_floating(hwnd);
+        }
+        let Some(drag) = self.drag_state.as_mut().filter(|drag| drag.hwnd == hwnd) else {
+            return false;
+        };
+        let now = std::time::Instant::now();
+        if drag
+            .last_hint_update
+            .is_some_and(|t| now.duration_since(t).as_millis() < 16)
+        {
+            return true;
+        }
+        drag.last_hint_update = Some(now);
+        if drag.is_tiled && !drag.float_on_drop {
+            self.update_drag_hint(hwnd);
+        } else {
+            self.show_border(hwnd);
+        }
+        true
+    }
+
+    pub(crate) fn switch_drag_to_floating(&mut self, hwnd: u64) {
+        let Some(drag) = self
+            .drag_state
+            .as_ref()
+            .filter(|drag| drag.hwnd == hwnd && drag.is_tiled && !drag.float_on_drop)
+            .cloned()
+        else {
+            return;
+        };
+        if drag.removed_from_source && self.restore_drag_source(&drag) {
+            if let Some(current) = self.drag_state.as_mut() {
+                current.removed_from_source = false;
+            }
+        }
+        if let Some(current) = self.drag_state.as_mut() {
+            current.float_on_drop = true;
+        }
+        self.reset_drag_preview_without_target(hwnd);
+    }
+
+    pub(crate) fn finalize_float_drag(&mut self, drag: &DragState, rect: Rect) -> bool {
+        let monitors: Vec<_> = self.monitors.values().cloned().collect();
+        let target_monitor = find_monitor_for_rect(&monitors, &rect)
+            .map(|monitor| monitor.id)
+            .unwrap_or(drag.source_monitor);
+        let target_idx = self.active_workspace_idx(target_monitor);
+        if self
+            .workspaces
+            .get(&target_monitor)
+            .and_then(|v| v.get(target_idx))
+            .is_none()
+        {
+            return false;
+        }
+        self.clear_drag_placeholder();
+        self.restore_removed_drag_source(drag);
+        let viewport = self.layout_viewport(drag.source_monitor);
+        let Some(source) = self
+            .workspaces
+            .get_mut(&drag.source_monitor)
+            .and_then(|v| v.get_mut(drag.source_workspace_idx))
+        else {
+            return false;
+        };
+        if !source.float_window_at(drag.hwnd, rect, viewport) {
+            return false;
+        }
+        if (target_monitor, target_idx) != (drag.source_monitor, drag.source_workspace_idx) {
+            source.remove_floating(drag.hwnd);
+            let target = &mut self.workspaces.get_mut(&target_monitor).unwrap()[target_idx];
+            let _ = target.add_floating(drag.hwnd, rect);
+        }
+        self.focused_monitor = target_monitor;
+        self.previous_focused_hwnd = Some(drag.hwnd);
+        self.restore_snap_for_window(drag.hwnd);
+        if let Err(e) = self.apply_layout() {
+            warn!(
+                "Failed to apply layout after floating dragged window: {}",
+                e
+            );
+        }
+        self.sync_foreground_window();
+        info!("Window {} floated by drag at {:?}", drag.hwnd, rect);
+        true
     }
 
     fn abandon_tiled_drop(&mut self, drag: &DragState) {

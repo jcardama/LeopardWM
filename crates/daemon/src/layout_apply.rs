@@ -541,6 +541,7 @@ impl AppState {
     ) -> anyhow::Error {
         self.display_change_apply_retry = None;
         self.paused = true;
+        leopardwm_platform_win32::disarm_drag_float();
         self.resume_deferred_apply_worker_recovery();
         let msg = layout_apply_timeout_message(timeout);
         let report = LayoutApplyTimeoutReport {

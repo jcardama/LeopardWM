@@ -50,7 +50,10 @@ pub use gestures::*;
 pub use hotkeys::*;
 pub use keyboard_hook::*;
 pub use mouse_hook::*;
-pub use user_press::{install_mouse_press_hook, user_press_count, MousePressHookHandle};
+pub use user_press::{
+    arm_drag_float, disarm_drag_float, drag_float_requested, install_mouse_press_hook,
+    take_drag_float_request, user_press_count, MousePressHookHandle,
+};
 
 pub use elevation::{
     current_process_integrity, manage_block, window_manage_block, ManageBlock, INTEGRITY_HIGH,

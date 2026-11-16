@@ -212,7 +212,11 @@ impl AppState {
             );
             return;
         }
-        if self.drag_state.as_ref().is_some_and(|drag| drag.is_tiled) {
+        if let Some(drag) = self.drag_state.as_ref().filter(|drag| drag.is_tiled) {
+            if drag.float_on_drop {
+                frame.hide();
+                return;
+            }
             if let Some(layout_rect) = self.compute_window_layout_rect(hwnd) {
                 frame.show_at_rect(
                     layout_rect,

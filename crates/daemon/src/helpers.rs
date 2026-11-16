@@ -961,6 +961,7 @@ impl AppState {
             source
         );
         if self.paused {
+            leopardwm_platform_win32::disarm_drag_float();
             self.restore_taskbar_buttons();
             self.restore_snap_for_all_windows();
             self.hide_border();

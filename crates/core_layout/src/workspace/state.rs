@@ -156,6 +156,19 @@ impl Workspace {
     pub fn toggle_floating(&mut self, viewport: Rect) -> Option<WindowId> {
         let wid = self.focused_window()?;
 
+        let float_w = 800.min(viewport.width - 40);
+        let float_h = 600.min(viewport.height - 40);
+        let float_x = viewport.x + (viewport.width - float_w) / 2;
+        let float_y = viewport.y + (viewport.height - float_h) / 2;
+        let rect = Rect::new(float_x, float_y, float_w, float_h);
+        self.float_window_at(wid, rect, viewport).then_some(wid)
+    }
+
+    /// Float a tiled window at a specific visible rectangle, preserving its tiling origin.
+    pub fn float_window_at(&mut self, wid: WindowId, rect: Rect, viewport: Rect) -> bool {
+        if self.find_window_location_rc(wid).is_none() {
+            return false;
+        }
         self.clear_fullscreen_if_window(wid);
 
         let origin = self
@@ -179,14 +192,8 @@ impl Workspace {
             self.float_origin_column.insert(wid, origin);
         }
 
-        let float_w = 800.min(viewport.width - 40);
-        let float_h = 600.min(viewport.height - 40);
-        let float_x = viewport.x + (viewport.width - float_w) / 2;
-        let float_y = viewport.y + (viewport.height - float_h) / 2;
-        let rect = Rect::new(float_x, float_y, float_w, float_h);
-
         let _ = self.add_floating(wid, rect);
-        Some(wid)
+        true
     }
 
     /// Move a floating window back to the tiling layout.

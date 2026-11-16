@@ -2941,6 +2941,20 @@ mod tests {
     }
 
     #[test]
+    fn float_window_at_preserves_rect_and_original_column_on_return() {
+        let mut ws = Workspace::new();
+        let viewport = Rect::new(0, 0, 1920, 1080);
+        let dropped = Rect::new(300, 200, 700, 500);
+        for id in 1..=3 {
+            ws.insert_window(id, Some(400)).unwrap();
+        }
+        assert!(ws.float_window_at(2, dropped, viewport));
+        assert_eq!(ws.floating_windows()[0].rect, dropped);
+        assert!(ws.unfloat_window(2));
+        assert_eq!(ws.find_window_location_rc(2).unwrap().1, 1);
+    }
+
+    #[test]
     fn floating_last_column_repairs_scroll_bounds() {
         let mut ws = Workspace::with_gaps(10, 10);
         let viewport = Rect::new(0, 0, 800, 600);

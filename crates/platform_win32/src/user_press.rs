@@ -1,11 +1,12 @@
 use crate::{Win32Error, WM_QUIT_LLHOOK_THREAD};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, DispatchMessageW, GetMessageW, PeekMessageW, PostThreadMessageW,
-    SetWindowsHookExW, UnhookWindowsHookEx, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, WH_MOUSE_LL,
-    WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_RBUTTONDOWN, WM_XBUTTONDOWN,
+    CallNextHookEx, DispatchMessageW, GetMessageW, GetSystemMetrics, PeekMessageW,
+    PostThreadMessageW, SetWindowsHookExW, UnhookWindowsHookEx, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE,
+    SM_SWAPBUTTON, WH_MOUSE_LL, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_RBUTTONDOWN,
+    WM_RBUTTONUP, WM_XBUTTONDOWN,
 };
 
 pub(crate) const SELF_INJECTED_INPUT_TAG: usize = 0x4C57_4D49;
@@ -14,6 +15,69 @@ static USER_PRESS_COUNT: AtomicU64 = AtomicU64::new(0);
 static NEXT_OBSERVER_GENERATION: AtomicU64 = AtomicU64::new(1);
 static KEYBOARD_OBSERVER_GENERATION: AtomicU64 = AtomicU64::new(0);
 static MOUSE_OBSERVER_GENERATION: AtomicU64 = AtomicU64::new(0);
+static DRAG_FLOAT_ARMED: AtomicU64 = AtomicU64::new(0);
+static DRAG_FLOAT_REQUESTED: AtomicU64 = AtomicU64::new(0);
+static SWALLOW_SECONDARY_UP: AtomicBool = AtomicBool::new(false);
+
+pub fn arm_drag_float(hwnd: u64) {
+    DRAG_FLOAT_REQUESTED.store(0, Ordering::SeqCst);
+    DRAG_FLOAT_ARMED.store(hwnd, Ordering::SeqCst);
+}
+
+pub fn disarm_drag_float() {
+    DRAG_FLOAT_ARMED.store(0, Ordering::SeqCst);
+}
+
+pub fn drag_float_requested(hwnd: u64) -> bool {
+    hwnd != 0 && DRAG_FLOAT_REQUESTED.load(Ordering::SeqCst) == hwnd
+}
+
+pub fn take_drag_float_request(hwnd: u64) -> bool {
+    hwnd != 0
+        && DRAG_FLOAT_REQUESTED
+            .compare_exchange(hwnd, 0, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum DragFloatDecision {
+    Pass,
+    Request(u64),
+    ClearSwallow,
+    SwallowUp,
+    Disarm,
+}
+
+fn drag_float_decision(
+    ncode: i32,
+    message: u32,
+    self_injected: bool,
+    swapped: bool,
+    armed: u64,
+    swallow_up: bool,
+) -> DragFloatDecision {
+    if ncode < 0 || self_injected {
+        return DragFloatDecision::Pass;
+    }
+    let (secondary_down, secondary_up, primary_up) = if swapped {
+        (WM_LBUTTONDOWN, WM_LBUTTONUP, WM_RBUTTONUP)
+    } else {
+        (WM_RBUTTONDOWN, WM_RBUTTONUP, WM_LBUTTONUP)
+    };
+    if message == secondary_down {
+        if armed == 0 {
+            DragFloatDecision::ClearSwallow
+        } else {
+            DragFloatDecision::Request(armed)
+        }
+    } else if message == secondary_up && swallow_up {
+        DragFloatDecision::SwallowUp
+    } else if message == primary_up && armed != 0 {
+        DragFloatDecision::Disarm
+    } else {
+        DragFloatDecision::Pass
+    }
+}
 
 pub fn user_press_count() -> Option<u64> {
     let count = USER_PRESS_COUNT.load(Ordering::SeqCst);
@@ -139,6 +203,35 @@ unsafe extern "system" fn mouse_press_hook_proc(
             record_user_press();
         }
     }
+    if ncode >= 0
+        && matches!(
+            wparam.0 as u32,
+            WM_LBUTTONDOWN | WM_LBUTTONUP | WM_RBUTTONDOWN | WM_RBUTTONUP
+        )
+    {
+        let mouse = &*(lparam.0 as *const MSLLHOOKSTRUCT);
+        match drag_float_decision(
+            ncode,
+            wparam.0 as u32,
+            mouse.dwExtraInfo == SELF_INJECTED_INPUT_TAG,
+            GetSystemMetrics(SM_SWAPBUTTON) != 0,
+            DRAG_FLOAT_ARMED.load(Ordering::SeqCst),
+            SWALLOW_SECONDARY_UP.load(Ordering::SeqCst),
+        ) {
+            DragFloatDecision::Request(hwnd) => {
+                DRAG_FLOAT_REQUESTED.store(hwnd, Ordering::SeqCst);
+                SWALLOW_SECONDARY_UP.store(true, Ordering::SeqCst);
+                return LRESULT(1);
+            }
+            DragFloatDecision::ClearSwallow => SWALLOW_SECONDARY_UP.store(false, Ordering::SeqCst),
+            DragFloatDecision::SwallowUp => {
+                SWALLOW_SECONDARY_UP.store(false, Ordering::SeqCst);
+                return LRESULT(1);
+            }
+            DragFloatDecision::Disarm => disarm_drag_float(),
+            DragFloatDecision::Pass => {}
+        }
+    }
     CallNextHookEx(None, ncode, wparam, lparam)
 }
 
@@ -149,8 +242,30 @@ pub(crate) static PRESS_COUNT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex
 mod tests {
     use super::*;
     use windows::Win32::UI::WindowsAndMessaging::{
-        LLMHF_INJECTED, WM_LBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+        LLMHF_INJECTED, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL,
     };
+
+    #[test]
+    fn drag_float_mouse_decisions_respect_buttons_and_hook_boundaries() {
+        use DragFloatDecision::*;
+        for (ncode, message, injected, swapped, armed, swallow, expected) in [
+            (0, WM_RBUTTONDOWN, false, false, 42, false, Request(42)),
+            (0, WM_RBUTTONUP, false, false, 42, true, SwallowUp),
+            (0, WM_RBUTTONUP, false, false, 42, false, Pass),
+            (0, WM_RBUTTONDOWN, false, false, 0, true, ClearSwallow),
+            (0, WM_LBUTTONUP, false, false, 42, false, Disarm),
+            (0, WM_LBUTTONDOWN, false, true, 42, false, Request(42)),
+            (0, WM_LBUTTONUP, false, true, 42, true, SwallowUp),
+            (0, WM_RBUTTONUP, false, true, 42, false, Disarm),
+            (0, WM_RBUTTONDOWN, true, false, 42, false, Pass),
+            (-1, WM_RBUTTONDOWN, false, false, 42, false, Pass),
+        ] {
+            assert_eq!(
+                drag_float_decision(ncode, message, injected, swapped, armed, swallow),
+                expected
+            );
+        }
+    }
 
     #[test]
     fn press_count_requires_both_observers_and_invalidates_observation_gaps() {

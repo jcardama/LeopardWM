@@ -8,6 +8,7 @@ All notable changes to LeopardWM will be documented in this file.
 
 - **Floating windows now appear in the overview.** They sit in a group at the start of each workspace row, where they can be activated, closed and moved like tiled windows. Thanks to @gczark for the request. (#184)
 - **Keep off-screen columns from overlapping neighboring monitors.** Set `[layout] offscreen_mode = "park"` to opt in; the default remains `"bleed"`. Thanks to @doutorferr0 for the suggestion. (#181, #106)
+- **Right-click while dragging to float a window.** While dragging a tiled window by its title bar, press the right mouse button to drop it as a floating window where you release it. The click doesn't reach the app. Thanks to @gczark for the idea. (#183)
 - **Choose which drag gesture reorders columns.** Set `plain_drag_action` to `reorder` in Settings or `[behavior]` to make plain drag reorder and Shift+drag merge. (#154)
 - **Resize tiled windows freely with the mouse.** Choose free mouse resize in Settings or the layout config instead of snapping to presets. (#141)
 - **Yasb's stock GlazeWM workspaces widget can now connect to LeopardWM.** Enable GlazeWM compatibility in Settings or the config to use the local workspace endpoint. (#170)
