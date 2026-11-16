@@ -5,7 +5,7 @@ use crate::enumeration::{
     should_filter_window_event_by_manageability,
 };
 use crate::recover_poisoned_mutex;
-use leopardwm_core_layout::WindowId;
+use leopardwm_core_layout::{Rect, WindowId};
 use std::sync::mpsc;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::System::Threading::GetCurrentThreadId;
@@ -34,6 +34,12 @@ const WINEVENT_SKIPOWNPROCESS: u32 = 0x0002;
 
 const WM_QUIT_WINEVENT_THREAD: u32 = WM_USER + 3;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MoveStartCapture {
+    pub rect: Rect,
+    pub generation: u64,
+}
+
 /// Window event types that the daemon needs to handle.
 #[derive(Debug, Clone)]
 pub enum WindowEvent {
@@ -59,7 +65,7 @@ pub enum WindowEvent {
     /// A window was moved or resized by the user.
     MovedOrResized(WindowId),
     /// User started dragging/resizing a window.
-    MoveSizeStart(WindowId),
+    MoveSizeStart(WindowId, Option<MoveStartCapture>),
     /// User finished dragging/resizing a window.
     MoveSizeEnd(WindowId),
     /// Display configuration changed (monitors added/removed/rearranged).
@@ -365,15 +371,10 @@ fn win_event_callback_inner(
         }
         EVENT_SYSTEM_MINIMIZESTART => WindowEvent::Minimized(window_id, dwms_event_time),
         EVENT_SYSTEM_MINIMIZEEND => WindowEvent::Restored(window_id),
-        EVENT_SYSTEM_MOVESIZESTART => {
-            let capture_hwnd = if crate::user_press::primary_button_held() {
-                window_id
-            } else {
-                0
-            };
-            crate::capture_move_size_start(capture_hwnd);
-            WindowEvent::MoveSizeStart(window_id)
-        }
+        EVENT_SYSTEM_MOVESIZESTART => WindowEvent::MoveSizeStart(
+            window_id,
+            crate::user_press::capture_move_size_start(window_id),
+        ),
         EVENT_SYSTEM_MOVESIZEEND => WindowEvent::MoveSizeEnd(window_id),
         EVENT_OBJECT_LOCATIONCHANGE => WindowEvent::MovedOrResized(window_id),
         EVENT_OBJECT_NAMECHANGE => WindowEvent::TitleChanged(window_id),

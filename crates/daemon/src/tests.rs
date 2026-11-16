@@ -5243,8 +5243,6 @@ fn test_visible_hidden_suppression_preserves_resize_and_drag_sessions() {
     assert!(state.window_managed_at.contains_key(&100));
 }
 
-static FLOAT_DRAG_CAPTURE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
 fn float_drag_fixture_bounds() -> Rect {
     // Keep every possible cursor position away from the fixture's resize border.
     use windows::Win32::UI::WindowsAndMessaging::{
@@ -5282,7 +5280,6 @@ fn move_float_drag_fixture(hwnd: u64, x: i32, y: i32) {
 
 #[test]
 fn float_drag_drop_keeps_visible_rect_and_leaves_tiling() {
-    let _capture_guard = FLOAT_DRAG_CAPTURE_TEST_LOCK.lock().unwrap();
     let _desktop = display_change_regression::FixtureDesktop::enter();
     let fixture = display_change_regression::PlacementOwner::spawn_at(float_drag_fixture_bounds());
     fixture.resume();
@@ -5299,11 +5296,14 @@ fn float_drag_drop_keeps_visible_rect_and_leaves_tiling() {
         .unwrap()
         .insert_window(hwnd, Some(500))
         .unwrap();
-    leopardwm_platform_win32::capture_move_size_start(hwnd);
+    let capture = leopardwm_platform_win32::MoveStartCapture {
+        rect: start,
+        generation: 0,
+    };
     move_float_drag_fixture(hwnd, start.x + 100, start.y);
     let dropped = leopardwm_platform_win32::get_window_visible_rect(hwnd).unwrap();
     assert_ne!(start, dropped);
-    state.handle_window_event(WindowEvent::MoveSizeStart(hwnd));
+    state.handle_window_event(WindowEvent::MoveSizeStart(hwnd, Some(capture)));
     let drag = state
         .drag_state
         .as_mut()
@@ -5330,7 +5330,6 @@ fn float_drag_drop_keeps_visible_rect_and_leaves_tiling() {
 
 #[test]
 fn cancelled_float_drag_stays_tiled() {
-    let _capture_guard = FLOAT_DRAG_CAPTURE_TEST_LOCK.lock().unwrap();
     let _desktop = display_change_regression::FixtureDesktop::enter();
     for has_start in [true, false] {
         let fixture =
@@ -5349,13 +5348,16 @@ fn cancelled_float_drag_stays_tiled() {
             .unwrap()
             .insert_window(hwnd, Some(500))
             .unwrap();
-        leopardwm_platform_win32::capture_move_size_start(if has_start { hwnd } else { 0 });
+        let capture = has_start.then_some(leopardwm_platform_win32::MoveStartCapture {
+            rect: start,
+            generation: 0,
+        });
         move_float_drag_fixture(hwnd, start.x + 100, start.y);
         assert_ne!(
             leopardwm_platform_win32::get_window_visible_rect(hwnd),
             Some(start)
         );
-        state.handle_window_event(WindowEvent::MoveSizeStart(hwnd));
+        state.handle_window_event(WindowEvent::MoveSizeStart(hwnd, capture));
         let drag = state
             .drag_state
             .as_mut()
@@ -24200,7 +24202,7 @@ fn test_floating_return_to_old_landing_after_external_or_interactive_move() {
         state.moved_or_resized_suppression.remove(&owner.hwnd);
         let placement_sequence = state.physical_request_seq;
         if interactive {
-            state.handle_window_event(WindowEvent::MoveSizeStart(owner.hwnd));
+            state.handle_window_event(WindowEvent::MoveSizeStart(owner.hwnd, None));
         }
         owner.resize(400, 500);
         state.handle_window_event(if interactive {

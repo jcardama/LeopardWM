@@ -435,7 +435,7 @@ impl AppState {
             | WindowEvent::Minimized(hwnd, _)
             | WindowEvent::Restored(hwnd)
             | WindowEvent::MovedOrResized(hwnd)
-            | WindowEvent::MoveSizeStart(hwnd)
+            | WindowEvent::MoveSizeStart(hwnd, _)
             | WindowEvent::MoveSizeEnd(hwnd)
             | WindowEvent::TitleChanged(hwnd)
             | WindowEvent::MaximizedAdmissionRestored {
@@ -456,7 +456,7 @@ impl AppState {
             | WindowEvent::Minimized(id, _)
             | WindowEvent::Restored(id)
             | WindowEvent::MovedOrResized(id)
-            | WindowEvent::MoveSizeStart(id)
+            | WindowEvent::MoveSizeStart(id, _)
             | WindowEvent::MoveSizeEnd(id)
             | WindowEvent::TitleChanged(id)
             | WindowEvent::MaximizedAdmissionRestored { window_id: id, .. } => Some(*id),
@@ -504,7 +504,7 @@ impl AppState {
                     still_maximized,
                 );
             }
-            WindowEvent::MoveSizeStart(hwnd) => self.on_move_size_start(hwnd),
+            WindowEvent::MoveSizeStart(hwnd, capture) => self.on_move_size_start(hwnd, capture),
             WindowEvent::MoveSizeEnd(hwnd) => self.on_move_size_end(hwnd),
             WindowEvent::MovedOrResized(hwnd) => self.on_window_moved_or_resized(hwnd, false),
             WindowEvent::DisplayChange => self.on_display_change(),
@@ -3095,9 +3095,12 @@ impl AppState {
         (true, removed_placeholder, removed_from_source, drag_source)
     }
 
-    fn on_move_size_start(&mut self, hwnd: u64) {
+    fn on_move_size_start(
+        &mut self,
+        hwnd: u64,
+        start_capture: Option<leopardwm_platform_win32::MoveStartCapture>,
+    ) {
         debug!("User started dragging/resizing window {}", hwnd);
-        let start_capture = leopardwm_platform_win32::take_move_size_start(hwnd);
 
         // Distinguish resize (border drag) from move (title bar drag).
         // Only create drag state for moves — resizes should not trigger
@@ -3165,7 +3168,9 @@ impl AppState {
             hwnd,
             is_tiled,
             float_on_drop: false,
-            start_visible_rect: start_capture.filter(|_| is_tiled).map(|(rect, _)| rect),
+            start_visible_rect: start_capture
+                .filter(|_| is_tiled)
+                .map(|capture| capture.rect),
             source_monitor,
             source_workspace_idx: source_ws_idx,
             source_row,
@@ -3181,8 +3186,8 @@ impl AppState {
             source_column_width,
         });
         if is_tiled && !self.paused {
-            if let Some((_, generation)) = start_capture {
-                leopardwm_platform_win32::arm_drag_float(hwnd, generation);
+            if let Some(capture) = start_capture {
+                leopardwm_platform_win32::arm_drag_float(hwnd, capture.generation);
             }
         }
         // Disable DWM-managed position interpolation on the

@@ -51,9 +51,8 @@ pub use hotkeys::*;
 pub use keyboard_hook::*;
 pub use mouse_hook::*;
 pub use user_press::{
-    arm_drag_float, capture_move_size_start, disarm_drag_float, drag_float_requested,
-    install_mouse_press_hook, take_drag_float_request, take_move_size_start, user_press_count,
-    MousePressHookHandle,
+    arm_drag_float, disarm_drag_float, drag_float_requested, install_mouse_press_hook,
+    take_drag_float_request, user_press_count, MousePressHookHandle,
 };
 
 pub use elevation::{
@@ -67,7 +66,7 @@ pub use enumeration::{
     monitor_above, monitor_below, monitor_to_left, monitor_to_right, monitors_by_position,
     TopLevelWindowIdCollection,
 };
-pub use event_hooks::{install_event_hooks, EventHookHandle, WindowEvent};
+pub use event_hooks::{install_event_hooks, EventHookHandle, MoveStartCapture, WindowEvent};
 pub use focus::{
     can_raise_normal_window, close_window, current_event_time_ms, get_foreground_window,
     ms_since_last_user_input, raise_normal_window_no_activate, raise_window_no_activate,

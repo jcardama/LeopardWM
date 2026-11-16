@@ -1,7 +1,5 @@
 use crate::{Win32Error, WM_QUIT_LLHOOK_THREAD};
-use leopardwm_core_layout::Rect;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Mutex;
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -23,34 +21,19 @@ static DRAG_FLOAT_REQUESTED: AtomicU64 = AtomicU64::new(0);
 static SWALLOW_SECONDARY_UP: AtomicBool = AtomicBool::new(false);
 static PRIMARY_BUTTON_HELD: AtomicBool = AtomicBool::new(false);
 static PRIMARY_PRESS_GENERATION: AtomicU64 = AtomicU64::new(0);
-static MOVE_SIZE_START: Mutex<Option<(u64, Rect, u64)>> = Mutex::new(None);
 
-pub(crate) fn primary_button_held() -> bool {
-    PRIMARY_BUTTON_HELD.load(Ordering::SeqCst)
-}
-
-pub fn capture_move_size_start(hwnd: u64) {
-    let generation = PRIMARY_PRESS_GENERATION.load(Ordering::SeqCst);
-    let captured = (hwnd != 0)
-        .then(|| crate::get_window_visible_rect(hwnd))
-        .flatten()
-        .map(|rect| (hwnd, rect, generation));
-    *MOVE_SIZE_START
-        .lock()
-        .unwrap_or_else(crate::recover_poisoned_mutex) = captured;
-}
-
-pub fn take_move_size_start(hwnd: u64) -> Option<(Rect, u64)> {
-    let mut captured = MOVE_SIZE_START
-        .lock()
-        .unwrap_or_else(crate::recover_poisoned_mutex);
-    if captured.as_ref().is_some_and(|(id, _, _)| *id == hwnd) {
-        captured
-            .take()
-            .map(|(_, rect, generation)| (rect, generation))
-    } else {
-        None
+pub(crate) fn capture_move_size_start(hwnd: u64) -> Option<crate::event_hooks::MoveStartCapture> {
+    if !PRIMARY_BUTTON_HELD.load(Ordering::SeqCst) {
+        return None;
     }
+    let generation = PRIMARY_PRESS_GENERATION.load(Ordering::SeqCst);
+    let rect = crate::get_window_visible_rect(hwnd)?;
+    if !PRIMARY_BUTTON_HELD.load(Ordering::SeqCst)
+        || PRIMARY_PRESS_GENERATION.load(Ordering::SeqCst) != generation
+    {
+        return None;
+    }
+    Some(crate::event_hooks::MoveStartCapture { rect, generation })
 }
 
 pub fn arm_drag_float(hwnd: u64, generation: u64) {
@@ -421,6 +404,67 @@ mod tests {
         assert!(handle_drag_float_mouse(0, WM_RBUTTONUP, false, false));
         assert!(!handle_drag_float_mouse(0, WM_LBUTTONUP, false, false));
         disarm_drag_float();
+    }
+
+    #[test]
+    fn same_hwnd_drag_start_keeps_its_own_press() {
+        use crate::WindowEvent;
+        use windows::core::w;
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            CreateWindowExW, DestroyWindow, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP,
+        };
+        struct OwnedWindow(HWND);
+        impl Drop for OwnedWindow {
+            fn drop(&mut self) {
+                let _ = unsafe { DestroyWindow(self.0) };
+            }
+        }
+        let _guard = PRESS_COUNT_TEST_LOCK.lock().unwrap();
+        let window = OwnedWindow(unsafe {
+            CreateWindowExW(
+                WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
+                w!("STATIC"),
+                w!(""),
+                WS_POPUP,
+                100,
+                100,
+                300,
+                200,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap()
+        });
+        let hwnd = window.0 .0 as usize as u64;
+        disarm_drag_float();
+        DRAG_FLOAT_REQUESTED.store(0, Ordering::SeqCst);
+        PRIMARY_BUTTON_HELD.store(false, Ordering::SeqCst);
+        SWALLOW_SECONDARY_UP.store(false, Ordering::SeqCst);
+        assert!(capture_move_size_start(hwnd).is_none());
+        assert!(!handle_drag_float_mouse(0, WM_LBUTTONDOWN, false, false));
+        let event_a = WindowEvent::MoveSizeStart(hwnd, capture_move_size_start(hwnd));
+        assert!(!handle_drag_float_mouse(0, WM_LBUTTONUP, false, false));
+        assert!(!handle_drag_float_mouse(0, WM_LBUTTONDOWN, false, false));
+        let event_b = WindowEvent::MoveSizeStart(hwnd, capture_move_size_start(hwnd));
+        let WindowEvent::MoveSizeStart(_, Some(capture_a)) = event_a else {
+            panic!("missing first drag capture");
+        };
+        let WindowEvent::MoveSizeStart(_, Some(capture_b)) = event_b else {
+            panic!("missing second drag capture");
+        };
+        assert_ne!(capture_a.generation, capture_b.generation);
+        arm_drag_float(hwnd, capture_a.generation);
+        assert!(!handle_drag_float_mouse(0, WM_RBUTTONDOWN, false, false));
+        assert!(!drag_float_requested(hwnd));
+        assert!(!handle_drag_float_mouse(0, WM_RBUTTONUP, false, false));
+        arm_drag_float(hwnd, capture_b.generation);
+        assert!(handle_drag_float_mouse(0, WM_RBUTTONDOWN, false, false));
+        assert!(take_drag_float_request(hwnd));
+        assert!(handle_drag_float_mouse(0, WM_RBUTTONUP, false, false));
+        assert!(!handle_drag_float_mouse(0, WM_LBUTTONUP, false, false));
     }
 
     #[test]
