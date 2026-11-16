@@ -2,6 +2,14 @@
 # Translate values only; preserve quoted keys and {placeholders}.
 # Test from the repository root: cargo test -p leopardwm-daemon locale::tests
 "language.name" = "简体中文"
+"hotkeys.category.focus" = "焦点"
+"hotkeys.category.move" = "移动"
+"hotkeys.category.resize" = "调整大小"
+"hotkeys.category.manage_window" = "窗口管理"
+"hotkeys.category.workspace" = "工作区"
+"hotkeys.category.monitor" = "显示器"
+"hotkeys.category.leopardwm" = "LeopardWM"
+"settings.hotkeys.group_other" = "其他"
 "settings.text.rule_border" = "边框"
 "settings.text.rule_border_show" = "显示"
 "settings.text.rule_border_hide" = "隐藏"

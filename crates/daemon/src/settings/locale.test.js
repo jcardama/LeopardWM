@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
-const { page, english, chinese, hotkeyCatalog, languages: bundledLanguages } = JSON.parse(require('node:fs').readFileSync(0, 'utf8'));
+const { page, english, chinese, hotkeyCatalog, hotkeyCategories, languages: bundledLanguages } = JSON.parse(require('node:fs').readFileSync(0, 'utf8'));
 const script = page.split('<script>')[1].split('</script>')[0];
 const languagePopup = {};
 const initialLanguageCombo = { querySelector: () => languagePopup };
@@ -344,7 +344,7 @@ function commandFixture({ saving = false } = {}) {
     getElementById: () => null, querySelector: () => null
   };
   const ctx = vm.createContext({
-    document: doc, window: { _localeStrings: english, _hotkeyCatalog: hotkeyCatalog,
+    document: doc, window: { _localeStrings: english, _hotkeyCatalog: hotkeyCatalog, _hotkeyCategories: hotkeyCategories,
       ipc: { postMessage(json) {
         if (!saving) throw new Error('Language refresh sent IPC');
         saves.push(JSON.parse(json));
@@ -369,9 +369,17 @@ function commandFixture({ saving = false } = {}) {
     });
     const input = eventElement();
     const note = eventElement();
-    const row = { dataset: {}, label, input, note, querySelectorAll: () => [],
-      querySelector: selector => ({ '.hk-cmd-label': label, '.hk-key': input, '.hk-dup-note': note })[selector] };
+    const button = eventElement();
+    button.setAttribute = (name, value) => button[name] = value;
+    const row = { dataset: {}, label, input, note, button, querySelectorAll: () => [],
+      querySelector: selector => ({ '.hk-cmd-label': label, '.hk-key': input, '.hk-dup-note': note, button })[selector] };
     Object.defineProperty(row, 'innerHTML', { set(markup) {
+      if (row.className === 'hk-group') {
+        button['aria-expanded'] = markup.match(/aria-expanded="([^"]*)"/)[1];
+        const heading = markup.match(/<span data-i18n="([^"]*)">([^<]*)<\/span>/);
+        label.dataset.i18n = heading[1]; label.textContent = decode(heading[2]);
+        return;
+      }
       const match = markup.match(/<td class="hk-cmd-label"(?: title="([^"]*)")?[^>]*>([^<]*)<\/td>/);
       if (match[1] === undefined) label.removeAttribute('title');
       else label.title = decode(match[1]);
@@ -385,6 +393,7 @@ function commandFixture({ saving = false } = {}) {
     appendChild: row => rows.push(row),
     insertBefore: (row, anchor) => rows.splice(rows.indexOf(anchor), 0, row),
     querySelectorAll(selector) {
+      if (selector === 'tr[data-category]') return rows.filter(row => row.dataset.category);
       const match = /^tr\[data-cmd="([^"]+)"\]$/.exec(selector);
       assert.ok(match, `Unsupported hotkey table selector: ${selector}`);
       return rows.filter(row => row.dataset.cmd === match[1]);
@@ -402,6 +411,7 @@ function commandFixture({ saving = false } = {}) {
   doc.querySelector = selector => selector === '#hotkeys-body tr[data-special="scroll_modifier"]'
     ? rows.find(row => row.dataset.special === 'scroll_modifier') : null;
   doc.querySelectorAll = selector => selector === '#hotkeys-body tr[data-cmd]' ? rows.filter(row => row.dataset.cmd)
+    : selector === '[data-i18n]' ? rows.filter(row => row.className === 'hk-group').map(row => row.label)
     : selector === '#hotkeys-body tr' ? rows
     : selector === '.combobox' || selector === '[id^="cb-gestures-"]' ? combos : [];
   function addCombo(id, value) {
@@ -499,11 +509,43 @@ assert.ok(nextRows[1].note.textContent.includes(leftRows[0].label.textContent));
 const previousRows = rowsFor('focus_prev');
 assert.equal(previousRows.length, 2);
 assert.equal(shortcuts.rows[shortcuts.rows.indexOf(previousRows[0]) + 1], previousRows[1]);
-assert.equal(shortcuts.rows[shortcuts.rows.indexOf(previousRows[1]) + 1].dataset.special, 'scroll_modifier');
-const catalogIds = hotkeyCatalog.map(action => action.id);
-assert.equal(shortcuts.rows[shortcuts.rows.indexOf(previousRows[1]) + 2].dataset.cmd,
-  catalogIds[catalogIds.indexOf('focus_prev') + 1]);
+const headers = shortcuts.rows.filter(row => row.className === 'hk-group');
+assert.deepEqual(headers.map(row => row.dataset.category), [...hotkeyCategories.map(category => category.id), 'other']);
+assert.equal(headers.find(row => row.dataset.category === 'focus').label.textContent, '焦点');
+assert.equal(headers.at(-1).label.textContent, '其他');
+let currentCategory;
+for (const row of shortcuts.rows) {
+  if (row.className === 'hk-group') currentCategory = row.dataset.category;
+  else assert.equal(row.dataset.category, currentCategory);
+}
+for (const category of hotkeyCategories) {
+  const header = headers.find(row => row.dataset.category === category.id);
+  const categoryRows = shortcuts.rows.filter(row => row.dataset.category === category.id && row !== header);
+  assert.ok(categoryRows.length);
+  assert.ok(categoryRows.every(row => row.hidden === category.collapsed));
+  assert.equal(header.button['aria-expanded'], String(!category.collapsed));
+}
+const leopardHeader = headers.find(row => row.dataset.category === 'leopardwm');
+assert.equal(shortcuts.rows[shortcuts.rows.indexOf(leopardHeader) + 1].dataset.special, 'scroll_modifier');
+const monitorHeader = headers.find(row => row.dataset.category === 'monitor');
+const monitorRow = rowsFor('focus_monitor_left')[0];
+assert.ok(monitorRow.hidden);
+assert.equal(savedShortcuts()['Ctrl+Alt+Win+,'], 'focus_monitor_left');
+monitorRow.input.value = 'Ctrl+Alt+H';
+shortcuts.ctx.refreshDuplicateWarnings();
+assert.ok(monitorRow.note.textContent.includes(leftRows[0].label.textContent));
+assert.ok(leftRows[0].note.textContent.includes(monitorRow.label.textContent));
+monitorRow.input.value = '';
+assert.ok(savedShortcuts().disabled.includes('focus_monitor_left'));
+monitorHeader.button.emit('click');
+assert.equal(monitorRow.hidden, false);
+assert.equal(monitorHeader.button['aria-expanded'], 'true');
 shortcuts.ctx.loadHotkeysSorted(shortcuts.ctx.DEFAULT_HOTKEYS, 'Ctrl+Alt');
+assert.equal(rowsFor('focus_monitor_left')[0].hidden, false);
+assert.ok(!shortcuts.rows.some(row => row.className === 'hk-group' && row.dataset.category === 'other'));
+const newMonitorHeader = shortcuts.rows.find(row => row.className === 'hk-group' && row.dataset.category === 'monitor');
+newMonitorHeader.button.emit('click');
+assert.equal(rowsFor('focus_monitor_left')[0].hidden, true);
 saved = savedShortcuts();
 assert.deepEqual(saved, { ...shortcuts.ctx.DEFAULT_HOTKEYS, scroll_modifier: 'Ctrl+Alt', disabled: [] });
 shortcuts.ctx.loadHotkeysSorted({}, 'Ctrl+Alt', ['focus_left']);

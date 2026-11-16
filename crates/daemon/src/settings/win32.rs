@@ -304,6 +304,8 @@ pub fn run_settings_window(
         // reset-to-defaults from this single catalog (see ipc::hotkeys).
         let catalog_json = serde_json::to_string(&leopardwm_ipc::hotkeys::hotkey_catalog())
             .unwrap_or_else(|_| "[]".to_string());
+        let categories_json = serde_json::to_string(&leopardwm_ipc::hotkeys::hotkey_categories())
+            .unwrap_or_else(|_| "[]".to_string());
         let failed_binds_json =
             serde_json::to_string(&failed_binds).unwrap_or_else(|_| "[]".to_string());
 
@@ -313,8 +315,8 @@ pub fn run_settings_window(
         let webview = wry::WebViewBuilder::new_with_web_context(&mut web_context)
             .with_html(settings_html)
             .with_initialization_script(format!(
-                "window._initConfig = {}; window._hotkeyCatalog = {}; window._failedHotkeys = {}; window._localeStrings = {}; window._language = {}; window._version = {}; window._languages = {};",
-                config_json, catalog_json, failed_binds_json, crate::locale::page_json(&config.appearance.language), serde_json::to_string(&config.appearance.language)?, serde_json::to_string(env!("CARGO_PKG_VERSION"))?, crate::locale::languages_json()
+                "window._initConfig = {}; window._hotkeyCatalog = {}; window._hotkeyCategories = {}; window._failedHotkeys = {}; window._localeStrings = {}; window._language = {}; window._version = {}; window._languages = {};",
+                config_json, catalog_json, categories_json, failed_binds_json, crate::locale::page_json(&config.appearance.language), serde_json::to_string(&config.appearance.language)?, serde_json::to_string(env!("CARGO_PKG_VERSION"))?, crate::locale::languages_json()
             ))
             .with_ipc_handler(move |req| {
                 if let Some(event_tx) = event_tx.upgrade() {

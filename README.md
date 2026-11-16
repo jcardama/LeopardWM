@@ -213,6 +213,17 @@ Punctuation bindings accept `-`, `=`, `,`, `.`, `[`, `]`, `;`, `/`, `` ` ``, `\`
 | `Ctrl+Alt+Shift+R` | Reload config |
 | `Win+Ctrl+Escape` | Emergency restore + panic-revert |
 
+### Turning off a default hotkey
+
+List the action ID in `[hotkeys].disabled` to turn off its default binding:
+
+```toml
+[hotkeys]
+disabled = ["close_window"]
+```
+
+Alternatively, clear its binding in Settings → Hotkeys, where commands are grouped by category; Settings writes `disabled` for you. Deleting the binding line alone is not enough: defaults are merged back on load unless the action is disabled, already bound elsewhere, or its default chord is used by another binding.
+
 These commands have no default keyboard binding and are also available in the
 Settings gesture menus:
 

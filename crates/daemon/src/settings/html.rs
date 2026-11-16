@@ -357,6 +357,9 @@ html, body {
 .input-wrap:focus-within::after { transform: scaleX(1); }
 
 /* ── Hotkey recorder field ───────────────────────────────────────── */
+.hk-group td { padding: 0 !important; background: var(--card-bg-secondary); }
+.hk-group button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 10px 12px; border: 0; background: transparent; color: var(--text-primary); font: inherit; font-weight: 600; text-align: left; cursor: pointer; }
+.hk-group button[aria-expanded="false"] .combobox-chevron { transform: rotate(-90deg); }
 .hk-record { cursor: pointer; }
 .hk-record.recording { box-shadow: inset 0 0 0 1px var(--accent); }
 .hk-cmd-label[title] { cursor: help; }
@@ -1837,6 +1840,10 @@ var deleteIcon = '<svg viewBox="0 0 12 12"><line x1="2" y1="2" x2="10" y2="10"/>
 /* The host catalog supplies display order, defaults, and fallback labels.
    Locales supply translated names; a test keeps English names in sync. */
 var HOTKEY_CATALOG = window._hotkeyCatalog || [];
+var HOTKEY_CATEGORIES = window._hotkeyCategories || [];
+var hotkeyCollapsed = Object.create(null);
+HOTKEY_CATEGORIES.forEach(function(category) { hotkeyCollapsed[category.id] = category.collapsed; });
+hotkeyCollapsed.other = false;
 var CMD_ORDER = HOTKEY_CATALOG.map(function(a) { return a.id; });
 var CMD_LABELS = {};
 var DEFAULT_HOTKEYS = {};
@@ -2077,10 +2084,12 @@ function attachRecorder(input) {
   });
 }
 
-function addHotkeyRow(key, cmd, extra) {
+function addHotkeyRow(key, cmd, extra, category) {
   var tbody = document.getElementById('hotkeys-body');
   var tr = document.createElement('tr');
   tr.dataset.cmd = cmd;
+  tr.dataset.category = category;
+  tr.hidden = hotkeyCollapsed[category];
   if (extra) tr.dataset.extra = '1';
   /* Long labels carry a "(detail)" suffix; show the short name and move the
      parenthetical into a hover tooltip so the row stays one line. */
@@ -2165,35 +2174,56 @@ function renderFailedHotkeys() {
   bar.hidden = false;
 }
 
+function addHotkeyGroup(category, labelKey, fallback) {
+  var tbody = document.getElementById('hotkeys-body');
+  var tr = document.createElement('tr');
+  tr.className = 'hk-group';
+  tr.dataset.category = category;
+  tr.innerHTML = '<td colspan="3"><button type="button" aria-expanded="' + !hotkeyCollapsed[category] + '">' +
+    '<svg class="combobox-chevron" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.15 4.65a.5.5 0 01.7 0L6 7.79l3.15-3.14a.5.5 0 11.7.7l-3.5 3.5a.5.5 0 01-.7 0l-3.5-3.5a.5.5 0 010-.7z"/></svg>' +
+    '<span data-i18n="' + labelKey + '">' + escHtml(t(labelKey) === labelKey ? fallback : t(labelKey)) + '</span></button></td>';
+  var button = tr.querySelector('button');
+  button.addEventListener('click', function() {
+    hotkeyCollapsed[category] = !hotkeyCollapsed[category];
+    button.setAttribute('aria-expanded', String(!hotkeyCollapsed[category]));
+    tbody.querySelectorAll('tr[data-category]').forEach(function(row) {
+      if (row !== tr && row.dataset.category === category) row.hidden = hotkeyCollapsed[category];
+    });
+  });
+  tbody.appendChild(tr);
+}
+
 function loadHotkeysSorted(bindings, scrollModifier, disabled) {
   var tbody = document.getElementById('hotkeys-body');
   tbody.innerHTML = '';
   var disabledSet = disabled || [];
   var cmdToKeys = Object.create(null);
   Object.entries(bindings).forEach(function(e) { (cmdToKeys[e[1]] = cmdToKeys[e[1]] || []).push(e[0]); });
-  /* Render in defined order. A command the user disabled stays empty rather
-     than falling back to its default. */
-  CMD_ORDER.forEach(function(cmd) {
-    var keys = cmdToKeys[cmd] || [disabledSet.indexOf(cmd) !== -1 ? '' : defaultKeyForCmd(cmd)];
-    keys.forEach(function(key, index) { addHotkeyRow(key, cmd, index > 0); });
+  HOTKEY_CATEGORIES.forEach(function(category) {
+    addHotkeyGroup(category.id, 'hotkeys.category.' + category.id, category.label);
+    if (category.id === 'leopardwm') {
+      var tr = document.createElement('tr');
+      tr.dataset.special = 'scroll_modifier';
+      tr.dataset.category = category.id;
+      tr.hidden = hotkeyCollapsed[category.id];
+      tr.innerHTML =
+        '<td class="hk-cmd-label" data-i18n="settings.text.scroll_modifier">' + escHtml(t('settings.text.scroll_modifier')) + '</td>' +
+        '<td><input type="text" class="hk-key" value="' + escAttr(scrollModifier || 'Ctrl+Alt') + '" data-i18n-placeholder="settings.text.e_g_ctrl_alt" placeholder="' + escAttr(t('settings.text.e_g_ctrl_alt')) + '"></td>' +
+        '<td><button class="row-delete" data-i18n-title="settings.text.reset_to_default" title="' + escAttr(t('settings.text.reset_to_default')) + '" onclick="this.closest(\'tr\').querySelector(\'.hk-key\').value=\'Ctrl+Alt\';updateScrollLabels();autoSave(0);">' + resetIcon + '</button></td>';
+      tbody.appendChild(tr);
+      wrapAllInputs(tr);
+      tr.querySelector('.hk-key').addEventListener('input', function() { updateScrollLabels(); autoSave(500); });
+    }
+    HOTKEY_CATALOG.filter(function(action) { return action.category === category.id; }).forEach(function(action) {
+      var keys = cmdToKeys[action.id] || [disabledSet.indexOf(action.id) !== -1 ? '' : defaultKeyForCmd(action.id)];
+      keys.forEach(function(key, index) { addHotkeyRow(key, action.id, index > 0, category.id); });
+    });
   });
-  /* Append any custom commands not in CMD_ORDER */
-  Object.entries(bindings).forEach(function(e) {
-    if (CMD_ORDER.indexOf(e[1]) === -1) addHotkeyRow(e[0], e[1]);
-  });
-  /* Scroll modifier row — insert after focus navigation group */
-  var tr = document.createElement('tr');
-  tr.dataset.special = 'scroll_modifier';
-  tr.innerHTML =
-    '<td class="hk-cmd-label" data-i18n="settings.text.scroll_modifier">' + escHtml(t('settings.text.scroll_modifier')) + '</td>' +
-    '<td><input type="text" class="hk-key" value="' + escAttr(scrollModifier || 'Ctrl+Alt') + '" data-i18n-placeholder="settings.text.e_g_ctrl_alt" placeholder="' + escAttr(t('settings.text.e_g_ctrl_alt')) + '"></td>' +
-    '<td><button class="row-delete" data-i18n-title="settings.text.reset_to_default" title="' + escAttr(t('settings.text.reset_to_default')) + '" onclick="this.closest(\'tr\').querySelector(\'.hk-key\').value=\'Ctrl+Alt\';updateScrollLabels();autoSave(0);">' + resetIcon + '</button></td>';
-  var focusRows = tbody.querySelectorAll('tr[data-cmd="focus_prev"]');
-  var anchor = focusRows.length ? focusRows[focusRows.length - 1] : null;
-  if (anchor && anchor.nextSibling) { tbody.insertBefore(tr, anchor.nextSibling); }
-  else { tbody.appendChild(tr); }
-  wrapAllInputs(tr);
-  tr.querySelector('.hk-key').addEventListener('input', function() { updateScrollLabels(); autoSave(500); });
+  var custom = Object.entries(bindings).filter(function(e) { return CMD_ORDER.indexOf(e[1]) === -1; });
+  if (custom.length) {
+    addHotkeyGroup('other', 'settings.hotkeys.group_other', 'Other');
+    custom.forEach(function(e) { addHotkeyRow(e[0], e[1], false, 'other'); });
+  }
   refreshDuplicateWarnings();
 }
 
@@ -2624,8 +2654,7 @@ function readWorkspaceNames() {
 
 function readHotkeys() {
   var b = {};
-  document.querySelectorAll('#hotkeys-body tr').forEach(function(tr) {
-    if (tr.dataset.special) return;
+  document.querySelectorAll('#hotkeys-body tr[data-cmd]').forEach(function(tr) {
     var k = tr.querySelector('.hk-key').value.trim();
     var c = tr.dataset.cmd;
     if (k && c) b[k] = c;
@@ -2762,13 +2791,16 @@ mod tests {
         let payload = serde_json::json!({
             "page": SETTINGS_HTML,
             "hotkeyCatalog": leopardwm_ipc::hotkeys::hotkey_catalog(),
+            "hotkeyCategories": leopardwm_ipc::hotkeys::hotkey_categories(),
             "languages": serde_json::from_str::<serde_json::Value>(&crate::locale::languages_json()).unwrap(),
             "english": serde_json::from_str::<serde_json::Value>(&crate::locale::page_json("en")).unwrap(),
             "chinese": serde_json::from_str::<serde_json::Value>(&crate::locale::page_json("zh-CN")).unwrap(),
         });
         let mut child = Command::new("node")
-            .arg("-e")
-            .arg(include_str!("locale.test.js"))
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/src/settings/locale.test.js"
+            ))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

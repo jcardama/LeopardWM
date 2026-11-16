@@ -221,6 +221,24 @@ mod tests {
         for key in names.keys() {
             assert!(expected.contains_key(key), "en.toml: orphan key {key}");
         }
+        let english: BTreeMap<String, String> = toml::from_str(ENGLISH).unwrap();
+        let categories: BTreeMap<_, _> = english
+            .into_iter()
+            .filter(|(key, _)| key.starts_with("hotkeys.category."))
+            .collect();
+        let expected: BTreeMap<_, _> = leopardwm_ipc::hotkeys::hotkey_categories()
+            .into_iter()
+            .map(|category| {
+                (
+                    format!("hotkeys.category.{}", category.id),
+                    category.label.to_string(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            categories, expected,
+            "English category names must match the catalog"
+        );
     }
 
     #[test]

@@ -25,6 +25,7 @@ All notable changes to LeopardWM will be documented in this file.
 
 ### Improvements
 
+- **Settings groups hotkeys by category.** Monitor and LeopardWM start collapsed. Thanks to @gczark for the suggestion. (#182)
 - **Workspace snapshots now report rows.** When a workspace uses more than one row, `lwm query workspaces` and `workspace_state` subscribers see its row count and each tiled window's row, so bars can group windows by row. Thanks to @azumafuji for the original proposal. (#150)
 - **The CLI now has a complete command reference and a refreshed bar integration guide.**
 
