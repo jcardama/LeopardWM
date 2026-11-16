@@ -358,14 +358,15 @@ html, body {
 
 /* ── Hotkey recorder field ───────────────────────────────────────── */
 #sec-hotkeys table { table-layout: fixed; }
-#sec-hotkeys th:first-child { width: 50%; padding-left: 32px; }
-.hk-group td { padding: 0 !important; background: var(--card-bg-secondary); }
-.hk-group button { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 37px; padding: 8px 12px; border: 0; background: transparent; color: var(--text-primary); font: inherit; font-size: 15px; font-weight: 600; text-align: left; cursor: pointer; }
-.hk-group button:hover { background: var(--ctrl-fill-secondary); }
-.hk-group button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.hk-group button .combobox-chevron { width: 14px; height: 14px; fill: var(--text-primary); }
-.hk-group button[aria-expanded="false"] .combobox-chevron { transform: rotate(-90deg); }
-#hotkeys-body .hk-cmd-label { padding-left: 48px !important; }
+#sec-hotkeys th:first-child { width: 50%; padding-left: 16px; }
+#hotkeys-body > tr:not(.hk-group) > td { background: var(--card-bg-secondary); }
+#sec-hotkeys .hk-group td { padding: 0 !important; background: var(--card-bg); }
+#sec-hotkeys .hk-group button { display: flex; align-items: center; gap: 20px; width: 100%; min-height: 37px; padding: 2px 8px 2px 16px; border: 0; background: transparent; color: var(--text-primary); font: inherit; font-size: 14px; font-weight: 600; line-height: 20px; text-align: left; cursor: pointer; }
+#sec-hotkeys .hk-group button:hover { background: var(--subtle-secondary); }
+#sec-hotkeys .hk-group button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+#sec-hotkeys .hk-group button .combobox-chevron { order: 1; margin-left: auto; box-sizing: border-box; width: 32px; height: 32px; padding: 10px; fill: var(--text-primary); }
+#sec-hotkeys .hk-group button[aria-expanded="false"] .combobox-chevron { transform: rotate(-90deg); }
+#hotkeys-body .hk-cmd-label { padding-left: 32px !important; }
 .hk-record { cursor: pointer; }
 .hk-record.recording { box-shadow: inset 0 0 0 1px var(--accent); }
 .hk-cmd-label[title] { cursor: help; }
