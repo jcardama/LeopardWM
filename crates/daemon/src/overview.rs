@@ -250,7 +250,9 @@ impl AppState {
         let ws_vec = self.workspaces.get(&monitor)?;
 
         let geoms = layout_overview_rows(work_area.width, work_area.height, non_empty.len());
-        let focused_wid = ws_vec.get(active_idx).and_then(|ws| ws.focused_window());
+        let focused_wid = self
+            .focused_floating_window()
+            .or_else(|| ws_vec.get(active_idx).and_then(|ws| ws.focused_window()));
         let accent_width = self.config.appearance.active_border_width.max(1);
 
         let mut rows = Vec::with_capacity(non_empty.len());
@@ -351,10 +353,8 @@ impl AppState {
         u32::try_from(self.config.animation.overview_duration_ms).unwrap_or(0)
     }
 
-    // Include scrolled-out columns in one uniform strip transform. Floating
-    // windows are viewport-anchored, so translate them by the scroll offset.
-    // Fullscreen collapses to one viewport-sized card unless selection follows
-    // another window in its underlying strip. Return content width for panel wrap.
+    // Include scrolled-out columns and packed floats in one uniform transform.
+    // Return content width for panel wrap.
     fn overview_cards_for(
         &self,
         ws: &Workspace,
@@ -371,12 +371,13 @@ impl AppState {
         let fullscreen = ws
             .fullscreen_window_id()
             .filter(|&wid| ws.contains_window(wid) && !ws.is_minimized(wid))
-            .filter(|&wid| selected_wid.is_none_or(|selected| selected == wid));
+            .filter(|&wid| {
+                selected_wid.is_none_or(|selected| selected == wid || ws.is_floating(selected))
+            });
         let sources: Vec<(u64, Rect, Option<usize>)> = if let Some(fs_wid) = fullscreen {
             vec![(fs_wid, viewport_region, None)]
         } else {
-            let mut sources: Vec<(u64, Rect, Option<usize>)> = ws
-                .placements_for_full_strip(virtual_viewport)
+            ws.placements_for_full_strip(virtual_viewport)
                 .into_iter()
                 .filter(|p| {
                     p.visibility == Visibility::Visible
@@ -399,25 +400,15 @@ impl AppState {
                         .map(leopardwm_core_layout::Column::len);
                     (p.window_id, rect, tab_count)
                 })
-                .collect();
-            for f in ws.floating_windows() {
-                if ws.is_minimized(f.id) {
-                    continue; // matches the tiled path's visibility filter
-                }
-                sources.push((
-                    f.id,
-                    Rect::new(
-                        f.rect.x - work_area.x + scroll,
-                        f.rect.y - work_area.y,
-                        f.rect.width,
-                        f.rect.height,
-                    ),
-                    None,
-                ));
-            }
-            sources
+                .collect()
         };
-        if sources.is_empty() {
+        let mut floats: Vec<_> = ws
+            .floating_windows()
+            .iter()
+            .filter(|f| !ws.is_minimized(f.id) && Some(f.id) != fullscreen)
+            .collect();
+        floats.sort_by_key(|f| (f.rect.x, f.rect.y, f.id));
+        if sources.is_empty() && floats.is_empty() {
             return (Vec::new(), Rect::new(strip.x, strip.y, 0, 0), None);
         }
 
@@ -460,21 +451,58 @@ impl AppState {
         // omit it (and its reserve) so the panel hugs the cards instead
         // of carrying phantom viewport width at the workspace edge.
         let any_out = has_left || has_right;
-        let reserve = boundary_gap * (i32::from(has_left) + i32::from(has_right));
-
-        // With the ring shown, content bounds include the viewport region
-        // so the ring never escapes the row even when the strip is
-        // narrower than the screen.
-        let content = if any_out {
+        let tiled_content = (!sources.is_empty()).then(|| {
             bounding_box(
                 sources
                     .iter()
                     .map(|(_, r, _)| *r)
-                    .chain(std::iter::once(viewport_region)),
+                    .chain(any_out.then_some(viewport_region)),
             )
+        });
+        let float_gap =
+            VIEWPORT_RING_PAD + self.config.appearance.active_border_width.max(1) as i32 + 4;
+        let group_gap = if !floats.is_empty() && tiled_content.is_some() {
+            float_gap
         } else {
-            bounding_box(sources.iter().map(|(_, r, _)| *r))
+            0
         };
+        let packed_gaps = floats.len().saturating_sub(1) as i32 * float_gap;
+        let reserve =
+            boundary_gap * (i32::from(has_left) + i32::from(has_right)) + group_gap + packed_gaps;
+
+        // DWM thumbnails cover painted cards, so floats must not overlap tiles.
+        let group_width: i32 = floats
+            .iter()
+            .map(|f| f.rect.width.clamp(1, work_area.width.max(1)))
+            .sum();
+        let mut x = tiled_content.map_or(0, |r| r.x) - group_width;
+        let packed_floats: Vec<_> = floats
+            .into_iter()
+            .map(|f| {
+                let real = Rect::new(
+                    f.rect.x - work_area.x + scroll,
+                    f.rect.y - work_area.y,
+                    f.rect.width,
+                    f.rect.height,
+                );
+                let width = f.rect.width.clamp(1, work_area.width.max(1));
+                let height = f.rect.height.clamp(1, work_area.height.max(1));
+                let y = real.y.clamp(0, (work_area.height - height).max(0));
+                let packed = Rect::new(x, y, width, height);
+                x += width;
+                (f.id, real, packed)
+            })
+            .collect();
+        let mut content = bounding_box(
+            tiled_content
+                .into_iter()
+                .chain(packed_floats.iter().map(|(_, _, packed)| *packed)),
+        );
+        if !packed_floats.is_empty() {
+            let bottom = (content.y + content.height).max(work_area.height);
+            content.y = content.y.min(0);
+            content.height = bottom - content.y;
+        }
         let fit_strip = Rect::new(
             strip.x,
             strip.y,
@@ -494,16 +522,37 @@ impl AppState {
         let snapshots = self.config.overview.render == crate::config::OverviewRender::Snapshot;
         let cards = sources
             .into_iter()
-            .map(|(wid, r, tab_count)| {
-                let mut rect = xform.apply(&r);
-                rect.x += out_dir(&r) * boundary_gap;
+            .map(|(wid, r, tab_count)| (wid, r, r, tab_count, None))
+            .chain(
+                packed_floats
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, (wid, real, packed))| (wid, real, packed, None, Some(index))),
+            )
+            .map(|(wid, r, display, tab_count, float_index)| {
+                let mut rect = xform.apply(&display);
+                if let Some(index) = float_index {
+                    rect.x += index as i32 * float_gap - i32::from(has_left) * boundary_gap;
+                } else {
+                    rect.x += group_gap + packed_gaps + out_dir(&r) * boundary_gap;
+                }
                 // The window's real placement in overlay client coords:
                 // strip space minus the scroll (the strip places the
                 // viewport region at x = scroll; the overlay origin is
                 // the work-area origin). Filled for EVERY row — the
                 // close animation may zoom toward any workspace's
                 // would-be placements, not just the active one.
-                let from_rect = Rect::new(r.x - scroll, r.y, r.width, r.height);
+                let from_rect = if Some(wid) == fullscreen && ws.is_floating(wid) {
+                    let f = ws.floating_windows().iter().find(|f| f.id == wid).unwrap();
+                    Rect::new(
+                        f.rect.x - work_area.x,
+                        f.rect.y - work_area.y,
+                        f.rect.width,
+                        f.rect.height,
+                    )
+                } else {
+                    Rect::new(r.x - scroll, r.y, r.width, r.height)
+                };
                 OverviewCard {
                     window_id: wid,
                     title: self
@@ -535,7 +584,7 @@ impl AppState {
         } else {
             let v = xform.apply(&viewport_region);
             Rect::new(
-                v.x - VIEWPORT_RING_PAD,
+                v.x + group_gap + packed_gaps - VIEWPORT_RING_PAD,
                 v.y - VIEWPORT_RING_PAD,
                 v.width + 2 * VIEWPORT_RING_PAD,
                 v.height + 2 * VIEWPORT_RING_PAD,
@@ -2124,6 +2173,218 @@ mod tests {
         };
         assert!(!card(101).live, "ghost-handled window stays placeholder");
         assert!(card(102).live, "other windows stay live");
+    }
+
+    fn assert_float_before_tiles(row: &OverviewRow, float_id: u64) {
+        let float = row.cards.iter().find(|c| c.window_id == float_id).unwrap();
+        for tile in row.cards.iter().filter(|c| c.window_id != float_id) {
+            assert!(
+                float.rect.x + float.rect.width < tile.rect.x,
+                "float {:?}, tile {:?}",
+                float.rect,
+                tile.rect
+            );
+        }
+        assert!(float.rect.x >= row.panel.x + ROW_INNER_PAD);
+        assert!(float.rect.x + float.rect.width <= row.panel.x + row.panel.width - ROW_INNER_PAD);
+        assert!(float.rect.y >= row.label_strip.y + row.label_strip.height + ROW_INNER_PAD);
+        assert!(float.rect.y + float.rect.height <= row.panel.y + row.panel.height - ROW_INNER_PAD);
+    }
+
+    #[test]
+    fn float_group_packs_inactive_and_active_rows_and_preserves_real_origin() {
+        let mut state = test_state();
+        state.monitors.get_mut(&1).unwrap().work_area = Rect::new(300, 200, 1920, 1040);
+        add_windows(&mut state, 0, &[101]);
+        add_windows(&mut state, 1, &[201]);
+        for idx in [0, 1] {
+            let ws = &mut state.workspaces.get_mut(&1).unwrap()[idx];
+            ws.set_scroll_offset(150.0);
+            ws.add_floating(301 + idx as u64, Rect::new(400, 300, 500, 400))
+                .unwrap();
+        }
+        let (_, model) = state.build_overview_model().unwrap();
+        for (idx, row) in model.rows.iter().enumerate() {
+            let wid = 301 + idx as u64;
+            assert_float_before_tiles(row, wid);
+            let float = row.cards.iter().find(|c| c.window_id == wid).unwrap();
+            assert_eq!(float.from_rect, Some(Rect::new(100, 100, 500, 400)));
+            let tile = &row.cards[0];
+            let tile_width = tile.from_rect.unwrap().width;
+            let float_scale = f64::from(float.rect.width + 2 * CARD_INSET) / 500.0;
+            let tile_scale = f64::from(tile.rect.width + 2 * CARD_INSET) / f64::from(tile_width);
+            assert!((float_scale - tile_scale).abs() < 0.005);
+            assert_eq!(row.cards.last().unwrap().window_id, wid);
+            assert_eq!(row.viewport.width, 0);
+        }
+    }
+
+    #[test]
+    fn focused_float_is_initial_selection_and_does_not_create_a_ring() {
+        let mut state = test_state();
+        add_windows(&mut state, 0, &[101]);
+        state.workspaces.get_mut(&1).unwrap()[0]
+            .add_floating(301, Rect::new(-2000, 100, 500, 400))
+            .unwrap();
+        state.previous_focused_hwnd = Some(301);
+        let (_, model) = state.build_overview_model().unwrap();
+        let row = &model.rows[0];
+        assert_eq!(
+            row.cards
+                .iter()
+                .filter(|c| c.selected)
+                .map(|c| c.window_id)
+                .collect::<Vec<_>>(),
+            vec![301]
+        );
+        assert_eq!(row.viewport.width, 0);
+        assert_float_before_tiles(row, 301);
+    }
+
+    #[test]
+    fn float_group_keeps_separation_and_ring_clearance_for_overflow() {
+        for scroll in [0.0, 2100.0] {
+            let mut state = test_state();
+            add_windows(&mut state, 0, &[101, 102, 103, 104]);
+            let ws = &mut state.workspaces.get_mut(&1).unwrap()[0];
+            ws.set_all_column_widths(1000);
+            ws.set_scroll_offset(scroll);
+            ws.add_floating(301, Rect::new(100, 100, 500, 400)).unwrap();
+            let (_, model) = state.build_overview_model().unwrap();
+            let row = &model.rows[0];
+            assert_float_before_tiles(row, 301);
+            assert!(row.viewport.width > 0);
+            let float = row.cards.iter().find(|c| c.window_id == 301).unwrap();
+            assert!(
+                float.rect.x + float.rect.width <= row.viewport.x - model.accent_width as i32 - 4
+            );
+            let left_tiles = row
+                .cards
+                .iter()
+                .filter(|c| c.window_id != 301 && c.rect.x + c.rect.width < row.viewport.x)
+                .count();
+            assert_eq!(left_tiles > 0, scroll > 0.0);
+            if scroll == 0.0 {
+                assert!(row
+                    .cards
+                    .iter()
+                    .any(|c| c.window_id != 301 && c.rect.x > row.viewport.x + row.viewport.width));
+            }
+            for card in &row.cards {
+                assert!(
+                    card.rect.x >= row.panel.x
+                        && card.rect.x + card.rect.width <= row.panel.x + row.panel.width
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn float_only_workspace_preserves_vertical_offset() {
+        let mut state = test_state();
+        state.workspaces.get_mut(&1).unwrap()[0]
+            .add_floating(301, Rect::new(100, 50, 500, 300))
+            .unwrap();
+        let (_, top) = state.build_overview_model().unwrap();
+        let ws = &mut state.workspaces.get_mut(&1).unwrap()[0];
+        assert!(ws.update_floating(301, Rect::new(100, 600, 500, 300)));
+        let (_, bottom) = state.build_overview_model().unwrap();
+        assert!(top.rows[0].cards[0].rect.y < bottom.rows[0].cards[0].rect.y);
+        assert_eq!(top.rows[0].viewport.width, 0);
+        assert_eq!(bottom.rows[0].viewport.width, 0);
+    }
+
+    #[test]
+    fn floats_are_sorted_packed_and_clamped_to_the_body() {
+        let mut state = test_state();
+        add_windows(&mut state, 0, &[101]);
+        let ws = &mut state.workspaces.get_mut(&1).unwrap()[0];
+        for (id, rect) in [
+            (305, Rect::new(100, 100, 500, 400)),
+            (303, Rect::new(100, 100, 500, 400)),
+            (302, Rect::new(100, -100, 500, 400)),
+            (301, Rect::new(-100, 1200, 3000, 2000)),
+        ] {
+            ws.add_floating(id, rect).unwrap();
+        }
+        let (_, model) = state.build_overview_model().unwrap();
+        let row = &model.rows[0];
+        assert_eq!(
+            row.cards.iter().map(|c| c.window_id).collect::<Vec<_>>(),
+            vec![101, 301, 302, 303, 305]
+        );
+        for pair in row.cards[1..].windows(2) {
+            assert!(pair[0].rect.x + pair[0].rect.width < pair[1].rect.x);
+        }
+        let last = row.cards.last().unwrap();
+        assert!(last.rect.x + last.rect.width < row.cards[0].rect.x);
+        for card in &row.cards[1..] {
+            assert!(card.rect.x >= row.panel.x + ROW_INNER_PAD);
+            assert!(card.rect.x + card.rect.width <= row.panel.x + row.panel.width - ROW_INNER_PAD);
+            assert!(card.rect.y >= row.label_strip.y + row.label_strip.height + ROW_INNER_PAD);
+            assert!(
+                card.rect.y + card.rect.height <= row.panel.y + row.panel.height - ROW_INNER_PAD
+            );
+        }
+        assert_eq!(
+            row.cards[1].from_rect,
+            Some(Rect::new(-100, 1200, 3000, 2000))
+        );
+        assert!(row.cards[2].rect.y < row.cards[3].rect.y);
+    }
+
+    #[test]
+    fn fullscreen_float_appears_once_and_keeps_real_origin() {
+        let mut state = test_state();
+        let ws = &mut state.workspaces.get_mut(&1).unwrap()[0];
+        ws.add_floating(301, Rect::new(100, 150, 500, 400)).unwrap();
+        ws.add_floating(302, Rect::new(300, 250, 600, 500)).unwrap();
+        assert!(ws.toggle_fullscreen_window(301));
+        let (_, model) = state
+            .build_overview_model_with_selection(Some(301))
+            .unwrap();
+        let row = &model.rows[0];
+        assert_eq!(
+            row.cards.iter().map(|c| c.window_id).collect::<Vec<_>>(),
+            vec![301, 302]
+        );
+        assert_eq!(row.cards[0].from_rect, Some(Rect::new(100, 150, 500, 400)));
+        assert_float_before_tiles(row, 302);
+    }
+
+    #[test]
+    fn fullscreen_and_multi_row_keep_floats_separate() {
+        let mut state = test_state();
+        add_windows(&mut state, 0, &[101, 102]);
+        let ws = &mut state.workspaces.get_mut(&1).unwrap()[0];
+        assert!(ws.toggle_fullscreen());
+        let fullscreen = ws.fullscreen_window_id().unwrap();
+        ws.add_floating(301, Rect::new(100, 100, 500, 400)).unwrap();
+        for selection in [None, Some(301)] {
+            let (_, model) = state
+                .build_overview_model_with_selection(selection)
+                .unwrap();
+            let row = &model.rows[0];
+            assert_eq!(
+                row.cards.iter().map(|c| c.window_id).collect::<Vec<_>>(),
+                vec![fullscreen, 301]
+            );
+            assert_float_before_tiles(row, 301);
+        }
+        let other = if fullscreen == 101 { 102 } else { 101 };
+        let (_, expanded) = state
+            .build_overview_model_with_selection(Some(other))
+            .unwrap();
+        assert_eq!(expanded.rows[0].cards.len(), 3);
+        assert_float_before_tiles(&expanded.rows[0], 301);
+        let mut state = test_state();
+        let ws = &mut state.workspaces.get_mut(&1).unwrap()[0];
+        ws.set_row_layout(&[0.5, 0.5]);
+        ws.insert_window_in_row(101, 0, Some(800)).unwrap();
+        ws.insert_window_in_row(201, 1, Some(800)).unwrap();
+        ws.add_floating(301, Rect::new(100, 100, 500, 400)).unwrap();
+        let (_, model) = state.build_overview_model().unwrap();
+        assert_float_before_tiles(&model.rows[0], 301);
     }
 
     #[test]
