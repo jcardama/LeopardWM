@@ -16,7 +16,6 @@ leopardwm-ipc = { path = "../ipc" }
 leopardwm-platform-win32 = { path = "../platform_win32" }
 anyhow = { workspace = true }
 tracing = { workspace = true }
-tracing-appender = { workspace = true }
 tracing-subscriber = { workspace = true }
 windows = { workspace = true }
 

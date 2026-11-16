@@ -1,9 +1,9 @@
+use leopardwm_ipc::bounded_log::{BoundedLogFile, LOG_FILE_MAX_BYTES};
 use leopardwm_ipc::DaemonLogStatus;
 use std::io::{self, Write};
 use std::path::Path;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use tracing::Level;
-use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::fmt::format::Writer;
 use tracing_subscriber::fmt::time::{FormatTime, SystemTime};
 use tracing_subscriber::fmt::MakeWriter;
@@ -73,30 +73,26 @@ impl<W: Write> Write for LogWriter<W> {
 pub(crate) fn open(
     log_dir: &Path,
     log_level: Level,
-) -> (Option<LogWriter<RollingFileAppender>>, LogHealth) {
+) -> (Option<LogWriter<Mutex<BoundedLogFile>>>, LogHealth) {
     let path = log_dir.join("leopardwm-daemon.log").display().to_string();
-    match RollingFileAppender::builder()
-        .rotation(Rotation::NEVER)
-        .filename_prefix("leopardwm-daemon.log")
-        .build(log_dir)
-    {
+    match BoundedLogFile::open(log_dir, "leopardwm-daemon.log", LOG_FILE_MAX_BYTES) {
         Ok(inner) => {
             let health = LogHealth::new(DaemonLogStatus::Writing { path });
-            let mut writer = LogWriter {
-                inner,
+            let writer = LogWriter {
+                inner: Mutex::new(inner),
                 health: health.clone(),
             };
             let mut timestamp = String::new();
             SystemTime
                 .format_time(&mut Writer::new(&mut timestamp))
                 .expect("formatting a timestamp into a String cannot fail");
-            let _ = writeln!(
-                writer,
-                "{timestamp} LeopardWM daemon {} (pid {}) opened this log at log level {}",
+            let startup = format!(
+                "{timestamp} LeopardWM daemon {} (pid {}) opened this log at log level {}\n",
                 env!("CARGO_PKG_VERSION"),
                 std::process::id(),
                 log_level.as_str().to_ascii_lowercase()
             );
+            let _ = writer.make_writer().write_all(startup.as_bytes());
             (Some(writer), health)
         }
         Err(error) => {
@@ -130,7 +126,7 @@ mod tests {
     }
 
     #[test]
-    fn never_rotation_writes_the_exact_daemon_filename() {
+    fn startup_and_events_use_the_exact_daemon_filename() {
         let dir =
             std::env::temp_dir().join(format!("leopardwm-log-writing-{}", std::process::id()));
         let (writer, health) = open(&dir, Level::WARN);
@@ -152,8 +148,79 @@ mod tests {
             std::fs::read_to_string(dir.join("leopardwm-daemon.log")).unwrap(),
             format!("{startup}log entry\n")
         );
-        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
         assert!(matches!(health.status(), DaemonLogStatus::Writing { .. }));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn oversized_existing_log_moves_aside_before_startup_line() {
+        let dir = std::env::temp_dir().join(format!(
+            "leopardwm-log-upgrade-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("leopardwm-daemon.log");
+        let mut file = std::fs::File::create(&path).unwrap();
+        file.write_all(b"old log marker").unwrap();
+        file.set_len(LOG_FILE_MAX_BYTES + 1).unwrap();
+        drop(file);
+
+        let (writer, health) = open(&dir, Level::INFO);
+        let writer = writer.unwrap();
+        let previous = dir.join("leopardwm-daemon.old.log");
+        assert_eq!(
+            std::fs::metadata(&previous).unwrap().len(),
+            LOG_FILE_MAX_BYTES + 1
+        );
+        use std::io::Read;
+        let mut marker = [0; 14];
+        std::fs::File::open(previous)
+            .unwrap()
+            .read_exact(&mut marker)
+            .unwrap();
+        assert_eq!(&marker, b"old log marker");
+        let startup = std::fs::read_to_string(path).unwrap();
+        assert!(startup.contains("LeopardWM daemon "));
+        assert!(startup.ends_with("opened this log at log level info\n"));
+        assert!(matches!(health.status(), DaemonLogStatus::Writing { .. }));
+        drop(writer);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn startup_line_rolls_over_without_splitting() {
+        let dir = std::env::temp_dir().join(format!(
+            "leopardwm-log-startup-rollover-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("leopardwm-daemon.log");
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(LOG_FILE_MAX_BYTES - 1).unwrap();
+        drop(file);
+
+        let (writer, _) = open(&dir, Level::INFO);
+        let writer = writer.unwrap();
+        assert_eq!(
+            std::fs::metadata(dir.join("leopardwm-daemon.old.log"))
+                .unwrap()
+                .len(),
+            LOG_FILE_MAX_BYTES - 1
+        );
+        let startup = std::fs::read_to_string(path).unwrap();
+        let (timestamp, message) = startup.split_once(' ').unwrap();
+        assert!(timestamp.ends_with('Z'));
+        assert!(message.starts_with("LeopardWM daemon "));
+        assert!(message.ends_with("opened this log at log level info\n"));
+        drop(writer);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

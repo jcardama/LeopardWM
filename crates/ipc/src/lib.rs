@@ -2,6 +2,7 @@
 //!
 //! Shared types for daemon-CLI communication over Windows named pipes.
 
+pub mod bounded_log;
 pub mod config_template;
 pub mod hotkeys;
 pub mod workspace_state;

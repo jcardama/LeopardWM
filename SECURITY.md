@@ -111,7 +111,7 @@ The following data is stored only on your machine and is not uploaded:
 | Data | Location | Content |
 |------|----------|---------|
 | Config file | `%APPDATA%\leopardwm\config\config.toml` (then `%USERPROFILE%\.config\leopardwm\config.toml` or `.\config.toml`) | User preferences (gaps, hotkeys, window rules) |
-| Daemon log | `%LOCALAPPDATA%\leopardwm\logs\leopardwm-daemon.log` (fallback: `%TEMP%\leopardwm\logs\leopardwm-daemon.log`) | Operational messages (window events, errors) |
+| Daemon and watchdog logs | `%LOCALAPPDATA%\leopardwm\logs\` (fallback: `%TEMP%\leopardwm\logs\`), including one `.old.log` file for each | Operational messages (window events, errors) |
 | Workspace state | `%APPDATA%\leopardwm\data\workspace-state.json` (fallback: `.\workspace-state.json`) | Window positions for session restore |
 | Crash reports | `%TEMP%\leopardwm-crash-*.txt` | Timestamp, panic message and location, backtrace, version |
 | Settings WebView2 profile | `%LOCALAPPDATA%\leopardwm\cache\webview2` (fallback: `%TEMP%\leopardwm-webview2`) | Persistent browser-profile data for the local settings UI |

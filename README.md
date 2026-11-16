@@ -579,8 +579,9 @@ Failed physical gestures are diagnosed with an opt-in, short capture — not by 
 |---|---|
 | Config | `%APPDATA%\leopardwm\config\config.toml` |
 | State | `%APPDATA%\leopardwm\data\workspace-state.json` |
-| Log (stdout) | `%TEMP%\leopardwm-daemon.log` |
-| Log (stderr) | `%TEMP%\leopardwm-daemon.err.log` |
+| Daemon log | `%LOCALAPPDATA%\leopardwm\logs\leopardwm-daemon.log` (previous: `leopardwm-daemon.old.log`) |
+| Daemon error log | `%LOCALAPPDATA%\leopardwm\logs\leopardwm-daemon.err.log` |
+| Watchdog log | `%LOCALAPPDATA%\leopardwm\logs\leopardwm-watchdog.log` (previous: `leopardwm-watchdog.old.log`) |
 | Gesture capture | `%LOCALAPPDATA%\leopardwm\logs\leopardwm-gesture-capture.log` |
 
 ## Architecture

@@ -59,7 +59,14 @@ const MAX_CRASHES_PER_WINDOW: usize = 3;
 fn init_tracing(log_dir: &Path) -> Result<()> {
     use tracing_subscriber::prelude::*;
 
-    let file_appender = tracing_appender::rolling::never(log_dir, "leopardwm-watchdog.log");
+    let file_appender = std::sync::Mutex::new(
+        leopardwm_ipc::bounded_log::BoundedLogFile::open(
+            log_dir,
+            "leopardwm-watchdog.log",
+            leopardwm_ipc::bounded_log::LOG_FILE_MAX_BYTES,
+        )
+        .context("Failed to open watchdog log")?,
+    );
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
