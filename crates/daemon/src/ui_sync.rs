@@ -278,7 +278,6 @@ impl AppState {
                 .as_ref()
                 .and_then(|transition| transition.start_rects.get(&hwnd))
                 .is_some_and(|start| *start != layout_rect);
-        // Skip decoration clipping during motion to keep the bitmap full-sized.
         // Use the current interpolated rect, not the previous frame's presentation.
         let content = if animating {
             layout_rect
@@ -294,7 +293,18 @@ impl AppState {
             ),
         );
         if animating {
-            Some(overlay)
+            if self.config.layout.offscreen_mode == crate::config::OffscreenMode::Park {
+                let owner = self.monitors.get(&monitor_id)?.rect;
+                if layout_rect.width <= owner.width
+                    && layout_rect.height <= owner.height
+                    && self.park_mode_requires_parking(layout_rect, monitor_id, owner)
+                {
+                    return None;
+                }
+                self.project_decoration_rect(hwnd, overlay)
+            } else {
+                Some(overlay)
+            }
         } else {
             self.project_decoration_rect(hwnd, overlay)
         }

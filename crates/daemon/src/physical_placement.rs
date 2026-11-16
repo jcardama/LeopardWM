@@ -557,7 +557,12 @@ impl AppState {
             .is_some_and(|transition| transition.exit_rects.contains_key(&window_id))
     }
 
-    fn park_mode_requires_parking(&self, rect: Rect, owner_id: MonitorId, owner: Rect) -> bool {
+    pub(crate) fn park_mode_requires_parking(
+        &self,
+        rect: Rect,
+        owner_id: MonitorId,
+        owner: Rect,
+    ) -> bool {
         !rects_overlap_positive(rect, owner)
             || self
                 .monitors
@@ -984,11 +989,32 @@ impl AppState {
         let owner_id = self.owner_id_for_window(window_id)?;
         let owner = self.monitors.get(&owner_id)?.rect;
         let rects = monitor_rects(&self.monitors);
-        match project_physical_rect(rect, owner, &rects) {
-            PhysicalDecision::Parked { .. } => None,
-            PhysicalDecision::Constrained { rect, .. } => Some(rect),
-            PhysicalDecision::Unchanged => Some(rect),
+        let projected = match project_physical_rect(rect, owner, &rects) {
+            PhysicalDecision::Parked { .. } => return None,
+            PhysicalDecision::Constrained { rect, .. } => rect,
+            PhysicalDecision::Unchanged => rect,
+        };
+        if self.config.layout.offscreen_mode == OffscreenMode::Park
+            && self.monitors.iter().any(|(id, monitor)| {
+                *id != owner_id && rects_overlap_positive(projected, monitor.rect)
+            })
+        {
+            if !rects_overlap_positive(projected, owner) {
+                return None;
+            }
+            let left = i64::from(projected.x).max(i64::from(owner.x));
+            let top = i64::from(projected.y).max(i64::from(owner.y));
+            let right = edge_end(projected.x, projected.width).min(edge_end(owner.x, owner.width));
+            let bottom =
+                edge_end(projected.y, projected.height).min(edge_end(owner.y, owner.height));
+            return Some(Rect::new(
+                i32_sat(left),
+                i32_sat(top),
+                i32_sat(right - left),
+                i32_sat(bottom - top),
+            ));
         }
+        Some(projected)
     }
 }
 
@@ -1126,6 +1152,81 @@ mod tests {
                     "an unchanged window included in the layout snapshot must stay trimmed"
                 );
                 state.abort_layout_transition();
+            }
+        }
+    }
+
+    #[test]
+    fn park_mode_projects_animated_outside_border_and_hides_ahead_frame() {
+        for mode in [OffscreenMode::Bleed, OffscreenMode::Park] {
+            let mut config = crate::config::Config::default();
+            config.layout.offscreen_mode = mode;
+            config.appearance.active_border_position = "outside".into();
+            let mut state = AppState::new_with_config(
+                config,
+                vec![
+                    monitor(1, 0, 0, 1000, 1000),
+                    monitor(2, 1000, 0, 1000, 1000),
+                ],
+            );
+            let workspace = &mut state.workspaces.get_mut(&1).unwrap()[0];
+            workspace.insert_window(100, Some(400)).unwrap();
+            workspace.animate_scroll_to(
+                100.0,
+                Some(100),
+                Some(leopardwm_core_layout::Easing::Linear),
+            );
+            assert!(workspace.is_animating());
+            state.injected_window_maximized.insert(100, false);
+            let flush = Rect::new(600, 100, 400, 300);
+            state.apply_physical_projection(vec![placement(100, flush, Visibility::Visible)]);
+            let border = state
+                .compute_tiled_border_overlay_rect(100, flush, 3)
+                .unwrap();
+            if mode == OffscreenMode::Park {
+                assert_eq!(border, Rect::new(598, 98, 402, 304));
+            } else {
+                assert_eq!(border, Rect::new(598, 98, 404, 304));
+            }
+            let ahead = Rect::new(601, 100, 400, 300);
+            let border = state.compute_tiled_border_overlay_rect(100, ahead, 3);
+            if mode == OffscreenMode::Park {
+                assert_eq!(border, None);
+                let oversized = Rect::new(0, 100, 1100, 300);
+                assert!(state
+                    .compute_tiled_border_overlay_rect(100, oversized, 3)
+                    .is_some());
+            } else {
+                assert_eq!(border, Some(Rect::new(599, 98, 404, 304)));
+            }
+        }
+    }
+
+    #[test]
+    fn park_mode_clips_tab_strip_against_offset_neighbor() {
+        for mode in [OffscreenMode::Bleed, OffscreenMode::Park] {
+            let mut config = crate::config::Config::default();
+            config.layout.offscreen_mode = mode;
+            let mut state = AppState::new_with_config(
+                config,
+                vec![
+                    monitor(1, 0, 0, 1000, 1000),
+                    monitor(2, 1000, -500, 1000, 500),
+                ],
+            );
+            state.workspaces.get_mut(&1).unwrap()[0]
+                .insert_window(100, Some(300))
+                .unwrap();
+            let strip = tab_strip_rect(Rect::new(900, 10, 300, 300), 28, 0);
+            let projected = state.project_decoration_rect(100, strip);
+            if mode == OffscreenMode::Park {
+                assert_eq!(projected, Some(Rect::new(900, 0, 100, 10)));
+                assert_eq!(
+                    state.project_decoration_rect(100, Rect::new(1000, -18, 200, 18)),
+                    None
+                );
+            } else {
+                assert_eq!(projected, Some(strip));
             }
         }
     }
