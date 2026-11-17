@@ -9227,7 +9227,7 @@ fn assert_rule_removal_repairs_scroll(action: crate::config::WindowAction) {
     }];
     state.compiled_rules = state.config.compile_window_rules();
 
-    state.reapply_window_rules(&previous_rules);
+    state.reapply_window_rules(&previous_rules, state.config.behavior.fixed_size_windows);
 
     let workspace = &state.workspaces[&1][0];
     let max_scroll = (workspace.total_width() - workspace.visible_width(width)).max(0) as f64;
@@ -15143,7 +15143,10 @@ fn test_size_rules_reapply_keeps_managed_small_floating_window() {
     let mut small = large;
     small.rect = Rect::new(100, 100, 200, 150);
     state.injected_window_info.insert(100, small.clone());
-    state.reapply_window_rules(&state.compiled_rules.clone());
+    state.reapply_window_rules(
+        &state.compiled_rules.clone(),
+        state.config.behavior.fixed_size_windows,
+    );
     state.injected_enumerated_windows = Some(vec![small]);
     assert_eq!(state.enumerate_and_add_windows().unwrap(), 0);
     assert_eq!(state.find_window_workspace(100), Some((1, 0)));
@@ -15457,6 +15460,89 @@ fn fixed_caption_admission_respects_rules_and_preserves_rect() {
             }
         }
     }
+}
+
+fn fixed_caption_reload_case(
+    old_policy: crate::config::FixedSizeWindows,
+    old_rule: Option<crate::config::WindowAction>,
+    new_policy: crate::config::FixedSizeWindows,
+    new_rule: Option<crate::config::WindowAction>,
+    expected_floating: bool,
+) {
+    use crate::config::WindowRule;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SetWindowLongW, GWL_STYLE, WS_CAPTION, WS_MINIMIZEBOX,
+    };
+
+    let window = ResizeTestWindow::new(400);
+    let hwnd = window.id();
+    unsafe {
+        SetWindowLongW(
+            window.0,
+            GWL_STYLE,
+            (WS_CAPTION.0 | WS_MINIMIZEBOX.0) as i32,
+        )
+    };
+    let rule = |action| WindowRule {
+        match_class: Some("^TestWindowClass$".into()),
+        action,
+        ..Default::default()
+    };
+    let mut config = test_config();
+    config.behavior.fixed_size_windows = old_policy;
+    config.behavior.focus_new_windows = false;
+    config.window_rules = old_rule.map(rule).into_iter().collect();
+    let mut state = AppState::new_with_config(config, test_monitors());
+    state.paused = true;
+    let mut info = make_test_window_info(hwnd);
+    info.process_id = std::process::id();
+    info.rect = leopardwm_platform_win32::get_window_chrome_rect(hwnd).unwrap();
+    let rect = info.rect;
+    state.injected_window_info.insert(hwnd, info.clone());
+    state.injected_enumerated_windows = Some(vec![info]);
+    assert_eq!(state.enumerate_and_add_windows().unwrap(), 1);
+    let mut new_config = state.config.clone();
+    new_config.behavior.fixed_size_windows = new_policy;
+    new_config.window_rules = new_rule.map(rule).into_iter().collect();
+    state.apply_config(new_config);
+    let workspace = state.focused_workspace().unwrap();
+    assert!(workspace.contains_window(hwnd));
+    assert_eq!(workspace.is_floating(hwnd), expected_floating);
+    if expected_floating {
+        assert_eq!(
+            workspace
+                .floating_windows()
+                .iter()
+                .find(|w| w.id == hwnd)
+                .unwrap()
+                .rect,
+            rect
+        );
+    }
+}
+
+#[test]
+fn fixed_caption_reload_removed_float_rule_keeps_floating() {
+    use crate::config::{FixedSizeWindows::Float, WindowAction};
+    fixed_caption_reload_case(Float, Some(WindowAction::Float), Float, None, true);
+}
+
+#[test]
+fn fixed_caption_reload_added_tile_rule_tiles() {
+    use crate::config::{FixedSizeWindows::Float, WindowAction};
+    fixed_caption_reload_case(Float, None, Float, Some(WindowAction::Tile), false);
+}
+
+#[test]
+fn fixed_caption_reload_float_policy_to_tile() {
+    use crate::config::FixedSizeWindows::{Float, Tile};
+    fixed_caption_reload_case(Float, None, Tile, None, false);
+}
+
+#[test]
+fn fixed_caption_reload_tile_policy_to_float() {
+    use crate::config::FixedSizeWindows::{Float, Tile};
+    fixed_caption_reload_case(Tile, None, Float, None, true);
 }
 
 fn new_window_monitor_state(mut config: Config) -> AppState {

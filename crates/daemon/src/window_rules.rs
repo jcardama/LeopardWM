@@ -10,9 +10,12 @@ use leopardwm_platform_win32::{
 use tracing::{debug, info, warn};
 
 impl AppState {
-    /// Apply changed rule outcomes to managed windows, preserving manual overrides
-    /// when the previous and current rules decide the same action.
-    pub(crate) fn reapply_window_rules(&mut self, previous_rules: &[config::CompiledWindowRule]) {
+    /// Apply changed effective actions, preserving manual overrides when they are unchanged.
+    pub(crate) fn reapply_window_rules(
+        &mut self,
+        previous_rules: &[config::CompiledWindowRule],
+        previous_policy: config::FixedSizeWindows,
+    ) {
         let mut transitions: Vec<(u64, MonitorId, usize, config::WindowAction, bool)> = Vec::new();
 
         for (&monitor_id, ws_vec) in &self.workspaces {
@@ -22,24 +25,32 @@ impl AppState {
                     if let Some(win_info) = self.lookup_window_info(wid) {
                         let executable =
                             get_process_executable(win_info.process_id).unwrap_or_default();
-                        let action = self.evaluate_window_rules(
+                        let matched = self.matched_rule(
                             &win_info.class_name,
                             &win_info.title,
                             &executable,
                             None,
                         );
-                        let previous_action = previous_rules
-                            .iter()
-                            .find(|rule| {
-                                rule.matches(
-                                    &win_info.class_name,
-                                    &win_info.title,
-                                    &executable,
-                                    None,
-                                )
-                            })
-                            .map(|rule| rule.action)
-                            .unwrap_or(config::WindowAction::Tile);
+                        let previous_matched = previous_rules.iter().find(|rule| {
+                            rule.matches(&win_info.class_name, &win_info.title, &executable, None)
+                        });
+                        let action = self.effective_admission_action(
+                            &win_info,
+                            self.evaluate_window_rules(
+                                &win_info.class_name,
+                                &win_info.title,
+                                &executable,
+                                None,
+                            ),
+                            matched.is_some(),
+                            self.config.behavior.fixed_size_windows,
+                        );
+                        let previous_action = self.effective_admission_action(
+                            &win_info,
+                            previous_matched.map_or(config::WindowAction::Tile, |rule| rule.action),
+                            previous_matched.is_some(),
+                            previous_policy,
+                        );
                         if action != previous_action {
                             transitions.push((wid, monitor_id, ws_idx, action, is_floating));
                         }
@@ -255,7 +266,12 @@ impl AppState {
                 continue;
             }
 
-            let action = self.effective_admission_action(&win_info, action, rule_matched);
+            let action = self.effective_admission_action(
+                &win_info,
+                action,
+                rule_matched,
+                self.config.behavior.fixed_size_windows,
+            );
             let floating_rect = (action == config::WindowAction::Float).then(|| {
                 self.get_floating_rect_from_rules(
                     &win_info.class_name,
@@ -385,9 +401,10 @@ impl AppState {
         window: &WindowInfo,
         action: config::WindowAction,
         rule_matched: bool,
+        policy: config::FixedSizeWindows,
     ) -> config::WindowAction {
         if !rule_matched
-            && self.config.behavior.fixed_size_windows == config::FixedSizeWindows::Float
+            && policy == config::FixedSizeWindows::Float
             && leopardwm_platform_win32::is_fixed_caption_window(window.hwnd)
         {
             debug!(

@@ -1109,7 +1109,12 @@ impl AppState {
                 return AdmitOutcome::DialogLike;
             }
 
-            let action = self.effective_admission_action(&win_info, action, rule_matched);
+            let action = self.effective_admission_action(
+                &win_info,
+                action,
+                rule_matched,
+                self.config.behavior.fixed_size_windows,
+            );
             let recreated_slot =
                 self.take_recreated_window_slot(&win_info, kind, action, rule_sticky);
             let opening_monitor = self

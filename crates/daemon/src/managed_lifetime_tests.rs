@@ -1046,7 +1046,7 @@ fn reapply_ignore_drops_managed_lifetime_record() {
     let previous_rules = state.compiled_rules.clone();
     ignore_managed_class(&mut state);
 
-    state.reapply_window_rules(&previous_rules);
+    state.reapply_window_rules(&previous_rules, state.config.behavior.fixed_size_windows);
 
     assert_eq!(membership_count(&state, 10), 0);
     assert!(!state.managed_lifetime_tokens.contains_key(&10));

@@ -179,6 +179,7 @@ impl AppState {
         // abort the in-flight transition before applying the new config.
         self.abort_active_ghost_transition();
         let old_border_on = self.config.appearance.active_border;
+        let previous_fixed_size_windows = self.config.behavior.fixed_size_windows;
         if self.config.layout.offscreen_mode != config.layout.offscreen_mode {
             self.bump_physical_invalidation();
         }
@@ -253,7 +254,7 @@ impl AppState {
             }
         }
 
-        self.reapply_window_rules(&previous_rules);
+        self.reapply_window_rules(&previous_rules, previous_fixed_size_windows);
 
         if let Ok(added) = self.enumerate_and_add_windows() {
             if added > 0 {
