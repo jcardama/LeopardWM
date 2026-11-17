@@ -1904,8 +1904,8 @@ function updateScrollLabels() {
   var modDisplay = mod.split('+').map(function(s) { return s.trim(); }).join(' + ');
   var up = document.getElementById('lbl-scroll-up');
   var dn = document.getElementById('lbl-scroll-down');
-  if (up) up.textContent = t('settings.text.modifier_scroll_up', {modifier:modDisplay});
-  if (dn) dn.textContent = t('settings.text.modifier_scroll_down', {modifier:modDisplay});
+  if (up) up.textContent = mod === 'none' ? t('settings.text.scroll_up_modifier_off') : t('settings.text.modifier_scroll_up', {modifier:modDisplay});
+  if (dn) dn.textContent = mod === 'none' ? t('settings.text.scroll_down_modifier_off') : t('settings.text.modifier_scroll_down', {modifier:modDisplay});
 }
 
 /* Build gesture comboboxes from CMD_ORDER/CMD_LABELS */
@@ -2224,9 +2224,11 @@ function loadHotkeysSorted(bindings, scrollModifier, disabled) {
       tr.dataset.special = 'scroll_modifier';
       tr.dataset.category = category.id;
       tr.hidden = hotkeyCollapsed[category.id];
+      var scrollValue = scrollModifier || 'Ctrl+Alt';
+      if (scrollValue.trim().toLowerCase() === 'none') scrollValue = '';
       tr.innerHTML =
         '<td class="hk-cmd-label" data-i18n="settings.text.scroll_modifier">' + escHtml(t('settings.text.scroll_modifier')) + '</td>' +
-        '<td><input type="text" class="hk-key" value="' + escAttr(scrollModifier || 'Ctrl+Alt') + '" data-i18n-placeholder="settings.text.e_g_ctrl_alt" placeholder="' + escAttr(t('settings.text.e_g_ctrl_alt')) + '"></td>' +
+        '<td><input type="text" class="hk-key" value="' + escAttr(scrollValue) + '" data-i18n-placeholder="settings.text.scroll_modifier_placeholder" placeholder="' + escAttr(t('settings.text.scroll_modifier_placeholder')) + '"></td>' +
         '<td><button class="row-delete" data-i18n-title="settings.text.reset_to_default" title="' + escAttr(t('settings.text.reset_to_default')) + '" onclick="this.closest(\'tr\').querySelector(\'.hk-key\').value=\'Ctrl+Alt\';updateScrollLabels();autoSave(0);">' + resetIcon + '</button></td>';
       tbody.appendChild(tr);
       wrapAllInputs(tr);
@@ -2695,7 +2697,9 @@ function readDisabledHotkeys() {
 
 function readScrollModifier() {
   var tr = document.querySelector('#hotkeys-body tr[data-special="scroll_modifier"]');
-  return tr ? tr.querySelector('.hk-key').value.trim() || 'Ctrl+Alt' : 'Ctrl+Alt';
+  if (!tr) return 'Ctrl+Alt';
+  var value = tr.querySelector('.hk-key').value.trim();
+  return !value || value.toLowerCase() === 'none' ? 'none' : value;
 }
 
 function readRules() {

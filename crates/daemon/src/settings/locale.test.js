@@ -434,8 +434,38 @@ function commandFixture({ saving = false } = {}) {
     fields[id] = cb; combos.push(cb); ctx.initGestureCombo(id);
     return { cb, text, options };
   }
-  return { ctx, rows, combos, addCombo, saves, scheduledSaves: () => scheduledSaves, flush() { saveCallback(); } };
+  return { ctx, rows, combos, fields, addCombo, saves, scheduledSaves: () => scheduledSaves, flush() { saveCallback(); } };
 }
+
+const scrollSettings = commandFixture({ saving: true });
+scrollSettings.fields['lbl-scroll-up'] = eventElement();
+scrollSettings.fields['lbl-scroll-down'] = eventElement();
+scrollSettings.ctx.loadHotkeysSorted({}, ' NONE ');
+let scrollRow = scrollSettings.rows.find(row => row.dataset.special === 'scroll_modifier');
+assert.equal(scrollRow.input.value, '');
+scrollSettings.ctx.updateScrollLabels();
+assert.equal(scrollSettings.fields['lbl-scroll-up'].textContent, english['settings.text.scroll_up_modifier_off']);
+assert.equal(scrollSettings.fields['lbl-scroll-down'].textContent, english['settings.text.scroll_down_modifier_off']);
+scrollSettings.ctx.refreshLocale(chinese, 'zh-CN');
+assert.equal(scrollSettings.fields['lbl-scroll-up'].textContent, chinese['settings.text.scroll_up_modifier_off']);
+scrollSettings.ctx.refreshLocale(english, 'en');
+scrollRow.input.value = 'Ctrl+Alt';
+scrollRow.input.emit('input');
+assert.equal(scrollSettings.fields['lbl-scroll-up'].textContent, 'Ctrl + Alt + Scroll up');
+scrollRow.input.value = '';
+scrollRow.input.emit('input');
+scrollSettings.flush();
+assert.equal(scrollSettings.saves.at(-1).config.hotkeys.scroll_modifier, 'none');
+scrollRow.input.value = ' NoNe ';
+scrollRow.input.emit('input');
+scrollSettings.flush();
+assert.equal(scrollSettings.saves.at(-1).config.hotkeys.scroll_modifier, 'none');
+assert.equal(scrollSettings.fields['lbl-scroll-up'].textContent, english['settings.text.scroll_up_modifier_off']);
+scrollSettings.ctx.resetHotkeys();
+scrollSettings.flush();
+scrollRow = scrollSettings.rows.find(row => row.dataset.special === 'scroll_modifier');
+assert.equal(scrollRow.input.value, 'Ctrl+Alt');
+assert.equal(scrollSettings.saves.at(-1).config.hotkeys.scroll_modifier, 'Ctrl+Alt');
 
 const dragSettings = commandFixture({ saving: true });
 dragSettings.addCombo('cb-behavior-plain_drag_action', 'merge');

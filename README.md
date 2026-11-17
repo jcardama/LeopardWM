@@ -237,7 +237,10 @@ Settings gesture menus:
 
 `scroll_up` and `scroll_down` under `[gestures]` default to `focus_next` and
 `focus_prev`. Hold `[hotkeys].scroll_modifier` (Ctrl+Alt by default) while using
-the mouse wheel to run them. For small window moves instead, set:
+the mouse wheel to run them. Set `[hotkeys] scroll_modifier = "none"` to turn
+modifier-wheel navigation off, or clear the scroll modifier in Settings. An
+empty or unrecognized config value falls back to Ctrl+Alt. This does not disable
+other wheel gestures or swipes. For small window moves instead, set:
 
 ```toml
 [gestures]

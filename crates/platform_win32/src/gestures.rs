@@ -504,9 +504,23 @@ fn clear_gesture_state() {
 
 /// Set the modifier keys required for scroll wheel navigation.
 ///
-/// Parses a modifier string like "Ctrl+Alt", "Ctrl+Shift", etc.
-/// Unrecognized tokens are ignored.
+/// Parses a modifier string like "Ctrl+Alt" or "Ctrl+Shift". "none" disables
+/// modifier navigation; empty or wholly unrecognized values use Ctrl+Alt.
+/// Unrecognized tokens in combinations are ignored.
 pub fn set_scroll_modifier(modifier_str: &str) {
+    let flags = parse_scroll_modifier(modifier_str);
+    SCROLL_MODIFIER_FLAGS.store(flags, std::sync::atomic::Ordering::Relaxed);
+    tracing::debug!(
+        "Scroll modifier set to: {} (flags=0x{:02x})",
+        modifier_str,
+        flags
+    );
+}
+
+fn parse_scroll_modifier(modifier_str: &str) -> u8 {
+    if modifier_str.trim().eq_ignore_ascii_case("none") {
+        return 0;
+    }
     let mut flags: u8 = 0;
     for part in modifier_str.split('+') {
         match part.trim().to_lowercase().as_str() {
@@ -520,12 +534,7 @@ pub fn set_scroll_modifier(modifier_str: &str) {
     if flags == 0 {
         flags = 0x03;
     }
-    SCROLL_MODIFIER_FLAGS.store(flags, std::sync::atomic::Ordering::Relaxed);
-    tracing::debug!(
-        "Scroll modifier set to: {} (flags=0x{:02x})",
-        modifier_str,
-        flags
-    );
+    flags
 }
 
 /// Enable or disable wheel-based swipes without changing modifier navigation
@@ -913,6 +922,20 @@ unsafe extern "system" fn gesture_mouse_hook_proc(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scroll_modifier_parsing_preserves_fallback_and_supports_off() {
+        for (value, expected) in [
+            ("none", 0),
+            (" NONE ", 0),
+            ("", 0x03),
+            ("garbage", 0x03),
+            ("Ctrl+Shift", 0x05),
+            ("none+shift", 0x04),
+        ] {
+            assert_eq!(parse_scroll_modifier(value), expected, "{value:?}");
+        }
+    }
 
     #[test]
     fn native_backend_prevents_duplicate_wheel_swipes() {
