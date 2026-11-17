@@ -15468,6 +15468,7 @@ fn fixed_caption_reload_case(
     new_policy: crate::config::FixedSizeWindows,
     new_rule: Option<crate::config::WindowAction>,
     expected_floating: bool,
+    dialog_like: bool,
 ) {
     use crate::config::WindowRule;
     use windows::Win32::UI::WindowsAndMessaging::{
@@ -15480,7 +15481,7 @@ fn fixed_caption_reload_case(
         SetWindowLongW(
             window.0,
             GWL_STYLE,
-            (WS_CAPTION.0 | WS_MINIMIZEBOX.0) as i32,
+            (WS_CAPTION.0 | if dialog_like { 0 } else { WS_MINIMIZEBOX.0 }) as i32,
         )
     };
     let rule = |action| WindowRule {
@@ -15524,25 +15525,31 @@ fn fixed_caption_reload_case(
 #[test]
 fn fixed_caption_reload_removed_float_rule_keeps_floating() {
     use crate::config::{FixedSizeWindows::Float, WindowAction};
-    fixed_caption_reload_case(Float, Some(WindowAction::Float), Float, None, true);
+    fixed_caption_reload_case(Float, Some(WindowAction::Float), Float, None, true, false);
 }
 
 #[test]
 fn fixed_caption_reload_added_tile_rule_tiles() {
     use crate::config::{FixedSizeWindows::Float, WindowAction};
-    fixed_caption_reload_case(Float, None, Float, Some(WindowAction::Tile), false);
+    fixed_caption_reload_case(Float, None, Float, Some(WindowAction::Tile), false, false);
 }
 
 #[test]
 fn fixed_caption_reload_float_policy_to_tile() {
     use crate::config::FixedSizeWindows::{Float, Tile};
-    fixed_caption_reload_case(Float, None, Tile, None, false);
+    fixed_caption_reload_case(Float, None, Tile, None, false, false);
 }
 
 #[test]
 fn fixed_caption_reload_tile_policy_to_float() {
     use crate::config::FixedSizeWindows::{Float, Tile};
-    fixed_caption_reload_case(Tile, None, Float, None, true);
+    fixed_caption_reload_case(Tile, None, Float, None, true, false);
+}
+
+#[test]
+fn dialog_like_reload_removed_tile_rule_stays_tiled() {
+    use crate::config::{FixedSizeWindows::Float, WindowAction};
+    fixed_caption_reload_case(Float, Some(WindowAction::Tile), Float, None, false, true);
 }
 
 fn new_window_monitor_state(mut config: Config) -> AppState {

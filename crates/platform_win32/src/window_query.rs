@@ -180,11 +180,12 @@ pub fn is_dialog_like_window(hwnd: WindowId) -> bool {
 
 fn is_fixed_caption_style(style: u32) -> bool {
     style & WS_CAPTION.0 == WS_CAPTION.0
+        && style & WS_MINIMIZEBOX.0 != 0
         && style & WS_THICKFRAME.0 == 0
         && style & WS_MAXIMIZEBOX.0 == 0
 }
 
-/// Whether a window has a caption but no resize frame or maximize button.
+/// Whether a window has a caption and minimize box but no resize frame or maximize box.
 pub fn is_fixed_caption_window(hwnd: WindowId) -> bool {
     if hwnd == 0 {
         return false;
@@ -486,17 +487,19 @@ mod tests {
     }
 
     #[test]
-    fn fixed_caption_style_requires_caption_without_resize_or_maximize() {
+    fn fixed_caption_style_requires_caption_and_minimize_without_resize_or_maximize() {
         for (style, expected) in [
             (0x16CA0000, true),
             (0x16CE0000, false),
             (0, false),
-            (WS_CAPTION.0, true),
+            (WS_CAPTION.0, false),
             (
                 WS_CAPTION.0 | WS_THICKFRAME.0 | WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0,
                 false,
             ),
             (WS_CAPTION.0 | WS_MAXIMIZEBOX.0, false),
+            (WS_CAPTION.0 | WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0, false),
+            (WS_CAPTION.0 | WS_MINIMIZEBOX.0 | WS_THICKFRAME.0, false),
         ] {
             assert_eq!(is_fixed_caption_style(style), expected, "{style:#x}");
         }
