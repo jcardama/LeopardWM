@@ -169,13 +169,28 @@ fn is_dialog_like_style(style: u32) -> bool {
 /// resizable. Requiring *both* absent is deliberate: custom-titlebar apps
 /// (Chrome, Slack, Windows Terminal) draw their own controls but still keep a
 /// real `WS_MINIMIZEBOX`, so the minimize bit alone keeps them out of this set.
-/// Used to leave dialog-like windows floating instead of tiling them.
+/// Used to leave dialog-like windows unmanaged instead of tiling them.
 pub fn is_dialog_like_window(hwnd: WindowId) -> bool {
     if hwnd == 0 {
         return false;
     }
     let style = unsafe { GetWindowLongW(HWND(hwnd as *mut c_void), GWL_STYLE) as u32 };
     is_dialog_like_style(style)
+}
+
+fn is_fixed_caption_style(style: u32) -> bool {
+    style & WS_CAPTION.0 == WS_CAPTION.0
+        && style & WS_THICKFRAME.0 == 0
+        && style & WS_MAXIMIZEBOX.0 == 0
+}
+
+/// Whether a window has a caption but no resize frame or maximize button.
+pub fn is_fixed_caption_window(hwnd: WindowId) -> bool {
+    if hwnd == 0 {
+        return false;
+    }
+    let style = unsafe { GetWindowLongW(HWND(hwnd as *mut c_void), GWL_STYLE) as u32 };
+    is_fixed_caption_style(style)
 }
 
 /// Whether a window has neither a caption nor a minimize box: the shape of an
@@ -468,6 +483,24 @@ mod tests {
         assert!(!is_dialog_like_style(0));
         assert!(!is_dialog_like_style(WS_MINIMIZEBOX.0));
         assert!(!is_dialog_like_style(0x16880080));
+    }
+
+    #[test]
+    fn fixed_caption_style_requires_caption_without_resize_or_maximize() {
+        for (style, expected) in [
+            (0x16CA0000, true),
+            (0x16CE0000, false),
+            (0, false),
+            (WS_CAPTION.0, true),
+            (
+                WS_CAPTION.0 | WS_THICKFRAME.0 | WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0,
+                false,
+            ),
+            (WS_CAPTION.0 | WS_MAXIMIZEBOX.0, false),
+        ] {
+            assert_eq!(is_fixed_caption_style(style), expected, "{style:#x}");
+        }
+        assert!(!is_fixed_caption_window(0));
     }
 
     #[test]

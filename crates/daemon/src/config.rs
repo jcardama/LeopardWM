@@ -712,6 +712,8 @@ pub struct BehaviorConfig {
 
     pub new_window_monitor: NewWindowMonitor,
 
+    pub fixed_size_windows: FixedSizeWindows,
+
     /// Whether to track window focus changes from Windows.
     #[serde(default = "default_true")]
     pub track_focus_changes: bool,
@@ -811,6 +813,14 @@ fn default_move_step() -> i32 {
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum FixedSizeWindows {
+    #[default]
+    Float,
+    Tile,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum NewWindowMonitor {
     #[default]
@@ -848,6 +858,7 @@ impl Default for BehaviorConfig {
         Self {
             focus_new_windows: true,
             new_window_monitor: NewWindowMonitor::default(),
+            fixed_size_windows: FixedSizeWindows::default(),
             track_focus_changes: true,
             log_level: default_log_level(),
             focus_follows_mouse: false,
@@ -2292,6 +2303,26 @@ mod tests {
         assert_eq!(config.layout.gap, 20);
         assert_eq!(config.layout.outer_gap_left, 10);
         assert_eq!(config.layout.width_presets, vec![0.333, 0.5, 0.667]);
+    }
+
+    #[test]
+    fn fixed_size_windows_config_defaults_and_rejects_invalid_values() {
+        assert_eq!(
+            Config::default().behavior.fixed_size_windows,
+            FixedSizeWindows::Float
+        );
+        for (value, expected) in [
+            ("float", FixedSizeWindows::Float),
+            ("tile", FixedSizeWindows::Tile),
+        ] {
+            let config: Config =
+                toml::from_str(&format!("[behavior]\nfixed_size_windows = '{value}'")).unwrap();
+            assert_eq!(config.behavior.fixed_size_windows, expected);
+            let json = serde_json::to_string(&config).unwrap();
+            let roundtrip: Config = serde_json::from_str(&json).unwrap();
+            assert_eq!(roundtrip.behavior.fixed_size_windows, expected);
+        }
+        assert!(toml::from_str::<Config>("[behavior]\nfixed_size_windows = 'invalid'").is_err());
     }
 
     #[test]

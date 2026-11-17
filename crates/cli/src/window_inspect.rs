@@ -1,7 +1,8 @@
 use anyhow::Result;
 use leopardwm_platform_win32::inspect::{inspect_windows, SkipReason, WindowInspection};
 use leopardwm_platform_win32::{
-    get_process_executable, is_dialog_like_window, window_manage_block, ManageBlock,
+    get_process_executable, is_dialog_like_window, is_fixed_caption_window, window_manage_block,
+    ManageBlock,
 };
 use std::collections::HashSet;
 use std::io::{self, Write};
@@ -210,11 +211,15 @@ fn print_window(w: &WindowInspection, include_titles: bool, is_update: bool) {
     }
     let dialog = is_dialog_like_window(w.hwnd);
     println!(
-        "  dialog-shape heuristic (applies only when no user rule matched): {}",
-        if dialog {
-            "yes (this heuristic would leave it floating, if admitted)"
+        "  dialog-shape heuristic (when no rule matched): {}",
+        if dialog { "yes (left unmanaged)" } else { "no" }
+    );
+    println!(
+        "  fixed-caption float style (if enabled, no rule matches, and not unmanaged): {}",
+        if is_fixed_caption_window(w.hwnd) {
+            "yes"
         } else {
-            "no (this heuristic would not float it)"
+            "no"
         }
     );
     println!("  elevation {}", format_elevation(w.hwnd));

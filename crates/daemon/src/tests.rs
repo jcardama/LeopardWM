@@ -15362,6 +15362,103 @@ fn test_frameless_fixed_size_admission_preserves_rules_and_fullscreen() {
     }
 }
 
+#[test]
+fn fixed_caption_admission_respects_rules_and_preserves_rect() {
+    use crate::config::{FixedSizeWindows, WindowAction, WindowRule};
+    use crate::event_handler::{AdmissionKind, AdmitOutcome};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SetWindowLongW, GWL_STYLE, WS_CAPTION, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_THICKFRAME,
+    };
+
+    for policy in [FixedSizeWindows::Float, FixedSizeWindows::Tile] {
+        for enumerate in [false, true] {
+            for (style, rule, expected) in [
+                (
+                    WS_CAPTION.0 | WS_MINIMIZEBOX.0,
+                    None,
+                    Some(policy == FixedSizeWindows::Float),
+                ),
+                (
+                    WS_CAPTION.0 | WS_MINIMIZEBOX.0,
+                    Some(WindowAction::Float),
+                    Some(true),
+                ),
+                (
+                    WS_CAPTION.0 | WS_MINIMIZEBOX.0,
+                    Some(WindowAction::Tile),
+                    Some(false),
+                ),
+                (
+                    WS_CAPTION.0 | WS_MINIMIZEBOX.0,
+                    Some(WindowAction::Ignore),
+                    None,
+                ),
+                (
+                    WS_CAPTION.0 | WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0 | WS_THICKFRAME.0,
+                    None,
+                    Some(false),
+                ),
+                (WS_CAPTION.0, None, None),
+            ] {
+                let window = ResizeTestWindow::new(400);
+                let hwnd = window.id();
+                unsafe { SetWindowLongW(window.0, GWL_STYLE, style as i32) };
+                let mut config = test_config();
+                config.behavior.focus_new_windows = false;
+                config.behavior.fixed_size_windows = policy;
+                if let Some(action) = rule {
+                    config.window_rules = vec![WindowRule {
+                        match_class: Some("TestWindowClass".to_string()),
+                        action,
+                        ..Default::default()
+                    }];
+                }
+                let mut state = AppState::new_with_config(config, test_monitors());
+                let mut info = make_test_window_info(hwnd);
+                info.rect = leopardwm_platform_win32::get_window_chrome_rect(hwnd).unwrap();
+                let original = info.rect;
+                if enumerate {
+                    state.injected_enumerated_windows = Some(vec![info]);
+                    assert_eq!(
+                        state.enumerate_and_add_windows().unwrap(),
+                        usize::from(expected.is_some())
+                    );
+                } else {
+                    state.injected_window_info.insert(hwnd, info);
+                    let outcome = state.try_admit_window_at_with_native_ops(
+                        hwnd,
+                        AdmissionKind::Automatic,
+                        None,
+                        |_| false,
+                        |_| Ok(true),
+                    );
+                    assert_eq!(
+                        outcome,
+                        match (expected, rule) {
+                            (Some(_), _) => AdmitOutcome::Admitted,
+                            (None, Some(WindowAction::Ignore)) => AdmitOutcome::PersistentIgnore,
+                            _ => AdmitOutcome::DialogLike,
+                        }
+                    );
+                }
+                let location = state.find_window_workspace(hwnd);
+                assert_eq!(location.is_some(), expected.is_some());
+                if let (Some((monitor, index)), Some(floating)) = (location, expected) {
+                    let workspace = &state.workspaces[&monitor][index];
+                    assert_eq!(
+                        workspace.is_floating(hwnd),
+                        floating,
+                        "enumerate={enumerate} style={style:#x} rule={rule:?}"
+                    );
+                    if floating {
+                        assert_eq!(workspace.floating_windows()[0].rect, original);
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn new_window_monitor_state(mut config: Config) -> AppState {
     config.animation.scroll_duration_ms = 0;
     let mut state = AppState::new_with_config(config, two_monitors());

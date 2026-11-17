@@ -234,19 +234,6 @@ impl AppState {
                 .map(|m| m.id)
                 .unwrap_or(self.focused_monitor);
 
-            let floating_rect = if action == config::WindowAction::Float {
-                Some(self.get_floating_rect_from_rules(
-                    &win_info.class_name,
-                    &win_info.title,
-                    &executable,
-                    &win_info.rect,
-                    Some(monitor_id),
-                    Some(self.window_rule_size(&win_info.rect)),
-                ))
-            } else {
-                None
-            };
-
             // Elevated window the non-elevated daemon can't reposition (UIPI):
             // skip + notify instead of reserving a column we can't fill. Mirrors
             // the live-create path; covers windows already open at startup and
@@ -267,6 +254,18 @@ impl AppState {
                 );
                 continue;
             }
+
+            let action = self.effective_admission_action(&win_info, action, rule_matched);
+            let floating_rect = (action == config::WindowAction::Float).then(|| {
+                self.get_floating_rect_from_rules(
+                    &win_info.class_name,
+                    &win_info.title,
+                    &executable,
+                    &win_info.rect,
+                    Some(monitor_id),
+                    Some(self.window_rule_size(&win_info.rect)),
+                )
+            });
 
             let target_idx = self.active_workspace_idx(monitor_id);
             let _ = self.ensure_workspace_exists(monitor_id, target_idx);
@@ -379,6 +378,26 @@ impl AppState {
             return Some("frameless fixed-size");
         }
         None
+    }
+
+    pub(crate) fn effective_admission_action(
+        &self,
+        window: &WindowInfo,
+        action: config::WindowAction,
+        rule_matched: bool,
+    ) -> config::WindowAction {
+        if !rule_matched
+            && self.config.behavior.fixed_size_windows == config::FixedSizeWindows::Float
+            && leopardwm_platform_win32::is_fixed_caption_window(window.hwnd)
+        {
+            debug!(
+                "Floating fixed-size caption window: {} ({})",
+                window.title, window.class_name
+            );
+            config::WindowAction::Float
+        } else {
+            action
+        }
     }
 
     fn windows_for_enumeration(&self) -> Result<Vec<WindowInfo>> {

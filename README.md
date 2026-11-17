@@ -655,6 +655,10 @@ These processes are ignored via built-in window rules (action = `ignore`):
 
 A user rule matching the same window overrides the built-in rule.
 
+### Fixed-size caption windows
+
+Windows with a title bar but no resize frame or maximize button open floating at their own size and position by default. Set `[behavior] fixed_size_windows = "tile"` to tile them instead, or use `"float"` for the default. Matching window rules override this setting; an `action = "tile"` rule keeps a particular window tiled. Dialog-like windows without minimize or maximize buttons remain unmanaged unless a rule matches.
+
 ## Floating Window Rule Position
 
 Floating window rules can specify `x` and `y` as integer offsets in 96-DPI logical pixels from the top-left of the work area on the monitor where the window opens. The monitor is chosen by normal admission, including `new_window_monitor`; no rule-specific monitor selector is needed. The offsets scale with that monitor's DPI. An unset axis keeps the window's own position before clamping.

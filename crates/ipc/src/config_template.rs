@@ -78,6 +78,9 @@ focus_new_windows = true
 # Sticky windows keep their existing placement.
 new_window_monitor = "opening"
 
+# Fixed-size caption windows: "float" (default) or "tile". Window rules override this.
+fixed_size_windows = "float"
+
 # Track focus changes from Windows (sync with Alt-Tab, etc.)
 # Changes to focus tracking hooks take effect the next time LeopardWM starts.
 track_focus_changes = true
