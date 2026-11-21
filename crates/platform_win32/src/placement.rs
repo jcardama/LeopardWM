@@ -2116,7 +2116,8 @@ fn position_entries_batch(entries: &[DeferEntry]) -> HashSet<u64> {
                 Ok(initial_hdwp) => {
                     let mut hdwp = initial_hdwp;
                     let mut batch_ok = true;
-                    for entry in entries {
+                    let mut failed_index = 0;
+                    for (index, entry) in entries.iter().enumerate() {
                         match DeferWindowPos(
                             hdwp,
                             entry.hwnd,
@@ -2130,6 +2131,7 @@ fn position_entries_batch(entries: &[DeferEntry]) -> HashSet<u64> {
                             Ok(new_hdwp) => hdwp = new_hdwp,
                             Err(_) => {
                                 batch_ok = false;
+                                failed_index = index;
                                 break;
                             }
                         }
@@ -2153,9 +2155,13 @@ fn position_entries_batch(entries: &[DeferEntry]) -> HashSet<u64> {
                             }
                         }
                     } else {
-                        // DeferWindowPos failed — HDWP is already freed by Win32.
-                        // Fall back to individual SetWindowPos calls.
-                        for entry in entries {
+                        // A failed DeferWindowPos leaves the HDWP alive; end it to avoid a USER object leak.
+                        let fallback = if EndDeferWindowPos(hdwp).is_ok() {
+                            &entries[failed_index..]
+                        } else {
+                            entries
+                        };
+                        for entry in fallback {
                             if SetWindowPos(
                                 entry.hwnd,
                                 None,
@@ -4966,6 +4972,36 @@ pub(crate) mod tests {
                 "a no-op earned queued-move credit"
             );
         }
+    }
+
+    #[test]
+    fn failed_deferred_batch_does_not_leak_user_objects() {
+        use windows::Win32::System::Threading::{
+            GetCurrentProcess, GetGuiResources, GR_USEROBJECTS,
+        };
+
+        let window = HiddenPopup::new(48, 48, 160, 120);
+        let entries = [
+            DeferEntry {
+                hwnd: window.hwnd,
+                x: 300,
+                y: 100,
+                flags: SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER,
+                ..fresh_inset_entry(window.id, 0)
+            },
+            fresh_inset_entry(0, 0),
+        ];
+        let user_objects = || unsafe { GetGuiResources(GetCurrentProcess(), GR_USEROBJECTS) };
+        let before = user_objects();
+        for _ in 0..256 {
+            let failures = position_entries_batch(&entries);
+            assert_eq!(failures, HashSet::from([0]));
+        }
+        let after = user_objects();
+        let growth = i64::from(after) - i64::from(before);
+        println!("USER objects: before={before}, after={after}, growth={growth}");
+        assert!(growth < 64, "failed batches leaked USER objects: {growth}");
+        assert_eq!(observed_async_position(window.hwnd), Some((300, 100)));
     }
 
     #[test]
