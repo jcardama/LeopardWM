@@ -91,7 +91,7 @@ pub use system::{
     is_on_battery_or_power_saver, scale_px, set_dpi_awareness,
 };
 pub use types::{MonitorId, MonitorInfo, PlatformConfig, Win32Error, WindowInfo};
-pub use virtual_desktop::is_window_on_current_virtual_desktop;
+pub use virtual_desktop::{is_window_on_current_virtual_desktop, warm_virtual_desktop_queries};
 pub use visibility::{
     cascade_windows, emergency_restore_windows, is_move_offscreen_sentinel_position,
     is_move_offscreen_sentinel_rect, move_window_offscreen, position_window,

@@ -15,6 +15,17 @@ const QUERY_TIMEOUT: Duration = Duration::from_millis(50);
 
 type Request = (WindowId, mpsc::Sender<bool>);
 
+trait Query {
+    fn query(&mut self, hwnd: WindowId) -> Result<bool, ()>;
+    fn after_reply(&mut self) {}
+}
+
+impl<F: FnMut(WindowId) -> Result<bool, ()>> Query for F {
+    fn query(&mut self, hwnd: WindowId) -> Result<bool, ()> {
+        self(hwnd)
+    }
+}
+
 struct QueryWorker {
     sender: mpsc::Sender<Request>,
     in_flight: Arc<AtomicBool>,
@@ -24,7 +35,7 @@ impl QueryWorker {
     fn spawn<F, Q>(factory: F) -> Option<Self>
     where
         F: FnOnce() -> Q + Send + 'static,
-        Q: FnMut(WindowId) -> Result<bool, ()> + 'static,
+        Q: Query + 'static,
     {
         let (sender, receiver) = mpsc::channel::<Request>();
         let in_flight = Arc::new(AtomicBool::new(false));
@@ -34,9 +45,10 @@ impl QueryWorker {
             .spawn(move || {
                 let mut query = factory();
                 while let Ok((hwnd, reply)) = receiver.recv() {
-                    let result = query(hwnd).unwrap_or(false);
+                    let result = query.query(hwnd).unwrap_or(false);
                     worker_in_flight.store(false, Ordering::Release);
                     let _ = reply.send(result);
+                    query.after_reply();
                 }
             })
             .ok()?;
@@ -63,20 +75,28 @@ struct DesktopQuery {
 
 impl DesktopQuery {
     fn new() -> Self {
-        Self {
+        let mut query = Self {
             initialized: unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok() },
             manager: None,
-        }
+        };
+        query.recreate_manager();
+        query
     }
 
+    fn recreate_manager(&mut self) {
+        if self.initialized && self.manager.is_none() {
+            self.manager =
+                unsafe { CoCreateInstance(&VirtualDesktopManager, None, CLSCTX_ALL).ok() };
+        }
+    }
+}
+
+impl Query for DesktopQuery {
     fn query(&mut self, hwnd: WindowId) -> Result<bool, ()> {
         if !self.initialized {
             return Err(());
         }
         unsafe {
-            if self.manager.is_none() {
-                self.manager = CoCreateInstance(&VirtualDesktopManager, None, CLSCTX_ALL).ok();
-            }
             let result = self
                 .manager
                 .as_ref()
@@ -91,6 +111,10 @@ impl DesktopQuery {
             }
         }
     }
+
+    fn after_reply(&mut self) {
+        self.recreate_manager();
+    }
 }
 
 impl Drop for DesktopQuery {
@@ -102,21 +126,27 @@ impl Drop for DesktopQuery {
     }
 }
 
+static WORKER: OnceLock<Option<QueryWorker>> = OnceLock::new();
+
+fn start_worker<F, Q>(slot: &OnceLock<Option<QueryWorker>>, factory: F) -> Option<&QueryWorker>
+where
+    F: FnOnce() -> Q + Send + 'static,
+    Q: Query + 'static,
+{
+    slot.get_or_init(|| QueryWorker::spawn(factory)).as_ref()
+}
+
+/// Start the desktop-query worker without waiting for COM initialization.
+pub fn warm_virtual_desktop_queries() {
+    let _ = start_worker(&WORKER, DesktopQuery::new);
+}
+
 /// Return whether the window is on the current Windows virtual desktop, failing closed.
 pub fn is_window_on_current_virtual_desktop(hwnd: WindowId) -> bool {
     if hwnd == 0 {
         return false;
     }
-    static WORKER: OnceLock<Option<QueryWorker>> = OnceLock::new();
-    WORKER
-        .get_or_init(|| {
-            QueryWorker::spawn(|| {
-                let mut query = DesktopQuery::new();
-                move |hwnd| query.query(hwnd)
-            })
-        })
-        .as_ref()
-        .is_some_and(|worker| worker.query(hwnd, QUERY_TIMEOUT))
+    start_worker(&WORKER, DesktopQuery::new).is_some_and(|worker| worker.query(hwnd, QUERY_TIMEOUT))
 }
 
 #[cfg(test)]
@@ -130,6 +160,78 @@ mod tests {
             assert!(Instant::now() < deadline, "worker did not finish");
             std::thread::yield_now();
         }
+    }
+
+    #[test]
+    fn warm_up_initializes_before_the_first_query() {
+        let slot = Arc::new(OnceLock::new());
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (returned_tx, returned_rx) = mpsc::channel();
+        let thread_slot = slot.clone();
+        let warm = std::thread::spawn(move || {
+            start_worker(&thread_slot, move || {
+                started_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                ready_tx.send(()).unwrap();
+                |_| Ok(true)
+            })
+            .unwrap();
+            returned_tx.send(()).unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let returned = returned_rx.recv_timeout(Duration::from_secs(1));
+        let early_ready = ready_rx.recv_timeout(QUERY_TIMEOUT + Duration::from_millis(10));
+        release_tx.send(()).unwrap();
+        assert!(returned.is_ok(), "warm-up blocked on initialization");
+        assert!(early_ready.is_err(), "factory was not delayed");
+        ready_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        warm.join().unwrap();
+        let worker = slot.get().unwrap().as_ref().unwrap();
+        assert!(worker.query(1, QUERY_TIMEOUT));
+    }
+
+    #[test]
+    fn recovery_runs_after_the_error_reply() {
+        struct RecoveringQuery {
+            recovered: bool,
+            entered: mpsc::Sender<()>,
+            release: mpsc::Receiver<()>,
+            finished: mpsc::Sender<()>,
+        }
+        impl Query for RecoveringQuery {
+            fn query(&mut self, _: WindowId) -> Result<bool, ()> {
+                if self.recovered {
+                    Ok(true)
+                } else {
+                    Err(())
+                }
+            }
+            fn after_reply(&mut self) {
+                if !self.recovered {
+                    self.entered.send(()).unwrap();
+                    self.release.recv().unwrap();
+                    self.recovered = true;
+                    self.finished.send(()).unwrap();
+                }
+            }
+        }
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (finished_tx, finished_rx) = mpsc::channel();
+        let worker = QueryWorker::spawn(move || RecoveringQuery {
+            recovered: false,
+            entered: entered_tx,
+            release: release_rx,
+            finished: finished_tx,
+        })
+        .unwrap();
+        assert!(!worker.query(1, QUERY_TIMEOUT));
+        entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        release_tx.send(()).unwrap();
+        finished_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(worker.query(2, QUERY_TIMEOUT));
     }
 
     #[test]

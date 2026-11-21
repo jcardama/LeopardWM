@@ -3801,6 +3801,7 @@ async fn main() -> Result<()> {
 
     info!("LeopardWM daemon starting...");
     info!("Version: {}", env!("CARGO_PKG_VERSION"));
+    leopardwm_platform_win32::warm_virtual_desktop_queries();
 
     // Register the toast AppUserModelID so notify::show_toast can surface
     // user-facing notices (e.g. "can't tile this elevated window"). Non-fatal.
