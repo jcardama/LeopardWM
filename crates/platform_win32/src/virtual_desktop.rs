@@ -35,8 +35,8 @@ impl QueryWorker {
                 let mut query = factory();
                 while let Ok((hwnd, reply)) = receiver.recv() {
                     let result = query(hwnd).unwrap_or(false);
-                    let _ = reply.send(result);
                     worker_in_flight.store(false, Ordering::Release);
+                    let _ = reply.send(result);
                 }
             })
             .ok()?;
@@ -133,6 +133,15 @@ mod tests {
     }
 
     #[test]
+    fn successive_completed_queries_get_their_answers() {
+        let worker = QueryWorker::spawn(|| |_| Ok(true)).unwrap();
+        for _ in 0..2000 {
+            assert!(worker.query(1, Duration::from_secs(1)));
+            assert!(worker.query(2, Duration::from_secs(1)));
+        }
+    }
+
+    #[test]
     fn hung_query_times_out_and_rejects_concurrent_requests() {
         let (entered_tx, entered_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
@@ -153,7 +162,6 @@ mod tests {
         assert!(!worker.query(2, Duration::from_secs(1)));
         assert!(started.elapsed() < Duration::from_millis(250));
         release_tx.send(()).unwrap();
-        wait_until_idle(&worker);
     }
 
     #[test]
