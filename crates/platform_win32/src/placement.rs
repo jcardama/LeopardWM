@@ -2155,9 +2155,10 @@ fn position_entries_batch(entries: &[DeferEntry]) -> HashSet<u64> {
                             }
                         }
                     } else {
-                        // Win32 says to abandon a failed batch, but a rejected window can leave
-                        // its HDWP allocated, leaking a USER object (#180). Ending it applies prior
-                        // entries; if already freed, End fails and every entry falls back.
+                        // Win32 says to abandon a failed batch, but a rejected window left its HDWP
+                        // allocated: 100 abandoned batches leaked 100 USER objects; ending them leaked
+                        // none. A live daemon held 1628 of 1718 USER objects as HDWPs (#180).
+                        // Ending applies prior entries; if End fails, every entry falls back.
                         let fallback = if EndDeferWindowPos(hdwp).is_ok() {
                             &entries[failed_index..]
                         } else {
@@ -4976,12 +4977,46 @@ pub(crate) mod tests {
         }
     }
 
+    fn run_in_placement_test_process(test_name: &str) -> bool {
+        const CHILD_ENV: &str = "LEOPARDWM_TEST_PLACEMENT_CHILD";
+        if std::env::var(CHILD_ENV).as_deref() == Ok(test_name) {
+            return false;
+        }
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", test_name, "--nocapture"])
+            .env(CHILD_ENV, test_name)
+            .spawn()
+            .unwrap();
+        let started = std::time::Instant::now();
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
+            }
+            if started.elapsed() >= std::time::Duration::from_secs(30) {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                panic!("placement test child exceeded its deadline: {test_name}");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
+        assert!(
+            status.success(),
+            "placement test child failed: {test_name}: {status}"
+        );
+        true
+    }
+
     #[test]
     fn failed_deferred_batch_does_not_leak_user_objects() {
         use windows::Win32::System::Threading::{
             GetCurrentProcess, GetGuiResources, GR_USEROBJECTS,
         };
 
+        if run_in_placement_test_process(
+            "placement::tests::failed_deferred_batch_does_not_leak_user_objects",
+        ) {
+            return;
+        }
         let window = HiddenPopup::new(48, 48, 160, 120);
         let suffix_window = HiddenPopup::new(60, 60, 160, 120);
         let entries = [
@@ -5010,7 +5045,7 @@ pub(crate) mod tests {
         let after = user_objects();
         let growth = i64::from(after) - i64::from(before);
         println!("USER objects: before={before}, after={after}, growth={growth}");
-        assert!(growth < 64, "failed batches leaked USER objects: {growth}");
+        assert_eq!(growth, 0, "failed batches leaked USER objects");
         assert_eq!(observed_async_position(window.hwnd), Some((300, 100)));
         assert_eq!(
             observed_async_position(suffix_window.hwnd),
