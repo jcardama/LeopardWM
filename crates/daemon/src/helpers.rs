@@ -1,7 +1,7 @@
 use crate::config;
 use crate::state::*;
 use anyhow::Result;
-use leopardwm_core_layout::{Rect, Workspace};
+use leopardwm_core_layout::{CenterColumns, Rect, Workspace};
 #[cfg(not(test))]
 use leopardwm_platform_win32::{is_excluded_tool_window_hwnd, window_presence};
 use leopardwm_platform_win32::{scale_px, MonitorId, WindowPresence};
@@ -247,7 +247,13 @@ impl AppState {
                     self.config.animation.easing,
                 );
 
-                if old_center_columns != workspace.center_columns() {
+                if matches!(
+                    (old_center_columns, workspace.center_columns()),
+                    (
+                        CenterColumns::Single | CenterColumns::Fit,
+                        CenterColumns::Off
+                    ) | (CenterColumns::Fit, CenterColumns::Single)
+                ) {
                     workspace.reconcile_scroll_bounds(viewport_width);
                 }
 

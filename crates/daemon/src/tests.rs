@@ -22101,6 +22101,35 @@ fn test_restore_center_single_column_runtime_setting() {
 }
 
 #[test]
+fn center_columns_reload_enabling_animates_and_disabling_repairs_bounds() {
+    use crate::config::CenterColumnsConfig;
+    for mode in [CenterColumnsConfig::Single, CenterColumnsConfig::Fit] {
+        let mut config = test_config();
+        config.layout.center_columns.center_columns = CenterColumnsConfig::Off;
+        config.layout.outer_gap_left = 20;
+        config.layout.outer_gap_right = 20;
+        let mut monitors = test_monitors();
+        monitors[0].work_area.width = 1000;
+        let mut state = AppState::new_with_config(config.clone(), monitors);
+        let ws = &mut state.workspaces.get_mut(&1).unwrap()[0];
+        ws.insert_window(100, Some(400)).unwrap();
+        ws.set_reduce_motion(false);
+        ws.set_scroll_offset(0.0);
+        config.layout.center_columns.center_columns = mode;
+        state.apply_config(config.clone());
+        let ws = &mut state.workspaces.get_mut(&1).unwrap()[0];
+        assert!(ws.is_animating(), "enabling {mode:?} should animate");
+        assert_eq!(ws.effective_scroll_offset(), 0.0);
+        ws.stop_animation();
+        assert_eq!(ws.scroll_offset(), -280.0);
+        config.layout.center_columns.center_columns = CenterColumnsConfig::Off;
+        state.apply_config(config);
+        let ws = &state.workspaces[&1][0];
+        assert_eq!(ws.effective_scroll_offset(), 0.0);
+    }
+}
+
+#[test]
 fn center_columns_reload_updates_existing_workspace() {
     use crate::config::CenterColumnsConfig;
     let mut config = test_config();

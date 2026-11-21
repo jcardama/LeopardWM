@@ -178,7 +178,7 @@ mod tests {
     }
 
     #[test]
-    fn fit_alignment_release_expires_after_layout_change() {
+    fn fit_alignment_release_survives_focus_and_stack_changes() {
         for alignment in [ColumnAlignment::Left, ColumnAlignment::Right] {
             let mut ws = Workspace::with_gaps(10, 20);
             ws.set_center_columns(CenterColumns::Fit);
@@ -198,41 +198,59 @@ mod tests {
             ws.focus_window(1).unwrap();
             ws.reconcile_scroll_bounds(1000);
             assert_eq!(ws.scroll_offset(), 0.0);
-            ws.set_gap(20);
-            ws.reconcile_scroll_bounds(1000);
-            assert_eq!(ws.scroll_offset(), -270.0);
-            ws.set_gap(10);
-            ws.reconcile_scroll_bounds(1000);
-            assert_eq!(ws.scroll_offset(), -275.0);
         }
     }
 
     #[test]
-    fn fit_release_expires_on_width_viewport_or_column_change() {
-        for change in 0..3 {
-            let mut ws = Workspace::with_gaps(10, 20);
-            ws.set_center_columns(CenterColumns::Fit);
-            ws.insert_window(1, Some(200)).unwrap();
-            ws.insert_window(2, Some(200)).unwrap();
-            ws.ensure_focused_visible(1000);
-            ws.align_focused_column_animated(ColumnAlignment::Left, 1000);
-            ws.stop_animation();
-            assert_eq!(ws.scroll_offset(), 0.0);
-            let viewport = match change {
-                0 => {
-                    ws.set_column_width(0, 250).unwrap();
-                    1000
+    fn fit_release_expires_on_layout_changes_even_during_fullscreen() {
+        for fullscreen in [false, true] {
+            for change in ["gap", "width", "viewport", "columns"] {
+                let mut ws = Workspace::with_gaps(10, 20);
+                ws.set_center_columns(CenterColumns::Fit);
+                ws.insert_window(1, Some(200)).unwrap();
+                ws.insert_window(2, Some(200)).unwrap();
+                ws.ensure_focused_visible(1000);
+                ws.align_focused_column_animated(ColumnAlignment::Left, 1000);
+                ws.stop_animation();
+                assert_eq!(ws.scroll_offset(), 0.0);
+                ws.focus_window(1).unwrap();
+                if fullscreen {
+                    ws.toggle_fullscreen();
                 }
-                1 => 900,
-                _ => {
-                    ws.remove_window(2).unwrap();
-                    ws.insert_window(3, Some(200)).unwrap();
-                    1000
+                match change {
+                    "gap" => ws.set_gap(20),
+                    "width" => ws.set_column_width(0, 250).unwrap(),
+                    "viewport" => (),
+                    "columns" => {
+                        ws.remove_window(2).unwrap();
+                        ws.insert_window(3, Some(200)).unwrap();
+                    }
+                    _ => unreachable!(),
                 }
-            };
-            ws.reconcile_scroll_bounds(viewport);
-            let expected = -((ws.visible_width(viewport) - ws.total_width()) / 2) as f64;
-            assert_eq!(ws.scroll_offset(), expected);
+                assert_eq!(ws.is_fullscreen(), fullscreen, "{change}");
+                ws.reconcile_scroll_bounds(if change == "viewport" { 900 } else { 1000 });
+                match change {
+                    "gap" => ws.set_gap(10),
+                    "width" => ws.set_column_width(0, 200).unwrap(),
+                    "viewport" => (),
+                    "columns" => {
+                        ws.remove_window(3).unwrap();
+                        ws.insert_window(2, Some(200)).unwrap();
+                    }
+                    _ => unreachable!(),
+                }
+                assert_eq!(ws.is_fullscreen(), fullscreen, "{change}");
+                ws.reconcile_scroll_bounds(1000);
+                if fullscreen {
+                    ws.toggle_fullscreen();
+                }
+                ws.reconcile_scroll_bounds(1000);
+                assert_eq!(
+                    ws.scroll_offset(),
+                    -275.0,
+                    "{change}, fullscreen={fullscreen}"
+                );
+            }
         }
     }
 

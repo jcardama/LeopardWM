@@ -76,9 +76,6 @@ impl Workspace {
         min_scroll: f64,
         max_scroll: f64,
     ) -> (f64, f64) {
-        if self.center_columns == CenterColumns::Off || self.fullscreen_window.is_some() {
-            return (min_scroll, max_scroll);
-        }
         let Some(row) = self.rows.get(row_idx) else {
             return (min_scroll, max_scroll);
         };
@@ -101,6 +98,9 @@ impl Workspace {
                 }
                 *release = None;
             }
+        }
+        if self.center_columns == CenterColumns::Off || self.fullscreen_window.is_some() {
+            return (min_scroll, max_scroll);
         }
         let mut count = 0;
         let mut width = 0_i32;
