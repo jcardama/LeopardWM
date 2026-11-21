@@ -1013,8 +1013,12 @@ impl AppState {
                     info.title, info.class_name, on_current_desktop
                 );
             }
-            if kind == AdmissionKind::Automatic && on_current_desktop {
-                self.shell_cloaked_at_admission.insert(hwnd);
+            if kind == AdmissionKind::Automatic {
+                if on_current_desktop {
+                    self.shell_cloaked_at_admission.insert(hwnd);
+                } else {
+                    self.shell_cloaked_at_admission.remove(&hwnd);
+                }
             }
         } else if kind == AdmissionKind::Automatic
             || matches!(

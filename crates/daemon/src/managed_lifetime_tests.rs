@@ -249,6 +249,22 @@ fn unrecorded_and_other_desktop_uncloaks_do_not_admit() {
 }
 
 #[test]
+fn recycled_cloaked_hwnd_on_other_desktop_is_not_admitted_on_uncloak() {
+    let mut state = state();
+    inject(&mut state, 10, "Store app", "ApplicationFrameWindow", 1010);
+    state.injected_shell_cloaked_hwnds.insert(10);
+    state.handle_window_event(WindowEvent::Created(10, 100));
+    assert_eq!(membership_count(&state, 10), 0);
+
+    state.injected_off_current_desktop_hwnds.insert(10);
+    state.handle_window_event(WindowEvent::Created(10, 200));
+    state.injected_shell_cloaked_hwnds.remove(&10);
+    state.injected_off_current_desktop_hwnds.remove(&10);
+    state.handle_window_event(WindowEvent::Uncloaked(10, 300));
+    assert_eq!(membership_count(&state, 10), 0);
+}
+
+#[test]
 fn later_automatic_rejection_cancels_uncloak_retry() {
     let mut state = state();
     inject(&mut state, 10, "Store app", "ApplicationFrameWindow", 1010);
