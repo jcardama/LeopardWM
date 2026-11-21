@@ -6,6 +6,8 @@ All notable changes to LeopardWM will be documented in this file.
 
 ### Features
 
+- **Center columns until the row fills.** Choose Until full under Settings → Layout → Center columns to center each row's active columns while they fit.
+
 - **Turn off modifier-wheel navigation.** Clear the scroll modifier in Settings or set `[hotkeys] scroll_modifier = "none"`; other wheel gestures remain available. Thanks to @gczark for the request. (#185)
 - **Floating windows now appear in the overview.** They sit in a group at the start of each workspace row, where they can be activated, closed and moved like tiled windows. Thanks to @gczark for the request. (#184)
 - **Keep off-screen columns from overlapping neighboring monitors.** Set `[layout] offscreen_mode = "park"` to opt in; the default remains `"bleed"`. Thanks to @doutorferr0 for the suggestion. (#181, #106)

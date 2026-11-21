@@ -1228,7 +1228,8 @@ impl AppState {
                 continue;
             };
             for workspace in workspaces {
-                if (workspace.center_single_column() || workspace.row_count() > 1)
+                if (workspace.center_columns() != leopardwm_core_layout::CenterColumns::Off
+                    || workspace.row_count() > 1)
                     && workspace.fullscreen_window_id().is_none()
                 {
                     workspace.reconcile_scroll_bounds(monitor.work_area.width);

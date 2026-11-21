@@ -47,7 +47,7 @@ mod tests {
                     let mut ws = Workspace::with_gaps(10, 20);
                     ws.set_centering_mode(mode);
                     ws.set_center_past_edges(past_edges);
-                    ws.set_center_single_column(true);
+                    ws.set_center_columns(CenterColumns::Single);
                     ws.set_reduce_motion(reduce_motion);
                     ws.insert_window(1, Some(800)).unwrap();
                     ws.insert_window(2, Some(middle_width)).unwrap();
@@ -98,6 +98,145 @@ mod tests {
     }
 
     #[test]
+    fn fit_centers_active_group_in_every_focus_mode() {
+        for mode in [
+            CenteringMode::Center,
+            CenteringMode::JustInView,
+            CenteringMode::OnOverflow,
+        ] {
+            for past_edges in [false, true] {
+                for count in 1..=3 {
+                    let mut ws = Workspace::with_gaps(10, 20);
+                    ws.set_center_columns(CenterColumns::Fit);
+                    ws.set_centering_mode(mode);
+                    ws.set_center_past_edges(past_edges);
+                    ws.insert_window(99, Some(200)).unwrap();
+                    ws.mark_minimized(99);
+                    for id in 1..=count {
+                        ws.insert_window(id, Some(200)).unwrap();
+                    }
+                    ws.ensure_focused_visible_animated(1000);
+                    ws.stop_animation();
+                    let total = count as i32 * 200 + (count as i32 - 1) * 10;
+                    assert_eq!(ws.scroll_offset(), -((960 - total) / 2) as f64);
+                    let placements = ws.compute_placements(Rect::new(0, 0, 1000, 600));
+                    let first = placements.iter().find(|p| p.window_id == 1).unwrap();
+                    assert_eq!(first.rect.x, (1000 - total) / 2);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fit_overflow_transition_animates_and_recenters_after_removal() {
+        let mut ws = Workspace::with_gaps(10, 20);
+        ws.set_center_columns(CenterColumns::Fit);
+        ws.insert_window(1, Some(400)).unwrap();
+        ws.insert_window(2, Some(400)).unwrap();
+        ws.ensure_focused_visible(1000);
+        assert_eq!(ws.scroll_offset(), -75.0);
+        ws.insert_window(3, Some(400)).unwrap();
+        ws.ensure_focused_visible_animated(1000);
+        ws.reconcile_scroll_bounds(1000);
+        assert!(ws.is_animating());
+        ws.stop_animation();
+        assert_eq!(ws.scroll_offset(), 260.0);
+        ws.remove_window(3).unwrap();
+        ws.ensure_focused_visible_animated(1000);
+        ws.reconcile_scroll_bounds(1000);
+        assert!(ws.is_animating());
+        ws.stop_animation();
+        assert_eq!(ws.scroll_offset(), -75.0);
+    }
+
+    #[test]
+    fn fit_centers_rows_independently_with_inactive_columns() {
+        let mut ws = Workspace::with_gaps(10, 20);
+        ws.set_row_layout(&[1.0, 1.0]);
+        ws.set_center_columns(CenterColumns::Fit);
+        ws.insert_column_at_row(Column::new(1, 200), 0, 0);
+        ws.insert_column_at_row(Column::new(2, 200), 0, 1);
+        ws.insert_column_at_row(Column::new(3, 200), 0, 2);
+        ws.mark_minimized(2);
+        ws.insert_column_at_row(Column::new(4, 400), 1, 0);
+        ws.reconcile_scroll_bounds(1000);
+        assert_eq!(ws.scroll_offset_for_row(0), -275.0);
+        assert_eq!(ws.scroll_offset_for_row(1), -280.0);
+        let placements = ws.compute_placements(Rect::new(0, 0, 1000, 600));
+        assert_eq!(
+            placements.iter().find(|p| p.window_id == 1).unwrap().rect.x,
+            295
+        );
+        assert_eq!(
+            placements.iter().find(|p| p.window_id == 3).unwrap().rect.x,
+            505
+        );
+        assert_eq!(
+            placements.iter().find(|p| p.window_id == 4).unwrap().rect.x,
+            300
+        );
+    }
+
+    #[test]
+    fn fit_alignment_release_expires_after_layout_change() {
+        for alignment in [ColumnAlignment::Left, ColumnAlignment::Right] {
+            let mut ws = Workspace::with_gaps(10, 20);
+            ws.set_center_columns(CenterColumns::Fit);
+            ws.insert_window(1, Some(200)).unwrap();
+            ws.insert_window(2, Some(200)).unwrap();
+            ws.ensure_focused_visible(1000);
+            assert_eq!(ws.scroll_offset(), -275.0);
+            ws.align_focused_column_animated(ColumnAlignment::Center, 1000);
+            ws.stop_animation();
+            assert_eq!(ws.scroll_offset(), -275.0);
+            ws.align_focused_column_animated(alignment, 1000);
+            ws.stop_animation();
+            assert_eq!(ws.scroll_offset(), 0.0);
+            ws.insert_window_in_column(3, 1).unwrap();
+            ws.reconcile_scroll_bounds(1000);
+            assert_eq!(ws.scroll_offset(), 0.0);
+            ws.focus_window(1).unwrap();
+            ws.reconcile_scroll_bounds(1000);
+            assert_eq!(ws.scroll_offset(), 0.0);
+            ws.set_gap(20);
+            ws.reconcile_scroll_bounds(1000);
+            assert_eq!(ws.scroll_offset(), -270.0);
+            ws.set_gap(10);
+            ws.reconcile_scroll_bounds(1000);
+            assert_eq!(ws.scroll_offset(), -275.0);
+        }
+    }
+
+    #[test]
+    fn fit_release_expires_on_width_viewport_or_column_change() {
+        for change in 0..3 {
+            let mut ws = Workspace::with_gaps(10, 20);
+            ws.set_center_columns(CenterColumns::Fit);
+            ws.insert_window(1, Some(200)).unwrap();
+            ws.insert_window(2, Some(200)).unwrap();
+            ws.ensure_focused_visible(1000);
+            ws.align_focused_column_animated(ColumnAlignment::Left, 1000);
+            ws.stop_animation();
+            assert_eq!(ws.scroll_offset(), 0.0);
+            let viewport = match change {
+                0 => {
+                    ws.set_column_width(0, 250).unwrap();
+                    1000
+                }
+                1 => 900,
+                _ => {
+                    ws.remove_window(2).unwrap();
+                    ws.insert_window(3, Some(200)).unwrap();
+                    1000
+                }
+            };
+            ws.reconcile_scroll_bounds(viewport);
+            let expected = -((ws.visible_width(viewport) - ws.total_width()) / 2) as f64;
+            assert_eq!(ws.scroll_offset(), expected);
+        }
+    }
+
+    #[test]
     fn test_center_single_column_modes_scroll_and_default() {
         let viewport = Rect::new(100, 50, 1000, 600);
         for mode in [
@@ -116,7 +255,7 @@ mod tests {
                         ws.compute_placements(viewport)[0].rect,
                         Rect::new(120, 70, width, 560)
                     );
-                    ws.set_center_single_column(true);
+                    ws.set_center_columns(CenterColumns::Single);
                     for offset in [-100.0, 0.0, 150.0] {
                         ws.set_scroll_offset(offset);
                         ws.reconcile_scroll_bounds(viewport.width);
@@ -148,7 +287,7 @@ mod tests {
                             assert_eq!(ws.compute_placements(viewport)[0].rect.x, center_x);
                         }
                     }
-                    ws.set_center_single_column(false);
+                    ws.set_center_columns(CenterColumns::Off);
                     ws.scroll_by(0.0, viewport.width);
                     assert_eq!(ws.compute_placements(viewport)[0].rect.x, 120);
                 }
@@ -170,13 +309,13 @@ mod tests {
                 ws.set_center_past_edges(past_edges);
                 ws.insert_window(1, Some(400)).unwrap();
                 ws.set_scroll_offset(137.0);
-                ws.set_center_single_column(true);
+                ws.set_center_columns(CenterColumns::Single);
                 ws.ensure_focused_visible(viewport.width);
                 assert_eq!(ws.compute_placements(viewport)[0].rect.x, 300);
                 assert_eq!(ws.scroll_offset(), -280.0);
                 ws.insert_window(2, Some(800)).unwrap();
                 let mut normal = ws.clone();
-                normal.set_center_single_column(false);
+                normal.set_center_columns(CenterColumns::Off);
                 assert_eq!(ws.compute_placements_animated(viewport)[0].rect.x, 300);
                 ws.ensure_focused_visible_animated(viewport.width);
                 ws.reconcile_scroll_bounds(viewport.width);
@@ -216,7 +355,7 @@ mod tests {
     fn test_center_single_column_reduce_motion_transition() {
         let viewport = Rect::new(0, 0, 1000, 600);
         let mut ws = Workspace::with_gaps(10, 20);
-        ws.set_center_single_column(true);
+        ws.set_center_columns(CenterColumns::Single);
         ws.set_reduce_motion(true);
         ws.insert_window(1, Some(400)).unwrap();
         ws.ensure_focused_visible(viewport.width);
@@ -233,52 +372,54 @@ mod tests {
 
     #[test]
     fn test_center_single_column_active_stacked_tabbed_and_floating() {
-        let viewport = Rect::new(0, 0, 1000, 600);
-        let mut ws = Workspace::with_gaps(10, 20);
-        ws.set_center_single_column(true);
-        ws.insert_window(9, Some(500)).unwrap();
-        ws.mark_minimized(9);
-        ws.insert_window(1, Some(400)).unwrap();
-        ws.insert_window(2, Some(400)).unwrap();
-        ws.consume_from_left();
-        ws.insert_window(10, Some(600)).unwrap();
-        ws.mark_minimized(10);
-        let float_rect = Rect::new(50, 100, 200, 150);
-        ws.add_floating(11, float_rect).unwrap();
-        ws.reconcile_scroll_bounds(viewport.width);
-        let placements = ws.compute_placements(viewport);
-        let stacked: Vec<_> = placements
-            .iter()
-            .filter(|p| p.column_index != usize::MAX)
-            .collect();
-        assert_eq!(stacked.len(), 2);
-        assert_eq!(stacked[0].rect, Rect::new(300, 20, 400, 275));
-        assert_eq!(stacked[1].rect, Rect::new(300, 305, 400, 275));
-        assert_eq!(
-            placements.iter().find(|p| p.window_id == 11).unwrap().rect,
-            float_rect
-        );
-        ws.focus_window(1).unwrap();
-        ws.toggle_focused_column_tabbed_mode();
-        ws.set_tab_strip_reserve_px(30);
-        let placements = ws.compute_placements(viewport);
-        let tab = placements.iter().find(|p| p.window_id == 1).unwrap();
-        assert_eq!(tab.rect, Rect::new(300, 50, 400, 530));
-        assert_eq!(tab.visibility, Visibility::Visible);
-        assert_eq!(
-            placements
+        for center_columns in [CenterColumns::Single, CenterColumns::Fit] {
+            let viewport = Rect::new(0, 0, 1000, 600);
+            let mut ws = Workspace::with_gaps(10, 20);
+            ws.set_center_columns(center_columns);
+            ws.insert_window(9, Some(500)).unwrap();
+            ws.mark_minimized(9);
+            ws.insert_window(1, Some(400)).unwrap();
+            ws.insert_window(2, Some(400)).unwrap();
+            ws.consume_from_left();
+            ws.insert_window(10, Some(600)).unwrap();
+            ws.mark_minimized(10);
+            let float_rect = Rect::new(50, 100, 200, 150);
+            ws.add_floating(11, float_rect).unwrap();
+            ws.reconcile_scroll_bounds(viewport.width);
+            let placements = ws.compute_placements(viewport);
+            let stacked: Vec<_> = placements
                 .iter()
-                .find(|p| p.window_id == 2)
-                .unwrap()
-                .visibility,
-            Visibility::OffScreenLeft
-        );
-        ws.mark_minimized(1);
-        let placements = ws.compute_placements(viewport);
-        assert_eq!(
-            placements.iter().find(|p| p.window_id == 2).unwrap().rect,
-            Rect::new(300, 50, 400, 530)
-        );
+                .filter(|p| p.column_index != usize::MAX)
+                .collect();
+            assert_eq!(stacked.len(), 2);
+            assert_eq!(stacked[0].rect, Rect::new(300, 20, 400, 275));
+            assert_eq!(stacked[1].rect, Rect::new(300, 305, 400, 275));
+            assert_eq!(
+                placements.iter().find(|p| p.window_id == 11).unwrap().rect,
+                float_rect
+            );
+            ws.focus_window(1).unwrap();
+            ws.toggle_focused_column_tabbed_mode();
+            ws.set_tab_strip_reserve_px(30);
+            let placements = ws.compute_placements(viewport);
+            let tab = placements.iter().find(|p| p.window_id == 1).unwrap();
+            assert_eq!(tab.rect, Rect::new(300, 50, 400, 530));
+            assert_eq!(tab.visibility, Visibility::Visible);
+            assert_eq!(
+                placements
+                    .iter()
+                    .find(|p| p.window_id == 2)
+                    .unwrap()
+                    .visibility,
+                Visibility::OffScreenLeft
+            );
+            ws.mark_minimized(1);
+            let placements = ws.compute_placements(viewport);
+            assert_eq!(
+                placements.iter().find(|p| p.window_id == 2).unwrap().rect,
+                Rect::new(300, 50, 400, 530)
+            );
+        }
     }
 
     #[test]
@@ -302,7 +443,7 @@ mod tests {
                     }
                     normal.set_scroll_offset(123.0);
                     let mut centered = normal.clone();
-                    centered.set_center_single_column(true);
+                    centered.set_center_columns(CenterColumns::Single);
                     normal.ensure_focused_visible(viewport.width);
                     centered.ensure_focused_visible(viewport.width);
                     assert_eq!(
@@ -319,7 +460,7 @@ mod tests {
         let mut constrained = Workspace::with_gaps(10, 20);
         constrained.insert_window(1, Some(400)).unwrap();
         constrained.set_window_min_width(1, 1000);
-        constrained.set_center_single_column(true);
+        constrained.set_center_columns(CenterColumns::Single);
         constrained.ensure_focused_visible(viewport.width);
         constrained.clear_window_min_width(1);
         constrained.reconcile_scroll_bounds(viewport.width);
@@ -329,12 +470,18 @@ mod tests {
         ws.insert_window(1, Some(400)).unwrap();
         ws.toggle_fullscreen();
         let expected = ws.compute_placements(viewport);
-        ws.set_center_single_column(true);
+        ws.set_center_columns(CenterColumns::Single);
         assert_eq!(
             placement_geometry(ws.compute_placements(viewport)),
             placement_geometry(expected.clone())
         );
         assert_eq!(expected[0].rect, viewport);
+        ws.set_center_columns(CenterColumns::Fit);
+        ws.reconcile_scroll_bounds(viewport.width);
+        assert_eq!(
+            placement_geometry(ws.compute_placements(viewport)),
+            placement_geometry(expected)
+        );
         ws.toggle_fullscreen();
         ws.mark_minimized(1);
         assert!(ws.compute_placements(viewport).is_empty());
@@ -345,7 +492,7 @@ mod tests {
         let viewport = Rect::new(0, 0, 1000, 600);
         for sticky in [false, true] {
             let mut ws = Workspace::with_gaps(10, 20);
-            ws.set_center_single_column(true);
+            ws.set_center_columns(CenterColumns::Single);
             ws.insert_window(1, Some(400)).unwrap();
             ws.ensure_focused_visible(viewport.width);
             assert_eq!(ws.compute_placements(viewport)[0].rect.x, 300);
@@ -368,7 +515,7 @@ mod tests {
         let viewport = Rect::new(0, 0, 1000, 600);
         for animated in [false, true] {
             let mut ws = Workspace::with_gaps(10, 20);
-            ws.set_center_single_column(true);
+            ws.set_center_columns(CenterColumns::Single);
             ws.insert_window(1, Some(400)).unwrap();
             ws.insert_window(2, Some(400)).unwrap();
             ws.focus_window(1).unwrap();
@@ -392,7 +539,7 @@ mod tests {
     fn test_center_single_column_migrated_clone_insert() {
         let viewport = Rect::new(0, 0, 1000, 600);
         let mut source = Workspace::with_gaps(10, 20);
-        source.set_center_single_column(true);
+        source.set_center_columns(CenterColumns::Single);
         source.insert_window(1, Some(400)).unwrap();
         source.ensure_focused_visible(viewport.width);
         assert_eq!(source.compute_placements(viewport)[0].rect.x, 300);
@@ -421,7 +568,7 @@ mod tests {
     fn test_center_single_column_remove_column_clamps_during_fullscreen() {
         let viewport = Rect::new(0, 0, 1000, 600);
         let mut ws = Workspace::with_gaps(10, 20);
-        ws.set_center_single_column(true);
+        ws.set_center_columns(CenterColumns::Single);
         ws.insert_window(1, Some(400)).unwrap();
         ws.ensure_focused_visible(viewport.width);
         assert_eq!(ws.scroll_offset(), -280.0);
@@ -440,7 +587,7 @@ mod tests {
         default.insert_window(1, Some(400)).unwrap();
         default.set_scroll_offset(137.0);
         let mut disabled = default.clone();
-        disabled.set_center_single_column(false);
+        disabled.set_center_columns(CenterColumns::Off);
         for ws in [&mut default, &mut disabled] {
             assert_eq!(ws.compute_placements(viewport)[0].rect.x, -117);
             assert_eq!(ws.compute_placements_animated(viewport)[0].rect.x, -117);

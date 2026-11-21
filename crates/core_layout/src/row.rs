@@ -28,6 +28,15 @@ pub struct WorkspaceRow {
     /// State for maximized column toggle within this row.
     #[serde(skip)]
     pub(crate) maximized_column: Option<MaximizedColumnState>,
+    #[serde(skip)]
+    pub(crate) fit_release: std::cell::RefCell<Option<FitRelease>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FitRelease {
+    pub columns: Vec<(Vec<WindowId>, i32)>,
+    pub gap: i32,
+    pub visible_width: i32,
 }
 
 impl Default for WorkspaceRow {
@@ -39,6 +48,7 @@ impl Default for WorkspaceRow {
             scroll_offset: 0.0,
             active_animation: None,
             maximized_column: None,
+            fit_release: Default::default(),
         }
     }
 }

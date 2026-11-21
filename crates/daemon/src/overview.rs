@@ -1969,7 +1969,7 @@ mod tests {
         add_windows(&mut state, 0, &[101]);
         let ws = &mut state.workspaces.get_mut(&1).unwrap()[0];
         ws.set_all_column_widths(400);
-        ws.set_center_single_column(true);
+        ws.set_center_columns(leopardwm_core_layout::CenterColumns::Single);
         ws.set_scroll_offset(137.0);
         ws.reconcile_scroll_bounds(1920);
         let (_, model) = state.build_overview_model().expect("model");

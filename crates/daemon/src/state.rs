@@ -1029,7 +1029,7 @@ impl AppState {
             params.apply_to(&mut workspace, 0);
             workspace.set_centering_mode(config.layout.centering_mode.into());
             workspace.set_center_past_edges(config.layout.center_past_edges);
-            workspace.set_center_single_column(config.layout.center_single_column);
+            workspace.set_center_columns(config.layout.center_columns.center_columns.into());
             workspace.set_reduce_motion(initial_reduce_motion);
             workspace
                 .set_scroll_animation(config.animation.scroll_duration_ms, config.animation.easing);
@@ -1641,7 +1641,7 @@ impl AppState {
             params.apply_to(&mut ws, cur_idx);
             ws.set_centering_mode(config.layout.centering_mode.into());
             ws.set_center_past_edges(config.layout.center_past_edges);
-            ws.set_center_single_column(config.layout.center_single_column);
+            ws.set_center_columns(config.layout.center_columns.center_columns.into());
             ws.set_reduce_motion(self.reduce_motion);
             ws.set_scroll_animation(config.animation.scroll_duration_ms, config.animation.easing);
             ws_vec.push(ws);

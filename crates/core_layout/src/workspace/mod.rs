@@ -26,6 +26,14 @@ pub enum CenteringMode {
     OnOverflow,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CenterColumns {
+    #[default]
+    Off,
+    Single,
+    Fit,
+}
+
 /// Horizontal alignment; oversized columns expose the named edge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColumnAlignment {
@@ -108,9 +116,8 @@ pub struct Workspace {
     /// Lets centering scroll to negative offsets or past the maximum scroll.
     #[serde(skip)]
     pub(crate) center_past_edges: bool,
-    /// Outside fullscreen, pins scroll to center when exactly one active column fits.
     #[serde(skip)]
-    pub(crate) center_single_column: bool,
+    pub(crate) center_columns: CenterColumns,
     /// Pixels reserved at the top of each Tabbed column for the tab strip
     /// overlay. The daemon sets this from `appearance.tab_strip_height` scaled
     /// by the focused monitor's DPI so the strip has room to render above
@@ -210,6 +217,7 @@ impl From<WorkspaceRepr> for Workspace {
                 scroll_offset: repr.scroll_offset.unwrap_or(0.0),
                 active_animation: None,
                 maximized_column: None,
+                fit_release: Default::default(),
             };
             (vec![row], 0, vec![1.0])
         };
@@ -282,7 +290,7 @@ impl Default for Workspace {
             scroll_duration_ms: DEFAULT_ANIMATION_DURATION_MS,
             scroll_easing: Easing::default(),
             center_past_edges: false,
-            center_single_column: false,
+            center_columns: CenterColumns::Off,
             tab_strip_reserve_px: 0,
         }
     }
@@ -912,13 +920,17 @@ impl Workspace {
         self.scroll_easing = easing;
     }
 
-    /// Center the only active tiled column when it fits inside the viewport.
-    pub fn set_center_single_column(&mut self, center: bool) {
-        self.center_single_column = center;
+    pub fn set_center_columns(&mut self, mode: CenterColumns) {
+        if self.center_columns != mode {
+            for row in &mut self.rows {
+                *row.fit_release.get_mut() = None;
+            }
+        }
+        self.center_columns = mode;
     }
 
-    pub fn center_single_column(&self) -> bool {
-        self.center_single_column
+    pub fn center_columns(&self) -> CenterColumns {
+        self.center_columns
     }
 
     /// Set whether center-column can scroll past content edges.

@@ -997,8 +997,15 @@ input[type="range"]::-webkit-slider-thumb {
             </div>
           </div>
           <div class="field">
-            <div class="field-info"><div class="field-label" data-i18n="settings.layout.center_single_column.label"></div><div class="field-desc" data-i18n="settings.layout.center_single_column.description"></div></div>
-            <label class="toggle"><input type="checkbox" id="layout-center_single_column"><span class="track"></span><span class="thumb"></span></label>
+            <div class="field-info"><div class="field-label" data-i18n="settings.layout.center_columns.label"></div><div class="field-desc" data-i18n="settings.layout.center_columns.description"></div></div>
+            <div class="combobox" id="cb-layout-center_columns">
+              <button class="combobox-trigger" type="button"><span class="combobox-text" data-i18n="settings.text.center_columns_off"></span><svg class="combobox-chevron" viewBox="0 0 12 12"><path d="M2.15 4.65a.5.5 0 01.7 0L6 7.79l3.15-3.14a.5.5 0 11.7.7l-3.5 3.5a.5.5 0 01-.7 0l-3.5-3.5a.5.5 0 010-.7z"/></svg></button>
+              <div class="combobox-popup">
+                <div class="combobox-option selected" data-value="off" data-i18n="settings.text.center_columns_off"></div>
+                <div class="combobox-option" data-value="single" data-i18n="settings.text.center_columns_single"></div>
+                <div class="combobox-option" data-value="fit" data-i18n="settings.text.center_columns_fit"></div>
+              </div>
+            </div>
           </div>
           <div class="field">
             <div class="field-info"><div class="field-label" data-i18n="settings.layout.center_past_edges.label"></div><div class="field-desc" data-i18n="settings.layout.center_past_edges.description"></div></div>
@@ -1744,7 +1751,7 @@ function init(cfg) {
   setCb('cb-layout-centering_mode', cfg.layout.centering_mode);
   setCb('cb-layout-mouse_resize', cfg.layout.mouse_resize || 'presets');
   setCb('cb-layout-offscreen_mode', cfg.layout.offscreen_mode || 'bleed');
-  setChecked('layout-center_single_column', cfg.layout.center_single_column);
+  setCb('cb-layout-center_columns', cfg.layout.center_columns || 'off');
   setChecked('layout-center_past_edges', cfg.layout.center_past_edges);
 
   setCb('cb-appearance-language', cfg.appearance.language || 'en');
@@ -2576,7 +2583,7 @@ function readConfig() {
       centering_mode: cbVal('cb-layout-centering_mode'),
       mouse_resize: cbVal('cb-layout-mouse_resize'),
       offscreen_mode: cbVal('cb-layout-offscreen_mode'),
-      center_single_column: checked('layout-center_single_column'),
+      center_columns: cbVal('cb-layout-center_columns'),
       center_past_edges: checked('layout-center_past_edges'),
       rows: {
         workspaces: readWorkspaceRows(),
@@ -2861,14 +2868,11 @@ mod tests {
     }
 
     #[test]
-    fn center_single_column_is_wired_into_settings_config() {
-        assert!(SETTINGS_HTML.contains("id=\"layout-center_single_column\""));
-        assert!(SETTINGS_HTML.contains(
-            "setChecked('layout-center_single_column', cfg.layout.center_single_column);"
-        ));
-        assert!(
-            SETTINGS_HTML.contains("center_single_column: checked('layout-center_single_column')")
-        );
+    fn center_columns_is_wired_into_settings_config() {
+        assert!(SETTINGS_HTML.contains("id=\"cb-layout-center_columns\""));
+        assert!(SETTINGS_HTML
+            .contains("setCb('cb-layout-center_columns', cfg.layout.center_columns || 'off');"));
+        assert!(SETTINGS_HTML.contains("center_columns: cbVal('cb-layout-center_columns')"));
     }
 
     #[test]

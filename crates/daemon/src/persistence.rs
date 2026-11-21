@@ -278,7 +278,7 @@ impl AppState {
             params.apply_to(&mut ws, ws_idx);
             ws.set_centering_mode(self.config.layout.centering_mode.into());
             ws.set_center_past_edges(self.config.layout.center_past_edges);
-            ws.set_center_single_column(self.config.layout.center_single_column);
+            ws.set_center_columns(self.config.layout.center_columns.center_columns.into());
             ws.set_reduce_motion(self.reduce_motion);
             ws.set_scroll_animation(
                 self.config.animation.scroll_duration_ms,
@@ -302,7 +302,7 @@ impl AppState {
                 params.apply_to(&mut empty, cur_idx);
                 empty.set_centering_mode(self.config.layout.centering_mode.into());
                 empty.set_center_past_edges(self.config.layout.center_past_edges);
-                empty.set_center_single_column(self.config.layout.center_single_column);
+                empty.set_center_columns(self.config.layout.center_columns.center_columns.into());
                 empty.set_reduce_motion(self.reduce_motion);
                 empty.set_scroll_animation(
                     self.config.animation.scroll_duration_ms,
@@ -372,7 +372,9 @@ impl AppState {
                         params.apply_to(&mut ws, cur_idx);
                         ws.set_centering_mode(self.config.layout.centering_mode.into());
                         ws.set_center_past_edges(self.config.layout.center_past_edges);
-                        ws.set_center_single_column(self.config.layout.center_single_column);
+                        ws.set_center_columns(
+                            self.config.layout.center_columns.center_columns.into(),
+                        );
                         ws.set_reduce_motion(self.reduce_motion);
                         ws.set_scroll_animation(
                             self.config.animation.scroll_duration_ms,
@@ -380,8 +382,9 @@ impl AppState {
                         );
                         ws_vec.push(ws);
                     }
-                    ws_vec[ws_idx]
-                        .set_center_single_column(self.config.layout.center_single_column);
+                    ws_vec[ws_idx].set_center_columns(
+                        self.config.layout.center_columns.center_columns.into(),
+                    );
                     for (r_idx, saved_row) in ws_snapshot.workspace.rows().iter().enumerate() {
                         ws_vec[ws_idx].set_scroll_offset_for_row(r_idx, saved_row.scroll_offset());
                     }

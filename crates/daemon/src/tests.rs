@@ -11934,12 +11934,20 @@ fn test_center_single_column_apply_repairs_resync_and_nonrevealing_changes() {
                 monitors[0].rect.width = 1000;
                 monitors[0].work_area.width = 1000;
                 let mut config = test_config();
-                config.layout.center_single_column = enabled;
+                config.layout.center_columns.center_columns = if enabled {
+                    crate::config::CenterColumnsConfig::Single
+                } else {
+                    crate::config::CenterColumnsConfig::Off
+                };
                 let mut state = AppState::new_with_config(config, monitors);
                 state.paused = false;
                 let viewport = Rect::new(0, 0, 1000, 1040);
                 let mut ws = Workspace::with_gaps(10, 20);
-                ws.set_center_single_column(enabled);
+                ws.set_center_columns(if enabled {
+                    leopardwm_core_layout::CenterColumns::Single
+                } else {
+                    leopardwm_core_layout::CenterColumns::Off
+                });
                 ws.set_reduce_motion(false);
                 ws.insert_window(100, Some(400)).unwrap();
                 ws.ensure_focused_visible(1000);
@@ -22028,7 +22036,11 @@ fn test_restore_center_single_column_runtime_setting() {
     for enabled in [false, true] {
         for restore_path in 0..3 {
             let mut state = structure_restore_state();
-            state.config.layout.center_single_column = enabled;
+            state.config.layout.center_columns.center_columns = if enabled {
+                crate::config::CenterColumnsConfig::Single
+            } else {
+                crate::config::CenterColumnsConfig::Off
+            };
             state.monitors.get_mut(&2).unwrap().work_area.width = 1000;
             state.injected_apply_placements_behavior = Some(
                 TestApplyPlacementsBehavior::SleepAndSucceed(std::time::Duration::ZERO),
@@ -22042,7 +22054,7 @@ fn test_restore_center_single_column_runtime_setting() {
             };
             let mut saved = leopardwm_core_layout::Workspace::new();
             saved.insert_window(100, Some(400)).unwrap();
-            saved.set_center_single_column(true);
+            saved.set_center_columns(leopardwm_core_layout::CenterColumns::Single);
             saved.ensure_focused_visible(1000);
             let saved_offset = saved.scroll_offset();
             assert!(saved_offset < 0.0);
@@ -22089,9 +22101,43 @@ fn test_restore_center_single_column_runtime_setting() {
 }
 
 #[test]
+fn center_columns_reload_updates_existing_workspace() {
+    use crate::config::CenterColumnsConfig;
+    let mut config = test_config();
+    config.layout.center_columns.center_columns = CenterColumnsConfig::Single;
+    let mut monitors = test_monitors();
+    monitors[0].work_area.width = 1000;
+    let mut state = AppState::new_with_config(config.clone(), monitors);
+    let ws = &mut state.workspaces.get_mut(&1).unwrap()[0];
+    ws.insert_window(100, Some(200)).unwrap();
+    ws.insert_window(200, Some(200)).unwrap();
+    config.layout.center_columns.center_columns = CenterColumnsConfig::Fit;
+    state.apply_config(config.clone());
+    let ws = &mut state.workspaces.get_mut(&1).unwrap()[0];
+    ws.stop_animation();
+    assert_eq!(
+        ws.center_columns(),
+        leopardwm_core_layout::CenterColumns::Fit
+    );
+    assert_eq!(
+        ws.scroll_offset(),
+        -((ws.visible_width(1000) - ws.total_width()) / 2) as f64
+    );
+    config.layout.center_columns.center_columns = CenterColumnsConfig::Single;
+    state.apply_config(config);
+    let ws = &mut state.workspaces.get_mut(&1).unwrap()[0];
+    ws.stop_animation();
+    assert_eq!(
+        ws.center_columns(),
+        leopardwm_core_layout::CenterColumns::Single
+    );
+    assert_eq!(ws.scroll_offset(), 0.0);
+}
+
+#[test]
 fn test_center_single_column_toggle_off_repairs_first_placement() {
     let mut config = test_config();
-    config.layout.center_single_column = true;
+    config.layout.center_columns.center_columns = crate::config::CenterColumnsConfig::Single;
     config.layout.outer_gap_left = 20;
     config.layout.outer_gap_right = 20;
     let mut monitors = test_monitors();
@@ -22102,7 +22148,7 @@ fn test_center_single_column_toggle_off_repairs_first_placement() {
     ws.set_reduce_motion(false);
     ws.ensure_focused_visible(1000);
     assert_eq!(ws.scroll_offset(), -280.0);
-    config.layout.center_single_column = false;
+    config.layout.center_columns.center_columns = crate::config::CenterColumnsConfig::Off;
     state.apply_config(config);
     state.paused = false;
     state.injected_apply_placements_behavior = Some(TestApplyPlacementsBehavior::SleepAndSucceed(

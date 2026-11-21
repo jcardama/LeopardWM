@@ -143,7 +143,9 @@ impl AppState {
                     for workspace in &mut stashed_ws {
                         workspace.set_centering_mode(self.config.layout.centering_mode.into());
                         workspace.set_center_past_edges(self.config.layout.center_past_edges);
-                        workspace.set_center_single_column(self.config.layout.center_single_column);
+                        workspace.set_center_columns(
+                            self.config.layout.center_columns.center_columns.into(),
+                        );
                         workspace.ensure_focused_visible(source_viewport_width);
                     }
                     let returning: HashSet<u64> =
@@ -216,7 +218,8 @@ impl AppState {
                 params.apply_to(&mut workspace, 0);
                 workspace.set_centering_mode(self.config.layout.centering_mode.into());
                 workspace.set_center_past_edges(self.config.layout.center_past_edges);
-                workspace.set_center_single_column(self.config.layout.center_single_column);
+                workspace
+                    .set_center_columns(self.config.layout.center_columns.center_columns.into());
                 workspace.set_reduce_motion(self.reduce_motion);
                 workspace.set_scroll_animation(
                     self.config.animation.scroll_duration_ms,

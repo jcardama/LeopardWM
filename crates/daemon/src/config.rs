@@ -149,9 +149,8 @@ pub struct LayoutConfig {
     #[serde(default)]
     pub centering_mode: CenteringModeConfig,
 
-    /// Center the only active tiled column when it fits inside the viewport.
-    #[serde(default)]
-    pub center_single_column: bool,
+    #[serde(flatten)]
+    pub center_columns: CenterColumnsSetting,
 
     /// Whether center-column can scroll past content edges.
     /// When true, the first/last column will be truly centered with empty space.
@@ -493,7 +492,7 @@ impl Default for LayoutConfig {
             outer_gap_bottom: default_outer_gap(),
             centering_mode: CenteringModeConfig::default(),
             center_past_edges: false,
-            center_single_column: false,
+            center_columns: CenterColumnsSetting::default(),
             mouse_resize: MouseResize::default(),
             offscreen_mode: OffscreenMode::default(),
             width_presets: default_width_presets(),
@@ -550,6 +549,51 @@ impl LayoutConfig {
                 self.outer_gap_bottom = og;
             }
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CenterColumnsConfig {
+    #[default]
+    Off,
+    Single,
+    Fit,
+}
+
+impl From<CenterColumnsConfig> for leopardwm_core_layout::CenterColumns {
+    fn from(mode: CenterColumnsConfig) -> Self {
+        match mode {
+            CenterColumnsConfig::Off => Self::Off,
+            CenterColumnsConfig::Single => Self::Single,
+            CenterColumnsConfig::Fit => Self::Fit,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct CenterColumnsSetting {
+    pub center_columns: CenterColumnsConfig,
+}
+
+impl<'de> Deserialize<'de> for CenterColumnsSetting {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize, Default)]
+        #[serde(default)]
+        struct Values {
+            center_columns: Option<CenterColumnsConfig>,
+            center_single_column: bool,
+        }
+        let values = Values::deserialize(deserializer)?;
+        Ok(Self {
+            center_columns: values
+                .center_columns
+                .unwrap_or(if values.center_single_column {
+                    CenterColumnsConfig::Single
+                } else {
+                    CenterColumnsConfig::Off
+                }),
+        })
     }
 }
 
@@ -4082,14 +4126,31 @@ mod tests {
     }
 
     #[test]
-    fn test_center_single_column_defaults_false_and_roundtrips() {
-        let absent: Config = toml::from_str("[layout]\n").unwrap();
-        assert!(!absent.layout.center_single_column);
-        assert!(!Config::default().layout.center_single_column);
-        let enabled: Config = toml::from_str("[layout]\ncenter_single_column = true\n").unwrap();
-        assert!(enabled.layout.center_single_column);
-        let parsed: Config = toml::from_str(&toml::to_string_pretty(&enabled).unwrap()).unwrap();
-        assert!(parsed.layout.center_single_column);
+    fn center_columns_migrates_legacy_and_roundtrips_through_settings() {
+        use CenterColumnsConfig::*;
+        for (fields, expected) in [
+            ("", Off),
+            ("center_single_column = false", Off),
+            ("center_single_column = true", Single),
+            ("center_columns = \"fit\"", Fit),
+            ("center_single_column = true\ncenter_columns = \"off\"", Off),
+            (
+                "center_single_column = false\ncenter_columns = \"single\"",
+                Single,
+            ),
+        ] {
+            let config: Config = toml::from_str(&format!("[layout]\n{fields}\n")).unwrap();
+            assert_eq!(
+                config.layout.center_columns.center_columns, expected,
+                "{fields}"
+            );
+            let json = serde_json::to_value(&config).unwrap();
+            let settings_config: Config = serde_json::from_value(json).unwrap();
+            let saved = toml::to_string_pretty(&settings_config).unwrap();
+            assert!(!saved.contains("center_single_column"));
+            let parsed: Config = toml::from_str(&saved).unwrap();
+            assert_eq!(parsed.layout.center_columns.center_columns, expected);
+        }
     }
 
     #[test]

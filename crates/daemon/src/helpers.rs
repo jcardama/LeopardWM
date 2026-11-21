@@ -227,12 +227,13 @@ impl AppState {
                 // (not the raw config values) so rescale_column_widths works correctly.
                 let old_gap = workspace.gap();
                 let (old_ol, old_or, _, _) = workspace.outer_gaps();
-                let was_center_single_column = workspace.center_single_column();
+                let old_center_columns = workspace.center_columns();
 
                 params.apply_to(workspace, ws_idx);
                 workspace.set_centering_mode(self.config.layout.centering_mode.into());
                 workspace.set_center_past_edges(self.config.layout.center_past_edges);
-                workspace.set_center_single_column(self.config.layout.center_single_column);
+                workspace
+                    .set_center_columns(self.config.layout.center_columns.center_columns.into());
 
                 workspace.rescale_column_widths(
                     old_gap,
@@ -246,7 +247,7 @@ impl AppState {
                     self.config.animation.easing,
                 );
 
-                if was_center_single_column && !self.config.layout.center_single_column {
+                if old_center_columns != workspace.center_columns() {
                     workspace.reconcile_scroll_bounds(viewport_width);
                 }
 
