@@ -2155,7 +2155,9 @@ fn position_entries_batch(entries: &[DeferEntry]) -> HashSet<u64> {
                             }
                         }
                     } else {
-                        // A failed DeferWindowPos leaves the HDWP alive; end it to avoid a USER object leak.
+                        // Win32 says to abandon a failed batch, but a rejected window can leave
+                        // its HDWP allocated, leaking a USER object (#180). Ending it applies prior
+                        // entries; if already freed, End fails and every entry falls back.
                         let fallback = if EndDeferWindowPos(hdwp).is_ok() {
                             &entries[failed_index..]
                         } else {
@@ -4981,6 +4983,7 @@ pub(crate) mod tests {
         };
 
         let window = HiddenPopup::new(48, 48, 160, 120);
+        let suffix_window = HiddenPopup::new(60, 60, 160, 120);
         let entries = [
             DeferEntry {
                 hwnd: window.hwnd,
@@ -4990,6 +4993,13 @@ pub(crate) mod tests {
                 ..fresh_inset_entry(window.id, 0)
             },
             fresh_inset_entry(0, 0),
+            DeferEntry {
+                hwnd: suffix_window.hwnd,
+                x: 500,
+                y: 200,
+                flags: SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER,
+                ..fresh_inset_entry(suffix_window.id, 0)
+            },
         ];
         let user_objects = || unsafe { GetGuiResources(GetCurrentProcess(), GR_USEROBJECTS) };
         let before = user_objects();
@@ -5002,6 +5012,10 @@ pub(crate) mod tests {
         println!("USER objects: before={before}, after={after}, growth={growth}");
         assert!(growth < 64, "failed batches leaked USER objects: {growth}");
         assert_eq!(observed_async_position(window.hwnd), Some((300, 100)));
+        assert_eq!(
+            observed_async_position(suffix_window.hwnd),
+            Some((500, 200))
+        );
     }
 
     #[test]
