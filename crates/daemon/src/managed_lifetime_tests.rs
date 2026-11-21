@@ -190,6 +190,102 @@ fn assert_replacement_uses_default_column_width(state: &AppState, hwnd: u64) {
 }
 
 #[test]
+fn shell_cloaked_created_is_admitted_when_uncloaked() {
+    let mut state = state();
+    inject(&mut state, 10, "Store app", "ApplicationFrameWindow", 1010);
+    state.injected_shell_cloaked_hwnds.insert(10);
+
+    state.handle_window_event(WindowEvent::Created(10, 100));
+    assert_eq!(membership_count(&state, 10), 0);
+    state.injected_shell_cloaked_hwnds.remove(&10);
+    state.handle_window_event(WindowEvent::Uncloaked(10, 200));
+
+    assert_eq!(state.find_window_workspace(10), Some((1, 0)));
+    assert_eq!(membership_count(&state, 10), 1);
+    assert_eq!(state.focused_workspace().unwrap().columns().len(), 1);
+    state.handle_window_event(WindowEvent::Hidden(10, 150));
+    assert_eq!(state.find_window_workspace(10), Some((1, 0)));
+}
+
+#[test]
+fn still_cloaked_uncloak_retries_later() {
+    let mut state = state();
+    inject(&mut state, 10, "Store app", "ApplicationFrameWindow", 1010);
+    state.injected_shell_cloaked_hwnds.insert(10);
+    state.handle_window_event(WindowEvent::Created(10, 100));
+    state.injected_off_current_desktop_hwnds.insert(10);
+    state.handle_window_event(WindowEvent::Uncloaked(10, 200));
+    assert_eq!(membership_count(&state, 10), 0);
+
+    state.injected_shell_cloaked_hwnds.remove(&10);
+    state.injected_off_current_desktop_hwnds.remove(&10);
+    state.handle_window_event(WindowEvent::Uncloaked(10, 300));
+    assert_eq!(state.find_window_workspace(10), Some((1, 0)));
+}
+
+#[test]
+fn unrecorded_and_other_desktop_uncloaks_do_not_admit() {
+    let mut state = state();
+    inject(
+        &mut state,
+        10,
+        "Other desktop",
+        "ApplicationFrameWindow",
+        1010,
+    );
+    inject(&mut state, 20, "Unrecorded", "ApplicationFrameWindow", 1020);
+    state.injected_shell_cloaked_hwnds.insert(10);
+    state.injected_off_current_desktop_hwnds.insert(10);
+    state.handle_window_event(WindowEvent::Created(10, 100));
+    assert_eq!(membership_count(&state, 10), 0);
+    state.injected_shell_cloaked_hwnds.remove(&10);
+    state.injected_off_current_desktop_hwnds.remove(&10);
+
+    state.handle_window_event(WindowEvent::Uncloaked(10, 200));
+    state.handle_window_event(WindowEvent::Uncloaked(20, 200));
+    assert_eq!(membership_count(&state, 10), 0);
+    assert_eq!(membership_count(&state, 20), 0);
+    assert!(state.focused_workspace().unwrap().columns().is_empty());
+}
+
+#[test]
+fn later_automatic_rejection_cancels_uncloak_retry() {
+    let mut state = state();
+    inject(&mut state, 10, "Store app", "ApplicationFrameWindow", 1010);
+    state.injected_shell_cloaked_hwnds.insert(10);
+    state.handle_window_event(WindowEvent::Created(10, 100));
+    state.injected_shell_cloaked_hwnds.remove(&10);
+    state
+        .injected_manage_block
+        .insert(10, ManageBlock::HigherIntegrity);
+    state.handle_window_event(WindowEvent::Created(10, 200));
+    assert_eq!(membership_count(&state, 10), 0);
+
+    state.injected_manage_block.remove(&10);
+    state.handle_window_event(WindowEvent::Uncloaked(10, 300));
+    assert_eq!(membership_count(&state, 10), 0);
+}
+
+#[test]
+fn uncloak_does_not_change_managed_layout_or_admit_destroyed_window() {
+    let mut state = state();
+    admit(&mut state, 10);
+    inject(&mut state, 20, "Store app", "ApplicationFrameWindow", 1020);
+    state.injected_shell_cloaked_hwnds.insert(20);
+    state.handle_window_event(WindowEvent::Created(20, 100));
+    assert_eq!(membership_count(&state, 20), 0);
+    state.handle_window_event(WindowEvent::Destroyed(20));
+    state.injected_shell_cloaked_hwnds.remove(&20);
+
+    state.handle_window_event(WindowEvent::Uncloaked(10, 200));
+    state.handle_window_event(WindowEvent::Uncloaked(20, 200));
+    assert_eq!(state.find_window_workspace(10), Some((1, 0)));
+    assert_eq!(membership_count(&state, 10), 1);
+    assert_eq!(membership_count(&state, 20), 0);
+    assert_eq!(state.focused_workspace().unwrap().columns().len(), 1);
+}
+
+#[test]
 fn recycled_managed_hwnd_destroyed_before_create_drops_old_lifetime() {
     let mut state = state();
     let old_token = admit(&mut state, 10);

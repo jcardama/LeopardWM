@@ -416,7 +416,6 @@ pub(crate) enum AdmitOutcome {
     TransientSuppressed,
     NoWindowInfo,
     TopmostPopup,
-    #[cfg_attr(test, allow(dead_code))]
     ShellCloaked,
     ElevationBlocked,
     TransientConsoleHost,
@@ -427,8 +426,14 @@ pub(crate) enum AdmitOutcome {
 
 impl AppState {
     pub(crate) fn handle_window_event(&mut self, event: WindowEvent) {
+        if let WindowEvent::Uncloaked(hwnd, _) = &event {
+            if !self.shell_cloaked_at_admission.contains(hwnd) {
+                return;
+            }
+        }
         if let Some(hwnd) = match &event {
             WindowEvent::Created(hwnd, _)
+            | WindowEvent::Uncloaked(hwnd, _)
             | WindowEvent::Destroyed(hwnd)
             | WindowEvent::Hidden(hwnd, _)
             | WindowEvent::Focused(hwnd, _)
@@ -450,6 +455,7 @@ impl AppState {
 
         let window_id = match &event {
             WindowEvent::Created(id, _)
+            | WindowEvent::Uncloaked(id, _)
             | WindowEvent::Destroyed(id)
             | WindowEvent::Hidden(id, _)
             | WindowEvent::Focused(id, _)
@@ -479,9 +485,18 @@ impl AppState {
 
         match event {
             WindowEvent::Created(hwnd, event_time_ms) => {
-                self.on_window_created(hwnd, event_time_ms)
+                self.on_window_created(hwnd, event_time_ms);
             }
-            WindowEvent::Destroyed(hwnd) => self.on_window_destroyed_or_hidden(hwnd, None),
+            WindowEvent::Uncloaked(hwnd, event_time_ms) => {
+                self.shell_cloaked_at_admission.remove(&hwnd);
+                if self.on_window_created(hwnd, event_time_ms) == AdmitOutcome::ShellCloaked {
+                    self.shell_cloaked_at_admission.insert(hwnd);
+                }
+            }
+            WindowEvent::Destroyed(hwnd) => {
+                self.shell_cloaked_at_admission.remove(&hwnd);
+                self.on_window_destroyed_or_hidden(hwnd, None);
+            }
             WindowEvent::Hidden(hwnd, event_time_ms) => {
                 self.on_window_destroyed_or_hidden(hwnd, Some(event_time_ms))
             }
@@ -862,8 +877,30 @@ impl AppState {
         }
     }
 
-    fn on_window_created(&mut self, hwnd: u64, event_time_ms: u32) {
-        let _ = self.try_admit_window_at(hwnd, AdmissionKind::Automatic, Some(event_time_ms));
+    fn window_is_shell_cloaked(&self, hwnd: u64) -> bool {
+        #[cfg(test)]
+        {
+            self.injected_shell_cloaked_hwnds.contains(&hwnd)
+        }
+        #[cfg(not(test))]
+        {
+            leopardwm_platform_win32::is_window_shell_cloaked(hwnd)
+        }
+    }
+
+    fn window_on_current_virtual_desktop(&self, hwnd: u64) -> bool {
+        #[cfg(test)]
+        {
+            !self.injected_off_current_desktop_hwnds.contains(&hwnd)
+        }
+        #[cfg(not(test))]
+        {
+            leopardwm_platform_win32::is_window_on_current_virtual_desktop(hwnd)
+        }
+    }
+
+    fn on_window_created(&mut self, hwnd: u64, event_time_ms: u32) -> AdmitOutcome {
+        self.try_admit_window_at(hwnd, AdmissionKind::Automatic, Some(event_time_ms))
     }
 
     /// Focus recovery and an unmanaged restore are not Create/Show events.
@@ -968,6 +1005,25 @@ impl AppState {
         if replaced {
             self.reconcile_replaced_lifetime_admission(hwnd);
         }
+        if outcome == AdmitOutcome::ShellCloaked {
+            let on_current_desktop = self.window_on_current_virtual_desktop(hwnd);
+            if let Some(info) = self.lookup_window_info(hwnd) {
+                debug!(
+                    "Ignoring shell-cloaked window: {} ({}) current desktop: {}",
+                    info.title, info.class_name, on_current_desktop
+                );
+            }
+            if kind == AdmissionKind::Automatic && on_current_desktop {
+                self.shell_cloaked_at_admission.insert(hwnd);
+            }
+        } else if kind == AdmissionKind::Automatic
+            || matches!(
+                outcome,
+                AdmitOutcome::Admitted | AdmitOutcome::AdmittedPlacementFailed
+            )
+        {
+            self.shell_cloaked_at_admission.remove(&hwnd);
+        }
         outcome
     }
 
@@ -1030,12 +1086,7 @@ impl AppState {
             // Skip shell-cloaked windows (suspended UWP frames, windows
             // on other virtual desktops). These are valid HWNDs with
             // WS_VISIBLE but no rendered content.
-            #[cfg(not(test))]
-            if leopardwm_platform_win32::is_window_shell_cloaked(hwnd) {
-                debug!(
-                    "Ignoring shell-cloaked window: {} ({})",
-                    win_info.title, win_info.class_name
-                );
+            if self.window_is_shell_cloaked(hwnd) {
                 return AdmitOutcome::ShellCloaked;
             }
 

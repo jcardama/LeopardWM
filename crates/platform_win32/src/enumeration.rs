@@ -2,9 +2,9 @@
 
 use crate::event_hooks::{
     EVENT_OBJECT_CREATE, EVENT_OBJECT_DESTROY, EVENT_OBJECT_FOCUS, EVENT_OBJECT_HIDE,
-    EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_SHOW, EVENT_SYSTEM_FOREGROUND,
-    EVENT_SYSTEM_MINIMIZEEND, EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MOVESIZEEND,
-    EVENT_SYSTEM_MOVESIZESTART,
+    EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_SHOW, EVENT_OBJECT_UNCLOAKED,
+    EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MINIMIZEEND, EVENT_SYSTEM_MINIMIZESTART,
+    EVENT_SYSTEM_MOVESIZEEND, EVENT_SYSTEM_MOVESIZESTART,
 };
 use crate::types::{MonitorId, MonitorInfo, Win32Error, WindowInfo};
 use leopardwm_core_layout::{Rect, WindowId};
@@ -576,7 +576,7 @@ pub(crate) fn should_emit_window_event_for(event: u32, hwnd: HWND) -> bool {
     match event {
         // Creation can happen before title is set; keep manageability checks but
         // allow empty title and cloaked transitional states.
-        EVENT_OBJECT_CREATE | EVENT_OBJECT_SHOW => {
+        EVENT_OBJECT_CREATE | EVENT_OBJECT_SHOW | EVENT_OBJECT_UNCLOAKED => {
             should_emit_window_event_with_policy(hwnd, true, false, false)
         }
         // Focus must not be blocked by cloaked-state checks or empty titles.
@@ -603,6 +603,7 @@ pub(crate) fn should_filter_window_event_by_manageability(event: u32) -> bool {
         EVENT_OBJECT_CREATE
             | EVENT_OBJECT_DESTROY
             | EVENT_OBJECT_SHOW
+            | EVENT_OBJECT_UNCLOAKED
             | EVENT_OBJECT_HIDE
             | EVENT_SYSTEM_FOREGROUND
             | EVENT_SYSTEM_MINIMIZESTART

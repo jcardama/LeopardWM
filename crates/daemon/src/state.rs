@@ -574,6 +574,7 @@ pub(crate) struct AppState {
     pub(crate) deferred_moved_or_resized: HashSet<u64>,
     pub(crate) deferred_physical_landings: HashSet<u64>,
     pub(crate) size_ignored_windows: HashSet<u64>,
+    pub(crate) shell_cloaked_at_admission: HashSet<u64>,
     pub(crate) window_move_recheck_attempts: HashMap<u64, WindowMoveRecheckAttempt>,
     /// Last-placed layout rect per managed window (in layout coordinates, the
     /// rect the layout engine asked for — not the OS-level window rect with
@@ -762,6 +763,10 @@ pub(crate) struct AppState {
     pub(crate) injected_identity_read_count: AtomicUsize,
     #[cfg(test)]
     pub(crate) injected_manage_block: HashMap<u64, leopardwm_platform_win32::ManageBlock>,
+    #[cfg(test)]
+    pub(crate) injected_shell_cloaked_hwnds: HashSet<u64>,
+    #[cfg(test)]
+    pub(crate) injected_off_current_desktop_hwnds: HashSet<u64>,
     #[cfg(test)]
     pub(crate) injected_enumerated_windows: Option<Vec<leopardwm_platform_win32::WindowInfo>>,
     #[cfg(test)]
@@ -1120,6 +1125,7 @@ impl AppState {
             deferred_moved_or_resized: HashSet::new(),
             deferred_physical_landings: HashSet::new(),
             size_ignored_windows: HashSet::new(),
+            shell_cloaked_at_admission: HashSet::new(),
             window_move_recheck_attempts: HashMap::new(),
             last_placed_layout_rects: HashMap::new(),
             last_physical_presentations: HashMap::new(),
@@ -1204,6 +1210,10 @@ impl AppState {
             injected_identity_read_count: AtomicUsize::new(0),
             #[cfg(test)]
             injected_manage_block: HashMap::new(),
+            #[cfg(test)]
+            injected_shell_cloaked_hwnds: HashSet::new(),
+            #[cfg(test)]
+            injected_off_current_desktop_hwnds: HashSet::new(),
             #[cfg(test)]
             injected_enumerated_windows: None,
             #[cfg(test)]
