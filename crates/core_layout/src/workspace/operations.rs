@@ -93,7 +93,13 @@ impl Workspace {
                     && previous.visible_width == current.visible_width
                     && same_columns
                 {
+                    let visible_width = current.visible_width;
                     *release = Some(current);
+                    if self.fullscreen_window.is_none() {
+                        let free_space =
+                            visible_width.saturating_sub(self.total_width_for_row(row_idx));
+                        return (-(free_space as f64), 0.0);
+                    }
                     return (min_scroll, max_scroll);
                 }
                 *release = None;
@@ -139,6 +145,20 @@ impl Workspace {
             gap: self.gap.max(0),
             visible_width: self.visible_width(viewport_width),
         }
+    }
+
+    fn fit_release_active_for_row(&self, row_idx: usize, viewport_width: i32) -> bool {
+        if self.center_columns != CenterColumns::Fit || self.fullscreen_window.is_some() {
+            return false;
+        }
+        let Some(row) = self.rows.get(row_idx) else {
+            return false;
+        };
+        if row.fit_release.borrow().is_none() {
+            return false;
+        }
+        self.scroll_bounds_for_row(row_idx, viewport_width, 0.0, 0.0);
+        row.fit_release.borrow().is_some()
     }
 
     pub(super) fn clamp_scroll_offset_for_row(
@@ -205,7 +225,9 @@ impl Workspace {
         let row_total_w = self.total_width_for_row(row_idx);
         let current_scroll = self.rows[row_idx].scroll_offset;
 
-        let unconstrained_offset = if should_center {
+        let unconstrained_offset = if self.fit_release_active_for_row(row_idx, viewport_width) {
+            current_scroll
+        } else if should_center {
             let col_center = col_x.saturating_add(col_width / 2);
             (col_center.saturating_sub(vis_w / 2)) as f64
         } else {
@@ -394,7 +416,7 @@ impl Workspace {
             }
             // Outside fullscreen, centering needs a viewport; defer bounds repair
             // to reveal/reconcile so removal preserves the animation's start.
-            if !(self.center_columns != CenterColumns::Off) || self.fullscreen_window.is_some() {
+            if self.center_columns == CenterColumns::Off || self.fullscreen_window.is_some() {
                 let max_scroll = self.total_width_for_row(row_idx).max(0) as f64;
                 let row = &mut self.rows[row_idx];
                 row.scroll_offset = row.scroll_offset.clamp(0.0, max_scroll);
@@ -750,7 +772,7 @@ impl Workspace {
             let bounds = min_scroll..=max_scroll;
             if bounds.contains(&target)
                 && (bounds.contains(&current)
-                    || (((self.center_columns != CenterColumns::Off) || self.rows.len() > 1)
+                    || ((self.center_columns != CenterColumns::Off || self.rows.len() > 1)
                         && self.fullscreen_window.is_none()
                         && self.rows[row_idx].active_animation.is_some()))
             {
@@ -917,7 +939,12 @@ impl Workspace {
         };
 
         let vis_w = self.visible_width(viewport_width);
-        let target_offset = if self.should_center(col_width, vis_w) {
+        let target_offset = if self.fit_release_active_for_row(fr, viewport_width) {
+            self.rows[fr]
+                .active_animation
+                .as_ref()
+                .map_or(self.rows[fr].scroll_offset, |anim| anim.target())
+        } else if self.should_center(col_width, vis_w) {
             let col_center = col_x.saturating_add(col_width / 2);
             (col_center.saturating_sub(vis_w / 2)) as f64
         } else {
@@ -987,14 +1014,14 @@ impl Workspace {
         };
 
         let vis_w = self.visible_width(viewport_width);
-        if self.center_columns == CenterColumns::Fit
-            && self.fullscreen_window.is_none()
-            && alignment != ColumnAlignment::Center
-            && self.total_width_for_row(fr) <= vis_w
-        {
-            let signature = self.fit_signature(fr, viewport_width);
-            if !signature.columns.is_empty() {
-                *self.rows[fr].fit_release.borrow_mut() = Some(signature);
+        if self.center_columns == CenterColumns::Fit {
+            if alignment == ColumnAlignment::Center {
+                *self.rows[fr].fit_release.borrow_mut() = None;
+            } else if self.fullscreen_window.is_none() && self.total_width_for_row(fr) <= vis_w {
+                let signature = self.fit_signature(fr, viewport_width);
+                if !signature.columns.is_empty() {
+                    *self.rows[fr].fit_release.borrow_mut() = Some(signature);
+                }
             }
         }
         let raw_target = match alignment {

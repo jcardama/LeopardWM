@@ -178,6 +178,68 @@ mod tests {
     }
 
     #[test]
+    fn fit_alignment_sequences_preserve_edges_and_restore_center() {
+        let alignments = [
+            ColumnAlignment::Left,
+            ColumnAlignment::Right,
+            ColumnAlignment::Center,
+        ];
+        for reduce_motion in [false, true] {
+            for past_edges in [false, true] {
+                for mode in [
+                    CenteringMode::Center,
+                    CenteringMode::JustInView,
+                    CenteringMode::OnOverflow,
+                ] {
+                    let mut left = None;
+                    let mut right = None;
+                    for first in alignments {
+                        for second in [
+                            None,
+                            Some(ColumnAlignment::Left),
+                            Some(ColumnAlignment::Right),
+                            Some(ColumnAlignment::Center),
+                        ] {
+                            let mut ws = Workspace::with_gaps(10, 20);
+                            ws.set_center_columns(CenterColumns::Fit);
+                            ws.set_reduce_motion(reduce_motion);
+                            ws.set_center_past_edges(past_edges);
+                            ws.set_centering_mode(mode);
+                            ws.insert_window(1, Some(200)).unwrap();
+                            ws.insert_window(2, Some(200)).unwrap();
+                            ws.ensure_focused_visible(1000);
+                            assert_eq!(ws.scroll_offset(), -275.0);
+                            for alignment in [Some(first), second].into_iter().flatten() {
+                                let expected = match alignment {
+                                    ColumnAlignment::Left => 0.0,
+                                    ColumnAlignment::Right => -550.0,
+                                    ColumnAlignment::Center => -275.0,
+                                };
+                                ws.align_focused_column_animated(alignment, 1000);
+                                ws.stop_animation();
+                                assert_eq!(ws.scroll_offset(), expected, "{first:?} {second:?} {alignment:?} motion={reduce_motion} edges={past_edges} mode={mode:?}");
+                                ws.reconcile_scroll_bounds(1000);
+                                assert_eq!(ws.scroll_offset(), expected);
+                                ws.ensure_focused_visible_animated(1000);
+                                ws.stop_animation();
+                                assert_eq!(ws.scroll_offset(), expected, "reveal {first:?} {second:?} {alignment:?} motion={reduce_motion} edges={past_edges} mode={mode:?}");
+                            }
+                            if second.is_none() {
+                                match first {
+                                    ColumnAlignment::Left => left = Some(ws.scroll_offset()),
+                                    ColumnAlignment::Right => right = Some(ws.scroll_offset()),
+                                    ColumnAlignment::Center => (),
+                                }
+                            }
+                        }
+                    }
+                    assert_ne!(left.unwrap(), right.unwrap());
+                }
+            }
+        }
+    }
+
+    #[test]
     fn fit_alignment_release_survives_focus_and_stack_changes() {
         for alignment in [ColumnAlignment::Left, ColumnAlignment::Right] {
             let mut ws = Workspace::with_gaps(10, 20);
@@ -191,13 +253,20 @@ mod tests {
             assert_eq!(ws.scroll_offset(), -275.0);
             ws.align_focused_column_animated(alignment, 1000);
             ws.stop_animation();
-            assert_eq!(ws.scroll_offset(), 0.0);
+            let expected = if alignment == ColumnAlignment::Left {
+                0.0
+            } else {
+                -550.0
+            };
+            assert_eq!(ws.scroll_offset(), expected);
             ws.insert_window_in_column(3, 1).unwrap();
             ws.reconcile_scroll_bounds(1000);
-            assert_eq!(ws.scroll_offset(), 0.0);
+            assert_eq!(ws.scroll_offset(), expected);
             ws.focus_window(1).unwrap();
             ws.reconcile_scroll_bounds(1000);
-            assert_eq!(ws.scroll_offset(), 0.0);
+            ws.ensure_focused_visible_animated(1000);
+            ws.stop_animation();
+            assert_eq!(ws.scroll_offset(), expected);
         }
     }
 
