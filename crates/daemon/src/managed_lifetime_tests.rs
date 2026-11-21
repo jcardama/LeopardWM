@@ -213,14 +213,47 @@ fn still_cloaked_uncloak_retries_later() {
     inject(&mut state, 10, "Store app", "ApplicationFrameWindow", 1010);
     state.injected_shell_cloaked_hwnds.insert(10);
     state.handle_window_event(WindowEvent::Created(10, 100));
+    let started = Instant::now() - Duration::from_secs(1);
+    state.shell_cloaked_at_admission.insert(10, started);
+    state.handle_window_event(WindowEvent::Uncloaked(10, 200));
+    assert_eq!(membership_count(&state, 10), 0);
+    assert_eq!(state.shell_cloaked_at_admission.get(&10), Some(&started));
+
+    state.injected_shell_cloaked_hwnds.remove(&10);
+    state.handle_window_event(WindowEvent::Uncloaked(10, 300));
+    assert_eq!(state.find_window_workspace(10), Some((1, 0)));
+}
+
+#[test]
+fn off_desktop_still_cloaked_uncloak_cancels_retry() {
+    let mut state = state();
+    inject(&mut state, 10, "Store app", "ApplicationFrameWindow", 1010);
+    state.injected_shell_cloaked_hwnds.insert(10);
+    state.handle_window_event(WindowEvent::Created(10, 100));
     state.injected_off_current_desktop_hwnds.insert(10);
     state.handle_window_event(WindowEvent::Uncloaked(10, 200));
     assert_eq!(membership_count(&state, 10), 0);
-
     state.injected_shell_cloaked_hwnds.remove(&10);
     state.injected_off_current_desktop_hwnds.remove(&10);
     state.handle_window_event(WindowEvent::Uncloaked(10, 300));
-    assert_eq!(state.find_window_workspace(10), Some((1, 0)));
+    assert_eq!(membership_count(&state, 10), 0);
+}
+
+#[test]
+fn expired_cloaked_create_is_not_admitted_on_uncloak() {
+    let mut state = state();
+    inject(&mut state, 10, "Store app", "ApplicationFrameWindow", 1010);
+    state.injected_shell_cloaked_hwnds.insert(10);
+    state.handle_window_event(WindowEvent::Created(10, 100));
+    state.shell_cloaked_at_admission.insert(
+        10,
+        Instant::now() - crate::state::SHELL_CLOAK_RETRY_TTL - Duration::from_secs(1),
+    );
+    state.handle_window_event(WindowEvent::Created(10, 200));
+    state.injected_shell_cloaked_hwnds.remove(&10);
+    state.handle_window_event(WindowEvent::Uncloaked(10, 300));
+    assert_eq!(membership_count(&state, 10), 0);
+    assert!(!state.shell_cloaked_at_admission.contains_key(&10));
 }
 
 #[test]

@@ -154,6 +154,8 @@ pub(crate) const CROSSFADE_BARRIER_MAX_AGE: Duration = Duration::from_secs(2);
 pub(crate) const TRANSIENT_WINDOW_THRESHOLD: Duration = Duration::from_secs(30);
 /// How long transient window HWNDs stay in the suppression list before expiring.
 pub(crate) const RECENTLY_HIDDEN_TTL: Duration = Duration::from_secs(300);
+// Startup cloaks are brief; older records can be revealed by a desktop switch.
+pub(crate) const SHELL_CLOAK_RETRY_TTL: Duration = Duration::from_secs(10);
 /// Keep restore placement exemptions brief to avoid affecting unrelated follows.
 pub(crate) const RECENTLY_RESTORED_MANAGED_WINDOW_TTL: Duration = Duration::from_millis(1500);
 
@@ -574,7 +576,7 @@ pub(crate) struct AppState {
     pub(crate) deferred_moved_or_resized: HashSet<u64>,
     pub(crate) deferred_physical_landings: HashSet<u64>,
     pub(crate) size_ignored_windows: HashSet<u64>,
-    pub(crate) shell_cloaked_at_admission: HashSet<u64>,
+    pub(crate) shell_cloaked_at_admission: HashMap<u64, std::time::Instant>,
     pub(crate) window_move_recheck_attempts: HashMap<u64, WindowMoveRecheckAttempt>,
     /// Last-placed layout rect per managed window (in layout coordinates, the
     /// rect the layout engine asked for — not the OS-level window rect with
@@ -1125,7 +1127,7 @@ impl AppState {
             deferred_moved_or_resized: HashSet::new(),
             deferred_physical_landings: HashSet::new(),
             size_ignored_windows: HashSet::new(),
-            shell_cloaked_at_admission: HashSet::new(),
+            shell_cloaked_at_admission: HashMap::new(),
             window_move_recheck_attempts: HashMap::new(),
             last_placed_layout_rects: HashMap::new(),
             last_physical_presentations: HashMap::new(),

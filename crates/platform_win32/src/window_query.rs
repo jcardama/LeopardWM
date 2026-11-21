@@ -2,45 +2,13 @@
 
 use leopardwm_core_layout::{Rect, WindowId};
 use std::ffi::c_void;
-use windows::Win32::Foundation::{HWND, LPARAM, RECT, RPC_E_CHANGED_MODE, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS};
-use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_APARTMENTTHREADED,
-};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_SHIFT};
-use windows::Win32::UI::Shell::{IVirtualDesktopManager, VirtualDesktopManager};
 use windows::Win32::UI::WindowsAndMessaging::{
     GetWindowLongW, GetWindowRect, IsIconic, IsWindow, IsWindowVisible, GWL_STYLE, WS_CAPTION,
     WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_THICKFRAME,
 };
-
-/// Return whether the window is on the current Windows virtual desktop, failing closed.
-pub fn is_window_on_current_virtual_desktop(hwnd: WindowId) -> bool {
-    if hwnd == 0 {
-        return false;
-    }
-    unsafe {
-        let init = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-        if init.is_err() && init != RPC_E_CHANGED_MODE {
-            return false;
-        }
-        let result = (|| {
-            let manager: IVirtualDesktopManager =
-                CoCreateInstance(&VirtualDesktopManager, None, CLSCTX_ALL).ok()?;
-            Some(
-                manager
-                    .IsWindowOnCurrentVirtualDesktop(HWND(hwnd as *mut c_void))
-                    .ok()?
-                    .as_bool(),
-            )
-        })()
-        .unwrap_or(false);
-        if init.is_ok() {
-            CoUninitialize();
-        }
-        result
-    }
-}
 
 /// Query DWM for the window's corner-rounding preference and map to a pixel
 /// radius matching what Windows itself draws.

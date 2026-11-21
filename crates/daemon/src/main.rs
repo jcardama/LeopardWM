@@ -1966,6 +1966,11 @@ async fn process_window_event(ctx: &mut EventLoopCtx<'_>, win_event: WindowEvent
     } else {
         {
             let mut state = ctx.state.lock().await;
+            if let WindowEvent::Uncloaked(hwnd, _) = win_event {
+                if !state.has_pending_uncloak_retry(hwnd) {
+                    return;
+                }
+            }
             state.handle_window_event(win_event);
 
             // Keep an open overview in sync with window lifecycle changes

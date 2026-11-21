@@ -41,6 +41,7 @@ mod placement;
 mod system;
 mod types;
 mod user_press;
+mod virtual_desktop;
 mod visibility;
 mod window_identity;
 mod window_query;
@@ -90,6 +91,7 @@ pub use system::{
     is_on_battery_or_power_saver, scale_px, set_dpi_awareness,
 };
 pub use types::{MonitorId, MonitorInfo, PlatformConfig, Win32Error, WindowInfo};
+pub use virtual_desktop::is_window_on_current_virtual_desktop;
 pub use visibility::{
     cascade_windows, emergency_restore_windows, is_move_offscreen_sentinel_position,
     is_move_offscreen_sentinel_rect, move_window_offscreen, position_window,
@@ -106,9 +108,8 @@ pub use window_query::{
     cursor_is_over_window, get_cursor_pos, get_window_chrome_rect, get_window_corner_radius,
     get_window_icon, get_window_visible_rect, is_cursor_on_resize_border, is_dialog_like_window,
     is_fixed_caption_window, is_frameless_fixed_size_window, is_frameless_popup,
-    is_shift_key_pressed, is_valid_window, is_window_maximized,
-    is_window_on_current_virtual_desktop, is_window_shell_cloaked, is_window_valid,
-    is_window_visible, window_minimized_state, window_presence, WindowPresence,
+    is_shift_key_pressed, is_valid_window, is_window_maximized, is_window_shell_cloaked,
+    is_window_valid, is_window_visible, window_minimized_state, window_presence, WindowPresence,
 };
 pub use window_style::{
     queue_maximized_window_restore, remove_maximizebox, reset_window_border_color,

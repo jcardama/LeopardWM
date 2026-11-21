@@ -425,9 +425,20 @@ pub(crate) enum AdmitOutcome {
 }
 
 impl AppState {
+    pub(crate) fn has_pending_uncloak_retry(&mut self, hwnd: u64) -> bool {
+        if self
+            .shell_cloaked_at_admission
+            .get(&hwnd)
+            .is_some_and(|started| started.elapsed() >= crate::state::SHELL_CLOAK_RETRY_TTL)
+        {
+            self.shell_cloaked_at_admission.remove(&hwnd);
+        }
+        self.shell_cloaked_at_admission.contains_key(&hwnd)
+    }
+
     pub(crate) fn handle_window_event(&mut self, event: WindowEvent) {
         if let WindowEvent::Uncloaked(hwnd, _) = &event {
-            if !self.shell_cloaked_at_admission.contains(hwnd) {
+            if !self.has_pending_uncloak_retry(*hwnd) {
                 return;
             }
         }
@@ -488,9 +499,12 @@ impl AppState {
                 self.on_window_created(hwnd, event_time_ms);
             }
             WindowEvent::Uncloaked(hwnd, event_time_ms) => {
-                self.shell_cloaked_at_admission.remove(&hwnd);
-                if self.on_window_created(hwnd, event_time_ms) == AdmitOutcome::ShellCloaked {
-                    self.shell_cloaked_at_admission.insert(hwnd);
+                let started = self.shell_cloaked_at_admission.remove(&hwnd);
+                self.on_window_created(hwnd, event_time_ms);
+                if let (Some(started), Some(record)) =
+                    (started, self.shell_cloaked_at_admission.get_mut(&hwnd))
+                {
+                    *record = started;
                 }
             }
             WindowEvent::Destroyed(hwnd) => {
@@ -1005,7 +1019,7 @@ impl AppState {
         if replaced {
             self.reconcile_replaced_lifetime_admission(hwnd);
         }
-        if outcome == AdmitOutcome::ShellCloaked {
+        if outcome == AdmitOutcome::ShellCloaked && kind == AdmissionKind::Automatic {
             let on_current_desktop = self.window_on_current_virtual_desktop(hwnd);
             if let Some(info) = self.lookup_window_info(hwnd) {
                 debug!(
@@ -1013,12 +1027,15 @@ impl AppState {
                     info.title, info.class_name, on_current_desktop
                 );
             }
-            if kind == AdmissionKind::Automatic {
-                if on_current_desktop {
-                    self.shell_cloaked_at_admission.insert(hwnd);
-                } else {
-                    self.shell_cloaked_at_admission.remove(&hwnd);
-                }
+            if on_current_desktop {
+                self.shell_cloaked_at_admission.retain(|id, started| {
+                    *id == hwnd || started.elapsed() < crate::state::SHELL_CLOAK_RETRY_TTL
+                });
+                self.shell_cloaked_at_admission
+                    .entry(hwnd)
+                    .or_insert_with(std::time::Instant::now);
+            } else {
+                self.shell_cloaked_at_admission.remove(&hwnd);
             }
         } else if kind == AdmissionKind::Automatic
             || matches!(
