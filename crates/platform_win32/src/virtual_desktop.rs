@@ -96,6 +96,7 @@ impl Query for DesktopQuery {
         if !self.initialized {
             return Err(());
         }
+        self.recreate_manager();
         unsafe {
             let result = self
                 .manager
