@@ -32,8 +32,15 @@ pub struct WorkspaceRow {
     pub(crate) fit_release: std::cell::RefCell<Option<FitRelease>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FitEdge {
+    Left,
+    Right,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FitRelease {
+    pub edge: FitEdge,
     pub columns: Vec<(Vec<WindowId>, i32)>,
     pub gap: i32,
     pub visible_width: i32,

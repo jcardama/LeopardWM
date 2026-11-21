@@ -240,6 +240,37 @@ mod tests {
     }
 
     #[test]
+    fn fit_right_alignment_survives_minimize_during_animation() {
+        let mut ws = Workspace::with_gaps(10, 20);
+        ws.set_center_columns(CenterColumns::Fit);
+        ws.insert_window(1, Some(200)).unwrap();
+        ws.insert_window(2, Some(200)).unwrap();
+        ws.insert_window_in_column(3, 1).unwrap();
+        ws.ensure_focused_visible(1000);
+        assert_eq!(ws.scroll_offset(), -275.0);
+        ws.align_focused_column_animated(ColumnAlignment::Right, 1000);
+        assert!(ws.is_animating());
+        assert!(ws.mark_minimized(3));
+        assert!(!ws.is_animating());
+        ws.reconcile_scroll_bounds(1000);
+        assert_eq!(ws.scroll_offset(), -550.0);
+    }
+
+    #[test]
+    fn fit_right_alignment_ignores_inactive_focused_column() {
+        let mut ws = Workspace::with_gaps(10, 20);
+        ws.set_center_columns(CenterColumns::Fit);
+        ws.insert_window(1, Some(200)).unwrap();
+        ws.insert_window(2, Some(200)).unwrap();
+        assert!(ws.mark_minimized(2));
+        assert_eq!(ws.focused_column_index(), 1);
+        ws.reconcile_scroll_bounds(1000);
+        ws.align_focused_column_animated(ColumnAlignment::Right, 1000);
+        ws.stop_animation();
+        assert_eq!(ws.scroll_offset(), -760.0);
+    }
+
+    #[test]
     fn fit_alignment_release_survives_focus_and_stack_changes() {
         for alignment in [ColumnAlignment::Left, ColumnAlignment::Right] {
             let mut ws = Workspace::with_gaps(10, 20);

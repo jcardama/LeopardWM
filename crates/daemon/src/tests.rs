@@ -22130,6 +22130,36 @@ fn center_columns_reload_enabling_animates_and_disabling_repairs_bounds() {
 }
 
 #[test]
+fn fit_right_alignment_survives_fullscreen_config_reload() {
+    use crate::config::CenterColumnsConfig;
+    use leopardwm_core_layout::ColumnAlignment;
+    let mut config = test_config();
+    config.layout.center_columns.center_columns = CenterColumnsConfig::Fit;
+    config.layout.gap = 10;
+    config.layout.outer_gap_left = 20;
+    config.layout.outer_gap_right = 20;
+    let mut monitors = test_monitors();
+    monitors[0].work_area.width = 1000;
+    let mut state = AppState::new_with_config(config.clone(), monitors);
+    let ws = &mut state.workspaces.get_mut(&1).unwrap()[0];
+    ws.insert_window(100, Some(200)).unwrap();
+    ws.insert_window(200, Some(200)).unwrap();
+    ws.ensure_focused_visible(1000);
+    ws.align_focused_column_animated(ColumnAlignment::Right, 1000);
+    ws.stop_animation();
+    assert_eq!(ws.scroll_offset(), -550.0);
+    assert!(ws.toggle_fullscreen());
+    state.apply_config(config);
+    let ws = &mut state.workspaces.get_mut(&1).unwrap()[0];
+    assert!(ws.is_fullscreen());
+    ws.stop_animation();
+    assert!(!ws.toggle_fullscreen());
+    ws.ensure_focused_visible_animated(1000);
+    ws.stop_animation();
+    assert_eq!(ws.scroll_offset(), -550.0);
+}
+
+#[test]
 fn center_columns_reload_updates_existing_workspace() {
     use crate::config::CenterColumnsConfig;
     let mut config = test_config();
