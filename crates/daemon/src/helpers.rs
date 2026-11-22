@@ -238,22 +238,21 @@ impl AppState {
                     self.config.animation.scroll_duration_ms,
                     self.config.animation.easing,
                 );
-                if leaving_column_centering {
-                    workspace.reconcile_leaving_column_centering(viewport_width);
-                } else {
+                if !leaving_column_centering {
                     workspace.set_center_columns(new_center_columns);
                 }
 
-                let rescaled = workspace.rescale_column_widths(
+                workspace.rescale_column_widths(
                     old_gap,
                     old_ol,
                     old_or,
                     viewport_width,
                     viewport_width,
                 );
-                if (leaving_column_centering && rescaled)
-                    || (old_center_columns == CenterColumns::Fit
-                        && new_center_columns == CenterColumns::Single)
+                if leaving_column_centering {
+                    workspace.reconcile_leaving_column_centering(viewport_width);
+                } else if old_center_columns == CenterColumns::Fit
+                    && new_center_columns == CenterColumns::Single
                 {
                     workspace.reconcile_scroll_bounds(viewport_width);
                 }
