@@ -2138,12 +2138,14 @@ struct ConfigFile {
     path: Option<PathBuf>,
     last_seen: Option<Vec<u8>>,
     rejections: Vec<ConfigRejection>,
+    rejected_paths: Vec<PathBuf>,
 }
 
 static CONFIG_FILE: Mutex<ConfigFile> = Mutex::new(ConfigFile {
     path: None,
     last_seen: None,
     rejections: Vec::new(),
+    rejected_paths: Vec::new(),
 });
 
 pub(crate) fn config_rejection() -> Option<ConfigRejection> {
@@ -2335,6 +2337,9 @@ impl ConfigFile {
         bytes: Option<Vec<u8>>,
     ) {
         self.path = Some(path.to_path_buf());
+        if !self.rejected_paths.iter().any(|rejected| rejected == path) {
+            self.rejected_paths.push(path.to_path_buf());
+        }
         if let Some(index) = self
             .rejections
             .iter()
@@ -2422,11 +2427,7 @@ impl ConfigFile {
             file.write_all(content.as_bytes())?;
             file.sync_all()?;
             drop(file);
-            if self
-                .rejections
-                .iter()
-                .any(|rejection| rejection.path == path)
-            {
+            if self.rejected_paths.contains(&path) {
                 match fs::read(&target) {
                     Ok(current) => {
                         if self.last_seen.as_deref() != Some(current.as_slice()) {
@@ -5254,35 +5255,67 @@ mod tests {
     #[test]
     fn edits_after_preserved_save_are_backed_up_or_blocked() {
         for (source, recovered) in [("broken = [", false), ("[layout]\ngap = 'bad'\n", true)] {
-            let fixture = ConfigFileFixture::new();
-            let path = fixture.0.join("config.toml");
-            fs::write(&path, source).unwrap();
-            let mut file = ConfigFile::default();
-            assert_eq!(file.load(std::slice::from_ref(&path)).is_ok(), recovered);
-            file.save(&Config::default(), std::slice::from_ref(&path))
-                .unwrap();
-            let first_edit = "[layout]\ngap = 21\n";
-            fs::write(&path, first_edit).unwrap();
-            file.save(&Config::default(), std::slice::from_ref(&path))
-                .unwrap();
-            assert_eq!(
-                fs::read(corrupt_path(&path, ".corrupt.1")).unwrap(),
-                first_edit.as_bytes()
-            );
-            let second_edit = "[layout]\ngap = 31\n";
-            fs::write(&path, second_edit).unwrap();
-            assert!(file
-                .save(&Config::default(), std::slice::from_ref(&path))
-                .is_err());
-            assert_eq!(fs::read(&path).unwrap(), second_edit.as_bytes());
-            assert_eq!(
-                fs::read(corrupt_path(&path, ".corrupt")).unwrap(),
-                source.as_bytes()
-            );
-            assert_eq!(
-                file.rejections[0].preserved_at,
-                Some(corrupt_path(&path, ".corrupt"))
-            );
+            for event in [
+                "save",
+                "clean reload",
+                "recovered reload",
+                "reload and save",
+                "missing reload",
+            ] {
+                let fixture = ConfigFileFixture::new();
+                let path = fixture.0.join("config.toml");
+                let paths = std::slice::from_ref(&path);
+                fs::write(&path, source).unwrap();
+                let mut file = ConfigFile::default();
+                assert_eq!(file.load(paths).is_ok(), recovered);
+                file.save(&Config::default(), paths).unwrap();
+                assert_eq!(
+                    file.rejections[0].preserved_at,
+                    Some(corrupt_path(&path, ".corrupt"))
+                );
+                match event {
+                    "clean reload" => {
+                        file.load(paths).unwrap();
+                    }
+                    "recovered reload" => {
+                        fs::write(&path, "[layout]\ngap = 'bad'\n").unwrap();
+                        file.load(paths).unwrap();
+                    }
+                    "reload and save" => {
+                        let config = file.load(paths).unwrap();
+                        file.save(&config, paths).unwrap();
+                    }
+                    "missing reload" => {
+                        fs::remove_file(&path).unwrap();
+                        let config = file.load(paths).unwrap();
+                        file.save(&config, paths).unwrap();
+                    }
+                    "save" => {}
+                    _ => unreachable!(),
+                }
+                let first_edit = "[layout]\ngap = 21\n";
+                fs::write(&path, first_edit).unwrap();
+                let result = file.save(&Config::default(), paths);
+                if event == "recovered reload" && !recovered {
+                    assert!(result.is_err(), "{source:?} / {event}");
+                    assert_eq!(fs::read(&path).unwrap(), first_edit.as_bytes());
+                } else {
+                    result.unwrap();
+                    assert_eq!(
+                        fs::read(corrupt_path(&path, ".corrupt.1")).unwrap(),
+                        first_edit.as_bytes(),
+                        "{source:?} / {event}"
+                    );
+                    let second_edit = "[layout]\ngap = 31\n";
+                    fs::write(&path, second_edit).unwrap();
+                    assert!(file.save(&Config::default(), paths).is_err());
+                    assert_eq!(fs::read(&path).unwrap(), second_edit.as_bytes());
+                }
+                assert_eq!(
+                    fs::read(corrupt_path(&path, ".corrupt")).unwrap(),
+                    source.as_bytes()
+                );
+            }
         }
     }
 
