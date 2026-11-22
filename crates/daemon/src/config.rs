@@ -8,7 +8,9 @@ use leopardwm_platform_win32::parse_hotkey_string;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::PathBuf;
+use std::io::{ErrorKind, Write};
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 /// Executables whose windows should never be tiled (system dialogs, security prompts, etc.).
 /// These are appended as built-in Ignore rules after user-defined rules.
@@ -1562,17 +1564,7 @@ impl Config {
 
     /// Load the first existing path from [`config_paths`], or defaults if none exists.
     pub fn load() -> Result<Self> {
-        let paths = config_paths();
-
-        for path in &paths {
-            if path.exists() {
-                tracing::info!("Loading config from: {}", path.display());
-                return Self::load_from_path(path);
-            }
-        }
-
-        tracing::info!("No config file found, using defaults");
-        Ok(Self::default())
+        CONFIG_FILE.lock().unwrap().load(&config_paths())
     }
 
     /// Validate configuration values, clamping out-of-range fields and returning warnings.
@@ -2067,12 +2059,17 @@ impl Config {
         compiled
     }
 
+    #[cfg(test)]
     pub fn load_from_path(path: &PathBuf) -> Result<Self> {
         let content = fs::read_to_string(path)
             .with_context(|| format!("Failed to read config file: {}", path.display()))?;
 
-        let mut config: Config = toml::from_str(&content)
-            .with_context(|| format!("Failed to parse config file: {}", path.display()))?;
+        Self::parse(&content)
+            .with_context(|| format!("Failed to parse config file: {}", path.display()))
+    }
+
+    fn parse(content: &str) -> std::result::Result<Self, toml::de::Error> {
+        let mut config: Config = toml::from_str(content)?;
 
         config.layout.migrate_outer_gap();
 
@@ -2103,32 +2100,216 @@ impl Config {
         }
     }
 
-    /// Save configuration to the primary config path.
-    ///
-    /// Serializes the config to TOML and writes to `config_paths()[0]`.
-    /// Creates parent directories if they don't exist.
+    /// Save configuration to the loaded path, or the primary path if none was loaded.
     pub fn save(&self) -> Result<()> {
         // Unit tests exercise command handlers that persist config; never
         // let them overwrite the developer's real config file.
         if cfg!(test) {
             return Ok(());
         }
-        let paths = config_paths();
-        let path = paths
-            .first()
-            .ok_or_else(|| anyhow::anyhow!("No config path available"))?;
+        let result = CONFIG_FILE.lock().unwrap().save(self, &config_paths());
+        if let Err(error) = &result {
+            tracing::warn!("Failed to save config: {error:#}");
+        }
+        result
+    }
+}
 
-        if let Some(parent) = path.parent() {
+#[derive(Clone, Debug)]
+pub(crate) struct ConfigRejection {
+    pub path: PathBuf,
+    pub reason: String,
+    pub location: Option<(usize, usize)>,
+    pub preserved_at: Option<PathBuf>,
+    bytes: Option<Vec<u8>>,
+}
+
+#[derive(Default)]
+struct ConfigFile {
+    path: Option<PathBuf>,
+    rejections: Vec<ConfigRejection>,
+}
+
+static CONFIG_FILE: Mutex<ConfigFile> = Mutex::new(ConfigFile {
+    path: None,
+    rejections: Vec::new(),
+});
+
+pub(crate) fn config_rejection() -> Option<ConfigRejection> {
+    CONFIG_FILE.lock().unwrap().rejections.last().cloned()
+}
+
+fn corrupt_path(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(suffix);
+    PathBuf::from(name)
+}
+
+impl ConfigFile {
+    fn load(&mut self, paths: &[PathBuf]) -> Result<Config> {
+        for path in paths {
+            let bytes = match fs::read(path) {
+                Ok(bytes) => bytes,
+                Err(error) if error.kind() == ErrorKind::NotFound => continue,
+                Err(error) => {
+                    let reason = format!("Failed to read config file {}: {error}", path.display());
+                    self.reject(path, reason.clone(), None, None);
+                    return Err(anyhow::anyhow!(reason));
+                }
+            };
+            self.path = Some(path.clone());
+            let content = match std::str::from_utf8(&bytes) {
+                Ok(content) => content,
+                Err(error) => {
+                    let reason = format!(
+                        "Failed to read config file {} as UTF-8: {error}",
+                        path.display()
+                    );
+                    self.reject(path, reason.clone(), None, Some(bytes));
+                    return Err(anyhow::anyhow!(reason));
+                }
+            };
+            match Config::parse(content) {
+                Ok(config) => {
+                    self.rejections.clear();
+                    tracing::info!("Loading config from: {}", path.display());
+                    return Ok(config);
+                }
+                Err(error) => {
+                    let location = error.span().map(|span| {
+                        let prefix = &content[..span.start];
+                        (
+                            prefix.bytes().filter(|&byte| byte == b'\n').count() + 1,
+                            prefix.rsplit('\n').next().unwrap_or("").chars().count() + 1,
+                        )
+                    });
+                    let reason = format!("Failed to parse config file {}: {error}", path.display());
+                    self.reject(path, reason.clone(), location, Some(bytes));
+                    return Err(anyhow::anyhow!(reason));
+                }
+            }
+        }
+        tracing::info!("No config file found, using defaults");
+        Ok(Config::default())
+    }
+
+    fn reject(
+        &mut self,
+        path: &Path,
+        reason: String,
+        location: Option<(usize, usize)>,
+        bytes: Option<Vec<u8>>,
+    ) {
+        self.path = Some(path.to_path_buf());
+        if let Some(index) = self
+            .rejections
+            .iter()
+            .position(|r| r.path == path && r.bytes == bytes)
+        {
+            let mut rejection = self.rejections.remove(index);
+            rejection.reason = reason;
+            rejection.location = location;
+            self.rejections.push(rejection);
+        } else {
+            self.rejections.push(ConfigRejection {
+                path: path.to_path_buf(),
+                reason,
+                location,
+                preserved_at: None,
+                bytes,
+            });
+        }
+    }
+
+    fn save(&mut self, config: &Config, paths: &[PathBuf]) -> Result<()> {
+        let path = self
+            .path
+            .as_ref()
+            .or_else(|| paths.first())
+            .ok_or_else(|| anyhow::anyhow!("No config path available"))?
+            .clone();
+        let content =
+            toml::to_string_pretty(config).context("Failed to serialize config to TOML")?;
+        for rejection in &mut self.rejections {
+            if rejection.preserved_at.is_some() {
+                continue;
+            }
+            let bytes = rejection.bytes.as_ref().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Cannot preserve unreadable config file: {}",
+                    rejection.path.display()
+                )
+            })?;
+            let mut preserved = None;
+            let mut free = None;
+            for suffix in [".corrupt", ".corrupt.1"] {
+                let copy = corrupt_path(&rejection.path, suffix);
+                match fs::read(&copy) {
+                    Ok(existing) if existing == *bytes => {
+                        preserved = Some(copy);
+                        break;
+                    }
+                    Ok(_) => {}
+                    Err(error) if error.kind() == ErrorKind::NotFound => {
+                        if free.is_none() {
+                            free = Some(copy);
+                        }
+                    }
+                    Err(error) => {
+                        return Err(error).with_context(|| {
+                            format!("Failed to read config backup {}", copy.display())
+                        })
+                    }
+                }
+            }
+            if preserved.is_none() {
+                let copy = free.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "No free backup slot for rejected config {}",
+                        rejection.path.display()
+                    )
+                })?;
+                let mut file = fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&copy)
+                    .with_context(|| format!("Failed to preserve config at {}", copy.display()))?;
+                if let Err(error) = file.write_all(bytes).and_then(|()| file.sync_all()) {
+                    drop(file);
+                    let _ = fs::remove_file(&copy);
+                    return Err(error).with_context(|| {
+                        format!("Failed to preserve config at {}", copy.display())
+                    });
+                }
+                preserved = Some(copy);
+            }
+            rejection.preserved_at = preserved;
+        }
+        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
             fs::create_dir_all(parent).with_context(|| {
                 format!("Failed to create config directory: {}", parent.display())
             })?;
         }
-
-        let content = toml::to_string_pretty(self).context("Failed to serialize config to TOML")?;
-
-        fs::write(path, &content)
-            .with_context(|| format!("Failed to write config file: {}", path.display()))?;
-
+        let temp = corrupt_path(&path, &format!(".{}.tmp", uuid::Uuid::new_v4()));
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+            .with_context(|| {
+                format!("Failed to create temporary config file: {}", temp.display())
+            })?;
+        let result = (|| -> Result<()> {
+            file.write_all(content.as_bytes())?;
+            file.sync_all()?;
+            drop(file);
+            fs::rename(&temp, &path)?;
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(&temp);
+        }
+        result.with_context(|| format!("Failed to write config file: {}", path.display()))?;
+        self.path = Some(path.clone());
         tracing::info!("Config saved to: {}", path.display());
         Ok(())
     }
@@ -2139,8 +2320,13 @@ impl Config {
 pub fn ensure_config_on_disk() -> Result<Option<PathBuf>> {
     let paths = config_paths();
     for path in &paths {
-        if path.exists() {
-            return Ok(None);
+        match fs::metadata(path) {
+            Ok(_) => return Ok(None),
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("Failed to inspect config file: {}", path.display()))
+            }
         }
     }
     let path = paths
@@ -4444,6 +4630,174 @@ mod tests {
         assert!(loaded.behavior.floating_above_tiled);
         assert!(!loaded.behavior.track_focus_changes);
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    struct ConfigFileFixture(PathBuf);
+
+    impl ConfigFileFixture {
+        fn new() -> Self {
+            let path =
+                std::env::temp_dir().join(format!("leopardwm-config-{}", uuid::Uuid::new_v4()));
+            fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for ConfigFileFixture {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.0).unwrap();
+        }
+    }
+
+    #[test]
+    fn rejected_config_is_preserved_before_save() {
+        let fixture = ConfigFileFixture::new();
+        let path = fixture.0.join("config.toml");
+        let original = b"[layout]\ngap = 'bad'\n";
+        fs::write(&path, original).unwrap();
+        let mut file = ConfigFile::default();
+        assert!(file.load(std::slice::from_ref(&path)).is_err());
+        assert_eq!(file.rejections[0].location, Some((2, 7)));
+        file.save(&Config::default(), std::slice::from_ref(&path))
+            .unwrap();
+        assert_eq!(fs::read(corrupt_path(&path, ".corrupt")).unwrap(), original);
+        assert!(Config::load_from_path(&path).is_ok());
+        assert_eq!(
+            file.rejections[0].preserved_at,
+            Some(corrupt_path(&path, ".corrupt"))
+        );
+        assert!(file.load(std::slice::from_ref(&path)).is_ok());
+        assert!(file.rejections.is_empty());
+    }
+
+    #[test]
+    fn rejected_config_backup_slots_fail_closed_or_reuse_identical_bytes() {
+        for (first, second, expected) in [
+            (Some(&b"different"[..]), None, Some(".corrupt.1")),
+            (None, Some(&b"broken = ["[..]), Some(".corrupt.1")),
+            (
+                Some(&b"broken = ["[..]),
+                Some(&b"different"[..]),
+                Some(".corrupt"),
+            ),
+            (
+                Some(&b"different"[..]),
+                Some(&b"broken = ["[..]),
+                Some(".corrupt.1"),
+            ),
+            (Some(&b"different"[..]), Some(&b"also different"[..]), None),
+        ] {
+            let fixture = ConfigFileFixture::new();
+            let path = fixture.0.join("config.toml");
+            let original = b"broken = [";
+            fs::write(&path, original).unwrap();
+            if let Some(bytes) = first {
+                fs::write(corrupt_path(&path, ".corrupt"), bytes).unwrap();
+            }
+            if let Some(bytes) = second {
+                fs::write(corrupt_path(&path, ".corrupt.1"), bytes).unwrap();
+            }
+            let mut file = ConfigFile::default();
+            assert!(file.load(std::slice::from_ref(&path)).is_err());
+            let result = file.save(&Config::default(), std::slice::from_ref(&path));
+            if let Some(suffix) = expected {
+                result.unwrap();
+                assert_eq!(fs::read(corrupt_path(&path, suffix)).unwrap(), original);
+                assert_eq!(
+                    file.rejections[0].preserved_at,
+                    Some(corrupt_path(&path, suffix))
+                );
+                if first.is_none() {
+                    assert!(!corrupt_path(&path, ".corrupt").exists());
+                }
+            } else {
+                assert!(result.is_err());
+                assert_eq!(fs::read(&path).unwrap(), original);
+            }
+        }
+    }
+
+    #[test]
+    fn successive_rejected_reloads_are_preserved() {
+        let fixture = ConfigFileFixture::new();
+        let path = fixture.0.join("config.toml");
+        let mut file = ConfigFile::default();
+        fs::write(&path, "[layout]\ngap = 42\n").unwrap();
+        assert!(file.load(std::slice::from_ref(&path)).is_ok());
+        for bytes in [&b"first = ["[..], &b"second = ["[..]] {
+            fs::write(&path, bytes).unwrap();
+            assert!(file.load(std::slice::from_ref(&path)).is_err());
+        }
+        file.save(&Config::default(), std::slice::from_ref(&path))
+            .unwrap();
+        assert_eq!(
+            fs::read(corrupt_path(&path, ".corrupt")).unwrap(),
+            b"first = ["
+        );
+        assert_eq!(
+            fs::read(corrupt_path(&path, ".corrupt.1")).unwrap(),
+            b"second = ["
+        );
+    }
+
+    #[test]
+    fn config_save_failure_does_not_modify_destination() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let fixture = ConfigFileFixture::new();
+        let path = fixture.0.join("config.toml");
+        let original = b"[layout]\ngap = 42\n";
+        fs::write(&path, original).unwrap();
+        let mut file = ConfigFile::default();
+        let config = file.load(std::slice::from_ref(&path)).unwrap();
+        let lock = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(1)
+            .open(&path)
+            .unwrap();
+        assert!(file.save(&config, std::slice::from_ref(&path)).is_err());
+        drop(lock);
+        assert_eq!(fs::read(&path).unwrap(), original);
+        assert_eq!(fs::read_dir(&fixture.0).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn unreadable_config_cannot_be_saved_and_non_utf8_is_preserved() {
+        let fixture = ConfigFileFixture::new();
+        let path = fixture.0.join("config.toml");
+        fs::create_dir(&path).unwrap();
+        let mut file = ConfigFile::default();
+        assert!(file.load(std::slice::from_ref(&path)).is_err());
+        assert!(file
+            .save(&Config::default(), std::slice::from_ref(&path))
+            .is_err());
+        assert!(path.is_dir());
+        fs::remove_dir(&path).unwrap();
+        let bytes = [0xff, 0xfe, 0x00];
+        fs::write(&path, bytes).unwrap();
+        let mut file = ConfigFile::default();
+        assert!(file.load(std::slice::from_ref(&path)).is_err());
+        assert_eq!(file.rejections[0].location, None);
+        file.save(&Config::default(), std::slice::from_ref(&path))
+            .unwrap();
+        assert_eq!(fs::read(corrupt_path(&path, ".corrupt")).unwrap(), bytes);
+    }
+
+    #[test]
+    fn config_save_uses_loaded_path_and_existing_serializer() {
+        let fixture = ConfigFileFixture::new();
+        let paths = [
+            fixture.0.join("primary.toml"),
+            fixture.0.join("secondary.toml"),
+        ];
+        fs::write(&paths[1], "[layout]\ngap = 42\n").unwrap();
+        let mut file = ConfigFile::default();
+        let config = file.load(&paths).unwrap();
+        let expected = toml::to_string_pretty(&config).unwrap();
+        file.save(&config, &paths).unwrap();
+        assert!(!paths[0].exists());
+        assert_eq!(fs::read_to_string(&paths[1]).unwrap(), expected);
+        assert_eq!(file.load(&paths).unwrap().layout.gap, 42);
     }
 
     #[test]

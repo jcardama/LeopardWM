@@ -36,6 +36,7 @@ All notable changes to LeopardWM will be documented in this file.
 
 ### Fixes
 
+- **Rejected configuration files are no longer silently overwritten.** LeopardWM warns when it uses defaults and preserves rejected settings before saving changes.
 - **Settings no longer undoes quick-toggle changes made from the tray while Settings is open.**
 - **Turning off Center columns now slides automatically centered rows back into position, even when centering past the screen edges is enabled.** With reduced motion, rows snap into place.
 - **Hotkeys no longer stop working after hours of use because failed batched window moves leak positioning handles.** Thanks to @doutorferr0 for the report and measurements. (#180)

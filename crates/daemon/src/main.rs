@@ -3841,6 +3841,22 @@ fn spawn_tab_icon_poll(event_tx: &mpsc::Sender<DaemonEvent>) {
     });
 }
 
+fn notify_rejected_config() {
+    if let Some(rejection) = config::config_rejection() {
+        let location = rejection
+            .location
+            .map(|(line, column)| format!(" at line {line}, column {column}"))
+            .unwrap_or_default();
+        let mut backup = rejection.path.as_os_str().to_owned();
+        backup.push(".corrupt");
+        warn!("Configuration rejected: {}", rejection.reason);
+        notify::show_toast(
+            "Configuration rejected",
+            &format!("LeopardWM is using defaults. Configuration was rejected{location}. Before saving, LeopardWM will try to keep a copy at {} (or .corrupt.1 if occupied); saving is blocked if it cannot.", std::path::PathBuf::from(backup).display()),
+        );
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
@@ -3870,6 +3886,7 @@ async fn main() -> Result<()> {
     if let Err(e) = notify::init() {
         warn!("Toast notification setup failed (notifications disabled): {e:#}");
     }
+    notify_rejected_config();
 
     info!(
         "Configuration loaded: gap={}, outer_gaps=[{},{},{},{}], width_presets={:?}, log_level={}",
