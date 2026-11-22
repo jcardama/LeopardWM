@@ -142,6 +142,11 @@ focus_follows_mouse = false
 # Switch to the destination workspace when moving the focused window.
 # follow_window_to_workspace = false
 
+# At a horizontal strip edge, focus or move the window to the neighboring monitor.
+# These options are independent of vertical workspace_edge_wrap.
+# focus_crosses_monitors = false
+# move_crosses_monitors = false
+
 # Floating move and keyboard or wheel nudge distance in logical pixels (1-1000).
 # move_step = 50
 

@@ -25,6 +25,8 @@ Arguments in the tables are required unless marked optional. Commands that take 
 | `lwm scroll left` | Scroll left; optional `-p, --pixels <PIXELS>` defaults to 100. |
 | `lwm scroll right` | Scroll right; optional `-p, --pixels <PIXELS>` defaults to 100. |
 
+At a tiled horizontal strip edge, `[behavior] focus_crosses_monitors` and `move_crosses_monitors` can respectively focus the neighboring monitor or move the focused window there. Both default to false and are independent of vertical workspace edge behavior.
+
 Tiled vertical focus crosses rows at column edges regardless of `move_window_across_rows`. At a workspace's vertical edge, `[behavior] workspace_edge_wrap` controls `focus up`/`focus down` and `move-window up`/`move-window down`: `"off"` (default) stays on the workspace, `"wrap"` moves to an adjacent workspace and wraps between 1 and 9, and `"clamp"` stops at workspace 1 or 9. See the [README](../README.md#layout-commands) for skip-empty behavior and details.
 
 ## Move windows and columns

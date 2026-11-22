@@ -1188,6 +1188,14 @@ input[type="range"]::-webkit-slider-thumb {
             <label class="toggle"><input type="checkbox" id="behavior-follow_window_to_workspace"><span class="track"></span><span class="thumb"></span></label>
           </div>
           <div class="field">
+            <div class="field-info"><div class="field-label" data-i18n="settings.behavior.focus_crosses_monitors.label"></div><div class="field-desc" data-i18n="settings.behavior.focus_crosses_monitors.description"></div></div>
+            <label class="toggle"><input type="checkbox" id="behavior-focus_crosses_monitors"><span class="track"></span><span class="thumb"></span></label>
+          </div>
+          <div class="field">
+            <div class="field-info"><div class="field-label" data-i18n="settings.behavior.move_crosses_monitors.label"></div><div class="field-desc" data-i18n="settings.behavior.move_crosses_monitors.description"></div></div>
+            <label class="toggle"><input type="checkbox" id="behavior-move_crosses_monitors"><span class="track"></span><span class="thumb"></span></label>
+          </div>
+          <div class="field">
             <div class="field-info"><div class="field-label" data-i18n="settings.behavior.move_window_across_rows.label"></div><div class="field-desc" data-i18n="settings.behavior.move_window_across_rows.description"></div></div>
             <label class="toggle"><input type="checkbox" id="behavior-move_window_across_rows"><span class="track"></span><span class="thumb"></span></label>
           </div>
@@ -1791,6 +1799,8 @@ function init(cfg) {
   setCb('cb-behavior-workspace_edge_wrap', cfg.behavior.workspace_edge_wrap || 'off');
   setChecked('behavior-skip_empty_workspaces', cfg.behavior.skip_empty_workspaces === true);
   setChecked('behavior-follow_window_to_workspace', cfg.behavior.follow_window_to_workspace === true);
+  setChecked('behavior-focus_crosses_monitors', cfg.behavior.focus_crosses_monitors === true);
+  setChecked('behavior-move_crosses_monitors', cfg.behavior.move_crosses_monitors === true);
   setChecked('behavior-move_window_across_rows', cfg.behavior.move_window_across_rows === true);
   setChecked('behavior-fullscreen_follows_focus', cfg.behavior.fullscreen_follows_focus !== false);
   setChecked('behavior-disable_snap_layouts', cfg.behavior.disable_snap_layouts !== false);
@@ -2626,6 +2636,8 @@ function readConfig() {
       workspace_edge_wrap: cbVal('cb-behavior-workspace_edge_wrap'),
       skip_empty_workspaces: checked('behavior-skip_empty_workspaces'),
       follow_window_to_workspace: checked('behavior-follow_window_to_workspace'),
+      focus_crosses_monitors: checked('behavior-focus_crosses_monitors'),
+      move_crosses_monitors: checked('behavior-move_crosses_monitors'),
       move_window_across_rows: checked('behavior-move_window_across_rows'),
       fullscreen_follows_focus: checked('behavior-fullscreen_follows_focus'),
       disable_snap_layouts: checked('behavior-disable_snap_layouts'),
@@ -3105,6 +3117,14 @@ for (const [section, keys] of Object.entries({layout: ['centering_mode', 'center
         assert!(SETTINGS_HTML.contains("removeWorkspaceRow"));
         assert!(SETTINGS_HTML.contains("readWorkspaceRows"));
         assert!(SETTINGS_HTML.contains("workspaces: readWorkspaceRows()"));
+
+        for option in ["focus_crosses_monitors", "move_crosses_monitors"] {
+            assert!(SETTINGS_HTML.contains(&format!("id=\"behavior-{option}\"")));
+            assert!(SETTINGS_HTML.contains(&format!(
+                "setChecked('behavior-{option}', cfg.behavior.{option} === true);"
+            )));
+            assert!(SETTINGS_HTML.contains(&format!("{option}: checked('behavior-{option}')")));
+        }
 
         // Behavior move_window_across_rows toggle
         assert!(SETTINGS_HTML.contains("id=\"behavior-move_window_across_rows\""));

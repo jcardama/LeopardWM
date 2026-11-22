@@ -400,6 +400,17 @@ impl Workspace {
         Err(LayoutError::WindowNotFound(window_id))
     }
 
+    /// Whether a column with a non-minimized window exists in the given direction.
+    pub fn has_visible_column(&self, left: bool) -> bool {
+        let row = &self.rows[self.focused_row];
+        if left {
+            (0..row.focused_column).any(|index| self.has_visible_window_in_column(index))
+        } else {
+            (row.focused_column.saturating_add(1)..row.columns.len())
+                .any(|index| self.has_visible_window_in_column(index))
+        }
+    }
+
     /// Move focus to the column on the left in the focused row.
     pub fn focus_left(&mut self) {
         let fr = self.focused_row;

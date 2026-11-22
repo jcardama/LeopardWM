@@ -432,6 +432,8 @@ Set `floating_above_tiled = true` under `[behavior]` or enable **Settings → Be
 
 Disabling the option simply stops re-raising. There is no daemon-owned Z-order state to restore on disable, ignore, release, or shutdown.
 
+Set `focus_crosses_monitors = true` or `move_crosses_monitors = true` under `[behavior]`, or enable the corresponding Settings toggles, to focus the neighboring monitor or move the focused window there when a tiled horizontal command reaches the strip edge. Both default to false; floating focus is unchanged. These horizontal options are independent of `workspace_edge_wrap`, which only affects vertical navigation and moves.
+
 Set `workspace_edge_wrap` under `[behavior]` or in Settings to `"off"` (default) to leave edge focus and moves on the current workspace, `"wrap"` to switch or move to the adjacent workspace and wrap between 1 and 9, or `"clamp"` to stop at workspace 1 and 9. Legacy `true` and `false` still mean `"wrap"` and `"off"` respectively.
 
 Set `skip_empty_workspaces = true` under `[behavior]` or enable **Settings → Behavior → Skip empty workspaces** (off by default) to skip empty slots on the same monitor. This applies to `workspace_next` / `workspace_prev`, which always wrap, and to `focus_down` / `focus_up` when `workspace_edge_wrap` switches workspaces. With clamp, focus stops at the first or last occupied workspace; if no other occupied workspace is reachable, it does nothing.

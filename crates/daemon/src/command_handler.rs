@@ -669,6 +669,7 @@ impl AppState {
         if let Some(resp) = self.apply_fullscreen_policy(&cmd) {
             return resp;
         }
+        let cmd = self.cross_monitor_command(cmd);
         let resp = match cmd {
             IpcCommand::FocusFloating
             | IpcCommand::FocusTiling
@@ -1044,6 +1045,50 @@ impl AppState {
             }
             _ => unreachable!(),
         }
+    }
+
+    fn cross_monitor_command(&self, cmd: IpcCommand) -> IpcCommand {
+        match cmd {
+            IpcCommand::FocusLeft
+                if self.config.behavior.focus_crosses_monitors
+                    && self.crosses_monitor_edge(true, monitor_to_left) =>
+            {
+                IpcCommand::FocusMonitorLeft
+            }
+            IpcCommand::FocusRight
+                if self.config.behavior.focus_crosses_monitors
+                    && self.crosses_monitor_edge(false, monitor_to_right) =>
+            {
+                IpcCommand::FocusMonitorRight
+            }
+            IpcCommand::MoveColumnLeft
+                if self.config.behavior.move_crosses_monitors
+                    && self.crosses_monitor_edge(true, monitor_to_left) =>
+            {
+                IpcCommand::MoveWindowToMonitorLeft
+            }
+            IpcCommand::MoveColumnRight
+                if self.config.behavior.move_crosses_monitors
+                    && self.crosses_monitor_edge(false, monitor_to_right) =>
+            {
+                IpcCommand::MoveWindowToMonitorRight
+            }
+            _ => cmd,
+        }
+    }
+
+    fn crosses_monitor_edge(
+        &self,
+        left: bool,
+        select: fn(&[MonitorInfo], MonitorId) -> Option<&MonitorInfo>,
+    ) -> bool {
+        self.focused_workspace()
+            .is_some_and(|ws| !ws.has_visible_column(left))
+            && select(
+                &self.monitors.values().cloned().collect::<Vec<_>>(),
+                self.focused_monitor,
+            )
+            .is_some()
     }
 
     fn focus_monitor(

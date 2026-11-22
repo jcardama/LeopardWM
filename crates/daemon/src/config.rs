@@ -843,6 +843,12 @@ pub struct BehaviorConfig {
     #[serde(default = "default_false")]
     pub follow_window_to_workspace: bool,
 
+    #[serde(default)]
+    pub focus_crosses_monitors: bool,
+
+    #[serde(default)]
+    pub move_crosses_monitors: bool,
+
     #[serde(default = "default_move_step")]
     pub move_step: i32,
 
@@ -921,6 +927,8 @@ impl Default for BehaviorConfig {
             fullscreen_follows_focus: true,
             skip_empty_workspaces: false,
             follow_window_to_workspace: false,
+            focus_crosses_monitors: false,
+            move_crosses_monitors: false,
             move_step: default_move_step(),
             move_window_across_rows: false,
         }
@@ -2248,6 +2256,14 @@ mod tests {
         }
         let omitted: Config = toml::from_str("[behavior]").unwrap();
         assert_eq!(omitted.behavior.workspace_edge_wrap, WorkspaceEdgeWrap::Off);
+        assert!(!omitted.behavior.focus_crosses_monitors);
+        assert!(!omitted.behavior.move_crosses_monitors);
+        let enabled: Config = toml::from_str(
+            "[behavior]\nfocus_crosses_monitors = true\nmove_crosses_monitors = true",
+        )
+        .unwrap();
+        assert!(enabled.behavior.focus_crosses_monitors);
+        assert!(enabled.behavior.move_crosses_monitors);
         for bad in ["\"sideways\"", "42"] {
             let mut config: Config =
                 toml::from_str(&format!("[behavior]\nworkspace_edge_wrap = {bad}")).unwrap();

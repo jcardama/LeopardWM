@@ -10719,6 +10719,159 @@ fn test_cmd_resume_rolls_back_on_recovery_barrier_then_succeeds_after_landing() 
 }
 
 #[test]
+fn horizontal_edge_options_cross_only_with_a_neighbor() {
+    for (source, target, focus, movement) in [
+        (1, 2, IpcCommand::FocusRight, IpcCommand::MoveColumnRight),
+        (2, 1, IpcCommand::FocusLeft, IpcCommand::MoveColumnLeft),
+    ] {
+        for (focus_enabled, move_enabled) in
+            [(false, false), (true, false), (false, true), (true, true)]
+        {
+            for command in [focus.clone(), movement.clone()] {
+                let enabled = if matches!(command, IpcCommand::FocusLeft | IpcCommand::FocusRight) {
+                    focus_enabled
+                } else {
+                    move_enabled
+                };
+                let mut state = AppState::new_with_config(test_config(), two_monitors());
+                state.injected_apply_placements_behavior =
+                    Some(TestApplyPlacementsBehavior::SleepAndSucceed(Duration::ZERO));
+                state.focused_monitor = source;
+                state.config.behavior.focus_crosses_monitors = focus_enabled;
+                state.config.behavior.move_crosses_monitors = move_enabled;
+                state
+                    .focused_workspace_mut()
+                    .unwrap()
+                    .insert_window(0, None)
+                    .unwrap();
+                assert_eq!(state.handle_command(command.clone()), IpcResponse::Ok);
+                assert_eq!(state.focused_monitor, if enabled { target } else { source });
+                let moved = enabled
+                    && matches!(
+                        command,
+                        IpcCommand::MoveColumnLeft | IpcCommand::MoveColumnRight
+                    );
+                assert!(
+                    state.workspaces[&if moved { target } else { source }][0].contains_window(0)
+                );
+            }
+        }
+        let mut state = AppState::new_with_config(test_config(), two_monitors());
+        state.focused_monitor = target;
+        state.config.behavior.focus_crosses_monitors = true;
+        state.config.behavior.move_crosses_monitors = true;
+        state.injected_apply_placements_behavior =
+            Some(TestApplyPlacementsBehavior::SleepAndSucceed(Duration::ZERO));
+        state
+            .focused_workspace_mut()
+            .unwrap()
+            .insert_window(0, None)
+            .unwrap();
+        for command in [focus, movement] {
+            assert_eq!(state.handle_command(command), IpcResponse::Ok);
+            assert_eq!(state.focused_monitor, target);
+            assert!(state.focused_workspace().unwrap().contains_window(0));
+        }
+    }
+}
+
+#[test]
+fn horizontal_edges_skip_minimized_columns_and_leave_normal_strip_navigation_alone() {
+    const OTHER: u64 = 0xffff_ffff_0000_0000;
+    for (source, focus, movement, left) in [
+        (
+            1,
+            IpcCommand::FocusRight,
+            IpcCommand::MoveColumnRight,
+            false,
+        ),
+        (2, IpcCommand::FocusLeft, IpcCommand::MoveColumnLeft, true),
+    ] {
+        for command in [focus.clone(), movement.clone()] {
+            let mut state = AppState::new_with_config(test_config(), two_monitors());
+            state.injected_apply_placements_behavior =
+                Some(TestApplyPlacementsBehavior::SleepAndSucceed(Duration::ZERO));
+            state.config.appearance.active_border = false;
+            state.focused_monitor = source;
+            state.config.behavior.focus_crosses_monitors = true;
+            state.config.behavior.move_crosses_monitors = true;
+            let ws = state.focused_workspace_mut().unwrap();
+            ws.insert_window(0, None).unwrap();
+            ws.insert_window(OTHER, None).unwrap();
+            if !left {
+                ws.focus_left();
+            }
+            assert_eq!(state.handle_command(command.clone()), IpcResponse::Ok);
+            assert_eq!(state.focused_monitor, source);
+            assert_eq!(
+                state.focused_workspace().unwrap().focused_column_index(),
+                if left { 0 } else { 1 }
+            );
+            assert_eq!(
+                state.focused_workspace().unwrap().focused_window(),
+                Some(
+                    if matches!(command, IpcCommand::FocusLeft | IpcCommand::MoveColumnRight) {
+                        0
+                    } else {
+                        OTHER
+                    }
+                )
+            );
+
+            let mut state = AppState::new_with_config(test_config(), two_monitors());
+            state.injected_apply_placements_behavior =
+                Some(TestApplyPlacementsBehavior::SleepAndSucceed(Duration::ZERO));
+            state.config.appearance.active_border = false;
+            state.focused_monitor = source;
+            state.config.behavior.focus_crosses_monitors = true;
+            state.config.behavior.move_crosses_monitors = true;
+            let ws = state.focused_workspace_mut().unwrap();
+            if left {
+                ws.insert_window(OTHER, None).unwrap();
+                ws.insert_window(0, None).unwrap();
+            } else {
+                ws.insert_window(0, None).unwrap();
+                ws.insert_window(OTHER, None).unwrap();
+            }
+            ws.mark_minimized(OTHER);
+            assert_eq!(state.handle_command(command), IpcResponse::Ok);
+            assert_ne!(state.focused_monitor, source);
+        }
+    }
+}
+
+#[test]
+fn horizontal_crossing_is_independent_of_vertical_workspace_wrap() {
+    let mut state = AppState::new_with_config(test_config(), two_monitors());
+    state.config.behavior.workspace_edge_wrap = crate::config::WorkspaceEdgeWrap::Wrap;
+    state.config.behavior.focus_crosses_monitors = true;
+    state.config.behavior.move_crosses_monitors = true;
+    assert_eq!(state.handle_command(IpcCommand::FocusUp), IpcResponse::Ok);
+    assert_eq!(state.active_workspace_idx(1), 8);
+    assert_eq!(
+        state.handle_command(IpcCommand::FocusRight),
+        IpcResponse::Ok
+    );
+    assert_eq!(state.focused_monitor, 2);
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .insert_window(0, None)
+        .unwrap();
+    assert_eq!(
+        state.handle_command(IpcCommand::MoveWindowUp),
+        IpcResponse::Ok
+    );
+    assert!(state.workspaces[&2][8].contains_window(0));
+    state.active_workspace.insert(2, 8);
+    assert_eq!(
+        state.handle_command(IpcCommand::MoveColumnLeft),
+        IpcResponse::Ok
+    );
+    assert!(state.workspaces[&1][8].contains_window(0));
+}
+
+#[test]
 fn test_cmd_focus_monitor_left_single() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
     let resp = state.handle_command(IpcCommand::FocusMonitorLeft);
