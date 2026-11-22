@@ -12,6 +12,9 @@ use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+#[path = "config_recovery.rs"]
+mod recovery;
+
 /// Executables whose windows should never be tiled (system dialogs, security prompts, etc.).
 /// These are appended as built-in Ignore rules after user-defined rules.
 const BUILTIN_IGNORE_EXECUTABLES: &[&str] = &[
@@ -2121,6 +2124,7 @@ pub(crate) struct ConfigRejection {
     pub reason: String,
     pub location: Option<(usize, usize)>,
     pub preserved_at: Option<PathBuf>,
+    pub recovered_fields: Vec<recovery::DroppedField>,
     bytes: Option<Vec<u8>>,
 }
 
@@ -2215,6 +2219,20 @@ impl ConfigFile {
                     return Ok(config);
                 }
                 Err(error) => {
+                    if let Some((config, fields)) = recovery::recover(content) {
+                        for field in &fields {
+                            tracing::warn!(
+                                "Config: {} reset to default: {}",
+                                field.path,
+                                field.reason
+                            );
+                        }
+                        let reason = format!("Recovered config file {}: {error}", path.display());
+                        let location = fields.first().and_then(|field| field.location);
+                        self.reject(path, reason, location, Some(bytes));
+                        self.rejections.last_mut().unwrap().recovered_fields = fields;
+                        return Ok(config);
+                    }
                     let location = error.span().map(|span| {
                         let prefix = &content[..span.start];
                         (
@@ -2251,6 +2269,7 @@ impl ConfigFile {
             let mut rejection = self.rejections.remove(index);
             rejection.reason = reason;
             rejection.location = location;
+            rejection.recovered_fields.clear();
             self.rejections.push(rejection);
         } else {
             self.rejections.push(ConfigRejection {
@@ -2258,6 +2277,7 @@ impl ConfigFile {
                 reason,
                 location,
                 preserved_at: None,
+                recovered_fields: Vec::new(),
                 bytes,
             });
         }
@@ -4695,14 +4715,126 @@ mod tests {
     }
 
     #[test]
+    fn invalid_behavior_field_recovers_and_preserves_original() {
+        let fixture = ConfigFileFixture::new();
+        let path = fixture.0.join("config.toml");
+        let original = b"[layout]\ngap = 42\n[behavior]\nmove_step = 'bad'\n[[window_rules]]\nmatch_class = 'Example'\naction = 'float'\n";
+        fs::write(&path, original).unwrap();
+        let mut file = ConfigFile::default();
+        let config = file.load(std::slice::from_ref(&path)).unwrap();
+        assert_eq!(config.layout.gap, 42);
+        assert_eq!(
+            config.behavior.move_step,
+            Config::default().behavior.move_step
+        );
+        assert_eq!(
+            config.window_rules[0].match_class.as_deref(),
+            Some("Example")
+        );
+        let fields = &file.rejections[0].recovered_fields;
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].path, "behavior.move_step");
+        assert_eq!(fields[0].location, Some((4, 13)));
+        assert!(fields[0].reason.contains("invalid type"));
+        file.save(&config, std::slice::from_ref(&path)).unwrap();
+        assert_eq!(fs::read(corrupt_path(&path, ".corrupt")).unwrap(), original);
+        assert!(file.load(std::slice::from_ref(&path)).is_ok());
+        assert!(file.rejections.is_empty());
+    }
+
+    #[test]
+    fn invalid_window_rule_field_does_not_discard_other_rules() {
+        let fixture = ConfigFileFixture::new();
+        let path = fixture.0.join("config.toml");
+        fs::write(&path, "[[window_rules]]\nmatch_class = 'First'\nwidth = 'bad'\n[[window_rules]]\nmatch_class = 'Second'\nwidth = 321\n").unwrap();
+        let mut file = ConfigFile::default();
+        let config = file.load(std::slice::from_ref(&path)).unwrap();
+        assert_eq!(config.window_rules.len(), 2);
+        assert_eq!(config.window_rules[0].match_class.as_deref(), Some("First"));
+        assert_eq!(config.window_rules[0].width, None);
+        assert_eq!(config.window_rules[1].width, Some(321));
+        assert_eq!(
+            file.rejections[0].recovered_fields[0].path,
+            "window_rules[0].width"
+        );
+    }
+
+    #[test]
+    fn multiple_invalid_behavior_fields_recover_but_syntax_errors_do_not() {
+        let fixture = ConfigFileFixture::new();
+        let path = fixture.0.join("config.toml");
+        fs::write(
+            &path,
+            "[behavior]\nmove_step = 'bad'\nfocus_new_windows = 123\n[appearance]\nactive_border = 'bad'\n",
+        )
+        .unwrap();
+        let mut file = ConfigFile::default();
+        let config = file.load(std::slice::from_ref(&path)).unwrap();
+        assert_eq!(
+            config.behavior.move_step,
+            Config::default().behavior.move_step
+        );
+        assert_eq!(
+            config.behavior.focus_new_windows,
+            Config::default().behavior.focus_new_windows
+        );
+        let fields = &file.rejections[0].recovered_fields;
+        assert_eq!(fields.len(), 3);
+        assert!(fields
+            .iter()
+            .any(|field| field.path == "appearance.active_border"));
+        assert!(fields
+            .iter()
+            .any(|field| field.path == "behavior.move_step"));
+        assert!(fields
+            .iter()
+            .any(|field| field.path == "behavior.focus_new_windows"));
+        fs::write(&path, "[layout\ngap = 42\n").unwrap();
+        assert!(file.load(std::slice::from_ref(&path)).is_err());
+    }
+
+    #[test]
+    fn invalid_array_values_reset_their_containing_field() {
+        let fixture = ConfigFileFixture::new();
+        let path = fixture.0.join("config.toml");
+        for (source, field) in [
+            ("[layout]\ngap = []\n", "layout.gap"),
+            (
+                "[layout]\nwidth_presets = [0.5, 'bad']\n",
+                "layout.width_presets",
+            ),
+        ] {
+            fs::write(&path, source).unwrap();
+            let mut file = ConfigFile::default();
+            assert!(file.load(std::slice::from_ref(&path)).is_ok());
+            assert_eq!(file.rejections[0].recovered_fields[0].path, field);
+        }
+    }
+
+    #[test]
+    fn recovery_is_bounded_and_preserves_last_allowed_field() {
+        let fixture = ConfigFileFixture::new();
+        let path = fixture.0.join("config.toml");
+        let mut file = ConfigFile::default();
+        let rule = "[[window_rules]]\nwidth = 'bad'\n";
+        fs::write(&path, rule.repeat(64)).unwrap();
+        let config = file.load(std::slice::from_ref(&path)).unwrap();
+        assert_eq!(config.window_rules.len(), 64);
+        assert_eq!(file.rejections[0].recovered_fields.len(), 64);
+        fs::write(&path, rule.repeat(65)).unwrap();
+        assert!(file.load(std::slice::from_ref(&path)).is_err());
+        assert!(file.rejections.last().unwrap().recovered_fields.is_empty());
+    }
+
+    #[test]
     fn rejected_config_is_preserved_before_save() {
         let fixture = ConfigFileFixture::new();
         let path = fixture.0.join("config.toml");
-        let original = b"[layout]\ngap = 'bad'\n";
+        let original = b"[layout]\ngap = [\n";
         fs::write(&path, original).unwrap();
         let mut file = ConfigFile::default();
         assert!(file.load(std::slice::from_ref(&path)).is_err());
-        assert_eq!(file.rejections[0].location, Some((2, 7)));
+        assert!(file.rejections[0].location.is_some());
         file.save(&Config::default(), std::slice::from_ref(&path))
             .unwrap();
         assert_eq!(fs::read(corrupt_path(&path, ".corrupt")).unwrap(), original);
@@ -4850,7 +4982,7 @@ mod tests {
         for occupied in [false, true] {
             let fixture = ConfigFileFixture::new();
             let path = fixture.0.join("config.toml");
-            let rejected = b"[layout]\ngap = 'bad'\n";
+            let rejected = b"[layout]\ngap = [\n";
             let edited = b"[layout]\ngap = 32\n";
             fs::write(&path, rejected).unwrap();
             let mut file = ConfigFile::default();

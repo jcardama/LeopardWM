@@ -3849,11 +3849,31 @@ fn notify_rejected_config() {
             .unwrap_or_default();
         let mut backup = rejection.path.as_os_str().to_owned();
         backup.push(".corrupt");
-        warn!("Configuration rejected: {}", rejection.reason);
-        notify::show_toast(
-            "Configuration rejected",
-            &format!("LeopardWM is using defaults. Configuration was rejected{location}. Before saving, LeopardWM will try to keep a copy at {} (or .corrupt.1 if occupied); saving is blocked if it cannot.", std::path::PathBuf::from(backup).display()),
-        );
+        if rejection.recovered_fields.is_empty() {
+            warn!("Configuration rejected: {}", rejection.reason);
+            notify::show_toast(
+                "Configuration rejected",
+                &format!("LeopardWM is using defaults. Configuration was rejected{location}. Before saving, LeopardWM will try to keep a copy at {} (or .corrupt.1 if occupied); saving is blocked if it cannot.", std::path::PathBuf::from(backup).display()),
+            );
+        } else {
+            for field in &rejection.recovered_fields {
+                warn!("Config: {} reset to default: {}", field.path, field.reason);
+            }
+            let fields = &rejection.recovered_fields;
+            let mut names = fields
+                .iter()
+                .take(3)
+                .map(|field| field.path.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            if fields.len() > 3 {
+                names.push_str(&format!(" and {} more", fields.len() - 3));
+            }
+            notify::show_toast(
+                "Configuration recovered",
+                &format!("Settings reset to defaults: {names}{location}. Before saving, LeopardWM will try to keep the original at {} (or .corrupt.1 if occupied); saving is blocked if it cannot.", std::path::PathBuf::from(backup).display()),
+            );
+        }
     }
 }
 

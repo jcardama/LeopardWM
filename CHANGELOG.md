@@ -36,7 +36,7 @@ All notable changes to LeopardWM will be documented in this file.
 
 ### Fixes
 
-- **Rejected configuration files are no longer silently overwritten.** LeopardWM warns when it uses defaults and preserves rejected settings before saving changes.
+- **Invalid or outdated settings can now fall back to defaults without resetting the entire configuration.** When LeopardWM can identify the affected settings, it loads the rest and preserves the original as `config.toml.corrupt` before saving (or `config.toml.corrupt.1` if needed); saving is blocked if neither copy can be kept.
 - **Settings no longer undoes quick-toggle changes made from the tray while Settings is open.**
 - **Turning off Center columns now slides automatically centered rows back into position, even when centering past the screen edges is enabled.** With reduced motion, rows snap into place.
 - **Hotkeys no longer stop working after hours of use because failed batched window moves leak positioning handles.** Thanks to @doutorferr0 for the report and measurements. (#180)
@@ -54,6 +54,7 @@ All notable changes to LeopardWM will be documented in this file.
 - **Maximized columns remain restorable when their first window closes or moves out.** The next window carries the maximize state, and a window expelled from a maximized column gets the column's pre-maximize width. Contributed by @azumafuji. (#150)
 - **A dragged window returns to its original place in a stacked column when its drop is cancelled or has no target.** This also applies when switching workspaces during the drag.
 - **Shortcuts recorded in Settings with punctuation keys now fire on the key you pressed on non-US layouts such as Dvorak.** Settings saves the key Windows reports, so the shortcut matches it on any keyboard layout.
+- **Downgrade note.** Back up `config.toml` before installing a release older than 0.4.0; older releases cannot read some 0.4.0 values and may reset all settings.
 
 ## 0.3.5
 
