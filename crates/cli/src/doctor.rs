@@ -470,8 +470,12 @@ fn snapshot_outcome(
     use crate::ipc_client::SnapshotRequestError;
     match result {
         Ok(IpcResponse::DiagnosticSnapshotWritten { path }) => Ok(SnapshotOutcome::Written(path)),
-        Ok(IpcResponse::Error { .. }) => Ok(SnapshotOutcome::Fallback(
-            "daemon rejected snapshot capture",
+        Ok(IpcResponse::Error { message }) if message.starts_with("Invalid command:") => Ok(
+            SnapshotOutcome::Fallback("daemon rejected snapshot capture"),
+        ),
+        Ok(IpcResponse::Error { message }) => Err(anyhow::anyhow!(
+            "The daemon may still be writing the snapshot. Check {}. Daemon response: {message}",
+            leopardwm_ipc::diagnostics_dir().display()
         )),
         Err(SnapshotRequestError::Connection) => {
             Ok(SnapshotOutcome::Fallback("could not connect to the daemon"))
@@ -569,7 +573,10 @@ mod snapshot_tests {
             SnapshotOutcome::Fallback(_)
         ));
         assert!(matches!(
-            snapshot_outcome(Ok(IpcResponse::error("unknown command"))).unwrap(),
+            snapshot_outcome(Ok(IpcResponse::error(
+                "Invalid command: unknown variant `write_diagnostic_snapshot`"
+            )))
+            .unwrap(),
             SnapshotOutcome::Fallback(_)
         ));
         assert!(
@@ -583,6 +590,8 @@ mod snapshot_tests {
                 "response lost"
             ))),
             Ok(IpcResponse::Unknown),
+            Ok(IpcResponse::error("Timed out waiting for daemon response")),
+            Ok(IpcResponse::error("Failed to get response from daemon")),
         ] {
             let error = snapshot_outcome(response).unwrap_err().to_string();
             assert!(error.contains("may still be writing"), "{error}");
