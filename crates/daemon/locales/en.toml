@@ -102,7 +102,7 @@
 "settings.text.buy_me_a_coffee" = "Buy me a coffee"
 "settings.report.title" = "Report an Issue"
 "settings.report.guide" = "Describe the problem, then select Submit. LeopardWM writes a snapshot and shows it in Explorer, and opens a pre-filled GitHub issue. Drag the file into the issue, review it, and post with your account."
-"settings.report.privacy" = "The snapshot is redacted, but open and read it before attaching. Nothing is uploaded automatically."
+"settings.report.privacy" = "Submit opens GitHub with your text filled in. The snapshot stays on your computer until you attach it; open and read it first, even though it is redacted. Nothing is posted until you post the issue yourself."
 "settings.report.long" = "Long text is shortened in the browser form; the full report is copied to your clipboard."
 "settings.report.subject" = "Title (required)"
 "settings.report.category" = "Category"

@@ -75,10 +75,15 @@ pub fn issue_url(report: &IssueReport, version: &str, windows_version: &str) -> 
                 high = mid - 1;
             }
         }
-        fields[index].1 = if low == 0 {
+        let shortened = if low == 0 {
             "…".to_owned()
         } else {
             format!("{}…", &original[..boundaries[low - 1]])
+        };
+        fields[index].1 = if encode(&shortened).len() < encode(&original).len() {
+            shortened
+        } else {
+            original
         };
         url = build_url(&fields);
     }
@@ -203,5 +208,37 @@ mod tests {
             .map(|(_, value)| decode(value))
             .unwrap();
         assert_eq!(actual, report.actual);
+
+        for report in [
+            IssueReport {
+                title: "Report".into(),
+                actual: "x".repeat(3000),
+                affected_apps: "Edge".into(),
+                ..IssueReport::default()
+            },
+            IssueReport {
+                title: "x".repeat(3000),
+                actual: "x".into(),
+                ..IssueReport::default()
+            },
+        ] {
+            let (url, truncated) = issue_url(&report, "0.4.0", "Windows 11");
+            assert!(truncated);
+            assert!(url.len() <= URL_LIMIT);
+            let decoded: std::collections::HashMap<_, _> = url
+                .split_once('?')
+                .unwrap()
+                .1
+                .split('&')
+                .filter_map(|pair| pair.split_once('='))
+                .map(|(key, value)| (key, decode(value)))
+                .collect();
+            if !report.affected_apps.is_empty() {
+                assert_eq!(decoded["affected-apps"], report.affected_apps);
+            } else {
+                assert_eq!(decoded["actual"], report.actual);
+                assert!(decoded["title"].ends_with('…'));
+            }
+        }
     }
 }

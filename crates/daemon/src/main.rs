@@ -3423,7 +3423,7 @@ async fn handle_settings_event(
                     (None, Some(error.to_string()))
                 }
             };
-            leopardwm_platform_win32::shell::open(&url);
+            leopardwm_platform_win32::shell::open_labeled(&url, "GitHub issue form");
             settings::push_report_status(file, error, truncated, copied);
         }
         settings::SettingsEvent::Saved => {

@@ -102,7 +102,7 @@
 "settings.text.buy_me_a_coffee" = "请我喝杯咖啡"
 "settings.report.title" = "报告问题"
 "settings.report.guide" = "描述问题后选择提交。LeopardWM 将生成快照并在资源管理器中显示，同时打开预填的 GitHub 问题页面。将文件拖入问题页面，检查后使用自己的账户发布。"
-"settings.report.privacy" = "快照已脱敏，但请在附加前打开并阅读。不会自动上传任何内容。"
+"settings.report.privacy" = "提交会打开已填入您所写内容的 GitHub 页面。快照会保留在您的电脑上，直到您自行附加；快照虽已脱敏，附加前仍请打开并阅读。只有您自行发布问题后，内容才会发布。"
 "settings.report.long" = "过长的文本会在浏览器表单中缩短；完整报告会复制到剪贴板。"
 "settings.report.subject" = "标题（必填）"
 "settings.report.category" = "类别"

@@ -40,6 +40,25 @@ pub fn open(target: impl AsRef<OsStr>) {
     }
 }
 
+/// Open a target without including it or the resulting error in logs.
+pub fn open_labeled(target: impl AsRef<OsStr>, label: &'static str) {
+    let target = target.as_ref().to_os_string();
+    if std::thread::Builder::new()
+        .name("shell-open".into())
+        .spawn(move || {
+            if open_on_com_thread(&target).is_err() {
+                tracing::warn!("ShellExecuteW failed to open {}", log_text::name(label));
+            }
+        })
+        .is_err()
+    {
+        tracing::warn!(
+            "Failed to spawn ShellExecuteW worker for {}",
+            log_text::name(label)
+        );
+    }
+}
+
 fn open_on_com_thread(target: &OsStr) -> Result<()> {
     let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
     let result = open_with_shell(target);

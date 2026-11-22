@@ -901,6 +901,7 @@ input[type="range"]::-webkit-slider-thumb {
 .report-form { display: grid; gap: 14px; padding: 18px; }
 .report-form label { display: grid; gap: 6px; font-weight: 600; }
 .report-form input, .report-form textarea, .report-form select { width: 100%; box-sizing: border-box; font: inherit; color: var(--text-primary); background: var(--ctrl-fill); border: 1px solid var(--ctrl-stroke); border-radius: 4px; padding: 8px; }
+.report-form input:focus-visible, .report-form textarea:focus-visible, .report-form select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .report-form textarea { min-height: 90px; resize: vertical; }
 .report-form .input-wrap { width: 100%; }
 .report-note { line-height: 1.5; margin: 0 0 12px; }
@@ -2854,15 +2855,12 @@ wrapAllInputs();
   var fields = {};
   names.forEach(function(name) { fields[name] = document.getElementById('report-' + name); });
   var submit = document.getElementById('report-submit');
-  var timer = null;
   function draft() {
     var result = {};
     names.forEach(function(name) { result[name] = fields[name].value; });
     return result;
   }
   function persist() {
-    clearTimeout(timer);
-    timer = null;
     window.ipc.postMessage(JSON.stringify({action: 'report_draft', draft: draft()}));
   }
   function update() {
@@ -2871,11 +2869,12 @@ wrapAllInputs();
   var saved = window._reportDraft || {};
   names.forEach(function(name) {
     if (typeof saved[name] === 'string') fields[name].value = saved[name];
-    fields[name].addEventListener('input', function() {
+    function onChange() {
       update();
-      clearTimeout(timer);
-      timer = setTimeout(persist, 300);
-    });
+      persist();
+    }
+    fields[name].addEventListener('input', onChange);
+    fields[name].addEventListener('change', onChange);
   });
   document.getElementById('report-version').textContent = window._version || '';
   document.getElementById('report-windows').textContent = window._windowsVersion || '';
@@ -2891,7 +2890,6 @@ wrapAllInputs();
     persist();
     window.ipc.postMessage(JSON.stringify({action: 'report_issue', report: draft()}));
   });
-  window.addEventListener('pagehide', function() { if (timer !== null) persist(); });
   window.reportStatus = function(status) {
     var message = status.file ? (status.error ? t('settings.report.reveal_error', status) : t('settings.report.snapshot_ok', status)) : t('settings.report.snapshot_error', status);
     if (status.truncated) message += ' ' + t(status.copied ? 'settings.report.copied' : 'settings.report.copy_failed');
@@ -2963,8 +2961,9 @@ const els = {};
 function el(id) { return els[id] ||= {value:'', textContent:'', disabled:false, hidden:false,
   listeners:{}, addEventListener(event, callback) { this.listeners[event] = callback; }}; }
 global.document = {getElementById: el};
+const messages = [];
 global.window = {_reportDraft:{title:'Saved title', actual:'Saved details', category:'Focus', regression:'Yes'},
-  _version:'1', _windowsVersion:'Windows', ipc:{postMessage(){}}, addEventListener(){}};
+  _version:'1', _windowsVersion:'Windows', ipc:{postMessage(message){messages.push(JSON.parse(message));}}, addEventListener(){}};
 global.t = key => key;
 eval(html.slice(start, end));
 assert.equal(el('report-title').value, 'Saved title');
@@ -2978,6 +2977,10 @@ el('report-actual').value = ''; el('report-actual').listeners.input();
 assert.equal(el('report-submit').disabled, true);
 el('report-actual').value = 'Details'; el('report-actual').listeners.input();
 assert.equal(el('report-submit').disabled, false);
+assert.equal(messages.at(-1).action, 'report_draft');
+assert.equal(messages.at(-1).draft.actual, 'Details');
+el('report-category').value = 'Settings'; el('report-category').listeners.change();
+assert.equal(messages.at(-1).draft.category, 'Settings');
 "#;
         let mut child = Command::new("node")
             .args(["-e", script])
