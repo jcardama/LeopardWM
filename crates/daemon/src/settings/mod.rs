@@ -4,7 +4,7 @@
 mod html;
 mod win32;
 
-pub use win32::{push_failed_binds, push_locale, push_recorded_chord};
+pub use win32::{push_failed_binds, push_locale, push_recorded_chord, push_tray_config};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;

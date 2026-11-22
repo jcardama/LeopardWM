@@ -1724,6 +1724,16 @@ function setCb(id, value, showUnknown) {
 function hexToInput(hex) { return '#' + (hex || '000000').toLowerCase(); }
 function inputToHex(v) { return v.replace('#', '').toUpperCase(); }
 
+function applyTrayConfig(cfg) {
+  setCb('cb-layout-centering_mode', cfg.layout.centering_mode);
+  setCb('cb-layout-center_columns', cfg.layout.center_columns || 'off');
+  setChecked('appearance-active_border', cfg.appearance.active_border);
+  setChecked('behavior-focus_new_windows', cfg.behavior.focus_new_windows);
+  setChecked('behavior-focus_follows_mouse', cfg.behavior.focus_follows_mouse);
+  setCb('cb-behavior-taskbar_buttons', cfg.behavior.taskbar_buttons || 'hide_offscreen');
+  setCb('cb-behavior-new_window_placement', cfg.behavior.new_window_placement || 'new_column');
+}
+
 /* ── Init ────────────────────────────────────────────────────────────── */
 var glazewmCompatPort = 6123;
 function init(cfg) {
@@ -2808,6 +2818,15 @@ document.querySelectorAll('input[type="text"], input[type="number"]').forEach(fu
 </html>
 "##;
 
+pub(super) fn tray_config_script(
+    config: &crate::config::Config,
+) -> Result<String, serde_json::Error> {
+    Ok(format!(
+        "applyTrayConfig({});",
+        serde_json::to_string(config)?
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::SETTINGS_HTML;
@@ -2836,6 +2855,91 @@ mod tests {
             .stderr(Stdio::piped())
             .spawn()
             .expect("Node.js is required for the Settings JavaScript test");
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(payload.to_string().as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    #[ignore = "Needs Node.js on PATH for the optional Settings JavaScript check"]
+    fn tray_changes_survive_the_next_settings_save() {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+
+        let script = r#"
+const assert = require('assert');
+const payload = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+const html = payload.html;
+function section(start, end) {
+  const a = html.indexOf(start), b = html.indexOf(end, a);
+  assert(a >= 0 && b > a, 'missing Settings function: ' + start);
+  return html.slice(a, b);
+}
+const elements = {};
+global.document = { getElementById(id) {
+  return elements[id] ||= { value: '', checked: false, dataset: {},
+    querySelectorAll() { return []; }, querySelector() { return { textContent: '' }; } };
+} };
+global.autoSave = () => { throw Error('tray push must not save'); };
+eval(section('function val(id)', 'var selectedWidthPresetRow'));
+eval(section('function checked(id)', 'function hexToInput(hex)'));
+eval(section('function hexToInput(hex)', 'function applyTrayConfig('));
+eval(section('function applyTrayConfig(', '/* ── Init'));
+eval(section('function readConfig()', 'function readWorkspaceNames()'));
+global.readPresets = () => [0.5];
+global.lastValidDefaultWidthPreset = 1;
+global.lastValidWidthPresets = [0.5];
+global.readWorkspaceRows = global.readRules = global.readWorkspaceNames = global.readDisabledHotkeys = () => [];
+global.readHotkeys = () => ({});
+global.readScrollModifier = () => 'none';
+global.gestureCaptureSecs = 0;
+global.glazewmCompatPort = 6123;
+document.getElementById('layout-gap').value = '37';
+document.getElementById('cb-layout-centering_mode').dataset.value = 'center';
+document.getElementById('cb-layout-center_columns').dataset.value = 'off';
+document.getElementById('behavior-focus_new_windows').checked = true;
+document.getElementById('cb-behavior-taskbar_buttons').dataset.value = 'hide_offscreen';
+document.getElementById('cb-behavior-new_window_placement').dataset.value = 'new_column';
+const cfg = { layout: { centering_mode: 'on_overflow', center_columns: 'fit' },
+  appearance: { active_border: true }, behavior: { focus_new_windows: false,
+  focus_follows_mouse: true, taskbar_buttons: 'show_all', new_window_placement: 'in_column' } };
+eval(payload.script);
+const saved = readConfig();
+assert.strictEqual(saved.layout.gap, 37);
+for (const [section, keys] of Object.entries({layout: ['centering_mode', 'center_columns'],
+  appearance: ['active_border'], behavior: ['focus_new_windows', 'focus_follows_mouse', 'taskbar_buttons', 'new_window_placement']})) {
+  for (const key of keys) assert.strictEqual(saved[section][key], cfg[section][key], section + '.' + key);
+}
+"#;
+        let mut child = Command::new("node")
+            .args(["-e", script])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("Node.js is required for the Settings JavaScript test");
+        let mut config = crate::config::Config::default();
+        config.layout.centering_mode = crate::config::CenteringModeConfig::OnOverflow;
+        config.layout.center_columns.center_columns = crate::config::CenterColumnsConfig::Fit;
+        config.appearance.active_border = true;
+        config.behavior.focus_new_windows = false;
+        config.behavior.focus_follows_mouse = true;
+        config.behavior.taskbar_buttons = crate::config::TaskbarButtons::ShowAll;
+        config.behavior.new_window_placement = crate::config::NewWindowPlacement::InColumn;
+        let payload = serde_json::json!({
+            "html": SETTINGS_HTML,
+            "script": super::tray_config_script(&config).unwrap(),
+        });
         child
             .stdin
             .take()

@@ -93,7 +93,9 @@ const DARK_BG: u32 = 0x00202020;
 const WM_SETTINGS_PUSH_BINDS: u32 = WM_APP + 1;
 const WM_SETTINGS_PUSH_RECORDED: u32 = WM_APP + 2;
 const WM_SETTINGS_PUSH_LOCALE: u32 = WM_APP + 3;
+const WM_SETTINGS_PUSH_TRAY_CONFIG: u32 = WM_APP + 4;
 static PENDING_LOCALE: Mutex<Option<String>> = Mutex::new(None);
+static PENDING_TRAY_CONFIG: Mutex<Option<String>> = Mutex::new(None);
 
 /// Thread id of the open settings window's message loop, or `None` when closed.
 /// We target the thread queue (not the HWND) so a destroyed or recycled window
@@ -134,6 +136,30 @@ pub fn push_locale(language: &str) {
     }
     unsafe {
         let _ = PostThreadMessageW(thread_id, WM_SETTINGS_PUSH_LOCALE, WPARAM(0), LPARAM(0));
+    }
+}
+
+pub fn push_tray_config(config: &Config) {
+    let settings_thread = match SETTINGS_THREAD.lock() {
+        Ok(thread) => thread,
+        Err(_) => return,
+    };
+    let Some(thread_id) = *settings_thread else {
+        return;
+    };
+    let Ok(script) = super::html::tray_config_script(config) else {
+        return;
+    };
+    if let Ok(mut pending) = PENDING_TRAY_CONFIG.lock() {
+        *pending = Some(script);
+        unsafe {
+            let _ = PostThreadMessageW(
+                thread_id,
+                WM_SETTINGS_PUSH_TRAY_CONFIG,
+                WPARAM(0),
+                LPARAM(0),
+            );
+        }
     }
 }
 
@@ -384,6 +410,16 @@ pub fn run_settings_window(
                 }
                 continue;
             }
+            if msg_buf.message == WM_SETTINGS_PUSH_TRAY_CONFIG {
+                let script = PENDING_TRAY_CONFIG
+                    .lock()
+                    .ok()
+                    .and_then(|mut pending| pending.take());
+                if let Some(script) = script {
+                    let _ = webview.evaluate_script(&script);
+                }
+                continue;
+            }
             if msg_buf.message == WM_SETTINGS_PUSH_RECORDED {
                 let chords = PENDING_RECORDED
                     .lock()
@@ -407,6 +443,9 @@ pub fn run_settings_window(
         // The window is gone; stop the daemon from posting to a dead thread.
         if let Ok(mut g) = SETTINGS_THREAD.lock() {
             *g = None;
+            if let Ok(mut pending) = PENDING_TRAY_CONFIG.lock() {
+                *pending = None;
+            }
             if let Ok(mut pending) = PENDING_RECORDED.lock() {
                 pending.clear();
             }

@@ -368,6 +368,11 @@ fn sync_tray_toggles(tray_manager: &Option<tray::TrayManager>, config: &Config) 
     }
 }
 
+fn sync_tray_after_quick_toggle(tray_manager: &Option<tray::TrayManager>, config: &Config) {
+    sync_tray_toggles(tray_manager, config);
+    settings::push_tray_config(config);
+}
+
 async fn reload_config_and_hotkeys(
     state: &Arc<Mutex<AppState>>,
     hotkey_state: &mut HotkeyState,
@@ -2478,6 +2483,7 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
                 state.hide_border();
             }
             let _ = state.config.save();
+            settings::push_tray_config(&state.config);
         }
         tray::TrayEvent::ToggleFocusNewWindows => {
             let mut state = ctx.state.lock().await;
@@ -2487,6 +2493,7 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
                 state.config.behavior.focus_new_windows
             );
             let _ = state.config.save();
+            settings::push_tray_config(&state.config);
         }
         tray::TrayEvent::ToggleFocusFollowsMouse => {
             let enabled = {
@@ -2498,6 +2505,7 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
                     state.config.behavior.focus_follows_mouse
                 );
                 let _ = state.config.save();
+                settings::push_tray_config(&state.config);
                 state.config.behavior.focus_follows_mouse
             };
             sync_mouse_hook(enabled, ctx.mouse_hook_handle, ctx.event_tx);
@@ -2513,7 +2521,7 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
             info!("Tray: Taskbar buttons set to {:?}", mode);
             let _ = state.config.save();
             state.sync_taskbar_buttons();
-            sync_tray_toggles(ctx.tray_manager, &state.config);
+            sync_tray_after_quick_toggle(ctx.tray_manager, &state.config);
         }
         tray::TrayEvent::ToggleAutoStart => {
             use leopardwm_platform_win32::autostart;
@@ -2548,7 +2556,7 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
                 }
                 let _ = state.config.save();
             }
-            sync_tray_toggles(ctx.tray_manager, &state.config);
+            sync_tray_after_quick_toggle(ctx.tray_manager, &state.config);
         }
         tray::TrayEvent::OpenReleasesPage => {
             info!("Tray: opening releases page");
@@ -2566,7 +2574,7 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
                 }
                 let _ = state.config.save();
             }
-            sync_tray_toggles(ctx.tray_manager, &state.config);
+            sync_tray_after_quick_toggle(ctx.tray_manager, &state.config);
         }
         tray::TrayEvent::SetCenteringOnOverflow => {
             let mut state = ctx.state.lock().await;
@@ -2580,7 +2588,7 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
                 }
                 let _ = state.config.save();
             }
-            sync_tray_toggles(ctx.tray_manager, &state.config);
+            sync_tray_after_quick_toggle(ctx.tray_manager, &state.config);
         }
         tray::TrayEvent::SetCenterColumnsOff => {
             let mut state = ctx.state.lock().await;
@@ -2596,7 +2604,7 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
                 }
                 let _ = state.config.save();
             }
-            sync_tray_toggles(ctx.tray_manager, &state.config);
+            sync_tray_after_quick_toggle(ctx.tray_manager, &state.config);
         }
         tray::TrayEvent::SetCenterColumnsSingle => {
             let mut state = ctx.state.lock().await;
@@ -2613,7 +2621,7 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
                 }
                 let _ = state.config.save();
             }
-            sync_tray_toggles(ctx.tray_manager, &state.config);
+            sync_tray_after_quick_toggle(ctx.tray_manager, &state.config);
         }
         tray::TrayEvent::SetCenterColumnsFit => {
             let mut state = ctx.state.lock().await;
@@ -2629,7 +2637,7 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
                 }
                 let _ = state.config.save();
             }
-            sync_tray_toggles(ctx.tray_manager, &state.config);
+            sync_tray_after_quick_toggle(ctx.tray_manager, &state.config);
         }
         tray::TrayEvent::SetPlacementNewColumn => {
             let mut state = ctx.state.lock().await;
@@ -2638,7 +2646,7 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
                 info!("Tray: New-window placement set to NewColumn");
                 let _ = state.config.save();
             }
-            sync_tray_toggles(ctx.tray_manager, &state.config);
+            sync_tray_after_quick_toggle(ctx.tray_manager, &state.config);
         }
         tray::TrayEvent::SetPlacementInColumn => {
             let mut state = ctx.state.lock().await;
@@ -2647,7 +2655,7 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
                 info!("Tray: New-window placement set to InColumn");
                 let _ = state.config.save();
             }
-            sync_tray_toggles(ctx.tray_manager, &state.config);
+            sync_tray_after_quick_toggle(ctx.tray_manager, &state.config);
         }
     }
 }

@@ -35,6 +35,7 @@ All notable changes to LeopardWM will be documented in this file.
 
 ### Fixes
 
+- **Settings no longer undoes quick-toggle changes made from the tray while Settings is open.**
 - **Turning off Center columns now releases centered rows even when centering past the screen edges is enabled.**
 - **Hotkeys no longer stop working after hours of use because failed batched window moves leak positioning handles.** Thanks to @doutorferr0 for the report and measurements. (#180)
 - **Store apps such as Calculator and Settings are now managed as soon as they open.** Previously they could stay unmanaged until minimized and restored.
