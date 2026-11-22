@@ -4,6 +4,7 @@ mod animation_worker;
 mod command_handler;
 mod config;
 mod daemon_log;
+mod diagnostic_snapshot;
 #[cfg(test)]
 mod diagnostics_validation;
 mod drag;

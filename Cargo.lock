@@ -1166,7 +1166,6 @@ dependencies = [
  "tokio",
  "toml 1.2.1+spec-1.1.0",
  "windows",
- "winreg",
  "winresource",
 ]
 
@@ -1215,9 +1214,13 @@ dependencies = [
 name = "leopardwm-ipc"
 version = "0.3.5"
 dependencies = [
+ "aho-corasick",
  "directories",
+ "regex",
  "serde",
  "serde_json",
+ "time",
+ "toml 1.2.1+spec-1.1.0",
 ]
 
 [[package]]

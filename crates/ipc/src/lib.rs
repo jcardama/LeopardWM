@@ -4,6 +4,7 @@
 
 pub mod bounded_log;
 pub mod config_template;
+pub mod diagnostic_snapshot;
 pub mod hotkeys;
 pub mod workspace_state;
 
@@ -60,6 +61,13 @@ pub fn log_dir() -> std::path::PathBuf {
     directories::BaseDirs::new()
         .map(|d| d.data_local_dir().join("leopardwm").join("logs"))
         .unwrap_or_else(|| std::env::temp_dir().join("leopardwm").join("logs"))
+}
+
+/// Diagnostic snapshot directory alongside [`log_dir`].
+pub fn diagnostics_dir() -> std::path::PathBuf {
+    directories::BaseDirs::new()
+        .map(|d| d.data_local_dir().join("leopardwm").join("diagnostics"))
+        .unwrap_or_else(|| std::env::temp_dir().join("leopardwm").join("diagnostics"))
 }
 
 /// Dedicated opt-in gesture diagnostic capture file inside [`log_dir`].
@@ -587,6 +595,13 @@ pub enum IpcCommand {
     QueryStatus,
     /// Health check — returns uptime, window count, and error count.
     HealthCheck,
+    /// Write a diagnostic snapshot, an additive v4 command.
+    WriteDiagnosticSnapshot {
+        #[serde(default)]
+        requester_version: String,
+        #[serde(default)]
+        requester_integrity: Option<u32>,
+    },
 
     /// Switch to workspace N (1-9) on the focused monitor.
     SwitchWorkspace {
@@ -811,6 +826,8 @@ pub enum IpcResponse {
         issues: Vec<HotkeyIssue>,
     },
 
+    /// The diagnostic snapshot was written at this path.
+    DiagnosticSnapshotWritten { path: String },
     /// Daemon status information.
     StatusInfo {
         /// Daemon version.
@@ -1114,6 +1131,10 @@ mod tests {
             IpcCommand::EqualizeColumnHeights,
             IpcCommand::QueryStatus,
             IpcCommand::HealthCheck,
+            IpcCommand::WriteDiagnosticSnapshot {
+                requester_version: "1".into(),
+                requester_integrity: Some(0x2000),
+            },
             IpcCommand::MaximizeColumn,
             IpcCommand::SwitchWorkspace { index: 1 },
             IpcCommand::SwitchWorkspace { index: 9 },
@@ -1138,6 +1159,9 @@ mod tests {
             },
             IpcResponse::ApplyPending {
                 message: "Recovery placement is still pending".to_string(),
+            },
+            IpcResponse::DiagnosticSnapshotWritten {
+                path: "snapshot.txt".into(),
             },
             IpcResponse::WorkspaceState {
                 columns: 5,

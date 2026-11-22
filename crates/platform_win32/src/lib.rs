@@ -63,9 +63,10 @@ pub use elevation::{
 pub use enumeration::{
     collect_all_top_level_window_ids, enumerate_monitors, enumerate_windows, find_monitor_by_id,
     find_monitor_for_rect, get_primary_monitor, get_process_executable, get_window_info,
-    is_excluded_tool_window_hwnd, is_excluded_topmost_popup_hwnd, is_excluded_window_class_hwnd,
-    monitor_above, monitor_below, monitor_left_of, monitor_right_of, monitor_to_left,
-    monitor_to_right, monitors_by_position, TopLevelWindowIdCollection,
+    get_window_title, is_excluded_tool_window_hwnd, is_excluded_topmost_popup_hwnd,
+    is_excluded_window_class_hwnd, monitor_above, monitor_below, monitor_left_of,
+    monitor_right_of, monitor_to_left, monitor_to_right, monitors_by_position,
+    TopLevelWindowIdCollection,
 };
 pub use event_hooks::{install_event_hooks, EventHookHandle, MoveStartCapture, WindowEvent};
 pub use focus::{
@@ -87,8 +88,8 @@ pub use placement::{
     PlacementLanding, WidthViolation,
 };
 pub use system::{
-    are_animations_enabled, get_system_highlight_color_bgr, is_high_contrast_enabled,
-    is_on_battery_or_power_saver, scale_px, set_dpi_awareness,
+    are_animations_enabled, get_system_highlight_color_bgr, get_windows_version,
+    is_high_contrast_enabled, is_on_battery_or_power_saver, scale_px, set_dpi_awareness,
 };
 pub use types::{MonitorId, MonitorInfo, PlatformConfig, Win32Error, WindowInfo};
 pub use virtual_desktop::{is_window_on_current_virtual_desktop, warm_virtual_desktop_queries};

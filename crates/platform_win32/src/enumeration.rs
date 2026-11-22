@@ -73,6 +73,18 @@ pub fn is_excluded_window_class_hwnd(hwnd: WindowId) -> bool {
     should_skip_window_by_class(&String::from_utf16_lossy(&class_buf[..class_len as usize]))
 }
 
+/// Read a window title without admission or visibility filtering.
+pub fn get_window_title(hwnd_id: WindowId) -> String {
+    let hwnd = HWND(hwnd_id as *mut c_void);
+    let title_len = unsafe { GetWindowTextLengthW(hwnd) };
+    if title_len <= 0 {
+        return String::new();
+    }
+    let mut title_buf = vec![0; (title_len + 1) as usize];
+    let actual_len = unsafe { GetWindowTextW(hwnd, &mut title_buf) };
+    String::from_utf16_lossy(&title_buf[..actual_len as usize])
+}
+
 /// Get info for a single window handle with relaxed filters.
 ///
 /// Unlike `enumerate_windows`, this does not filter out cloaked windows
@@ -110,14 +122,7 @@ pub fn get_window_info(hwnd_id: WindowId) -> Option<WindowInfo> {
         }
 
         // Get title (allow empty for UWP apps still loading)
-        let title_len = GetWindowTextLengthW(hwnd);
-        let title = if title_len > 0 {
-            let mut title_buf: Vec<u16> = vec![0; (title_len + 1) as usize];
-            let actual_len = GetWindowTextW(hwnd, &mut title_buf);
-            String::from_utf16_lossy(&title_buf[..actual_len as usize])
-        } else {
-            String::new()
-        };
+        let title = get_window_title(hwnd_id);
 
         let mut class_buf: Vec<u16> = vec![0; 256];
         let class_len = GetClassNameW(hwnd, &mut class_buf);

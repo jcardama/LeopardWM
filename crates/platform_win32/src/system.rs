@@ -1,5 +1,22 @@
 //! System-level queries: DPI scaling, power state, accessibility settings.
 
+/// Return the installed Windows product name, display version, and build when available.
+pub fn get_windows_version() -> String {
+    use winreg::enums::HKEY_LOCAL_MACHINE;
+    use winreg::RegKey;
+
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    if let Ok(key) = hklm.open_subkey("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion") {
+        let build: String = key.get_value("CurrentBuildNumber").unwrap_or_default();
+        let display: String = key.get_value("DisplayVersion").unwrap_or_default();
+        let product: String = key.get_value("ProductName").unwrap_or_default();
+        if !build.is_empty() {
+            return format!("{} ({}, Build {})", product, display, build);
+        }
+    }
+    "Unknown".to_string()
+}
+
 /// Scale a pixel value by the given DPI scale factor.
 ///
 /// Config values are in logical pixels (96 DPI). This function converts them

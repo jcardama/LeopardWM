@@ -24,7 +24,8 @@ All source in `crates/daemon/src/`. All AppState fields are `pub(crate)` for mul
 | `state.rs` | AppState struct, constructor, constants, basic accessors, drag type enums |
 | `recreated_window_slot.rs` | Suspend/resume-gated same-process/class hidden-window column and tab restoration |
 | `event_handler.rs` | handle_window_event (Created/Destroyed/Focused/Hidden/etc.), apply_focus_follows_mouse |
-| `command_handler.rs` | handle_command — dispatches 26 IPC commands (focus, move, resize, scroll, config, etc.) |
+| `command_handler.rs` | handle_command — dispatches IPC commands (focus, move, resize, scroll, config, etc.) |
+| `diagnostic_snapshot.rs` | Gather daemon state and health for the shared diagnostic snapshot writer |
 | `helpers.rs` | Shared helpers: layout recalc, border management, config reload, persistence, window rules |
 | `drag.rs` | Drag-and-drop: update_drag_hint, execute_window_merge, finalize_drag_merge, placeholder logic |
 | `config.rs` | TOML config parsing, defaults, validation, HotkeyConfig, WindowRule, theme |

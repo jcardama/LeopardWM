@@ -6,6 +6,7 @@ use leopardwm_ipc::{
     DaemonLogStatus, ElevationBlockReason, ElevationBlockedWindow, IpcCommand, IpcResponse,
     NativeSwipeStatus,
 };
+pub(crate) use leopardwm_platform_win32::get_windows_version;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -313,28 +314,6 @@ pub(crate) fn blocked_windows_check(
     }
 }
 
-pub(crate) fn get_windows_version() -> String {
-    #[cfg(windows)]
-    {
-        use winreg::enums::*;
-        use winreg::RegKey;
-        let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-        if let Ok(key) = hklm.open_subkey("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion") {
-            let build: String = key.get_value("CurrentBuildNumber").unwrap_or_default();
-            let display: String = key.get_value("DisplayVersion").unwrap_or_default();
-            let product: String = key.get_value("ProductName").unwrap_or_default();
-            if !build.is_empty() {
-                return format!("{} ({}, Build {})", product, display, build);
-            }
-        }
-        "Unknown".to_string()
-    }
-    #[cfg(not(windows))]
-    {
-        "Not Windows".to_string()
-    }
-}
-
 pub(crate) async fn handle_doctor() -> Result<()> {
     println!("LeopardWM Doctor");
     println!("===============");
@@ -479,239 +458,70 @@ pub(crate) async fn handle_doctor() -> Result<()> {
     Ok(())
 }
 
-pub(crate) enum CollectLogsDaemon {
-    NotRunning,
-    ProbeFailed(anyhow::Error),
-    Running(Result<IpcResponse>),
-}
-
 pub(crate) async fn handle_collect_logs() -> Result<()> {
-    let config = doctor_config_path();
-    let log_dir = leopardwm_ipc::log_dir();
-    let daemon = match probe_daemon_running() {
-        Ok(false) => CollectLogsDaemon::NotRunning,
-        Ok(true) => CollectLogsDaemon::Running(send_command(IpcCommand::HealthCheck).await),
-        Err(error) => CollectLogsDaemon::ProbeFailed(error),
-    };
-    write_collect_logs_report(
-        &mut io::stdout(),
-        config,
-        &log_dir,
-        daemon,
-        find_daemon_binary().as_deref(),
-    )?;
-    Ok(())
-}
-
-pub(crate) fn write_collect_logs_report(
-    out: &mut impl Write,
-    (found_path, display_path): (Option<PathBuf>, PathBuf),
-    log_dir: &Path,
-    daemon: CollectLogsDaemon,
-    daemon_binary: Option<&Path>,
-) -> io::Result<()> {
-    writeln!(out, "LeopardWM Log Collection")?;
-    writeln!(out, "=======================\n")?;
-
-    writeln!(out, "## Environment")?;
-    writeln!(out, "OS: {}", get_windows_version())?;
-    writeln!(out, "CLI Version: {}", env!("CARGO_PKG_VERSION"))?;
-    writeln!(out)?;
-
-    match &found_path {
-        Some(path) => {
-            writeln!(out, "## Config ({}):", path.display())?;
-            match fs::read_to_string(path) {
-                Ok(content) => writeln!(out, "{}", content)?,
-                Err(e) => writeln!(out, "  (error reading: {})", e)?,
+    use leopardwm_ipc::diagnostic_snapshot::{self, ConfigLoadStatus, Monitor, SnapshotInput};
+    let version = env!("CARGO_PKG_VERSION").to_string();
+    let integrity = leopardwm_platform_win32::current_process_integrity();
+    let reason = match probe_daemon_running() {
+        Ok(true) => match send_command(IpcCommand::WriteDiagnosticSnapshot {
+            requester_version: version.clone(),
+            requester_integrity: integrity,
+        })
+        .await
+        {
+            Ok(IpcResponse::DiagnosticSnapshotWritten { path }) => {
+                println!("{path}");
+                return Ok(());
             }
-        }
-        None => writeln!(
-            out,
-            "## Config: not found (expected at {})",
-            display_path.display()
-        )?,
-    }
-    writeln!(out)?;
-
-    writeln!(out, "## Native Touchpad Swipes")?;
-    let running = match &daemon {
-        CollectLogsDaemon::NotRunning => Some(false),
-        CollectLogsDaemon::ProbeFailed(_) => None,
-        CollectLogsDaemon::Running(_) => Some(true),
-    };
-    let mut log_status = None;
-    let mut log_uptime = None;
-    match daemon {
-        CollectLogsDaemon::Running(health) => match health {
-            Ok(IpcResponse::HealthInfo {
-                native_swipes,
-                daemon_log,
-                uptime_seconds,
-                ..
-            }) => {
-                native_swipes_check(native_swipes.as_ref()).write_to(out)?;
-                log_status = daemon_log;
-                log_uptime = Some(uptime_seconds);
-            }
-            Ok(other) => writeln!(
-                out,
-                "  (status unavailable: unexpected health response: {other:?})"
-            )?,
-            Err(error) => writeln!(out, "  (status unavailable: health query failed: {error})")?,
+            _ => "daemon does not support snapshot capture or the request failed",
         },
-        CollectLogsDaemon::ProbeFailed(error) => {
-            writeln!(
-                out,
-                "  (status unavailable: could not check daemon state: {error})"
-            )?;
-        }
-        CollectLogsDaemon::NotRunning => {
-            writeln!(
-                out,
-                "  (status unavailable because the daemon is not running)"
-            )?;
-        }
-    }
-    writeln!(out)?;
-
-    let (log_path, source) = daemon_log_path(
-        log_status.as_ref(),
-        running,
-        &log_dir.join("leopardwm-daemon.log"),
-    );
-    writeln!(
-        out,
-        "Daemon log file read: {} ({source})",
-        log_path.display()
-    )?;
-    daemon_log_check_from_paths(
-        log_status.as_ref(),
-        log_uptime,
-        &log_path,
-        found_path.as_deref(),
-    )
-    .write_to(out)?;
-    write!(
-        out,
-        "{}",
-        format_file_section("Daemon Log", &log_path, Some(100))
-    )?;
-    writeln!(out)?;
-
-    let err_log_path = log_dir.join("leopardwm-daemon.err.log");
-    writeln!(out, "## Daemon Error Log ({}):", err_log_path.display())?;
-    match fs::read_to_string(&err_log_path) {
-        Ok(content) if !content.trim().is_empty() => writeln!(out, "{}", content)?,
-        Ok(_) => writeln!(out, "  (empty)")?,
-        Err(e) => writeln!(out, "  (not found or unreadable: {})", e)?,
-    }
-    writeln!(out)?;
-
-    let watchdog_log_path = log_dir.join("leopardwm-watchdog.log");
-    write!(
-        out,
-        "{}",
-        format_file_section("Watchdog Log", &watchdog_log_path, Some(100))
-    )?;
-    writeln!(out)?;
-
-    let watchdog_err_log_path = log_dir.join("leopardwm-watchdog.err.log");
-    writeln!(
-        out,
-        "## Watchdog Error Log ({}):",
-        watchdog_err_log_path.display()
-    )?;
-    match fs::read_to_string(&watchdog_err_log_path) {
-        Ok(content) if !content.trim().is_empty() => writeln!(out, "{}", content)?,
-        Ok(_) => writeln!(out, "  (empty)")?,
-        Err(e) => writeln!(out, "  (not found or unreadable: {})", e)?,
-    }
-    writeln!(out)?;
-
-    let capture_path = log_dir.join(leopardwm_ipc::GESTURE_CAPTURE_LOG_FILE);
-    write!(
-        out,
-        "{}",
-        format_file_section("Gesture Capture", &capture_path, None)
-    )?;
-    writeln!(
-        out,
-        "  Note: this is the full capture file, not a last-100 tail."
-    )?;
-    writeln!(
-        out,
-        "  Presence of this file does not mean a capture is running now. Capture is startup-only and default off."
-    )?;
-    writeln!(
-        out,
-        "  For touchpad gesture reports, share this section or the capture file itself rather than the tailed daemon log."
-    )?;
-    writeln!(out)?;
-
-    writeln!(out, "## Daemon Binary:")?;
-    match daemon_binary {
-        Some(path) => writeln!(out, "  Found: {}", path.display())?,
-        None => writeln!(out, "  Not found")?,
-    }
-
-    writeln!(out, "\n---")?;
-    writeln!(
-        out,
-        "Copy the above output and attach it to your bug report."
-    )?;
+        Ok(false) => "daemon not running",
+        Err(_) => "daemon state could not be checked",
+    };
+    let (found, config_path) = doctor_config_path();
+    let (config_status, config_text) = match found {
+        None => (ConfigLoadStatus::NotFound, None),
+        Some(path) => match fs::read_to_string(path) {
+            Ok(text) => (ConfigLoadStatus::Loaded, Some(text)),
+            Err(error) => (ConfigLoadStatus::ReadFailed(error.to_string()), None),
+        },
+    };
+    let input = SnapshotInput {
+        requester: "CLI".into(),
+        requester_version: version,
+        requester_integrity: integrity,
+        daemon_version: None,
+        daemon_integrity: None,
+        daemon_uptime: None,
+        unavailable_reason: reason.into(),
+        windows_version: get_windows_version(),
+        monitors: leopardwm_platform_win32::enumerate_monitors()
+            .ok()
+            .map(|monitors| {
+                monitors
+                    .into_iter()
+                    .map(|m| Monitor {
+                        device: m.device_name,
+                        x: m.rect.x,
+                        y: m.rect.y,
+                        width: m.rect.width,
+                        height: m.rect.height,
+                        scale: m.scale_factor,
+                    })
+                    .collect()
+            }),
+        health: None,
+        config_path,
+        config_status,
+        config_text,
+        workspaces: None,
+        known_titles: Vec::new(),
+        userprofile: std::env::var("USERPROFILE").ok(),
+        log_dir: leopardwm_ipc::log_dir(),
+        timestamp: SystemTime::now(),
+    };
+    let path = diagnostic_snapshot::write(&input, &leopardwm_ipc::diagnostics_dir())?;
+    println!("{}", path.display());
+    println!("Daemon data unavailable: {reason}.");
     Ok(())
-}
-
-/// Use `tail_lines = None` to preserve complete dedicated capture reports.
-pub(crate) fn format_file_section(heading: &str, path: &Path, tail_lines: Option<usize>) -> String {
-    let mut out = format!("## {heading} ({}):\n", path.display());
-    match fs::read_to_string(path) {
-        Ok(content) => {
-            if let Some(n) = tail_lines {
-                let lines: Vec<&str> = content.lines().collect();
-                let start = lines.len().saturating_sub(n);
-                if lines.len() < n {
-                    let previous_path = leopardwm_ipc::bounded_log::previous_log_path(path);
-                    if let Ok(previous) = fs::read_to_string(&previous_path) {
-                        let previous_lines: Vec<&str> = previous.lines().collect();
-                        let previous_start = previous_lines.len().saturating_sub(n - lines.len());
-                        if previous_start < previous_lines.len() {
-                            out.push_str(&format!(
-                                "  Previous log ({}):\n",
-                                previous_path.display()
-                            ));
-                            if previous_start > 0 {
-                                out.push_str(&format!(
-                                    "  ... ({} earlier lines omitted)\n",
-                                    previous_start
-                                ));
-                            }
-                            for line in &previous_lines[previous_start..] {
-                                out.push_str(line);
-                                out.push('\n');
-                            }
-                            out.push_str("  Current log:\n");
-                        }
-                    }
-                }
-                for line in &lines[start..] {
-                    out.push_str(line);
-                    out.push('\n');
-                }
-                if start > 0 {
-                    out.push_str(&format!("  ... ({} earlier lines omitted)\n", start));
-                }
-            } else if content.is_empty() {
-                out.push_str("  (empty)\n");
-            } else {
-                out.push_str(&content);
-                if !content.ends_with('\n') {
-                    out.push('\n');
-                }
-            }
-        }
-        Err(e) => out.push_str(&format!("  (not found or unreadable: {e})\n")),
-    }
-    out
 }

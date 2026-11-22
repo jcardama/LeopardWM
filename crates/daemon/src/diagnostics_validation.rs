@@ -140,6 +140,7 @@ pub(crate) fn is_allowed_ipc_command(cmd: &IpcCommand) -> bool {
 pub(crate) fn command_name(cmd: &IpcCommand) -> &'static str {
     match cmd {
         IpcCommand::HealthCheck => "HealthCheck",
+        IpcCommand::WriteDiagnosticSnapshot { .. } => "WriteDiagnosticSnapshot",
         IpcCommand::QueryStatus => "QueryStatus",
         IpcCommand::Stop => "Stop",
         IpcCommand::PanicRevert => "PanicRevert",

@@ -137,6 +137,31 @@ enum OldRecord {
 }
 
 #[test]
+fn snapshot_command_defaults_and_old_response_fallback() {
+    let command: IpcCommand =
+        serde_json::from_str(r#"{"type":"write_diagnostic_snapshot"}"#).unwrap();
+    assert_eq!(
+        command,
+        IpcCommand::WriteDiagnosticSnapshot {
+            requester_version: String::new(),
+            requester_integrity: None
+        }
+    );
+    let response = IpcResponse::DiagnosticSnapshotWritten {
+        path: "snapshot.txt".into(),
+    };
+    let wire = serde_json::to_string(&response).unwrap();
+    assert_eq!(
+        serde_json::from_str::<OldResponse>(&wire).unwrap(),
+        OldResponse::Unknown
+    );
+    assert_eq!(
+        serde_json::from_str::<IpcResponse>(&wire).unwrap(),
+        response
+    );
+}
+
+#[test]
 fn released_035_client_decodes_additive_rows_and_snapshot() {
     let ready = IpcResponse::WorkspaceStateReady {
         protocol_version: IPC_PROTOCOL_VERSION,

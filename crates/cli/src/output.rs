@@ -11,6 +11,7 @@ pub(crate) fn print_response(response: &IpcResponse) {
         IpcResponse::ApplyPending { message } => {
             println!("{}", message);
         }
+        IpcResponse::DiagnosticSnapshotWritten { path } => println!("{path}"),
         IpcResponse::WorkspaceState {
             columns,
             windows,

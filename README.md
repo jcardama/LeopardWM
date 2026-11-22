@@ -504,8 +504,8 @@ Enable **GlazeWM compatibility** in Settings or set `enabled = true` under `[gla
 ### Troubleshooting
 
 ```bash
-lwm doctor             # diagnostic checks (config valid, daemon reachable, hotkey conflicts, etc.)
-lwm collect-logs       # bundles logs + crash reports into a zip for bug reports
+lwm doctor             # checks config, daemon reachability, integrity and log status
+lwm collect-logs       # writes a redacted snapshot under %LOCALAPPDATA%\leopardwm\diagnostics\ and prints its path
 lwm reload             # reload config from disk without restarting
 lwm refresh            # re-enumerate windows after weird state
 lwm panic-revert       # emergency: uncloak everything, drop daemon out of management

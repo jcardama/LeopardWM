@@ -314,5 +314,10 @@ mod tests {
             .expect("owned hidden window must be enumerated");
         assert_eq!(inspected.startup_verdict, Err(SkipReason::NotVisible));
         assert_eq!(inspected.live_create_verdict, Err(SkipReason::NotVisible));
+        assert!(crate::get_window_info(owned.0 .0 as WindowId).is_none());
+        assert_eq!(
+            crate::get_window_title(owned.0 .0 as WindowId),
+            "LeopardWM hidden inspection test"
+        );
     }
 }

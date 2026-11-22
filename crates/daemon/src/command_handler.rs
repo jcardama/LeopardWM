@@ -925,6 +925,12 @@ impl AppState {
             } => self.handle_switch_workspace_on_monitor(&monitor_device_name, index),
             IpcCommand::MoveToWorkspace { index } => self.handle_move_to_workspace(index),
             IpcCommand::HealthCheck => self.handle_health_check(),
+            IpcCommand::WriteDiagnosticSnapshot { requester_version, requester_integrity } => {
+                match crate::diagnostic_snapshot::create_diagnostic_snapshot(self, "CLI", requester_version, requester_integrity) {
+                    Ok(path) => IpcResponse::DiagnosticSnapshotWritten { path: path.to_string_lossy().into_owned() },
+                    Err(error) => IpcResponse::error(format!("Failed to write diagnostic snapshot: {error}")),
+                }
+            }
             IpcCommand::GetAutoStart => {
                 match leopardwm_platform_win32::autostart::get_autostart() {
                     Ok(enabled) => IpcResponse::AutoStartState { enabled },
