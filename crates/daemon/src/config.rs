@@ -4,6 +4,7 @@
 use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use leopardwm_core_layout::CenteringMode;
+use leopardwm_ipc::log_text;
 use leopardwm_platform_win32::parse_hotkey_string;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -324,11 +325,14 @@ pub fn parse_split_shares(split: &[String]) -> Vec<f64> {
             } else {
                 tracing::warn!(
                     "Row split entry '{}' must be greater than 0; ignoring",
-                    entry
+                    log_text::text(entry)
                 );
             }
         } else {
-            tracing::warn!("Failed to parse row split entry '{}'; ignoring", entry);
+            tracing::warn!(
+                "Failed to parse row split entry '{}'; ignoring",
+                log_text::text(entry)
+            );
         }
     }
 
@@ -439,7 +443,10 @@ fn parse_workspaces_str(s: &str, out: &mut Vec<u8>) {
                 tracing::warn!("Workspace index {} out of range 1..=9; ignoring", n);
             }
         } else {
-            tracing::warn!("Invalid workspace entry '{}'; ignoring", trimmed);
+            tracing::warn!(
+                "Invalid workspace entry '{}'; ignoring",
+                log_text::text(trimmed)
+            );
         }
     }
 }
@@ -2110,7 +2117,10 @@ impl Config {
         }
         let result = CONFIG_FILE.lock().unwrap().save(self, &config_paths());
         if let Err(error) = &result {
-            tracing::warn!("Failed to save config: {error:#}");
+            tracing::warn!(
+                "Failed to save config: {}",
+                log_text::text(format_args!("{error:#}"))
+            );
             let message = if let Some(recovery) = error.downcast_ref::<HardLinkWriteError>() {
                 format!(
                     "The settings were not saved. The original config is backed up at {}.",
@@ -2217,14 +2227,16 @@ fn replace_config_file(target: &Path, temp: &Path, content: &[u8]) -> Result<()>
             })?;
         if let Err(error) = fs::remove_file(&backup) {
             tracing::warn!(
-                "Could not remove config backup {}: {error}",
-                backup.display()
+                "Could not remove config backup {}: {}",
+                log_text::path(backup.display()),
+                log_text::text(&error)
             );
         }
         if let Err(error) = fs::remove_file(temp) {
             tracing::warn!(
-                "Could not remove temporary config {}: {error}",
-                temp.display()
+                "Could not remove temporary config {}: {}",
+                log_text::path(temp.display()),
+                log_text::text(&error)
             );
         }
         Ok(())
@@ -2304,7 +2316,7 @@ impl ConfigFile {
             match Config::parse(content) {
                 Ok(config) => {
                     self.rejections.clear();
-                    tracing::info!("Loading config from: {}", path.display());
+                    tracing::info!("Loading config from: {}", log_text::path(path.display()));
                     return Ok(config);
                 }
                 Err(error) => {
@@ -2312,8 +2324,8 @@ impl ConfigFile {
                         for field in &fields {
                             tracing::warn!(
                                 "Config: {} reset to default: {}",
-                                field.path,
-                                field.reason
+                                log_text::name(&field.path),
+                                log_text::text(&field.reason)
                             );
                         }
                         let reason = format!("Recovered config file {}: {error}", path.display());
@@ -2473,7 +2485,7 @@ impl ConfigFile {
         for rejection in &mut self.rejections {
             rejection.pending = false;
         }
-        tracing::info!("Config saved to: {}", path.display());
+        tracing::info!("Config saved to: {}", log_text::path(path.display()));
         self.path = Some(path);
         self.last_seen = Some(content.into_bytes());
     }

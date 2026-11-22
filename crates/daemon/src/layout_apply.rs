@@ -1,6 +1,7 @@
 use crate::animation_worker;
 use crate::state::*;
 use anyhow::{anyhow, Result};
+use leopardwm_ipc::log_text;
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use tracing::{debug, warn};
@@ -555,11 +556,11 @@ impl AppState {
         );
         for candidate in &report.candidates {
             warn!(
-                "Timed-out placement batch candidate (not a proven blocker): hwnd={:#x} class={:?} title={:?} executable={:?}",
+                "Timed-out placement batch candidate (not a proven blocker): hwnd={:#x} class={} title={} executable={}",
                 candidate.hwnd,
-                candidate.class_name,
-                candidate.title,
-                candidate.executable
+                log_text::name(candidate.class_name.as_deref().unwrap_or("")),
+                log_text::title(candidate.title.as_deref().unwrap_or("")),
+                log_text::name(candidate.executable.as_deref().unwrap_or(""))
             );
         }
         self.pending_layout_apply_timeout_report = Some(report);
@@ -814,11 +815,11 @@ impl AppState {
                     );
                     for candidate in &candidates {
                         warn!(
-                            "Timed-out placement batch candidate (not a proven blocker): hwnd={:#x} class={:?} title={:?} executable={:?}",
+                            "Timed-out placement batch candidate (not a proven blocker): hwnd={:#x} class={} title={} executable={}",
                             candidate.hwnd,
-                            candidate.class_name,
-                            candidate.title,
-                            candidate.executable
+                            log_text::name(candidate.class_name.as_deref().unwrap_or("")),
+                            log_text::title(candidate.title.as_deref().unwrap_or("")),
+                            log_text::name(candidate.executable.as_deref().unwrap_or(""))
                         );
                     }
                     Err(anyhow!(msg))
@@ -1167,8 +1168,11 @@ impl AppState {
                             let windows: Vec<_> = candidates
                                 .iter()
                                 .map(|candidate| format!(
-                                    "hwnd={:#x} class={:?} title={:?} executable={:?}",
-                                    candidate.hwnd, candidate.class_name, candidate.title, candidate.executable
+                                    "hwnd={:#x} class={} title={} executable={}",
+                                    candidate.hwnd,
+                                    log_text::name(candidate.class_name.as_deref().unwrap_or("")),
+                                    log_text::title(candidate.title.as_deref().unwrap_or("")),
+                                    log_text::name(candidate.executable.as_deref().unwrap_or(""))
                                 ))
                                 .collect();
                             warn!(

@@ -1,6 +1,7 @@
 use crate::event_handler::{AdmissionKind, AdmitOutcome};
 use crate::layout_apply::LayoutApplyOutcome;
 use crate::state::AppState;
+use leopardwm_ipc::log_text;
 use leopardwm_ipc::IpcResponse;
 #[cfg(not(test))]
 use leopardwm_platform_win32::Win32Error;
@@ -74,7 +75,9 @@ impl AppState {
             Ok(Some(token)) if token == entry.token => {
                 debug!(
                     "Temporary ignore still live for {} (pid {} class {})",
-                    hwnd, entry.process_id, entry.class_name
+                    hwnd,
+                    entry.process_id,
+                    log_text::name(&entry.class_name)
                 );
                 IgnoreGate::Block
             }
@@ -100,7 +103,9 @@ impl AppState {
             Ok(Some(token)) if token == entry.token => {
                 debug!(
                     "Keeping temporary ignore for live hwnd {} (pid {} class {})",
-                    hwnd, entry.process_id, entry.class_name
+                    hwnd,
+                    entry.process_id,
+                    log_text::name(&entry.class_name)
                 );
             }
             Ok(Some(_)) | Ok(None) | Err(IdentityReadError::Gone) => {
@@ -247,7 +252,9 @@ impl AppState {
             Ok(()) => {
                 info!(
                     "Temporarily ignored window {} (pid {} class {})",
-                    hwnd, process_id, class_name
+                    hwnd,
+                    process_id,
+                    log_text::name(&class_name)
                 );
                 IpcResponse::Ok
             }

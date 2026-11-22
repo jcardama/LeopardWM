@@ -3,6 +3,7 @@
 //! Supervises the daemon, restores hidden windows after abnormal exits, and bounds crash restarts.
 
 use anyhow::{Context, Result};
+use leopardwm_ipc::log_text;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -73,34 +74,41 @@ fn init_tracing(log_dir: &Path) -> Result<()> {
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .with(tracing_subscriber::fmt::layer().with_writer(std::io::stdout))
-        .with(
-            tracing_subscriber::fmt::layer()
-                .with_ansi(false)
-                .with_writer(file_appender),
-        )
+        .with(log_text::file_layer(
+            file_appender,
+            tracing_subscriber::filter::LevelFilter::TRACE,
+        ))
         .try_init()
         .map_err(|err| anyhow::anyhow!("Failed to set tracing subscriber: {err}"))
 }
 
-fn append_error(path: &Path, message: &str) -> std::io::Result<()> {
+fn append_error(path: &Path, record: &str) -> std::io::Result<()> {
     let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-    writeln!(file, "{message}")
+    file.write_all(record.as_bytes())
 }
 
 fn install_panic_hook(error_log_path: PathBuf) {
-    let previous_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |panic_info| {
-        let _ = append_error(&error_log_path, &format!("watchdog panic: {panic_info}"));
-        previous_hook(panic_info);
+    std::panic::set_hook(Box::new(move |info| {
+        let record =
+            log_text::panic_record(info.location(), log_text::panic_payload(info.payload()));
+        let _ = append_error(&error_log_path, &record);
+        eprint!("{record}");
     }));
+}
+
+fn report_fatal_error(path: &Path, err: &anyhow::Error) {
+    let record = log_text::error_record(format_args!(
+        "Watchdog fatal error: {}",
+        log_text::text(format_args!("{err:#}"))
+    ));
+    let _ = append_error(path, &record);
+    eprint!("{record}");
 }
 
 fn main() -> ExitCode {
     let log_paths = WatchdogLogPaths::new();
     if let Err(err) = fs::create_dir_all(&log_paths.dir).context("Failed to create log directory") {
-        let message = format!("watchdog fatal error: {err:#}");
-        eprintln!("{message}");
-        let _ = append_error(&log_paths.watchdog_error, &message);
+        report_fatal_error(&log_paths.watchdog_error, &err);
         return ExitCode::FAILURE;
     }
 
@@ -109,10 +117,8 @@ fn main() -> ExitCode {
     match run(&log_paths) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
-            error!(error = %err, "Watchdog fatal error");
-            let message = format!("watchdog fatal error: {err:#}");
-            eprintln!("{message}");
-            let _ = append_error(&log_paths.watchdog_error, &message);
+            error!(error = %log_text::text(format_args!("{err:#}")), "Watchdog fatal error");
+            report_fatal_error(&log_paths.watchdog_error, &err);
             ExitCode::FAILURE
         }
     }
@@ -142,7 +148,7 @@ fn run(log_paths: &WatchdogLogPaths) -> Result<()> {
     }
 
     let daemon_path = find_daemon_binary()?;
-    info!(path = %daemon_path.display(), "Resolved daemon binary");
+    info!(path = %log_text::path(daemon_path.display()), "Resolved daemon binary");
 
     let daemon_args: Vec<String> = std::env::args().skip(1).collect();
 

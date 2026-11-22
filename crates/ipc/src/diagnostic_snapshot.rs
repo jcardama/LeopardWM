@@ -1,3 +1,4 @@
+use crate::log_text::{self, Kind};
 use regex::Regex;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -63,7 +64,10 @@ fn masked_config(text: &str) -> String {
         match value {
             toml::Value::Table(table) => {
                 for (key, value) in table.iter_mut() {
-                    if key == "match_title" || key == "match_class" {
+                    if matches!(
+                        key.as_str(),
+                        "match_title" | "match_class" | "match_executable"
+                    ) {
                         *value = toml::Value::String("<masked>".into());
                     } else {
                         mask(value);
@@ -118,31 +122,7 @@ fn read_tail(path: &Path, limit: u64) -> io::Result<(String, bool)> {
     Ok((String::from_utf8_lossy(&bytes).into_owned(), start > 0))
 }
 
-static TRACE_ENTRY: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?m)^\d{4}-\d{2}-\d{2}T\S+ +(?:TRACE|DEBUG|INFO|WARN|ERROR) ").unwrap()
-});
-
-fn trace_lines(text: &str) -> Vec<String> {
-    let mut lines = Vec::new();
-    let mut omitted = 0;
-    for line in text.lines() {
-        if TRACE_ENTRY.is_match(line) {
-            if omitted != 0 {
-                lines.push(format!("<{omitted} continuation lines omitted>"));
-                omitted = 0;
-            }
-            lines.push(line.to_string());
-        } else {
-            omitted += 1;
-        }
-    }
-    if omitted != 0 {
-        lines.push(format!("<{omitted} continuation lines omitted>"));
-    }
-    lines
-}
-
-fn file_section(path: &Path, tail: Option<usize>, stitch: bool) -> String {
+fn file_section(path: &Path, tail: Option<usize>, stitch: bool, redactor: &Redactor<'_>) -> String {
     let limit = if tail.is_some() {
         LOG_TAIL_BYTES
     } else {
@@ -153,6 +133,7 @@ fn file_section(path: &Path, tail: Option<usize>, stitch: bool) -> String {
         Err(error) => return format!("unavailable: {error}\n"),
     };
     let Some(line_limit) = tail else {
+        // Gesture capture contains only typed gesture data and canonical command names.
         let note = if truncated {
             "(capture truncated to its last 1 MiB)\n"
         } else {
@@ -164,247 +145,137 @@ fn file_section(path: &Path, tail: Option<usize>, stitch: bool) -> String {
             format!("{note}{current}\n")
         };
     };
-    let current_lines: Vec<String> = if stitch {
-        trace_lines(&current)
-    } else {
-        current.lines().map(str::to_owned).collect()
-    };
-    let mut lines = current_lines;
+    let mut lines = redactor.records(std::iter::once(current.as_str()));
     if stitch && lines.len() < line_limit {
-        if let Ok((mut previous, _)) =
+        if let Ok((previous, _)) =
             read_tail(&crate::bounded_log::previous_log_path(path), LOG_TAIL_BYTES)
         {
-            if !previous.is_empty() && !previous.ends_with('\n') {
-                previous.push('\n');
-            }
-            previous.push_str(&current);
-            lines = trace_lines(&previous);
+            lines = redactor.records([previous.as_str(), current.as_str()]);
         }
     }
     let start = lines.len().saturating_sub(line_limit);
     format!("{}\n", lines[start..].join("\n"))
 }
 
-fn title_forms(titles: &[String]) -> Vec<(String, String)> {
-    let mut unique: Vec<_> = titles
-        .iter()
-        .map(String::as_str)
-        .filter(|s| !s.trim().is_empty())
-        .collect();
-    unique.sort_unstable();
-    unique.dedup();
-    let mut forms = Vec::new();
-    for (index, title) in unique.iter().enumerate() {
-        let marker = format!("<title#{}>", index + 1);
-        let debug = format!("{title:?}");
-        for value in [*title, &debug[1..debug.len() - 1]] {
-            forms.push((value.to_string(), marker.clone()));
+static PROFILE_PREFIX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?i)[a-z]:[\\/]+users[\\/]+[^\\/"<>|?*:\x00-\x1f]+"#).unwrap());
+
+struct Redactor<'a> {
+    titles: Vec<&'a str>,
+    profile: Option<Regex>,
+}
+
+impl<'a> Redactor<'a> {
+    fn new(titles: &'a [String], profile: Option<&str>) -> Self {
+        let mut titles: Vec<_> = titles.iter().map(String::as_str).collect();
+        titles.sort_unstable();
+        titles.dedup();
+        let profile = profile.filter(|p| !p.is_empty()).and_then(|p| {
+            let pattern = p
+                .split(['\\', '/'])
+                .map(regex::escape)
+                .collect::<Vec<_>>()
+                .join(r"[\\/]+");
+            Regex::new(&format!("(?i){pattern}")).ok()
+        });
+        Self { titles, profile }
+    }
+
+    fn mask_profile(&self, value: &str) -> String {
+        let masked = PROFILE_PREFIX.replace_all(value, "%USERPROFILE%");
+        match &self.profile {
+            Some(profile) => profile.replace_all(&masked, "%USERPROFILE%").into_owned(),
+            None => masked.into_owned(),
         }
     }
-    forms.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then_with(|| a.0.cmp(&b.0)));
-    forms.dedup();
-    forms
-}
 
-static PIPE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)([\\/]{2,}\.[\\/]+pipe[\\/]+leopardwm)_[a-z0-9_.-]+").unwrap()
-});
-static PROFILE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"(?i)[a-z]:[\\/]+users[\\/]+[^\\/"\r\n]+"#).unwrap());
-static EXECUTABLE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?i)(?:[a-z]:[\\/]+|[\\/]{2,}[^\\/\s"]+[\\/]+)[^"\r\n:]*\.exe"#).unwrap()
-});
-
-fn path_character(ch: char) -> bool {
-    ch.is_alphanumeric()
-        || matches!(
-            ch,
-            '\\' | '/'
-                | '.'
-                | '_'
-                | '-'
-                | '+'
-                | '~'
-                | '\''
-                | '('
-                | ')'
-                | '['
-                | ']'
-                | '@'
-                | '#'
-                | '$'
-                | '%'
-                | '&'
-                | '='
-                | '!'
-                | ';'
-                | ','
-        )
-}
-
-fn executable_spans(text: &str) -> Vec<std::ops::Range<usize>> {
-    EXECUTABLE
-        .find_iter(text)
-        .filter(|m| !text[m.end()..].chars().next().is_some_and(path_character))
-        .map(|m| m.range())
-        .collect()
-}
-
-fn sensitive_spans(text: &str, userprofile: Option<&str>) -> Vec<std::ops::Range<usize>> {
-    let mut spans: Vec<_> = PIPE.find_iter(text).map(|m| m.range()).collect();
-    spans.extend(PROFILE.find_iter(text).map(|m| m.range()));
-    spans.extend(executable_spans(text));
-    if let Some(profile) = userprofile.filter(|p| !p.is_empty()) {
-        for variant in [
-            profile.to_string(),
-            profile.replace('\\', "\\\\"),
-            profile.replace('\\', "/"),
-        ] {
-            spans.extend(
-                text.match_indices(&variant)
-                    .map(|(start, _)| start..start + variant.len()),
-            );
-        }
-    }
-    spans
-}
-
-fn redact_paths(text: &str, userprofile: Option<&str>) -> String {
-    let text = PIPE.replace_all(text, "${1}_<pipe-scope>");
-    let mut out = String::new();
-    let mut end = 0;
-    for span in executable_spans(&text) {
-        out.push_str(&text[end..span.start]);
-        out.push_str(text[span.clone()].rsplit(['\\', '/']).next().unwrap_or(""));
-        end = span.end;
-    }
-    out.push_str(&text[end..]);
-    if let Some(profile) = userprofile.filter(|p| !p.is_empty()) {
-        out = out.replace(profile, "%USERPROFILE%");
-        out = out.replace(&profile.replace('\\', "\\\\"), "%USERPROFILE%");
-        out = out.replace(&profile.replace('\\', "/"), "%USERPROFILE%");
-    }
-    PROFILE.replace_all(&out, "%USERPROFILE%").into_owned()
-}
-
-fn redact_title_and_paths(
-    text: &str,
-    forms: &[(String, String)],
-    userprofile: Option<&str>,
-) -> String {
-    if forms.is_empty() {
-        return redact_paths(text, userprofile);
-    }
-    let matcher = match aho_corasick::AhoCorasick::builder()
-        .match_kind(aho_corasick::MatchKind::LeftmostLongest)
-        .build(forms.iter().map(|(form, _)| form))
-    {
-        Ok(matcher) => matcher,
-        Err(_) => return "snapshot omitted: too many titles to redact safely".into(),
-    };
-    let sensitive = sensitive_spans(text, userprofile);
-    let mut candidates: Vec<(std::ops::Range<usize>, &str)> = Vec::new();
-    for found in matcher.find_iter(text) {
-        let range = found.range();
-        if sensitive
-            .iter()
-            .any(|span| span.start <= range.start && range.end <= span.end)
+    fn path(&self, value: &str) -> String {
+        const PIPE: &str = r"\\.\pipe\leopardwm_";
+        let normalized = value.replace('/', "\\");
+        if normalized
+            .get(..PIPE.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(PIPE))
         {
-            continue;
+            return format!(r"{PIPE}<pipe-scope>");
         }
-        let mut combined = range;
-        loop {
-            let before = combined.clone();
-            for span in &sensitive {
-                if span.start < combined.end && combined.start < span.end {
-                    combined.start = combined.start.min(span.start);
-                    combined.end = combined.end.max(span.end);
+        let basename = value.rsplit(['\\', '/']).next().unwrap_or_default();
+        if basename
+            .as_bytes()
+            .last_chunk::<4>()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case(b".exe"))
+        {
+            return log_text::single_line(basename).to_string();
+        }
+        // Preserve Windows separators while keeping the rendered value on one line.
+        let masked = self.mask_profile(value);
+        let masked = log_text::single_line(&masked).to_string();
+        masked
+    }
+
+    fn spans(&self, mut line: &str) -> Option<String> {
+        let mut output = String::new();
+        while let Some((before, span)) = log_text::before_span(line) {
+            output.push_str(&self.mask_profile(before));
+            let (kind, encoded, decoded, rest) = log_text::split_span(span)?;
+            match kind {
+                Kind::Title => match self.titles.binary_search(&decoded.as_str()) {
+                    Ok(index) => output.push_str(&format!("<title#{}>", index + 1)),
+                    Err(_) => output.push_str("<title>"),
+                },
+                Kind::Path => output.push_str(&self.path(&decoded)),
+                Kind::Text => output.push_str("<redacted>"),
+                Kind::Name => output.push_str(encoded),
+            }
+            line = rest;
+        }
+        output.push_str(&self.mask_profile(line));
+        Some(output)
+    }
+
+    fn records<'b>(&self, files: impl IntoIterator<Item = &'b str>) -> Vec<String> {
+        fn flush(lines: &mut Vec<String>, omitted: &mut usize) {
+            if *omitted != 0 {
+                lines.push(format!(
+                    "<{} records omitted (older format, malformed, or incomplete)>",
+                    std::mem::take(omitted)
+                ));
+            }
+        }
+        let mut lines = Vec::new();
+        let mut omitted = 0;
+        // This is a format marker, not authentication. A crafted old title can
+        // forge a tagged-looking line of its own text; later old records still drop.
+        for record in files
+            .into_iter()
+            .flat_map(|file| file.split_inclusive('\n'))
+        {
+            let body = record
+                .strip_suffix('\n')
+                .map(|line| line.strip_suffix('\r').unwrap_or(line))
+                .and_then(|line| line.strip_prefix(log_text::RECORD_TAG))
+                .and_then(|line| self.spans(line));
+            match body {
+                Some(line) => {
+                    flush(&mut lines, &mut omitted);
+                    lines.push(line);
                 }
-            }
-            if combined == before {
-                break;
+                None => omitted += 1,
             }
         }
-        candidates.push((combined, forms[found.pattern().as_usize()].1.as_str()));
+        flush(&mut lines, &mut omitted);
+        lines
     }
-    candidates.sort_by_key(|(span, _)| span.start);
-    let mut matches: Vec<(std::ops::Range<usize>, Vec<&str>)> = Vec::new();
-    for (span, marker) in candidates {
-        if let Some((prior, markers)) = matches.last_mut() {
-            if span.start < prior.end {
-                prior.end = prior.end.max(span.end);
-                markers.push(marker);
-                continue;
-            }
-        }
-        matches.push((span, vec![marker]));
-    }
-    let mut out = String::with_capacity(text.len());
-    let mut end = 0;
-    for (span, markers) in matches {
-        out.push_str(&redact_paths(&text[end..span.start], userprofile));
-        for marker in markers {
-            out.push_str(marker);
-        }
-        end = span.end;
-    }
-    out.push_str(&redact_paths(&text[end..], userprofile));
-    out
-}
-
-fn redact_records(text: &str) -> String {
-    static RECORD: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?m)^\d{4}-\d{2}-\d{2}T\S+ +(?:TRACE|DEBUG|INFO|WARN|ERROR) ").unwrap()
-    });
-    static OMITTED: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"(?m)^<\d+ continuation lines omitted>$").unwrap());
-    static PREFIX: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r#"(?:Cannot tile window '|Window created: |Ignoring shell-cloaked window: |Ignoring window by rule: |Recovering suppressed window: |Skipping transient console-host window with exe-path title: |Recovering console-host window with real title: |Added floating window: |Added tiled window: |Floating fixed-size caption window: |Leaving [^\r\n]*? window unmanaged: |Pruning stale tab title override for dead HWND \d+: |Invalid regex in window rule match_(?:class|title) |\btitle\s*[:=]\s*(?:Some\()?"?)"#).unwrap()
-    });
-    let mut starts = vec![0];
-    for found in RECORD.find_iter(text) {
-        if found.start() != 0 {
-            starts.push(found.start());
-        }
-    }
-    starts.push(text.len());
-    let mut out = String::new();
-    for pair in starts.windows(2) {
-        let record = &text[pair[0]..pair[1]];
-        if let Some(prefix) = PREFIX.find(record) {
-            out.push_str(&record[..prefix.end()]);
-            out.push_str("<redacted>");
-            for marker in OMITTED.find_iter(&record[prefix.end()..]) {
-                out.push('\n');
-                out.push_str(marker.as_str());
-            }
-            if record.ends_with('\n') {
-                out.push('\n');
-            }
-        } else {
-            out.push_str(record);
-        }
-    }
-    out
-}
-
-/// Redact title-bearing records, known titles, executable and profile paths, and pipe scopes.
-pub fn redact(text: &str, titles: &[String], userprofile: Option<&str>) -> String {
-    let forms = title_forms(titles);
-    redact_body(text, &forms, userprofile)
-}
-
-fn redact_body(text: &str, forms: &[(String, String)], userprofile: Option<&str>) -> String {
-    let text = redact_records(text);
-    redact_title_and_paths(&text, forms, userprofile)
 }
 
 pub fn render(input: &SnapshotInput) -> String {
+    let redactor = Redactor::new(&input.known_titles, input.userprofile.as_deref());
+    let requester_version = semver::Version::parse(&input.requester_version)
+        .map_or_else(|_| "<redacted>".into(), |version| version.to_string());
     let mut sections = Vec::new();
     let mut out = String::new();
     out.push_str(&format!(
         "Requester: {} {} (integrity {:?})\nWindows: {}\n",
-        input.requester, input.requester_version, input.requester_integrity, input.windows_version
+        input.requester, requester_version, input.requester_integrity, input.windows_version
     ));
     if let Some(version) = &input.daemon_version {
         out.push_str(&format!(
@@ -423,7 +294,7 @@ pub fn render(input: &SnapshotInput) -> String {
             for m in monitors {
                 out.push_str(&format!(
                     "{}: {},{} {}x{} scale {} (DPI {})\n",
-                    m.device,
+                    log_text::single_line(&m.device),
                     m.x,
                     m.y,
                     m.width,
@@ -441,24 +312,30 @@ pub fn render(input: &SnapshotInput) -> String {
         Some(rows) if rows.is_empty() => out.push_str("No problems found\n"),
         Some(rows) => {
             for row in rows {
-                out.push_str(&format!("- {}\n", row.summary));
+                let summary = redactor.spans(&row.summary);
+                out.push_str(&format!(
+                    "- {}\n",
+                    summary.as_deref().unwrap_or("<redacted>")
+                ));
                 if let Some(hint) = &row.hint {
-                    out.push_str(&format!("  {hint}\n"));
+                    let hint = redactor.spans(hint);
+                    out.push_str(&format!("  {}\n", hint.as_deref().unwrap_or("<redacted>")));
                 }
             }
         }
     }
     sections.push(("Health", std::mem::take(&mut out)));
-    out.push_str(&format!("Source: {}\n", input.config_path.display()));
+    out.push_str(&format!(
+        "Source: {}\n",
+        redactor.path(&input.config_path.to_string_lossy())
+    ));
     match &input.config_status {
         ConfigLoadStatus::Loaded => out.push_str("Source status: readable\n"),
         ConfigLoadStatus::NotFound => out.push_str("Source status: not found\n"),
-        ConfigLoadStatus::ReadFailed(error) => {
-            out.push_str(&format!("Source status: read failed: {error}\n"))
-        }
+        ConfigLoadStatus::ReadFailed(_) => out.push_str("Source status: read failed\n"),
     }
     if let Some(text) = &input.config_text {
-        out.push_str(&masked_config(text));
+        out.push_str(&redactor.mask_profile(&masked_config(text)));
         out.push('\n');
     } else {
         out.push_str("Config text unavailable\n");
@@ -470,7 +347,7 @@ pub fn render(input: &SnapshotInput) -> String {
             for ws in workspaces {
                 out.push_str(&format!(
                     "{} workspace {}: floating {}\n",
-                    ws.monitor,
+                    log_text::single_line(&ws.monitor),
                     ws.index + 1,
                     ws.floating
                 ));
@@ -509,17 +386,16 @@ pub fn render(input: &SnapshotInput) -> String {
     ] {
         sections.push((
             heading,
-            file_section(&input.log_dir.join(name), tail, stitch),
+            file_section(&input.log_dir.join(name), tail, stitch, &redactor),
         ));
     }
-    let forms = title_forms(&input.known_titles);
     let mut report = String::new();
     for (heading, body) in sections {
         if !report.is_empty() {
             report.push('\n');
         }
         report.push_str(&format!("## {heading}\n"));
-        report.push_str(&redact_body(&body, &forms, input.userprofile.as_deref()));
+        report.push_str(&body);
     }
     report
 }
@@ -574,7 +450,7 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let input = SnapshotInput {
             requester: "CLI".into(),
-            requester_version: "1".into(),
+            requester_version: "1.0.0".into(),
             requester_integrity: None,
             daemon_version: None,
             daemon_integrity: None,
@@ -595,59 +471,211 @@ mod tests {
         (dir, input)
     }
 
+    fn file_tracing(path: &Path, log: impl FnOnce()) {
+        use tracing_subscriber::prelude::*;
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .unwrap();
+        let subscriber = tracing_subscriber::registry().with(log_text::file_layer(
+            std::sync::Mutex::new(file),
+            tracing_subscriber::filter::LevelFilter::TRACE,
+        ));
+        tracing::subscriber::with_default(subscriber, log);
+    }
+
     #[test]
-    fn written_snapshot_redacts_known_and_structured_titles_and_paths() {
+    fn explicit_spans_preserve_only_the_allowed_parts() {
         let (dir, mut input) = fixture();
-        let quoted = "Report \\\"private\\\" \\\\ notes";
+        input.known_titles = vec!["x title=y".into()];
         input.userprofile = Some(r"D:\Profiles\PrivateHome".into());
-        input.known_titles = vec![
-            "Secret".into(),
-            "Secret longer".into(),
-            quoted.into(),
-            "Users".into(),
-            "title".into(),
-            "Cannot".into(),
-        ];
-        input.config_text = Some("[[window_rules]]\nmatch_title = 'hidden-rule-title'\nmatch_class = 'hidden-rule-class'\naction = 'float'\n".into());
-        let logs = format!("Secret longer\nSecret\ntitle=\"Secret longer\"\n{quoted}\n{quoted:?}\ntitle=\"closed confidential\"\ntitle=Some(\"closed optional\")\ntitle: \"closed struct\"\nCannot tile window 'closed blocked'\nC:\\Users\\Alice\\Documents\\note.txt\nC:\\\\Users\\\\Alice\\\\docs\\\\note.txt\nC:/Users/Alice/docs/note.txt\nC:\\Program Files\\Vendor\\ExampleApp.exe\nD:/Program Files/HiddenApp/Forward.EXE\n\\\\PrivateServer\\PrivateShare\\Network.exe\nD:\\Profiles\\PrivateHome\\notes.txt\n");
-        let logs: String = logs
-            .lines()
-            .map(|line| format!("2026-01-01T00:00:00Z INFO {line}\n"))
-            .collect();
-        fs::write(dir.join("leopardwm-daemon.log"), logs).unwrap();
-        let path = write(&input, &dir).unwrap();
-        let result = fs::read_to_string(path).unwrap();
+        input.health = Some(vec![HealthRow {
+            summary: format!(
+                "Auto-start enabled (path: {})",
+                log_text::path(r"D:\Private\App.exe")
+            ),
+            hint: None,
+        }]);
+        file_tracing(&dir.join("leopardwm-daemon.log"), || {
+            tracing::info!(
+                target: "leopardwm::window_rules",
+                title = %log_text::title("x title=y"),
+                class = %log_text::name("ExampleClass"),
+                "Window created"
+            );
+            tracing::info!(
+                target: "leopardwm_platform_win32::shell",
+                "Sources: {} | {} | {} | {} | fallback C:/Users/Unmarked/notes.txt",
+                log_text::path(r"d:/profiles/PrivateHome/first.toml"),
+                log_text::path(r"C:\Users\O'Connor\second.toml"),
+                log_text::path(r"\\PrivateServer\PrivateShare\Network.EXE"),
+                log_text::path(crate::scoped_pipe_name_for_user(
+                    r"DOMAIN\PrivateAccount.exe"
+                )),
+            );
+        });
+        let report = render(&input);
+        assert!(
+            report.contains("Auto-start enabled (path: App.exe)"),
+            "{report}"
+        );
+        assert!(
+            report.contains("Window created title=<title#1> class=ExampleClass"),
+            "{report}"
+        );
+        assert!(report.contains(r"%USERPROFILE%/first.toml | %USERPROFILE%\second.toml | Network.EXE | \\.\pipe\leopardwm_<pipe-scope> | fallback %USERPROFILE%/notes.txt"), "{report}");
         for secret in [
-            "Secret longer",
-            "Secret",
-            quoted,
-            "closed confidential",
-            "closed optional",
-            "closed struct",
-            "closed blocked",
-            "Alice",
-            "hidden-rule-title",
-            "hidden-rule-class",
-            "Program Files",
-            "Vendor",
-            "HiddenApp",
+            r"D:\Private",
+            "x title=y",
+            "PrivateHome",
+            "O'Connor",
             "PrivateServer",
             "PrivateShare",
-            "PrivateHome",
+            "privateaccount",
+            "Unmarked",
         ] {
-            assert!(
-                !result.contains(secret),
-                "secret survived: {secret}: {result}"
-            );
+            assert!(!report.contains(secret), "{secret} survived: {report}");
         }
-        assert_eq!(result.matches("<title#2>").count(), 2);
-        assert!(result.contains("<title#3>"));
-        assert_eq!(result.matches("<title#4>").count(), 1);
-        assert!(!result.contains(&format!("{quoted:?}")));
-        assert!(result.contains("%USERPROFILE%"));
-        assert!(result.contains("ExampleApp.exe"));
-        assert!(result.contains("Forward.EXE"));
-        assert!(result.contains("Network.exe"));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn formatter_keeps_multiline_titles_in_one_record_and_drops_legacy_after_tag() {
+        let (dir, mut input) = fixture();
+        let title = "a\n2026-11-22T00:00:00.000000Z  INFO x: secret";
+        input.known_titles = vec![title.into()];
+        let log = dir.join("leopardwm-daemon.log");
+        file_tracing(
+            &log,
+            || tracing::info!(target: "leopardwm::event_handler", "Observed {}", log_text::title(title)),
+        );
+        let first = fs::read_to_string(&log).unwrap();
+        assert!(first.starts_with("[lwm-log-v1] "), "{first}");
+        assert_eq!(first.lines().count(), 1, "{first}");
+        OpenOptions::new()
+            .append(true)
+            .open(&log)
+            .unwrap()
+            .write_all(
+                b"2026-11-22T00:00:00Z INFO private legacy title\nprivate legacy continuation\n",
+            )
+            .unwrap();
+        file_tracing(
+            &log,
+            || tracing::info!(target: "leopardwm::event_handler", "After downgrade"),
+        );
+        let report = render(&input);
+        assert!(!report.contains("secret"));
+        assert!(!report.contains("private legacy"));
+        let first = report.find("Observed <title#1>").unwrap();
+        let omitted = report.find("<2 records omitted").unwrap();
+        let last = report.find("After downgrade").unwrap();
+        assert!(first < omitted && omitted < last, "{report}");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn malformed_and_incomplete_records_are_omitted_whole() {
+        let (dir, input) = fixture();
+        let log = dir.join("leopardwm-daemon.log");
+        fs::write(
+            &log,
+            concat!(
+                "[lwm-log-v1] INFO private-prefix @lwm:title\"bad\\q\"\n",
+                "[lwm-log-v1] INFO private-prefix @lwm:unknown\"bad\"\n",
+                "[lwm-log-v1] INFO private-prefix @lwm:text\"unfinished\n",
+                "[lwm-log-v1] INFO safe neighboring record\n",
+                "[lwm-log-v1] INFO private-prefix @lwm:name\"truncated record\"",
+            ),
+        )
+        .unwrap();
+        let report = render(&input);
+        assert!(!report.contains("private-prefix"), "{report}");
+        assert!(report.contains("<3 records omitted"), "{report}");
+        assert!(
+            report.contains("safe neighboring record\n<1 records omitted"),
+            "{report}"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn final_snapshot_excludes_distinct_private_inputs_from_every_source() {
+        let (dir, mut input) = fixture();
+        input.known_titles = vec!["canary-known-title".into()];
+        input.requester_version = "canary-requester-version".into();
+        input.config_path = PathBuf::from(r"C:\Users\canary-source\config.toml");
+        input.config_text = Some(
+            concat!(
+                "[[window_rules]]\n",
+                "match_title = 'canary-title-rule'\n",
+                "match_class = 'canary-class-rule'\n",
+                "match_executable = 'canary-exe-rule'\n",
+                "action = 'float'\n",
+            )
+            .into(),
+        );
+        input.health = Some(vec![HealthRow {
+            summary: format!("Worker error: {}", log_text::text("canary-health")),
+            hint: Some(format!(
+                "Inspect {}",
+                log_text::path(r"D:\canary-health-path\Helper.exe")
+            )),
+        }]);
+        let daemon = dir.join("leopardwm-daemon.log");
+        fs::write(&daemon, "2026-11-22T00:00:00Z WARN canary-legacy\n").unwrap();
+        file_tracing(&daemon, || {
+            tracing::info!(
+                target: "leopardwm::layout_apply",
+                "Real layout event: {} {}",
+                log_text::title("canary-known-title"),
+                log_text::title("canary-unknown-title")
+            );
+            tracing::warn!(target: "leopardwm::config", error = %log_text::text("canary-traced-error"), "Config rejected");
+            tracing::debug!(target: "webview_dependency", "Raw error: canary-dependency");
+        });
+        let location = std::panic::Location::caller();
+        let panic = log_text::panic_record(
+            Some(location),
+            "canary-panic\n[lwm-log-v1] canary-panic-forged",
+        );
+        fs::write(
+            dir.join("leopardwm-daemon.err.log"),
+            format!("canary-stderr\n{panic}"),
+        )
+        .unwrap();
+        file_tracing(&dir.join("leopardwm-watchdog.log"), || {
+            tracing::info!(target: "leopardwm_watchdog", path = %log_text::path(r"D:\canary-watchdog\leopardwm.exe"), "Resolved daemon binary");
+        });
+        fs::write(
+            dir.join("leopardwm-watchdog.err.log"),
+            log_text::panic_record(None, "canary-watchdog-error"),
+        )
+        .unwrap();
+        let final_path = write(&input, &dir).unwrap();
+        let report = fs::read_to_string(final_path).unwrap();
+        assert!(!report.contains("canary-"), "{report}");
+        assert!(
+            report.contains("Real layout event: <title#1> <title>"),
+            "{report}"
+        );
+        assert!(
+            report.contains(r"Source: %USERPROFILE%\config.toml"),
+            "{report}"
+        );
+        assert!(
+            report.contains(&format!(
+                ":{}:{}: <redacted>",
+                location.line(),
+                location.column()
+            )),
+            "{report}"
+        );
+        assert!(
+            report.contains("Resolved daemon binary path=leopardwm.exe"),
+            "{report}"
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -671,6 +699,7 @@ mod tests {
     fn snapshot_sections_are_identical_when_daemon_unavailable() {
         let (dir, mut input) = fixture();
         let local = render(&input);
+        assert!(local.contains("Requester: CLI 1.0.0"));
         input.daemon_version = Some("1".into());
         input.monitors = Some(vec![]);
         input.health = Some(vec![]);
@@ -689,271 +718,6 @@ mod tests {
     }
 
     #[test]
-    fn every_title_shape_and_log_format_is_redacted_with_or_without_known_titles() {
-        let (dir, mut input) = fixture();
-        let titles = [
-            "SensitiveToken plain",
-            "SensitiveToken (paren)",
-            "SensitiveToken\ncontinuation SensitiveToken",
-            "SensitiveToken \\\"quote\\\" \\\\ slash",
-            "SensitiveToken . Skipping rule. tail",
-            r"SensitiveToken C:\Users\Alice\Private\notes.txt",
-            r"SensitiveToken D:\Private\app.exe",
-            "Users",
-            "## Health",
-        ];
-        type Format = Box<dyn Fn(&str) -> String>;
-        let formats: Vec<Format> = vec![
-            Box::new(|t| format!("Cannot tile window '{t}' (AppClass): blocked")),
-            Box::new(|t| {
-                format!("Ignoring shell-cloaked window: {t} (AppClass) current desktop: true")
-            }),
-            Box::new(|t| {
-                format!(
-                    "Skipping transient console-host window with exe-path title: {t} (AppClass)"
-                )
-            }),
-            Box::new(|t| format!("Ignoring window by rule: {t} (AppClass)")),
-            Box::new(|t| format!("Leaving dialog-like window unmanaged: {t} (AppClass)")),
-            Box::new(|t| format!("Window created: {t} (AppClass) - added to monitor 1")),
-            Box::new(|t| format!("Recovering suppressed window: {t} (AppClass) - user focused it")),
-            Box::new(|t| {
-                format!("Recovering console-host window with real title: {t} (AppClass) - user focused it")
-            }),
-            Box::new(|t| format!("Added floating window: {t} (AppClass) to monitor 1")),
-            Box::new(|t| format!("Added tiled window: {t} (AppClass) to monitor 1")),
-            Box::new(|t| format!("Floating fixed-size caption window: {t} (AppClass)")),
-            Box::new(|t| format!("Pruning stale tab title override for dead HWND 42: {t:?}")),
-            Box::new(|t| {
-                format!("Invalid regex in window rule match_class '{t}': regex parse error: {t}. Skipping rule.")
-            }),
-            Box::new(|t| {
-                format!("Invalid regex in window rule match_title '{t}': regex parse error: {t}. Skipping rule.")
-            }),
-            Box::new(|t| format!("candidate: title={t:?}")),
-            Box::new(|t| format!("candidate: title=Some({t:?})")),
-            Box::new(|t| format!("WindowInfo {{ title: {t:?} }}")),
-        ];
-        let path = dir.join("leopardwm-daemon.log");
-        for title in titles {
-            for (index, format) in formats.iter().enumerate() {
-                for known in [false, true] {
-                    input.known_titles = if known { vec![title.into()] } else { vec![] };
-                    fs::write(
-                        &path,
-                        format!("2026-01-01T00:00:00Z INFO {}\n", format(title)),
-                    )
-                    .unwrap();
-                    let report = render(&input);
-                    let log = report
-                        .split_once("## Daemon Log\n")
-                        .unwrap()
-                        .1
-                        .split_once("\n## Daemon Error Log")
-                        .unwrap()
-                        .0;
-                    for secret in ["SensitiveToken", "Alice", "Private"] {
-                        assert!(
-                            !report.contains(secret),
-                            "format {index}, title {title:?}, known {known}: {report}"
-                        );
-                    }
-                    if title == "Users" || title == "## Health" {
-                        assert!(!log.contains(title), "{log}");
-                    }
-                }
-            }
-        }
-        for repeat in [250, 30000] {
-            let mut log = String::from(
-                "2026-01-01T00:00:00Z WARN Invalid regex in window rule match_title '",
-            );
-            for _ in 0..repeat {
-                log.push_str("SensitiveToken Alice Private\n");
-            }
-            log.push_str(". Skipping rule.\n2026-01-01T00:00:01Z INFO safe\n");
-            for known in [false, true] {
-                input.known_titles = if known {
-                    vec!["SensitiveToken".into()]
-                } else {
-                    vec![]
-                };
-                fs::write(&path, &log).unwrap();
-                let report = render(&input);
-                for secret in ["SensitiveToken", "Alice", "Private"] {
-                    assert!(
-                        !report.contains(secret),
-                        "continuation leaked with {repeat} lines: {secret}"
-                    );
-                }
-                assert!(report.contains("continuation lines omitted"));
-                assert!(report.contains("safe"));
-            }
-        }
-        fs::write(
-            crate::bounded_log::previous_log_path(&path),
-            "2026-01-01T00:00:00Z INFO begin\nSensitiveToken Alice Private\n",
-        )
-        .unwrap();
-        fs::write(
-            &path,
-            "SensitiveToken Alice Private\n2026-01-01T00:00:01Z INFO safe\n",
-        )
-        .unwrap();
-        input.known_titles.clear();
-        let report = render(&input);
-        assert!(
-            report.contains("<2 continuation lines omitted>"),
-            "{report}"
-        );
-        assert!(!report.contains("SensitiveToken"));
-        fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn original_title_spans_take_precedence_over_paths_and_scoped_pipes() {
-        let title = r"Payroll C:\Users\Alice\Q4.txt".to_string();
-        let text = format!(r"{title} and D:\Apps\tool.exe");
-        assert_eq!(redact(&text, &[title], None), "<title#1> and tool.exe");
-        assert_eq!(
-            redact(r"C:\Users\Alice\Private\notes.txt", &["Users".into()], None),
-            r"%USERPROFILE%\Private\notes.txt"
-        );
-        assert_eq!(
-            redact(r"D:\O'Connor.exe\Private\App.exe", &[], None),
-            "App.exe"
-        );
-        let pipe = crate::scoped_pipe_name_for_user(r"DOMAIN\user.exe");
-        let output = redact(&pipe, &[], None);
-        assert!(output.contains("<pipe-scope>"), "{output}");
-        assert!(!output.contains("user.exe"), "{output}");
-        let text = format!("{pipe} logs");
-        let output = redact(&text, &["user.exe logs".into()], None);
-        assert!(output.contains("<title#1>"), "{output}");
-        assert!(!output.contains("domain"), "{output}");
-    }
-
-    #[test]
-    fn unknown_titles_are_removed_from_existing_log_formats() {
-        let lines = [
-            "Cannot tile window 'Private Window' (AppClass): Protected — leaving it floating and ignoring it for this session.",
-            "Ignoring shell-cloaked window: Private Window (AppClass) current desktop: true",
-            "Skipping transient console-host window with exe-path title: Private Window (AppClass)",
-            "Ignoring window by rule: Private Window (AppClass)",
-            "Leaving dialog-like window unmanaged: Private Window (AppClass)",
-            "Window created: Private Window (AppClass) - added to monitor 1 workspace 2 as Tile",
-            "Window created: Private Window (inner) (App(Class)) - added to monitor 1 workspace 2 as Tile",
-            "Window created: Private Window\nmore secret (AppClass) - added to monitor 1 workspace 2 as Tile",
-            "Cannot tile window 'Private Window\nmore secret' (AppClass): Protected",
-            "Recovering suppressed window: Private Window (AppClass) - user focused it",
-            "Recovering console-host window with real title: Private Window (AppClass) - user focused it",
-            "Added floating window: Private Window (AppClass) to monitor 1 - 800x600",
-            "Added tiled window: Private Window (AppClass) to monitor 1 - 800x600",
-            "Floating fixed-size caption window: Private Window (AppClass)",
-            "Pruning stale tab title override for dead HWND 42: \"Private Window\"",
-            "candidate: title=\"Private Window\"",
-            "candidate: title=Some(\"Private Window\")",
-            "WindowInfo { title: \"Private Window\" }",
-        ];
-        for line in lines {
-            let output = redact(line, &[], None);
-            assert!(!output.contains("Private Window"), "{line} => {output}");
-            assert!(!output.contains("more secret"), "{line} => {output}");
-        }
-    }
-
-    #[test]
-    fn path_bearing_known_titles_keep_their_number() {
-        let titles = vec![
-            r"Notes - C:\Users\Alice\Tax Return.pdf - Notepad".to_string(),
-            r"Launch D:\Apps\Secret Tool.exe - Admin".to_string(),
-        ];
-        for (index, title) in titles.iter().enumerate() {
-            let output = redact(
-                &format!(
-                    "{title}\n{title:?}\nWindow created: {title} (AppClass) - added to monitor 1"
-                ),
-                &titles,
-                None,
-            );
-            let marker = if index == 0 { "<title#2>" } else { "<title#1>" };
-            assert_eq!(output.matches(marker).count(), 2, "{output}");
-            assert!(output.contains("Window created: <redacted>"), "{output}");
-            assert!(!output.contains("Tax Return.pdf"));
-            assert!(!output.contains("Secret Tool"));
-        }
-    }
-
-    #[test]
-    fn old_invalid_rule_warnings_never_expose_pattern_or_diagnostic() {
-        for field in ["match_class", "match_title"] {
-            let line = format!("Invalid regex in window rule {field} 'PrivatePattern(': regex parse error:\n PrivatePattern(\n ^\nerror: unclosed group. Skipping rule.");
-            let output = redact(&line, &[], None);
-            assert!(!output.contains("PrivatePattern"), "{output}");
-            let partial = format!("Invalid regex in window rule {field} 'PrivatePattern(");
-            let output = redact(&partial, &[], None);
-            assert!(!output.contains("PrivatePattern"), "{output}");
-            let embedded = format!("Invalid regex in window rule {field} 'PrivatePattern. Skipping rule.(': regex parse error: PrivatePattern. Skipping rule.()\nerror: invalid. Skipping rule.\n2026-01-01T00:00:01Z INFO next entry");
-            let output = redact(&embedded, &[], None);
-            assert!(!output.contains("PrivatePattern"), "{output}");
-            assert!(output.contains("next entry"), "{output}");
-            let spoofed = format!("Invalid regex in window rule {field} 'x':\n<5 continuation lines omitted>\nPrivatePattern\n. Skipping rule.");
-            let output = redact(&spoofed, &[], None);
-            assert!(!output.contains("PrivatePattern"), "{output}");
-        }
-    }
-
-    #[test]
-    fn apostrophes_in_paths_are_redacted_in_every_separator_form() {
-        for (exe, profile) in [
-            (r"D:\O'Connor\lwm.exe", r"C:\Users\O'Connor\notes.txt"),
-            (r"D:\\O'Connor\\lwm.exe", r"C:\\Users\\O'Connor\\notes.txt"),
-            (r"D:/O'Connor/lwm.exe", r"C:/Users/O'Connor/notes.txt"),
-        ] {
-            let output = redact(
-                &format!("{exe}\n{profile}"),
-                &[],
-                Some(r"C:\Users\O'CONNOR"),
-            );
-            assert!(!output.contains("O'Connor"), "{output}");
-            assert!(output.contains("lwm.exe"), "{output}");
-            assert!(output.contains("%USERPROFILE%"), "{output}");
-        }
-    }
-
-    #[test]
-    fn scoped_pipe_names_do_not_expose_account_names() {
-        for pipe in [
-            r"\\.\pipe\leopardwm_domain_user",
-            r"\\\\.\\pipe\\leopardwm_domain_user",
-        ] {
-            let output = redact(&format!("IPC server listening on {pipe}"), &[], None);
-            assert!(!output.contains("domain_user"), "{output}");
-            assert!(output.contains("<pipe-scope>"), "{output}");
-        }
-    }
-
-    #[test]
-    fn truncated_log_never_starts_inside_a_multiline_rule_warning() {
-        let (dir, input) = fixture();
-        let mut content = String::from("2026-01-01T00:00:00Z WARN Invalid regex in window rule match_title 'PrivatePattern(': regex parse error:\n");
-        for _ in 0..30000 {
-            content.push_str("PrivatePattern\n");
-        }
-        content.push_str(
-            "error: unclosed group. Skipping rule.\n2026-01-01T00:00:01Z INFO safe entry\n",
-        );
-        fs::write(dir.join("leopardwm-daemon.log"), content).unwrap();
-        let report = render(&input);
-        assert!(
-            !report.contains("PrivatePattern"),
-            "truncated warning leaked"
-        );
-        assert!(report.contains("safe entry"));
-        fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
     fn oversized_files_include_only_bounded_complete_tail_lines() {
         let (dir, input) = fixture();
         for name in [
@@ -963,7 +727,7 @@ mod tests {
             "leopardwm-watchdog.err.log",
         ] {
             let content = format!(
-                "old-secret\n{}\n2026-01-01T00:00:01Z INFO new-tail\n",
+                "old-secret\n{}\n[lwm-log-v1] 2026-01-01T00:00:01Z INFO new-tail\n",
                 "x".repeat(256 * 1024)
             );
             fs::write(dir.join(name), content).unwrap();
@@ -986,13 +750,13 @@ mod tests {
             fs::write(
                 dir.join(format!("leopardwm-{name}.old.log")),
                 (0..250)
-                    .map(|n| format!("2026-01-01T00:00:00Z INFO {name}-old-{n}\n"))
+                    .map(|n| format!("[lwm-log-v1] 2026-01-01T00:00:00Z INFO {name}-old-{n}\n"))
                     .collect::<String>(),
             )
             .unwrap();
             fs::write(
                 dir.join(format!("leopardwm-{name}.log")),
-                format!("2026-01-01T00:00:01Z INFO {name}-current\n"),
+                format!("[lwm-log-v1] 2026-01-01T00:00:01Z INFO {name}-current\n"),
             )
             .unwrap();
         }

@@ -5,6 +5,7 @@ mod mover;
 use crate::types::{PlatformConfig, Win32Error};
 use crate::window_id_to_hwnd;
 use leopardwm_core_layout::{Rect, Visibility, WindowId, WindowPlacement};
+use leopardwm_ipc::log_text;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Mutex;
@@ -2751,14 +2752,14 @@ fn nudge_sticky_compositor_windows(targets: &[NudgeTarget]) {
                 // is diagnosable; the next apply will correct geometry.
                 tracing::warn!(
                     "Nudge restore SetWindowPos failed for hwnd={:?} class={} — window left at w-1 until next apply: {:?}",
-                    t.hwnd, class, e
+                    t.hwnd, log_text::name(class), e
                 );
                 continue;
             }
         }
         tracing::debug!(
             "Nudged sticky-compositor window (class={}, hwnd={:?})",
-            class,
+            log_text::name(class),
             t.hwnd
         );
     }

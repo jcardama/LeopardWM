@@ -2,6 +2,7 @@ use crate::helpers::ScaledLayoutParams;
 use crate::state::*;
 use anyhow::Result;
 use leopardwm_core_layout::Workspace;
+use leopardwm_ipc::log_text;
 use leopardwm_platform_win32::MonitorId;
 use std::collections::{HashMap, HashSet};
 use tracing::{debug, info, warn};
@@ -17,7 +18,10 @@ impl AppState {
     pub(crate) fn save_state(&self) -> Result<()> {
         let json = self.build_state_json()?;
         Self::write_state_file(&json)?;
-        info!("Workspace state saved to {:?}", Self::state_file_path());
+        info!(
+            "Workspace state saved to {}",
+            log_text::path(Self::state_file_path().display())
+        );
         Ok(())
     }
 
@@ -172,7 +176,7 @@ impl AppState {
             Ok(json) => match serde_json::from_str(&json) {
                 Ok(snapshot) => Some(snapshot),
                 Err(e) => {
-                    warn!("Failed to parse saved state: {}", e);
+                    warn!("Failed to parse saved state: {}", log_text::text(e));
                     None
                 }
             },
@@ -233,7 +237,7 @@ impl AppState {
             else {
                 debug!(
                     "Skipping saved workspace for unknown monitor '{}'",
-                    ws_snapshot.monitor_device_name
+                    log_text::text(&ws_snapshot.monitor_device_name)
                 );
                 continue;
             };
@@ -314,7 +318,8 @@ impl AppState {
             restored_slots.insert((monitor_id, ws_idx));
             info!(
                 "Restored workspace structure for monitor '{}' workspace {}",
-                ws_snapshot.monitor_device_name, ws_idx
+                log_text::text(&ws_snapshot.monitor_device_name),
+                ws_idx
             );
         }
 
@@ -392,13 +397,14 @@ impl AppState {
                     restored_monitors.insert(id);
                     info!(
                         "Restored workspace state for monitor '{}' workspace {}",
-                        ws_snapshot.monitor_device_name, ws_idx
+                        log_text::text(&ws_snapshot.monitor_device_name),
+                        ws_idx
                     );
                 }
             } else {
                 debug!(
                     "Skipping saved workspace for unknown monitor '{}'",
-                    ws_snapshot.monitor_device_name
+                    log_text::text(&ws_snapshot.monitor_device_name)
                 );
             }
         }
@@ -438,8 +444,9 @@ impl AppState {
                 self.tab_title_overrides.insert(hwnd, title.clone());
             } else {
                 debug!(
-                    "Pruning stale tab title override for dead HWND {}: {:?}",
-                    hwnd, title
+                    "Pruning stale tab title override for dead HWND {}: {}",
+                    hwnd,
+                    log_text::title(title)
                 );
             }
         }

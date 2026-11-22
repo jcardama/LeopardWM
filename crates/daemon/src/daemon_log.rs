@@ -1,11 +1,14 @@
 use leopardwm_ipc::bounded_log::{BoundedLogFile, LOG_FILE_MAX_BYTES};
-use leopardwm_ipc::DaemonLogStatus;
+use leopardwm_ipc::{
+    log_text::{self, RecordTime},
+    DaemonLogStatus,
+};
 use std::io::{self, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 use tracing::Level;
 use tracing_subscriber::fmt::format::Writer;
-use tracing_subscriber::fmt::time::{FormatTime, SystemTime};
+use tracing_subscriber::fmt::time::FormatTime;
 use tracing_subscriber::fmt::MakeWriter;
 
 #[derive(Clone)]
@@ -83,7 +86,7 @@ pub(crate) fn open(
                 health: health.clone(),
             };
             let mut timestamp = String::new();
-            SystemTime
+            RecordTime
                 .format_time(&mut Writer::new(&mut timestamp))
                 .expect("formatting a timestamp into a String cannot fail");
             let startup = format!(
@@ -96,7 +99,14 @@ pub(crate) fn open(
             (Some(writer), health)
         }
         Err(error) => {
-            eprintln!("[leopardwm] Cannot open daemon log {path}: {error}");
+            eprint!(
+                "{}",
+                log_text::error_record(format_args!(
+                    "Cannot open daemon log {}: {}",
+                    log_text::path(&path),
+                    error
+                ))
+            );
             (
                 None,
                 LogHealth::new(DaemonLogStatus::OpenFailed {
@@ -132,7 +142,11 @@ mod tests {
         let (writer, health) = open(&dir, Level::WARN);
         let writer = writer.unwrap();
         let startup = std::fs::read_to_string(dir.join("leopardwm-daemon.log")).unwrap();
-        let (timestamp, message) = startup.split_once(' ').unwrap();
+        let (timestamp, message) = startup
+            .strip_prefix("[lwm-log-v1] ")
+            .unwrap()
+            .split_once(' ')
+            .unwrap();
         assert!(timestamp.ends_with('Z'));
         assert_eq!(
             message,
@@ -216,7 +230,11 @@ mod tests {
             LOG_FILE_MAX_BYTES - 1
         );
         let startup = std::fs::read_to_string(path).unwrap();
-        let (timestamp, message) = startup.split_once(' ').unwrap();
+        let (timestamp, message) = startup
+            .strip_prefix("[lwm-log-v1] ")
+            .unwrap()
+            .split_once(' ')
+            .unwrap();
         assert!(timestamp.ends_with('Z'));
         assert!(message.starts_with("LeopardWM daemon "));
         assert!(message.ends_with("opened this log at log level info\n"));

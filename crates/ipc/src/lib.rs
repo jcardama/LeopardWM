@@ -6,6 +6,7 @@ pub mod bounded_log;
 pub mod config_template;
 pub mod diagnostic_snapshot;
 pub mod hotkeys;
+pub mod log_text;
 pub mod workspace_state;
 
 pub use workspace_state::{WorkspaceStateRecord, WorkspaceStateSnapshot};

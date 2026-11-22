@@ -6,6 +6,7 @@
 //! `HotkeyEvent`, `parse_hotkey_string`) used by the keyboard hook and daemon.
 
 use crate::{recover_poisoned_mutex, Win32Error, WindowEvent};
+use leopardwm_ipc::log_text;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
@@ -465,7 +466,10 @@ unsafe extern "system" fn sysevent_window_proc(
     match result {
         Ok(lresult) => lresult,
         Err(e) => {
-            tracing::error!("Panic in sysevent_window_proc: {:?}", e);
+            tracing::error!(
+                "Panic in sysevent_window_proc: {}",
+                log_text::text(log_text::panic_payload(&*e))
+            );
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
     }

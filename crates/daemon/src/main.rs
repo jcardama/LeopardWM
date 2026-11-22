@@ -52,6 +52,7 @@ mod workspace_ipc;
 mod workspace_ipc_tests;
 
 use ipc_server::*;
+use leopardwm_ipc::log_text;
 use startup::*;
 use state::*;
 
@@ -536,7 +537,9 @@ fn setup_hotkeys(config: &Config, event_tx: mpsc::Sender<DaemonEvent>) -> Hotkey
     for issue in &resolved.issues {
         warn!(
             "Hotkey {} -> {}: {}",
-            issue.binding, issue.action_id, issue.message
+            log_text::text(&issue.binding),
+            log_text::text(&issue.action_id),
+            log_text::text(&issue.message)
         );
     }
     // Include blocked F-key triggers to preserve the hook's modifier mask.
@@ -547,7 +550,9 @@ fn setup_hotkeys(config: &Config, event_tx: mpsc::Sender<DaemonEvent>) -> Hotkey
         } = entry.hook_binding;
         debug!(
             "Configured hotkey {}: {} -> {:?}",
-            id, entry.binding, entry.command
+            id,
+            log_text::text(&entry.binding),
+            entry.command
         );
         binds.push(entry.hook_binding);
         mapping.insert(id, entry.command);
@@ -569,7 +574,7 @@ fn setup_hotkeys(config: &Config, event_tx: mpsc::Sender<DaemonEvent>) -> Hotkey
     if !failed_binds.is_empty() {
         warn!(
             "These hotkeys are reserved by Windows and can't be intercepted: {}",
-            failed_binds.join(", ")
+            log_text::text(failed_binds.join(", "))
         );
     }
 
@@ -612,7 +617,7 @@ async fn run_shutdown_cleanup(
         let pending_apply_workers = state.begin_shutdown_or_revert();
         if mode.should_save_state() {
             if let Err(e) = state.save_state() {
-                warn!("Failed to save workspace state: {}", e);
+                warn!("Failed to save workspace state: {}", log_text::text(e));
             }
         }
         (
@@ -867,15 +872,30 @@ fn bootstrap_config() -> Result<(
     }
 
     match config::ensure_config_on_disk() {
-        Ok(Some(path)) => eprintln!("[leopardwm] Created default config: {}", path.display()),
+        Ok(Some(path)) => eprintln!(
+            "[leopardwm] Created default config: {}",
+            log_text::path(path.display())
+        ),
         Ok(None) => {}
-        Err(e) => eprintln!("[leopardwm] Warning: Could not create config file: {}", e),
+        Err(e) => eprint!(
+            "{}",
+            log_text::error_record(format_args!(
+                "Could not create config file: {}",
+                log_text::text(format_args!("{e:#}"))
+            ))
+        ),
     }
 
     // Load configuration first (needed for log level)
     let mut config = Config::load().unwrap_or_else(|e| {
         // Can't use tracing yet, fall back to eprintln
-        eprintln!("Failed to load configuration: {}. Using defaults.", e);
+        eprint!(
+            "{}",
+            log_text::error_record(format_args!(
+                "Failed to load configuration: {}. Using defaults.",
+                log_text::text(format_args!("{e:#}"))
+            ))
+        );
         Config::default()
     });
 
@@ -895,7 +915,7 @@ fn bootstrap_config() -> Result<(
 
     let config_warnings = config.validate();
     for w in &config_warnings {
-        warn!("Config: {} - {}", w.field, w.message);
+        warn!("Config: {} - {}", w.field, log_text::text(&w.message));
     }
 
     Ok((config, config_warnings, capture_handle, log_health))
@@ -941,12 +961,10 @@ fn init_logging(
                 )),
         )
         .with(file_appender.map(|writer| {
-            tracing_subscriber::fmt::layer()
-                .with_ansi(false)
-                .with_writer(writer)
-                .with_filter(tracing_subscriber::filter::LevelFilter::from_level(
-                    log_level,
-                ))
+            log_text::file_layer(
+                writer,
+                tracing_subscriber::filter::LevelFilter::from_level(log_level),
+            )
         }))
         .with(
             capture_handle
@@ -960,7 +978,7 @@ fn init_logging(
         if capture_handle.is_some() {
             info!(
                 capture_secs,
-                path = %gesture_diagnostics::capture_log_path(&log_dir).display(),
+                path = %log_text::path(gesture_diagnostics::capture_log_path(&log_dir).display()),
                 "Gesture diagnostic capture started for this process (startup-only; reload does not start a new capture)"
             );
         } else {
@@ -975,8 +993,11 @@ fn init_logging(
 }
 
 fn install_panic_hook() {
-    let default_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
+    std::panic::set_hook(Box::new(|info| {
+        eprint!(
+            "{}",
+            log_text::panic_record(info.location(), log_text::panic_payload(info.payload()))
+        );
         eprintln!("[leopardwm] PANIC detected — emergency uncloaking all windows");
         leopardwm_platform_win32::restore_maximizebox_panic_recovery();
         uncloak_all_visible_windows();
@@ -1019,8 +1040,6 @@ fn install_panic_hook() {
                 crash_path.display()
             );
         }
-
-        default_hook(info);
     }));
 }
 
@@ -1040,7 +1059,7 @@ fn detect_monitors() -> Vec<MonitorInfo> {
                     m.work_area.y,
                     m.scale_factor * 100.0,
                     if m.is_primary { " [PRIMARY]" } else { "" },
-                    m.device_name
+                    log_text::name(&m.device_name)
                 );
             }
             monitors
@@ -1691,7 +1710,7 @@ async fn print_banner(
         config_path,
         config_warnings: config_warnings
             .iter()
-            .map(|w| format!("{}: {}", w.field, w.message))
+            .map(|w| format!("{}: {}", w.field, log_text::text(&w.message)))
             .collect(),
         log_path,
         safe_mode: args.safe_mode,
@@ -2096,7 +2115,7 @@ async fn handle_hotkey_event(
                 let mut state = ctx.state.lock().await;
                 let response = state.handle_command(cmd);
                 if let IpcResponse::Error { message } = response {
-                    warn!("Hotkey command failed: {}", message);
+                    warn!("Hotkey command failed: {}", log_text::text(message));
                 }
                 let animating = state.is_animating();
 
@@ -2219,7 +2238,7 @@ async fn handle_gesture_event(ctx: &mut EventLoopCtx<'_>, gesture_event: Gesture
                 let mut state = ctx.state.lock().await;
                 let response = state.handle_command(cmd);
                 if let IpcResponse::Error { message } = response {
-                    warn!("Gesture command failed: {}", message);
+                    warn!("Gesture command failed: {}", log_text::text(message));
                 }
                 if state.is_animating() && !*ctx.animation_active {
                     state.tick_animations(0);
@@ -2231,7 +2250,7 @@ async fn handle_gesture_event(ctx: &mut EventLoopCtx<'_>, gesture_event: Gesture
             }
         }
         GestureCommand::Unknown(cmd) => {
-            warn!("Unknown command for gesture: {}", cmd);
+            warn!("Unknown command for gesture: {}", log_text::text(cmd));
         }
     }
 
@@ -2369,7 +2388,7 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
             let mut state = ctx.state.lock().await;
             let response = state.handle_command(IpcCommand::Refresh);
             if let IpcResponse::Error { message } = response {
-                warn!("Refresh failed: {}", message);
+                warn!("Refresh failed: {}", log_text::text(message));
             }
         }
         tray::TrayEvent::Reload => {
@@ -2392,7 +2411,7 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
                 .await;
                 info!("Hotkeys reloaded after tray config reload");
             } else if let IpcResponse::Error { message } = response {
-                warn!("Reload failed: {}", message);
+                warn!("Reload failed: {}", log_text::text(message));
             }
         }
         tray::TrayEvent::Exit => {
@@ -2463,7 +2482,7 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
             if let Err(e) = std::fs::create_dir_all(&log_dir) {
                 warn!(
                     "Failed to create log directory {}: {}",
-                    log_dir.display(),
+                    log_text::path(log_dir.display()),
                     e
                 );
                 return;
@@ -2540,7 +2559,7 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
                     "Tray: Auto-start {}",
                     if target { "enabled" } else { "disabled" }
                 ),
-                Err(e) => warn!("Tray: failed to update auto-start: {}", e),
+                Err(e) => warn!("Tray: failed to update auto-start: {}", log_text::text(e)),
             }
             let state_guard = ctx.state.lock().await;
             sync_tray_toggles(ctx.tray_manager, &state_guard.config);
@@ -2727,11 +2746,11 @@ async fn handle_persist_state_now(state: &Arc<Mutex<AppState>>) {
         Ok(s) => {
             tokio::task::spawn_blocking(move || {
                 if let Err(e) = AppState::write_state_file(&s) {
-                    warn!("debounced save failed: {e}");
+                    warn!("debounced save failed: {}", log_text::text(e));
                 }
             });
         }
-        Err(e) => warn!("debounced save serialize failed: {e}"),
+        Err(e) => warn!("debounced save serialize failed: {}", log_text::text(e)),
     }
 }
 
@@ -2821,7 +2840,10 @@ async fn handle_tab_action_with_restore(
                     restore,
                 )
             {
-                warn!("SetActiveTab from tab click failed: {}", message);
+                warn!(
+                    "SetActiveTab from tab click failed: {}",
+                    log_text::text(message)
+                );
             }
         }
         TabAction::Close => {
@@ -2877,7 +2899,10 @@ async fn handle_tab_action_with_restore(
             if proceed {
                 let resp = s.untab_tiled_focus();
                 if let IpcResponse::Error { message } = resp {
-                    warn!("ExpelToRight from untab failed: {}", message);
+                    warn!(
+                        "ExpelToRight from untab failed: {}",
+                        log_text::text(message)
+                    );
                     s.pending_tab_focus = None;
                 }
             } else {
@@ -3182,7 +3207,10 @@ async fn handle_overview_event(
                     index: (ws_idx + 1) as u8,
                 });
                 if let IpcResponse::Error { message } = resp {
-                    warn!("Overview workspace switch failed: {}", message);
+                    warn!(
+                        "Overview workspace switch failed: {}",
+                        log_text::text(message)
+                    );
                     return;
                 }
             }
@@ -3203,7 +3231,10 @@ async fn handle_overview_event(
                 index: (idx + 1) as u8,
             });
             if let IpcResponse::Error { message } = resp {
-                warn!("Overview workspace switch failed: {}", message);
+                warn!(
+                    "Overview workspace switch failed: {}",
+                    log_text::text(message)
+                );
             }
         }
         OverviewEvent::MoveWindow {
@@ -3215,7 +3246,7 @@ async fn handle_overview_event(
             if let IpcResponse::Error { message } =
                 s.move_overview_window(window_id, forward, generation)
             {
-                warn!("Overview window move failed: {}", message);
+                warn!("Overview window move failed: {}", log_text::text(message));
             }
         }
         OverviewEvent::CloseWindow(wid) => {
@@ -3316,7 +3347,10 @@ async fn handle_settings_event(
                 .await;
                 info!("Hotkeys reloaded after settings save");
             } else if let IpcResponse::Error { message } = response {
-                warn!("Reload after settings save failed: {}", message);
+                warn!(
+                    "Reload after settings save failed: {}",
+                    log_text::text(message)
+                );
             }
         }
         settings::SettingsEvent::SetRecording(true) => {
@@ -3851,14 +3885,21 @@ fn notify_rejected_config() {
         let mut backup = rejection.path.as_os_str().to_owned();
         backup.push(".corrupt");
         if rejection.recovered_fields.is_empty() {
-            warn!("Configuration rejected: {}", rejection.reason);
+            warn!(
+                "Configuration rejected: {}",
+                log_text::text(&rejection.reason)
+            );
             notify::show_toast(
                 "Configuration rejected",
                 &format!("LeopardWM is using defaults. Configuration was rejected{location}. Before saving, LeopardWM will try to keep a copy at {} (or .corrupt.1 if occupied); saving is blocked if it cannot.", std::path::PathBuf::from(backup).display()),
             );
         } else {
             for field in &rejection.recovered_fields {
-                warn!("Config: {} reset to default: {}", field.path, field.reason);
+                warn!(
+                    "Config: {} reset to default: {}",
+                    log_text::name(&field.path),
+                    log_text::text(&field.reason)
+                );
             }
             let fields = &rejection.recovered_fields;
             let mut names = fields
@@ -4018,7 +4059,10 @@ async fn main() -> Result<()> {
 
     let mut glazewm_compat = start_glazewm_compat(&state, event_tx.clone()).await;
 
-    info!("IPC server listening on {}", preferred_pipe_name());
+    info!(
+        "IPC server listening on {}",
+        log_text::path(preferred_pipe_name())
+    );
 
     {
         let s = state.lock().await;

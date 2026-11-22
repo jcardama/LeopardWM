@@ -1,6 +1,7 @@
 use super::DaemonEvent;
 use crate::events::SubscribeStartup;
 use anyhow::Result;
+use leopardwm_ipc::log_text;
 use leopardwm_ipc::{
     preferred_pipe_name, EventKind, IpcCommand, IpcEvent, IpcResponse, MAX_IPC_MESSAGE_SIZE,
 };
@@ -78,7 +79,7 @@ pub(crate) async fn run_ipc_server(event_tx: mpsc::Sender<DaemonEvent>) {
                 s
             }
             Err(e) => {
-                error!("Failed to create named pipe server: {}", e);
+                error!("Failed to create named pipe server: {}", log_text::text(e));
                 if is_first_instance {
                     error!("Is another leopardwm daemon already running?");
                 }
@@ -88,7 +89,10 @@ pub(crate) async fn run_ipc_server(event_tx: mpsc::Sender<DaemonEvent>) {
             }
         };
 
-        debug!("Waiting for client connection on {}", pipe_name);
+        debug!(
+            "Waiting for client connection on {}",
+            log_text::path(&pipe_name)
+        );
 
         if let Err(e) = server.connect().await {
             error!("Failed to accept client connection: {}", e);
@@ -101,7 +105,7 @@ pub(crate) async fn run_ipc_server(event_tx: mpsc::Sender<DaemonEvent>) {
         let event_tx = event_tx.clone();
         tokio::spawn(async move {
             if let Err(e) = handle_client(server, event_tx, permit).await {
-                warn!("Client handler error: {}", e);
+                warn!("Client handler error: {}", log_text::text(e));
             }
         });
     }
@@ -195,7 +199,7 @@ async fn handle_client(
     }
 
     let line = line.trim_end_matches(['\r', '\n']);
-    debug!("Received command: {}", line);
+    debug!("Received command: {}", log_text::text(line));
 
     let cmd: IpcCommand = match serde_json::from_str(line) {
         Ok(cmd) => cmd,

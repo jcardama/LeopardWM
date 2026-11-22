@@ -8,6 +8,7 @@ use leopardwm_core_layout::workspace::sizing::PresetCycle;
 use leopardwm_core_layout::{
     ColumnAlignment, FloatingFocus, LayoutError, Rect, Visibility, WindowPlacement, Workspace,
 };
+use leopardwm_ipc::log_text;
 use leopardwm_ipc::{
     ElevationBlockReason, ElevationBlockedWindow, HotkeyBindingInfo, IpcCommand, IpcResponse,
 };
@@ -1179,7 +1180,11 @@ impl AppState {
             Ok(mut new_config) => {
                 for warning in new_config.validate() {
                     if log_validation_warnings {
-                        warn!("Config: {} - {}", warning.field, warning.message);
+                        warn!(
+                            "Config: {} - {}",
+                            warning.field,
+                            log_text::text(&warning.message)
+                        );
                     }
                 }
                 self.apply_config(new_config);
@@ -2358,7 +2363,10 @@ impl AppState {
         match result {
             Ok(exe) => {
                 if enabled {
-                    info!("Auto-start enabled (path: {})", exe.display());
+                    info!(
+                        "Auto-start enabled (path: {})",
+                        log_text::path(exe.display())
+                    );
                 } else {
                     info!("Auto-start disabled");
                 }

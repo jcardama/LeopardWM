@@ -5,6 +5,7 @@
 ```
 daemon ──> core_layout (layout engine, platform-agnostic)
        ──> platform_win32 ──> core_layout (types only)
+       │                  ──> ipc (diagnostic logging)
        ──> ipc (named-pipe protocol)
 
 cli ──> ipc (sends commands to daemon)
@@ -51,6 +52,9 @@ Win32 events (WinEventHook, message pump)
 ```
 
 ## Key Subsystems
+
+### Diagnostic Logging
+Use `leopardwm_ipc::log_text::{title, path, text, name}` with Display (`{}` or `%`) for foreign text in tracing messages or fields. Use `text` for arbitrary input and errors that can echo it, not Debug on a struct that holds it. The shared daemon and watchdog file layer accepts only audited crate targets and uses `RecordTime` to tag each record with `[lwm-log-v1]`. User values are encoded as `@lwm:kind"value"` spans. Snapshots redact escaped spans and omit untagged, malformed, or incomplete records. `name` is escaped but not hidden; reserve it for values safe to share. A marker is not authentication: an old log's unescaped multiline title can forge a tagged-looking line of its own text, but does not make subsequent old records eligible.
 
 ### Border Overlay (`platform_win32/src/border.rs`)
 - Custom per-pixel alpha rendering using SDF for anti-aliased rounded corners

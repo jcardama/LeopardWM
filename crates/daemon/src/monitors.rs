@@ -1,6 +1,7 @@
 use crate::helpers::ScaledLayoutParams;
 use crate::state::*;
 use leopardwm_core_layout::{Rect, Workspace};
+use leopardwm_ipc::log_text;
 use leopardwm_platform_win32::{MonitorId, MonitorInfo};
 use std::collections::{HashMap, HashSet};
 use tracing::{info, warn};
@@ -163,7 +164,7 @@ impl AppState {
                         "Restored {} stashed workspace(s) for reconnected monitor {} ({})",
                         stashed_ws.len(),
                         monitor.id,
-                        monitor.device_name
+                        log_text::name(&monitor.device_name)
                     );
                     self.workspaces.insert(monitor.id, stashed_ws);
                     self.active_workspace.insert(monitor.id, clamped);
@@ -194,7 +195,9 @@ impl AppState {
                         }
                         info!(
                             "Adopted live layout from monitor {} to {} ({}) across a handle change",
-                            old_id, monitor.id, monitor.device_name
+                            old_id,
+                            monitor.id,
+                            log_text::name(&monitor.device_name)
                         );
                         self.workspaces.insert(monitor.id, ws);
                         self.active_workspace.insert(monitor.id, clamped);

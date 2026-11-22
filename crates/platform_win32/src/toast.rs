@@ -13,6 +13,7 @@
 //! process may exit before the async worker would deliver.
 
 use anyhow::{Context, Result};
+use leopardwm_ipc::log_text;
 use std::sync::mpsc::{sync_channel, SyncSender};
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -60,7 +61,7 @@ pub fn init(aumid: &str, app_name: &str) -> Result<()> {
             // silently lost.
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 if let Err(err) = render(&aumid_owned, &msg.title, &msg.body) {
-                    warn!(%err, "Failed to render toast");
+                    warn!(error = %log_text::text(format_args!("{err:#}")), "Failed to render toast");
                 }
             }));
         }
@@ -84,7 +85,10 @@ pub fn show_toast(title: &str, body: &str) {
             })
             .is_err()
         {
-            debug!("Toast queue full; dropping notification: {title}");
+            debug!(
+                "Toast queue full; dropping notification: {}",
+                log_text::text(title)
+            );
         }
     }
 }
@@ -100,7 +104,7 @@ pub fn show_toast_blocking(title: &str, body: &str) {
         // the toast is fine, leaking a COM init on the caller thread is not.
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             if let Err(err) = render(aumid, title, body) {
-                warn!(%err, "Failed to render blocking toast");
+                warn!(error = %log_text::text(format_args!("{err:#}")), "Failed to render blocking toast");
             }
             // Show() is asynchronous; give the OS a moment to deliver before the
             // caller (typically) exits the process.

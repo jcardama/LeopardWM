@@ -1,3 +1,4 @@
+use leopardwm_ipc::log_text;
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 
@@ -25,15 +26,15 @@ pub fn open(target: impl AsRef<OsStr>) {
             if let Err(e) = open_on_com_thread(&target) {
                 tracing::warn!(
                     "ShellExecuteW failed to open {}: {}",
-                    target.to_string_lossy(),
-                    e
+                    log_text::text(target.to_string_lossy()),
+                    log_text::text(e)
                 );
             }
         })
     {
         tracing::warn!(
             "Failed to spawn ShellExecuteW worker for {}: {}",
-            target_label,
+            log_text::text(target_label),
             e
         );
     }

@@ -4,6 +4,7 @@
 //! provided callback when a newer version is detected. No telemetry beyond
 //! the bare HTTPS GET. Disabled entirely when `check_for_updates = false`.
 
+use leopardwm_ipc::log_text;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -45,7 +46,11 @@ fn run_check_once(on_update_found: &impl Fn(String)) {
                 info!("Update available: {} (current: {})", tag, current);
                 on_update_found(tag);
             } else {
-                debug!("Up to date (latest: {}, current: {})", tag, current);
+                debug!(
+                    "Up to date (latest: {}, current: {})",
+                    log_text::text(tag),
+                    current
+                );
             }
         }
         None => debug!("Update check failed (network/parse error)"),

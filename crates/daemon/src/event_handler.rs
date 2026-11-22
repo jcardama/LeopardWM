@@ -8,6 +8,7 @@ use crate::state::{
 };
 use crate::ui_sync::DepartureCause;
 use leopardwm_core_layout::{Rect, Visibility, Workspace};
+use leopardwm_ipc::log_text;
 #[cfg(not(test))]
 use leopardwm_platform_win32::enumerate_monitors;
 use leopardwm_platform_win32::{
@@ -818,7 +819,9 @@ impl AppState {
                 warn!(
                     "Cannot tile window '{}' ({}): {:?} — leaving it floating and ignoring it \
                      for this session.",
-                    title, class_name, block
+                    log_text::title(title),
+                    log_text::name(class_name),
+                    block
                 );
                 // Tailor remediation: elevating helps for a higher-integrity
                 // window, but not for a protected/PPL process.
@@ -1024,7 +1027,9 @@ impl AppState {
             if let Some(info) = self.lookup_window_info(hwnd) {
                 debug!(
                     "Ignoring shell-cloaked window: {} ({}) current desktop: {}",
-                    info.title, info.class_name, on_current_desktop
+                    log_text::title(&info.title),
+                    log_text::name(&info.class_name),
+                    on_current_desktop
                 );
             }
             if on_current_desktop {
@@ -1133,7 +1138,8 @@ impl AppState {
             if is_transient_console_host(&win_info.title, &win_info.class_name, &executable) {
                 debug!(
                     "Skipping transient console-host window with exe-path title: {} ({})",
-                    win_info.title, win_info.class_name
+                    log_text::title(&win_info.title),
+                    log_text::name(&win_info.class_name)
                 );
                 return AdmitOutcome::TransientConsoleHost;
             }
@@ -1168,7 +1174,8 @@ impl AppState {
             if action == config::WindowAction::Ignore {
                 debug!(
                     "Ignoring window by rule: {} ({})",
-                    win_info.title, win_info.class_name
+                    log_text::title(&win_info.title),
+                    log_text::name(&win_info.class_name)
                 );
                 return AdmitOutcome::PersistentIgnore;
             }
@@ -1176,7 +1183,9 @@ impl AppState {
             if let Some(kind) = self.unmanaged_helper_kind(&win_info, rule_matched) {
                 debug!(
                     "Leaving {} window unmanaged: {} ({})",
-                    kind, win_info.title, win_info.class_name
+                    kind,
+                    log_text::title(&win_info.title),
+                    log_text::name(&win_info.class_name)
                 );
                 return AdmitOutcome::DialogLike;
             }
@@ -1306,8 +1315,8 @@ impl AppState {
                     self.window_managed_at.insert(hwnd, now);
                     info!(
                         "Window created: {} ({}) - added to monitor {} workspace {} as {:?}",
-                        win_info.title,
-                        win_info.class_name,
+                        log_text::title(&win_info.title),
+                        log_text::name(&win_info.class_name),
                         monitor_id,
                         target_idx + 1,
                         action
@@ -2750,7 +2759,8 @@ impl AppState {
                 if action != config::WindowAction::Ignore {
                     info!(
                         "Recovering suppressed window: {} ({}) - user focused it",
-                        win_info.title, win_info.class_name
+                        log_text::title(&win_info.title),
+                        log_text::name(&win_info.class_name)
                     );
                     // Consume the entry now (immediately before
                     // dispatch) so the Created handler doesn't
@@ -2801,7 +2811,7 @@ impl AppState {
                     if action != config::WindowAction::Ignore {
                         info!(
                             "Recovering console-host window with real title: {} ({}) - user focused it",
-                            win_info.title, win_info.class_name
+                            log_text::title(&win_info.title), log_text::name(&win_info.class_name)
                         );
                         self.admit_created_without_event_time(hwnd);
                         let recovery_monitor =
@@ -4237,7 +4247,7 @@ impl AppState {
                         m.work_area.x,
                         m.work_area.y,
                         if m.is_primary { " [PRIMARY]" } else { "" },
-                        m.device_name
+                        log_text::name(&m.device_name)
                     );
                 }
 

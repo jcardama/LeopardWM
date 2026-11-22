@@ -19,6 +19,7 @@
 
 use crate::Win32Error;
 use leopardwm_core_layout::Rect;
+use leopardwm_ipc::log_text;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -375,7 +376,10 @@ unsafe extern "system" fn overlay_window_proc(
     match result {
         Ok(lresult) => lresult,
         Err(e) => {
-            tracing::error!("Panic in overlay_window_proc: {:?}", e);
+            tracing::error!(
+                "Panic in overlay_window_proc: {}",
+                log_text::text(log_text::panic_payload(&*e))
+            );
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
     }

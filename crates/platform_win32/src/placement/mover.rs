@@ -1,6 +1,7 @@
 use super::{cached_placement_owner_answer, placement_owner_answers, DeferEntry};
 use crate::window_id_to_hwnd;
 use leopardwm_core_layout::WindowId;
+use leopardwm_ipc::log_text;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Condvar, LazyLock, Mutex};
 use std::time::{Duration, Instant};
@@ -92,10 +93,10 @@ pub(super) fn mark(window_id: WindowId) {
         })
         .unwrap_or_default();
     tracing::info!(
-        "Window ignores queued moves; LeopardWM now moves it synchronously on the mover thread: hwnd={:#x} class={:?} executable={:?}",
+        "Window ignores queued moves; LeopardWM now moves it synchronously on the mover thread: hwnd={:#x} class={} executable={}",
         window_id,
-        class,
-        executable
+        log_text::name(&class),
+        log_text::name(executable.as_deref().unwrap_or(""))
     );
 }
 

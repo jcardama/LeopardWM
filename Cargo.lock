@@ -1214,13 +1214,17 @@ dependencies = [
 name = "leopardwm-ipc"
 version = "0.3.5"
 dependencies = [
- "aho-corasick",
  "directories",
+ "proc-macro2",
  "regex",
+ "semver",
  "serde",
  "serde_json",
+ "syn 2.0.117",
  "time",
  "toml 1.2.1+spec-1.1.0",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -1229,6 +1233,7 @@ version = "0.3.5"
 dependencies = [
  "anyhow",
  "leopardwm-core-layout",
+ "leopardwm-ipc",
  "thiserror 2.0.21",
  "tracing",
  "tracing-subscriber",

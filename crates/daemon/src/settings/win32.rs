@@ -1,6 +1,7 @@
 //! The WebView2 settings UI lives in html.rs. Rust sends scripts through
 //! evaluate_script; JS sends messages through window.ipc.postMessage.
 
+use leopardwm_ipc::log_text;
 use std::sync::mpsc;
 use std::sync::Mutex;
 
@@ -482,7 +483,7 @@ fn handle_ipc(body: &str, event_tx: &mpsc::Sender<SettingsEvent>, _hwnd: HWND) {
     let msg: serde_json::Value = match serde_json::from_str(body) {
         Ok(v) => v,
         Err(e) => {
-            warn!("Settings IPC: invalid JSON: {}", e);
+            warn!("Settings IPC: invalid JSON: {}", log_text::text(e));
             return;
         }
     };
@@ -517,9 +518,15 @@ fn handle_ipc(body: &str, event_tx: &mpsc::Sender<SettingsEvent>, _hwnd: HWND) {
                 autostart::disable_autostart().map(|()| None)
             };
             match result {
-                Ok(Some(exe)) => info!("Auto-start enabled via Settings (path: {})", exe.display()),
+                Ok(Some(exe)) => info!(
+                    "Auto-start enabled via Settings (path: {})",
+                    log_text::path(exe.display())
+                ),
                 Ok(None) => info!("Auto-start disabled via Settings"),
-                Err(e) => warn!("Settings: failed to update auto-start: {}", e),
+                Err(e) => warn!(
+                    "Settings: failed to update auto-start: {}",
+                    log_text::text(e)
+                ),
             }
         }
         "open_url" => {
@@ -528,13 +535,13 @@ fn handle_ipc(body: &str, event_tx: &mpsc::Sender<SettingsEvent>, _hwnd: HWND) {
                 return;
             };
             if !is_allowed_url(url) {
-                warn!("Settings IPC: rejected open_url: {:?}", url);
+                warn!("Settings IPC: rejected open_url: {}", log_text::text(url));
                 return;
             }
             leopardwm_platform_win32::shell::open(url);
         }
         other => {
-            warn!("Settings IPC: unknown action: {}", other);
+            warn!("Settings IPC: unknown action: {}", log_text::text(other));
         }
     }
 }
@@ -543,14 +550,17 @@ fn do_save(cfg_val: &serde_json::Value, event_tx: &mpsc::Sender<SettingsEvent>) 
     let mut cfg: Config = match serde_json::from_value(cfg_val.clone()) {
         Ok(c) => c,
         Err(e) => {
-            warn!("Settings: failed to parse config JSON: {}", e);
+            warn!(
+                "Settings: failed to parse config JSON: {}",
+                log_text::text(e)
+            );
             return false;
         }
     };
 
     let warnings = cfg.validate();
     for w in &warnings {
-        warn!("Config: {} - {}", w.field, w.message);
+        warn!("Config: {} - {}", w.field, log_text::text(&w.message));
     }
 
     match cfg.save() {
@@ -560,7 +570,7 @@ fn do_save(cfg_val: &serde_json::Value, event_tx: &mpsc::Sender<SettingsEvent>) 
             true
         }
         Err(e) => {
-            warn!("Failed to save settings: {}", e);
+            warn!("Failed to save settings: {}", log_text::text(e));
             false
         }
     }

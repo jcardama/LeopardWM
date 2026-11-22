@@ -2,7 +2,7 @@ use crate::state::AppState;
 use leopardwm_ipc::diagnostic_snapshot::{
     self, ConfigLoadStatus, HealthRow, Monitor, SnapshotInput, Workspace,
 };
-use leopardwm_ipc::{DaemonLogStatus, NativeSwipeStatus};
+use leopardwm_ipc::{log_text, DaemonLogStatus, NativeSwipeStatus};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::SystemTime;
@@ -14,7 +14,7 @@ fn diagnostic_health_rows(state: &AppState) -> Vec<HealthRow> {
     ) = state.daemon_log.as_ref().map(|log| log.status())
     {
         rows.push(HealthRow {
-            summary: format!("Daemon log failure: {error}"),
+            summary: format!("Daemon log failure: {}", log_text::text(error)),
             hint: None,
         });
     }
@@ -24,19 +24,23 @@ fn diagnostic_health_rows(state: &AppState) -> Vec<HealthRow> {
             .and_then(|info| leopardwm_platform_win32::get_process_executable(info.process_id))
             .unwrap_or_else(|| "unknown executable".into());
         rows.push(HealthRow {
-            summary: format!("Privilege-blocked window: {executable}"),
+            summary: format!("Privilege-blocked window: {}", log_text::name(executable)),
             hint: None,
         });
     }
     if let NativeSwipeStatus::Inactive { reason } = &state.native_swipes {
         rows.push(HealthRow {
-            summary: format!("Native swipes inactive: {reason}"),
+            summary: format!("Native swipes inactive: {}", log_text::text(reason)),
             hint: None,
         });
     }
     for issue in crate::hotkey_resolution::resolve_hotkeys(&state.config.hotkeys).issues {
         rows.push(HealthRow {
-            summary: format!("Hotkey {}: {}", issue.binding, issue.message),
+            summary: format!(
+                "Hotkey {}: {}",
+                log_text::name(&issue.binding),
+                log_text::name(&issue.message)
+            ),
             hint: None,
         });
     }

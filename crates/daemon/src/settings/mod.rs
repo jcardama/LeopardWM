@@ -6,6 +6,7 @@ mod win32;
 
 pub use win32::{push_failed_binds, push_locale, push_recorded_chord, push_tray_config};
 
+use leopardwm_ipc::log_text;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 
@@ -63,7 +64,7 @@ impl SettingsWindowHandle {
                     high_contrast,
                     failed_binds,
                 ) {
-                    warn!("Settings window error: {}", e);
+                    warn!("Settings window error: {}", log_text::text(e));
                 }
                 SETTINGS_OPEN.store(false, Ordering::SeqCst);
             })

@@ -2,6 +2,7 @@ use crate::config;
 use crate::state::*;
 use anyhow::Result;
 use leopardwm_core_layout::Rect;
+use leopardwm_ipc::log_text;
 #[cfg(not(test))]
 use leopardwm_platform_win32::enumerate_windows;
 use leopardwm_platform_win32::{
@@ -236,7 +237,8 @@ impl AppState {
             if action == config::WindowAction::Ignore {
                 debug!(
                     "Ignoring window by rule: {} ({})",
-                    win_info.title, win_info.class_name
+                    log_text::title(&win_info.title),
+                    log_text::name(&win_info.class_name)
                 );
                 continue;
             }
@@ -261,7 +263,9 @@ impl AppState {
             if let Some(kind) = self.unmanaged_helper_kind(&win_info, rule_matched) {
                 debug!(
                     "Leaving {} window unmanaged: {} ({})",
-                    kind, win_info.title, win_info.class_name
+                    kind,
+                    log_text::title(&win_info.title),
+                    log_text::name(&win_info.class_name)
                 );
                 continue;
             }
@@ -321,8 +325,8 @@ impl AppState {
                                 self.record_managed_window_identity(&win_info);
                                 info!(
                                     "Added floating window: {} ({}) to monitor {} - {}x{}",
-                                    win_info.title,
-                                    win_info.class_name,
+                                    log_text::title(&win_info.title),
+                                    log_text::name(&win_info.class_name),
                                     monitor_id,
                                     rule_rect.width,
                                     rule_rect.height
@@ -344,8 +348,8 @@ impl AppState {
                                 self.disable_snap_for_window(win_info.hwnd);
                                 info!(
                                     "Added tiled window: {} ({}) to monitor {} - {}x{}",
-                                    win_info.title,
-                                    win_info.class_name,
+                                    log_text::title(&win_info.title),
+                                    log_text::name(&win_info.class_name),
                                     monitor_id,
                                     win_info.rect.width,
                                     win_info.rect.height
@@ -409,7 +413,8 @@ impl AppState {
         {
             debug!(
                 "Floating fixed-size caption window: {} ({})",
-                window.title, window.class_name
+                log_text::title(&window.title),
+                log_text::name(&window.class_name)
             );
             config::WindowAction::Float
         } else {
