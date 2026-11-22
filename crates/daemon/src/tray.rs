@@ -78,6 +78,9 @@ mod menu_ids {
     pub const CENTERING_CENTER: &str = "centering_center";
     pub const CENTERING_JUST_IN_VIEW: &str = "centering_just_in_view";
     pub const CENTERING_ON_OVERFLOW: &str = "centering_on_overflow";
+    pub const CENTER_COLUMNS_OFF: &str = "center_columns_off";
+    pub const CENTER_COLUMNS_SINGLE: &str = "center_columns_single";
+    pub const CENTER_COLUMNS_FIT: &str = "center_columns_fit";
     pub const PLACEMENT_NEW_COLUMN: &str = "placement_new_column";
     pub const PLACEMENT_IN_COLUMN: &str = "placement_in_column";
     pub const CHECK_UPDATES: &str = "check_updates";
@@ -102,6 +105,9 @@ pub enum TrayEvent {
     SetCenteringCenter,
     SetCenteringJustInView,
     SetCenteringOnOverflow,
+    SetCenterColumnsOff,
+    SetCenterColumnsSingle,
+    SetCenterColumnsFit,
     SetPlacementNewColumn,
     SetPlacementInColumn,
     OpenReleasesPage,
@@ -110,6 +116,9 @@ pub enum TrayEvent {
 pub const CENTERING_CENTER: u8 = 0;
 pub const CENTERING_JUST_IN_VIEW: u8 = 1;
 pub const CENTERING_ON_OVERFLOW: u8 = 2;
+pub const CENTER_COLUMNS_OFF: u8 = 0;
+pub const CENTER_COLUMNS_SINGLE: u8 = 1;
+pub const CENTER_COLUMNS_FIT: u8 = 2;
 pub const PLACEMENT_NEW_COLUMN: u8 = 0;
 pub const PLACEMENT_IN_COLUMN: u8 = 1;
 pub const TASKBAR_HIDE_OFFSCREEN: u8 = 0;
@@ -131,6 +140,7 @@ struct SharedState {
     taskbar_buttons: AtomicU8,
     auto_start: AtomicBool,
     centering_mode: AtomicU8,
+    center_columns: AtomicU8,
     placement_mode: AtomicU8,
     available_update: Mutex<Option<String>>,
 }
@@ -148,6 +158,9 @@ struct TrayItems {
     centering_center_item: CheckMenuItem,
     centering_just_in_view_item: CheckMenuItem,
     centering_on_overflow_item: CheckMenuItem,
+    center_columns_off_item: CheckMenuItem,
+    center_columns_single_item: CheckMenuItem,
+    center_columns_fit_item: CheckMenuItem,
     placement_new_column_item: CheckMenuItem,
     placement_in_column_item: CheckMenuItem,
     update_item: MenuItem,
@@ -162,6 +175,8 @@ pub struct QuickToggleState {
     pub auto_start: bool,
     /// 0 = Center, 1 = JustInView, 2 = OnOverflow
     pub centering_mode: u8,
+    /// 0 = Off, 1 = Single, 2 = Fit
+    pub center_columns: u8,
     /// 0 = NewColumn, 1 = InColumn
     pub placement_mode: u8,
 }
@@ -200,6 +215,7 @@ impl TrayManager {
             taskbar_buttons: AtomicU8::new(initial.taskbar_buttons),
             auto_start: AtomicBool::new(initial.auto_start),
             centering_mode: AtomicU8::new(initial.centering_mode),
+            center_columns: AtomicU8::new(initial.center_columns),
             placement_mode: AtomicU8::new(initial.placement_mode),
             available_update: Mutex::new(None),
         });
@@ -297,6 +313,9 @@ impl TrayManager {
         self.shared
             .centering_mode
             .store(toggles.centering_mode, Ordering::Relaxed);
+        self.shared
+            .center_columns
+            .store(toggles.center_columns, Ordering::Relaxed);
         self.shared
             .placement_mode
             .store(toggles.placement_mode, Ordering::Relaxed);
@@ -538,6 +557,16 @@ fn run_tray_thread(
                         items
                             .centering_on_overflow_item
                             .set_checked(cm == CENTERING_ON_OVERFLOW);
+                        let cc = shared.center_columns.load(Ordering::Relaxed);
+                        items
+                            .center_columns_off_item
+                            .set_checked(cc == CENTER_COLUMNS_OFF);
+                        items
+                            .center_columns_single_item
+                            .set_checked(cc == CENTER_COLUMNS_SINGLE);
+                        items
+                            .center_columns_fit_item
+                            .set_checked(cc == CENTER_COLUMNS_FIT);
                         let pm = shared.placement_mode.load(Ordering::Relaxed);
                         items
                             .placement_new_column_item
@@ -592,6 +621,9 @@ fn menu_label(language: &str, id: &str) -> String {
         "centering_center" => crate::locale::text(language, "tray.centering_center"),
         "centering_just_in_view" => crate::locale::text(language, "tray.centering_just_in_view"),
         "centering_on_overflow" => crate::locale::text(language, "tray.centering_on_overflow"),
+        "center_columns_off" => crate::locale::text(language, "tray.center_columns_off"),
+        "center_columns_single" => crate::locale::text(language, "tray.center_columns_single"),
+        "center_columns_fit" => crate::locale::text(language, "tray.center_columns_fit"),
         "placement_new_column" => crate::locale::text(language, "tray.placement_new_column"),
         "placement_in_column" => crate::locale::text(language, "tray.placement_in_column"),
         "check_updates" => crate::locale::text(language, "tray.check_updates"),
@@ -604,6 +636,7 @@ fn menu_label(language: &str, id: &str) -> String {
         "exit" => crate::locale::text(language, "tray.exit"),
         "taskbar" => crate::locale::text(language, "tray.taskbar"),
         "centering" => crate::locale::text(language, "tray.centering"),
+        "center_columns" => crate::locale::text(language, "tray.center_columns"),
         "placement" => crate::locale::text(language, "tray.placement"),
         "troubleshooting" => crate::locale::text(language, "tray.troubleshooting"),
         "open_about" => crate::locale::format(
@@ -779,6 +812,43 @@ fn build_tray(initial: &QuickToggleState) -> Result<(tray_icon::TrayIcon, TrayIt
         .map_err(|e| TrayError::Menu(e.to_string()))?;
     append(&centering_sub)?;
 
+    let center_columns_sub = Submenu::with_id(
+        "center_columns",
+        menu_label(&initial.language, "center_columns"),
+        true,
+    );
+    let center_columns_off_item = CheckMenuItem::with_id(
+        menu_ids::CENTER_COLUMNS_OFF,
+        menu_label(&initial.language, "center_columns_off"),
+        true,
+        initial.center_columns == CENTER_COLUMNS_OFF,
+        None,
+    );
+    let center_columns_single_item = CheckMenuItem::with_id(
+        menu_ids::CENTER_COLUMNS_SINGLE,
+        menu_label(&initial.language, "center_columns_single"),
+        true,
+        initial.center_columns == CENTER_COLUMNS_SINGLE,
+        None,
+    );
+    let center_columns_fit_item = CheckMenuItem::with_id(
+        menu_ids::CENTER_COLUMNS_FIT,
+        menu_label(&initial.language, "center_columns_fit"),
+        true,
+        initial.center_columns == CENTER_COLUMNS_FIT,
+        None,
+    );
+    center_columns_sub
+        .append(&center_columns_off_item)
+        .map_err(|e| TrayError::Menu(e.to_string()))?;
+    center_columns_sub
+        .append(&center_columns_single_item)
+        .map_err(|e| TrayError::Menu(e.to_string()))?;
+    center_columns_sub
+        .append(&center_columns_fit_item)
+        .map_err(|e| TrayError::Menu(e.to_string()))?;
+    append(&center_columns_sub)?;
+
     let placement_sub = Submenu::with_id(
         "placement",
         menu_label(&initial.language, "placement"),
@@ -900,6 +970,9 @@ fn build_tray(initial: &QuickToggleState) -> Result<(tray_icon::TrayIcon, TrayIt
         centering_center_item,
         centering_just_in_view_item,
         centering_on_overflow_item,
+        center_columns_off_item,
+        center_columns_single_item,
+        center_columns_fit_item,
         placement_new_column_item,
         placement_in_column_item,
         update_item,
@@ -958,6 +1031,9 @@ fn map_menu_id_to_event(menu_id: &str) -> Option<TrayEvent> {
         menu_ids::CENTERING_CENTER => Some(TrayEvent::SetCenteringCenter),
         menu_ids::CENTERING_JUST_IN_VIEW => Some(TrayEvent::SetCenteringJustInView),
         menu_ids::CENTERING_ON_OVERFLOW => Some(TrayEvent::SetCenteringOnOverflow),
+        menu_ids::CENTER_COLUMNS_OFF => Some(TrayEvent::SetCenterColumnsOff),
+        menu_ids::CENTER_COLUMNS_SINGLE => Some(TrayEvent::SetCenterColumnsSingle),
+        menu_ids::CENTER_COLUMNS_FIT => Some(TrayEvent::SetCenterColumnsFit),
         menu_ids::PLACEMENT_NEW_COLUMN => Some(TrayEvent::SetPlacementNewColumn),
         menu_ids::PLACEMENT_IN_COLUMN => Some(TrayEvent::SetPlacementInColumn),
         menu_ids::CHECK_UPDATES => Some(TrayEvent::OpenReleasesPage),
@@ -1110,6 +1186,18 @@ mod tests {
         assert!(matches!(
             map_menu_id_to_event(menu_ids::CENTERING_JUST_IN_VIEW),
             Some(TrayEvent::SetCenteringJustInView)
+        ));
+        assert!(matches!(
+            map_menu_id_to_event(menu_ids::CENTER_COLUMNS_OFF),
+            Some(TrayEvent::SetCenterColumnsOff)
+        ));
+        assert!(matches!(
+            map_menu_id_to_event(menu_ids::CENTER_COLUMNS_SINGLE),
+            Some(TrayEvent::SetCenterColumnsSingle)
+        ));
+        assert!(matches!(
+            map_menu_id_to_event(menu_ids::CENTER_COLUMNS_FIT),
+            Some(TrayEvent::SetCenterColumnsFit)
         ));
         for (id, expected) in [
             (

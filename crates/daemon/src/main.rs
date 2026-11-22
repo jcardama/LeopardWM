@@ -350,6 +350,11 @@ fn quick_toggle_state(config: &Config) -> tray::QuickToggleState {
             config::CenteringModeConfig::JustInView => tray::CENTERING_JUST_IN_VIEW,
             config::CenteringModeConfig::OnOverflow => tray::CENTERING_ON_OVERFLOW,
         },
+        center_columns: match config.layout.center_columns.center_columns {
+            config::CenterColumnsConfig::Off => tray::CENTER_COLUMNS_OFF,
+            config::CenterColumnsConfig::Single => tray::CENTER_COLUMNS_SINGLE,
+            config::CenterColumnsConfig::Fit => tray::CENTER_COLUMNS_FIT,
+        },
         placement_mode: match config.behavior.new_window_placement {
             config::NewWindowPlacement::NewColumn => tray::PLACEMENT_NEW_COLUMN,
             config::NewWindowPlacement::InColumn => tray::PLACEMENT_IN_COLUMN,
@@ -2572,6 +2577,55 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
                 state.apply_config(cfg);
                 if let Err(e) = state.apply_layout() {
                     warn!("Layout apply after centering change failed: {}", e);
+                }
+                let _ = state.config.save();
+            }
+            sync_tray_toggles(ctx.tray_manager, &state.config);
+        }
+        tray::TrayEvent::SetCenterColumnsOff => {
+            let mut state = ctx.state.lock().await;
+            if state.config.layout.center_columns.center_columns != config::CenterColumnsConfig::Off
+            {
+                state.config.layout.center_columns.center_columns =
+                    config::CenterColumnsConfig::Off;
+                info!("Tray: Center columns set to Off");
+                let cfg = state.config.clone();
+                state.apply_config(cfg);
+                if let Err(e) = state.apply_layout() {
+                    warn!("Layout apply after center columns change failed: {}", e);
+                }
+                let _ = state.config.save();
+            }
+            sync_tray_toggles(ctx.tray_manager, &state.config);
+        }
+        tray::TrayEvent::SetCenterColumnsSingle => {
+            let mut state = ctx.state.lock().await;
+            if state.config.layout.center_columns.center_columns
+                != config::CenterColumnsConfig::Single
+            {
+                state.config.layout.center_columns.center_columns =
+                    config::CenterColumnsConfig::Single;
+                info!("Tray: Center columns set to Single");
+                let cfg = state.config.clone();
+                state.apply_config(cfg);
+                if let Err(e) = state.apply_layout() {
+                    warn!("Layout apply after center columns change failed: {}", e);
+                }
+                let _ = state.config.save();
+            }
+            sync_tray_toggles(ctx.tray_manager, &state.config);
+        }
+        tray::TrayEvent::SetCenterColumnsFit => {
+            let mut state = ctx.state.lock().await;
+            if state.config.layout.center_columns.center_columns != config::CenterColumnsConfig::Fit
+            {
+                state.config.layout.center_columns.center_columns =
+                    config::CenterColumnsConfig::Fit;
+                info!("Tray: Center columns set to Fit");
+                let cfg = state.config.clone();
+                state.apply_config(cfg);
+                if let Err(e) = state.apply_layout() {
+                    warn!("Layout apply after center columns change failed: {}", e);
                 }
                 let _ = state.config.save();
             }
