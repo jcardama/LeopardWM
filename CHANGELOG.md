@@ -36,7 +36,7 @@ All notable changes to LeopardWM will be documented in this file.
 ### Fixes
 
 - **Settings no longer undoes quick-toggle changes made from the tray while Settings is open.**
-- **Turning off Center columns now releases centered rows even when centering past the screen edges is enabled.**
+- **Turning off Center columns now slides automatically centered rows back into position, even when centering past the screen edges is enabled.** With reduced motion, rows snap into place.
 - **Hotkeys no longer stop working after hours of use because failed batched window moves leak positioning handles.** Thanks to @doutorferr0 for the report and measurements. (#180)
 - **Store apps such as Calculator and Settings are now managed as soon as they open.** Previously they could stay unmanaged until minimized and restored.
 - **Daemon and watchdog logs now normally stay around 20 MB each, with one previous file kept.** If another process prevents rollover, the current log can grow until rollover succeeds. On first start, an existing oversized log moves to its `.old.log` file when possible and is replaced at the next successful rollover.

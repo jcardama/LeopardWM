@@ -150,6 +150,45 @@ mod tests {
     }
 
     #[test]
+    fn leaving_column_centering_slides_to_off_unless_motion_is_reduced() {
+        for (mode, widths, centered) in [
+            (CenterColumns::Single, &[400][..], -280.0),
+            (CenterColumns::Fit, &[200, 200][..], -275.0),
+        ] {
+            for past_edges in [false, true] {
+                for reduce_motion in [false, true] {
+                    let mut ws = Workspace::with_gaps(10, 20);
+                    ws.set_center_columns(mode);
+                    ws.set_centering_mode(CenteringMode::JustInView);
+                    ws.set_center_past_edges(past_edges);
+                    ws.set_reduce_motion(reduce_motion);
+                    for (index, &width) in widths.iter().enumerate() {
+                        ws.insert_window(index as u64 + 1, Some(width)).unwrap();
+                    }
+                    ws.ensure_focused_visible(1000);
+                    assert_eq!(ws.effective_scroll_offset(), centered);
+
+                    ws.reconcile_leaving_column_centering(1000);
+
+                    assert_eq!(ws.center_columns(), CenterColumns::Off);
+                    if reduce_motion {
+                        assert!(!ws.is_animating());
+                        assert_eq!(ws.effective_scroll_offset(), 0.0);
+                    } else {
+                        assert!(ws.is_animating(), "{mode:?}, past_edges={past_edges}");
+                        assert_eq!(ws.effective_scroll_offset(), centered);
+                        assert_eq!(ws.rows[0].active_animation.as_ref().unwrap().target(), 0.0);
+                    }
+                    ws.ensure_focused_visible_animated(1000);
+                    assert_eq!(ws.is_animating(), !reduce_motion);
+                    ws.tick_animation(1000);
+                    assert_eq!(ws.effective_scroll_offset(), 0.0);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn fit_centers_rows_independently_with_inactive_columns() {
         let mut ws = Workspace::with_gaps(10, 20);
         ws.set_row_layout(&[1.0, 1.0]);

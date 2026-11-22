@@ -22101,11 +22101,14 @@ fn test_restore_center_single_column_runtime_setting() {
 }
 
 #[test]
-fn center_columns_reload_enabling_animates_and_disabling_repairs_bounds() {
+fn center_columns_reload_animates_enabling_and_disabling() {
     use crate::config::CenterColumnsConfig;
+    use leopardwm_core_layout::Easing;
+
     for mode in [CenterColumnsConfig::Single, CenterColumnsConfig::Fit] {
         let mut config = test_config();
         config.layout.center_columns.center_columns = CenterColumnsConfig::Off;
+        config.layout.center_past_edges = false;
         config.layout.outer_gap_left = 20;
         config.layout.outer_gap_right = 20;
         let mut monitors = test_monitors();
@@ -22123,8 +22126,14 @@ fn center_columns_reload_enabling_animates_and_disabling_repairs_bounds() {
         ws.stop_animation();
         assert_eq!(ws.scroll_offset(), -280.0);
         config.layout.center_columns.center_columns = CenterColumnsConfig::Off;
+        config.animation.scroll_duration_ms = 480;
+        config.animation.easing = Easing::Linear;
         state.apply_config(config);
-        let ws = &state.workspaces[&1][0];
+        let ws = &mut state.workspaces.get_mut(&1).unwrap()[0];
+        assert_eq!(ws.effective_scroll_offset(), -280.0);
+        assert!(ws.tick_animation(240), "disabling {mode:?} should animate");
+        assert_eq!(ws.effective_scroll_offset(), -140.0);
+        assert!(!ws.tick_animation(240));
         assert_eq!(ws.effective_scroll_offset(), 0.0);
     }
 }
@@ -22358,7 +22367,7 @@ fn center_columns_reload_updates_existing_workspace() {
 }
 
 #[test]
-fn test_center_single_column_toggle_off_repairs_first_placement() {
+fn test_center_single_column_toggle_off_places_centered_then_lands_at_edge() {
     let mut config = test_config();
     config.layout.center_columns.center_columns = crate::config::CenterColumnsConfig::Single;
     config.layout.outer_gap_left = 20;
@@ -22378,8 +22387,10 @@ fn test_center_single_column_toggle_off_repairs_first_placement() {
         std::time::Duration::ZERO,
     ));
     state.apply_layout().unwrap();
+    assert_eq!(state.last_placed_layout_rects[&100].x, 300);
+    state.tick_animations(u64::MAX);
+    state.apply_layout().unwrap();
     assert_eq!(state.last_placed_layout_rects[&100].x, 20);
-    assert_eq!(state.workspaces[&1][0].effective_scroll_offset(), 0.0);
 }
 
 #[test]

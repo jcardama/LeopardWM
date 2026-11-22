@@ -761,7 +761,7 @@ impl Workspace {
         (min_scroll, max_scroll)
     }
 
-    /// Switch column centering off and restore each automatically centered row's focus position.
+    /// Switch column centering off and slide automatically centered rows to their new positions.
     pub fn reconcile_leaving_column_centering(&mut self, viewport_width: i32) {
         let centered_rows: Vec<_> = (0..self.rows.len())
             .filter(|&row_idx| {
@@ -770,13 +770,22 @@ impl Workspace {
                     && (self.center_columns != CenterColumns::Fit
                         || self.fit_release_for_row(row_idx, viewport_width).is_none())
             })
+            .map(|row_idx| (row_idx, self.effective_scroll_offset_for_row(row_idx)))
             .collect();
         self.set_center_columns(CenterColumns::Off);
-        for row_idx in centered_rows {
+        for &(row_idx, _) in &centered_rows {
             let row = &mut self.rows[row_idx];
             row.active_animation = None;
             row.scroll_offset = 0.0;
             self.ensure_focused_visible_for_row(row_idx, viewport_width);
+        }
+        // Repair the landing positions before animating from offsets that Off may not allow.
+        self.reconcile_scroll_bounds(viewport_width);
+        if !self.reduce_motion {
+            for (row_idx, start) in centered_rows {
+                let target = std::mem::replace(&mut self.rows[row_idx].scroll_offset, start);
+                self.animate_scroll_to_for_row(row_idx, target, None, None);
+            }
         }
     }
 

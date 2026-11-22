@@ -229,36 +229,32 @@ impl AppState {
                 let (old_ol, old_or, _, _) = workspace.outer_gaps();
                 let old_center_columns = workspace.center_columns();
                 let new_center_columns = self.config.layout.center_columns.center_columns.into();
+                let leaving_column_centering = old_center_columns != CenterColumns::Off
+                    && new_center_columns == CenterColumns::Off;
                 params.apply_to(workspace, ws_idx);
                 workspace.set_centering_mode(self.config.layout.centering_mode.into());
                 workspace.set_center_past_edges(self.config.layout.center_past_edges);
-                if old_center_columns != CenterColumns::Off
-                    && new_center_columns == CenterColumns::Off
-                {
+                workspace.set_scroll_animation(
+                    self.config.animation.scroll_duration_ms,
+                    self.config.animation.easing,
+                );
+                if leaving_column_centering {
                     workspace.reconcile_leaving_column_centering(viewport_width);
                 } else {
                     workspace.set_center_columns(new_center_columns);
                 }
 
-                workspace.rescale_column_widths(
+                let rescaled = workspace.rescale_column_widths(
                     old_gap,
                     old_ol,
                     old_or,
                     viewport_width,
                     viewport_width,
                 );
-                workspace.set_scroll_animation(
-                    self.config.animation.scroll_duration_ms,
-                    self.config.animation.easing,
-                );
-
-                if matches!(
-                    (old_center_columns, workspace.center_columns()),
-                    (
-                        CenterColumns::Single | CenterColumns::Fit,
-                        CenterColumns::Off
-                    ) | (CenterColumns::Fit, CenterColumns::Single)
-                ) {
+                if (leaving_column_centering && rescaled)
+                    || (old_center_columns == CenterColumns::Fit
+                        && new_center_columns == CenterColumns::Single)
+                {
                     workspace.reconcile_scroll_bounds(viewport_width);
                 }
 
