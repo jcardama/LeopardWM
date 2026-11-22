@@ -2113,10 +2113,15 @@ impl Config {
         let result = CONFIG_FILE.lock().unwrap().save(self, &config_paths());
         if let Err(error) = &result {
             tracing::warn!("Failed to save config: {error:#}");
-            crate::notify::show_toast(
-                "Settings not saved",
-                "The settings were not saved. config.toml may have changed outside LeopardWM, or no backup slot is free. Reload the config or move the .corrupt files, then try again.",
-            );
+            let message = if let Some(recovery) = error.downcast_ref::<HardLinkWriteError>() {
+                format!(
+                    "The settings were not saved. The original config is backed up at {}.",
+                    recovery.backup.display()
+                )
+            } else {
+                "The settings were not saved. config.toml may have changed outside LeopardWM, or no backup slot is free. Reload the config or move the .corrupt files, then try again.".to_string()
+            };
+            crate::notify::show_toast("Settings not saved", &message);
         }
         result
     }
@@ -2158,6 +2163,14 @@ fn corrupt_path(path: &Path, suffix: &str) -> PathBuf {
     PathBuf::from(name)
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("Failed to write hard-linked config; original copy kept at {}", backup.display())]
+struct HardLinkWriteError {
+    backup: PathBuf,
+    #[source]
+    source: std::io::Error,
+}
+
 fn replace_config_file(target: &Path, temp: &Path, content: &[u8]) -> Result<()> {
     use std::os::windows::io::AsRawHandle;
     use windows::Win32::Foundation::HANDLE;
@@ -2177,6 +2190,7 @@ fn replace_config_file(target: &Path, temp: &Path, content: &[u8]) -> Result<()>
         GetFileInformationByHandle(HANDLE(source.as_raw_handle()), &mut info)?;
     }
     if info.nNumberOfLinks > 1 {
+        let mut destination = fs::OpenOptions::new().write(true).open(target)?;
         let backup = corrupt_path(target, &format!(".{}.backup", uuid::Uuid::new_v4()));
         let mut copy = fs::OpenOptions::new()
             .write(true)
@@ -2192,20 +2206,17 @@ fn replace_config_file(target: &Path, temp: &Path, content: &[u8]) -> Result<()>
         }
         drop(copy);
         drop(source);
-        let result = (|| -> std::io::Result<()> {
-            let mut destination = fs::OpenOptions::new()
-                .write(true)
-                .truncate(true)
-                .open(target)?;
-            destination.write_all(content)?;
-            destination.sync_all()
-        })();
-        result.with_context(|| {
-            format!(
-                "Failed to write hard-linked config; original copy kept at {}",
-                backup.display()
-            )
-        })?;
+        if let Err(error) = destination.set_len(0) {
+            let _ = fs::remove_file(&backup);
+            return Err(error.into());
+        }
+        destination
+            .write_all(content)
+            .and_then(|()| destination.sync_all())
+            .map_err(|source| HardLinkWriteError {
+                backup: backup.clone(),
+                source,
+            })?;
         if let Err(error) = fs::remove_file(&backup) {
             tracing::warn!(
                 "Could not remove config backup {}: {error}",
@@ -2265,7 +2276,11 @@ impl ConfigFile {
         for path in paths {
             let bytes = match fs::read(path) {
                 Ok(bytes) => bytes,
-                Err(error) if error.kind() == ErrorKind::NotFound => continue,
+                Err(error) if error.kind() == ErrorKind::NotFound => {
+                    self.rejections
+                        .retain(|rejection| rejection.path != *path || rejection.bytes.is_some());
+                    continue;
+                }
                 Err(error) => {
                     let reason = format!("Failed to read config file {}: {error}", path.display());
                     self.last_seen = None;
@@ -2451,9 +2466,7 @@ impl ConfigFile {
         if result.is_err() {
             let _ = fs::remove_file(&temp);
         }
-        result.map_err(|error| {
-            anyhow::anyhow!("Failed to write config file {}: {error:#}", path.display())
-        })?;
+        result.with_context(|| format!("Failed to write config file {}", path.display()))?;
         self.finish_save(path, content);
         Ok(())
     }
@@ -5165,6 +5178,29 @@ mod tests {
     }
 
     #[test]
+    fn missing_unreadable_config_does_not_block_recovered_secondary_save() {
+        let fixture = ConfigFileFixture::new();
+        let paths = [
+            fixture.0.join("primary.toml"),
+            fixture.0.join("secondary.toml"),
+        ];
+        fs::create_dir(&paths[0]).unwrap();
+        let original = b"[layout]\ngap = 'bad'\n";
+        fs::write(&paths[1], original).unwrap();
+        let mut file = ConfigFile::default();
+        assert!(file.load(&paths).is_err());
+        fs::remove_dir(&paths[0]).unwrap();
+        let config = file.load(&paths).unwrap();
+        file.save(&config, &paths).unwrap();
+        assert_eq!(
+            fs::read(corrupt_path(&paths[1], ".corrupt")).unwrap(),
+            original
+        );
+        assert!(file.rejected_paths.contains(&paths[0]));
+        assert!(Config::load_from_path(&paths[1]).is_ok());
+    }
+
+    #[test]
     fn save_updates_all_hard_links() {
         let fixture = ConfigFileFixture::new();
         let path = fixture.0.join("config.toml");
@@ -5180,7 +5216,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_hard_link_write_keeps_recovery_copy() {
+    fn blocked_hard_link_writes_leave_no_backups() {
         use std::os::windows::fs::OpenOptionsExt;
 
         let fixture = ConfigFileFixture::new();
@@ -5196,15 +5232,14 @@ mod tests {
             .share_mode(1)
             .open(&path)
             .unwrap();
-        let error = file.save(&config, std::slice::from_ref(&path)).unwrap_err();
+        for _ in 0..3 {
+            assert!(file.save(&config, std::slice::from_ref(&path)).is_err());
+        }
         drop(lock);
-        let backup = fs::read_dir(&fixture.0)
+        assert!(!fs::read_dir(&fixture.0)
             .unwrap()
             .map(|entry| entry.unwrap().path())
-            .find(|entry| entry.extension().is_some_and(|ext| ext == "backup"))
-            .unwrap();
-        assert!(error.to_string().contains(&backup.display().to_string()));
-        assert_eq!(fs::read(&backup).unwrap(), original);
+            .any(|entry| entry.extension().is_some_and(|ext| ext == "backup")));
         assert_eq!(fs::read(&path).unwrap(), original);
         assert_eq!(fs::read(&linked).unwrap(), original);
     }
@@ -5362,6 +5397,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "needs SeCreateSymbolicLinkPrivilege"]
     fn save_follows_config_file_symlink() {
         use std::os::windows::fs::symlink_file;
 
@@ -5371,8 +5407,7 @@ mod tests {
         fs::write(&target, "[layout]\ngap = 42\n").unwrap();
         if let Err(error) = symlink_file(&target, &path) {
             if error.raw_os_error() == Some(1314) {
-                eprintln!("skipped: symlink privilege unavailable");
-                return;
+                panic!("symlink test requires SeCreateSymbolicLinkPrivilege: {error}");
             }
             panic!("failed to create test symlink: {error}");
         }
@@ -5388,6 +5423,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "needs SeCreateSymbolicLinkPrivilege"]
     fn save_creates_missing_symlink_target() {
         use std::os::windows::fs::symlink_file;
 
@@ -5396,8 +5432,7 @@ mod tests {
         let target = fixture.0.join("missing.toml");
         if let Err(error) = symlink_file(&target, &path) {
             if error.raw_os_error() == Some(1314) {
-                eprintln!("skipped: symlink privilege unavailable");
-                return;
+                panic!("symlink test requires SeCreateSymbolicLinkPrivilege: {error}");
             }
             panic!("failed to create test symlink: {error}");
         }
