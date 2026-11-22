@@ -10922,6 +10922,74 @@ fn fullscreen_horizontal_edges_follow_monitor_command_policy() {
 }
 
 #[test]
+fn horizontal_move_uses_actual_target_and_preserves_minimized_windows() {
+    const VISIBLE: u64 = 0;
+    const MINIMIZED: u64 = 0xffff_ffff_0000_0000;
+    const OUTSIDE: u64 = 0xffff_fffe_0000_0000;
+    for (source, target, command) in [
+        (1, 2, IpcCommand::MoveColumnRight),
+        (2, 1, IpcCommand::MoveColumnLeft),
+    ] {
+        for tracked in [Some(MINIMIZED), None, Some(VISIBLE), Some(OUTSIDE)] {
+            for strip_minimized in [false, true] {
+                let mut state = AppState::new_with_config(test_config(), two_monitors());
+                state.injected_apply_placements_behavior =
+                    Some(TestApplyPlacementsBehavior::SleepAndSucceed(Duration::ZERO));
+                state.config.appearance.active_border = false;
+                state.config.behavior.move_crosses_monitors = true;
+                state.focused_monitor = source;
+                let ws = state.focused_workspace_mut().unwrap();
+                let windows = if source == 1 {
+                    [VISIBLE, MINIMIZED]
+                } else {
+                    [MINIMIZED, VISIBLE]
+                };
+                for window in windows {
+                    ws.insert_window(window, None).unwrap();
+                }
+                assert!(ws.mark_minimized(MINIMIZED));
+                ws.focus_window(if strip_minimized { MINIMIZED } else { VISIBLE })
+                    .unwrap();
+                if tracked == Some(OUTSIDE) {
+                    state
+                        .ensure_workspace_exists(source, 1)
+                        .unwrap()
+                        .insert_window(OUTSIDE, None)
+                        .unwrap();
+                }
+                state.previous_focused_hwnd = tracked;
+                let crosses = match tracked {
+                    Some(MINIMIZED) => false,
+                    Some(VISIBLE) => true,
+                    _ => !strip_minimized,
+                };
+                assert_eq!(state.handle_command(command.clone()), IpcResponse::Ok);
+                assert_eq!(
+                    state.focused_monitor,
+                    if crosses { target } else { source },
+                    "source={source}, tracked={tracked:?}, strip_minimized={strip_minimized}"
+                );
+                assert_eq!(
+                    state.workspaces[&target][0].contains_window(VISIBLE),
+                    crosses
+                );
+                assert_eq!(
+                    state.workspaces[&source][0].contains_window(VISIBLE),
+                    !crosses
+                );
+                assert!(state.workspaces[&source][0].contains_window(MINIMIZED));
+                assert!(state.workspaces[&source][0].is_minimized(MINIMIZED));
+                assert!(!state.workspaces[&target][0].contains_window(MINIMIZED));
+                if tracked == Some(OUTSIDE) {
+                    assert!(state.workspaces[&source][1].contains_window(OUTSIDE));
+                    assert!(!state.workspaces[&target][0].contains_window(OUTSIDE));
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn minimized_only_column_does_not_move_across_monitors() {
     for (source, movement) in [
         (1, IpcCommand::MoveColumnRight),

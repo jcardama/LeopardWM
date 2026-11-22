@@ -1065,26 +1065,27 @@ impl AppState {
             }
             IpcCommand::MoveColumnLeft
                 if self.config.behavior.move_crosses_monitors
-                    && self
-                        .focused_workspace()
-                        .and_then(Workspace::focused_visible_window)
-                        .is_some()
+                    && self.has_non_minimized_monitor_move_target()
                     && self.crosses_monitor_edge(true, monitor_to_left) =>
             {
                 IpcCommand::MoveWindowToMonitorLeft
             }
             IpcCommand::MoveColumnRight
                 if self.config.behavior.move_crosses_monitors
-                    && self
-                        .focused_workspace()
-                        .and_then(Workspace::focused_visible_window)
-                        .is_some()
+                    && self.has_non_minimized_monitor_move_target()
                     && self.crosses_monitor_edge(false, monitor_to_right) =>
             {
                 IpcCommand::MoveWindowToMonitorRight
             }
             _ => cmd,
         }
+    }
+
+    fn has_non_minimized_monitor_move_target(&self) -> bool {
+        self.monitor_move_target().is_some_and(|target| {
+            self.focused_workspace()
+                .is_some_and(|ws| !ws.is_minimized(target))
+        })
     }
 
     fn crosses_monitor_edge(

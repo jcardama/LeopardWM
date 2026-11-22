@@ -441,23 +441,20 @@ impl AppState {
         }
     }
 
+    pub(crate) fn monitor_move_target(&self) -> Option<u64> {
+        // Prefer the OS-foreground window so floating windows can be moved too.
+        let ws = self.focused_workspace()?;
+        self.previous_focused_hwnd
+            .filter(|&hwnd| ws.contains_window(hwnd))
+            .or_else(|| ws.focused_window())
+    }
+
     /// Move the focused window to another monitor using an all-or-nothing update.
     pub(crate) fn move_focused_window_to_monitor_transactional(
         &mut self,
         target_monitor: MonitorId,
     ) -> std::result::Result<Option<u64>, String> {
-        // Prefer the OS-foreground window so floating windows can be moved too.
-        let source_monitor = self.focused_monitor;
-        let src_idx = self.active_workspace_idx(source_monitor);
-        let os_focus = self.previous_focused_hwnd.and_then(|hwnd| {
-            self.workspaces
-                .get(&source_monitor)
-                .and_then(|v| v.get(src_idx))
-                .filter(|ws| ws.contains_window(hwnd))
-                .map(|_| hwnd)
-        });
-        let tiled_focus = self.focused_workspace().and_then(|ws| ws.focused_window());
-        let Some(window_id) = os_focus.or(tiled_focus) else {
+        let Some(window_id) = self.monitor_move_target() else {
             return Ok(None);
         };
         self.move_window_to_monitor_transactional(window_id, target_monitor)
