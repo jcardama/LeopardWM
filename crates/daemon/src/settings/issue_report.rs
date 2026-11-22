@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 const ISSUE_BASE: &str = "https://github.com/jcardama/LeopardWM/issues/new?template=bug_report.yml";
 const URL_LIMIT: usize = 2000;
+const TITLE_ENCODED_LIMIT: usize = 400;
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default)]
@@ -55,6 +56,23 @@ pub fn issue_url(report: &IssueReport, version: &str, windows_version: &str) -> 
     ];
     let mut url = build_url(&fields);
     let truncated = url.len() > URL_LIMIT;
+    if truncated && encode(&fields[0].1).len() > TITLE_ENCODED_LIMIT {
+        let mut title = String::new();
+        let mut encoded_len = encode("…").len();
+        for ch in fields[0].1.chars() {
+            let char_len = encode(&ch.to_string()).len();
+            if encoded_len + char_len > TITLE_ENCODED_LIMIT {
+                break;
+            }
+            title.push(ch);
+            encoded_len += char_len;
+        }
+        title.push('…');
+        if encode(&title).len() < encode(&fields[0].1).len() {
+            fields[0].1 = title;
+            url = build_url(&fields);
+        }
+    }
     for index in [4, 3, 5, 2, 0, 1, 8, 7, 6] {
         if url.len() <= URL_LIMIT {
             break;
@@ -208,6 +226,27 @@ mod tests {
             .map(|(_, value)| decode(value))
             .unwrap();
         assert_eq!(actual, report.actual);
+
+        for title_char in ["x", "😀"] {
+            let report = IssueReport {
+                title: title_char.repeat(3000),
+                actual: "Focus fails".into(),
+                ..IssueReport::default()
+            };
+            let (url, truncated) = issue_url(&report, "0.4.0", "Windows 11");
+            assert!(truncated);
+            assert!(url.len() <= URL_LIMIT);
+            let decoded: std::collections::HashMap<_, _> = url
+                .split_once('?')
+                .unwrap()
+                .1
+                .split('&')
+                .filter_map(|pair| pair.split_once('='))
+                .map(|(key, value)| (key, decode(value)))
+                .collect();
+            assert_eq!(decoded["actual"], "Focus fails");
+            assert!(decoded["title"].ends_with('…'));
+        }
 
         for report in [
             IssueReport {
