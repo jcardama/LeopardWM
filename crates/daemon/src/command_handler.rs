@@ -48,12 +48,22 @@ enum FloatingPolicy {
 }
 
 fn limit_unknown_config_keys(keys: Vec<String>) -> Vec<String> {
-    let omitted = keys.len().saturating_sub(50);
-    let mut bounded: Vec<_> = keys
-        .into_iter()
-        .take(50)
-        .map(|key| key.chars().take(200).collect())
-        .collect();
+    const KEY_BYTES_BUDGET: usize = 8 * 1024;
+    let total = keys.len();
+    let mut bytes = 0;
+    let mut bounded = Vec::new();
+    for key in keys.into_iter().take(50) {
+        let key: String = key.chars().take(200).collect();
+        let size = serde_json::to_string(&key)
+            .expect("string serialization cannot fail")
+            .len();
+        if bytes + size > KEY_BYTES_BUDGET {
+            break;
+        }
+        bytes += size;
+        bounded.push(key);
+    }
+    let omitted = total - bounded.len();
     if omitted > 0 {
         bounded.push(format!("... and {omitted} more"));
     }
@@ -68,10 +78,15 @@ mod unknown_config_key_health_tests {
     fn health_key_list_is_bounded_and_fits_a_response_frame() {
         let keys = vec![format!("{}{}", "\u{1}".repeat(199), "界".repeat(20)); 60];
         let bounded = limit_unknown_config_keys(keys);
-        assert_eq!(bounded.len(), 51);
+        assert_eq!(bounded.len(), 7);
         assert_eq!(bounded[0].chars().count(), 200);
         assert!(bounded[0].ends_with('界'));
-        assert_eq!(bounded[50], "... and 10 more");
+        assert_eq!(bounded[6], "... and 54 more");
+        let bytes: usize = bounded[..6]
+            .iter()
+            .map(|key| serde_json::to_string(key).unwrap().len())
+            .sum();
+        assert!(bytes <= 8 * 1024);
         let response = IpcResponse::HealthInfo {
             healthy: true,
             uptime_seconds: 0,
@@ -89,6 +104,9 @@ mod unknown_config_key_health_tests {
         assert!(serde_json::to_vec(&response).unwrap().len() < leopardwm_ipc::MAX_IPC_MESSAGE_SIZE);
         assert_eq!(limit_unknown_config_keys(vec!["short".into()]), ["short"]);
         assert_eq!(limit_unknown_config_keys(vec!["x".into(); 50]).len(), 50);
+        let ascii = limit_unknown_config_keys(vec!["x".repeat(200); 50]);
+        assert_eq!(ascii.len(), 41);
+        assert_eq!(ascii[40], "... and 10 more");
     }
 }
 
