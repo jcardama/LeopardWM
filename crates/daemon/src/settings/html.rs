@@ -898,6 +898,14 @@ input[type="range"]::-webkit-slider-thumb {
 .info-bar.error  { background: var(--error-bg); }
 .info-bar.error .info-bar-icon { fill: var(--error-stroke); }
 
+.report-form { display: grid; gap: 14px; padding: 18px; }
+.report-form label { display: grid; gap: 6px; font-weight: 600; }
+.report-form input, .report-form textarea, .report-form select { width: 100%; box-sizing: border-box; font: inherit; color: var(--text-primary); background: var(--ctrl-fill); border: 1px solid var(--ctrl-stroke); border-radius: 4px; padding: 8px; }
+.report-form textarea { min-height: 90px; resize: vertical; }
+.report-form .input-wrap { width: 100%; }
+.report-note { line-height: 1.5; margin: 0 0 12px; }
+.report-actions { display: flex; gap: 8px; }
+.report-status { margin-bottom: 12px; overflow-wrap: anywhere; }
 </style>
 </head>
 <body>
@@ -933,6 +941,10 @@ input[type="range"]::-webkit-slider-thumb {
       <span data-i18n="settings.text.snap_hints_titlecase"></span>
     </a>
     <div class="nav-spacer"></div>
+    <a href="#" data-section="report" class="nav-item">
+      <svg class="nav-icon" viewBox="0 0 16 16"><path d="M3 2h10v9H7l-4 3z"/><path d="M8 4v3m0 2v.1"/></svg>
+      <span data-i18n="settings.report.title"></span>
+    </a>
     <a href="#" data-section="about" class="nav-item">
       <svg class="nav-icon" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5" fill="none" stroke-width="1.2"/><text x="8" y="11.5" text-anchor="middle" font-size="9" font-weight="600" fill="currentColor" stroke="none">i</text></svg>
       <span data-i18n="settings.text.about"></span>
@@ -1442,6 +1454,38 @@ input[type="range"]::-webkit-slider-thumb {
       </div>
 
       <!-- About -->
+      <div id="sec-report" class="section">
+        <h2 class="section-title" data-i18n="settings.report.title"></h2>
+        <p class="report-note" data-i18n="settings.report.guide"></p>
+        <p class="report-note" data-i18n="settings.report.privacy"></p>
+        <p class="report-note" data-i18n="settings.report.long"></p>
+        <div class="info-bar report-status" id="report-status" role="status" hidden><div class="info-bar-content" id="report-status-text"></div></div>
+        <div class="card report-form">
+          <label><span data-i18n="settings.report.subject"></span><input type="text" id="report-title" data-no-config></label>
+          <label><span data-i18n="settings.report.category"></span><select id="report-category">
+            <option value="" data-i18n="settings.report.unsure"></option>
+            <option value="Layout and scrolling" data-i18n="settings.report.layout"></option>
+            <option value="Focus" data-i18n="settings.report.focus"></option>
+            <option value="Hotkeys and gestures" data-i18n="settings.report.hotkeys"></option>
+            <option value="Window rules" data-i18n="settings.report.rules"></option>
+            <option value="Multiple monitors" data-i18n="settings.report.monitors"></option>
+            <option value="Settings" data-i18n="settings.report.settings"></option>
+            <option value="Performance" data-i18n="settings.report.performance"></option>
+            <option value="Crash or freeze" data-i18n="settings.report.crash"></option>
+            <option value="Other" data-i18n="settings.report.other"></option>
+          </select></label>
+          <label><span data-i18n="settings.report.actual"></span><textarea id="report-actual"></textarea></label>
+          <label><span data-i18n="settings.report.expected"></span><textarea id="report-expected"></textarea></label>
+          <label><span data-i18n="settings.report.repro"></span><textarea id="report-repro"></textarea></label>
+          <label><span data-i18n="settings.report.apps"></span><input type="text" id="report-affected_apps" data-no-config></label>
+          <label><span data-i18n="settings.report.regression"></span><select id="report-regression">
+            <option value="Not sure" data-i18n="settings.report.unsure"></option><option value="Yes" data-i18n="settings.report.yes"></option><option value="No" data-i18n="settings.report.no"></option>
+          </select></label>
+          <div><span data-i18n="settings.report.version"></span>: <span id="report-version"></span></div>
+          <div><span data-i18n="settings.report.windows"></span>: <span id="report-windows"></span></div>
+          <div class="report-actions"><button class="btn" type="button" id="report-submit" data-i18n="settings.report.submit" disabled></button><button class="btn" type="button" id="report-clear" data-i18n="settings.report.clear"></button></div>
+        </div>
+      </div>
       <div id="sec-about" class="section">
         <h2 class="section-title" data-i18n="settings.text.about"></h2>
         <div class="card about-card">
@@ -2804,6 +2848,59 @@ function wrapAllInputs(root) {
 }
 wrapAllInputs();
 
+/* ── Report an Issue ── */
+(function() {
+  var names = ['title', 'category', 'actual', 'expected', 'repro', 'affected_apps', 'regression'];
+  var fields = {};
+  names.forEach(function(name) { fields[name] = document.getElementById('report-' + name); });
+  var submit = document.getElementById('report-submit');
+  var timer = null;
+  function draft() {
+    var result = {};
+    names.forEach(function(name) { result[name] = fields[name].value; });
+    return result;
+  }
+  function persist() {
+    clearTimeout(timer);
+    timer = null;
+    window.ipc.postMessage(JSON.stringify({action: 'report_draft', draft: draft()}));
+  }
+  function update() {
+    submit.disabled = !fields.title.value.trim() || !fields.actual.value.trim();
+  }
+  var saved = window._reportDraft || {};
+  names.forEach(function(name) {
+    if (typeof saved[name] === 'string') fields[name].value = saved[name];
+    fields[name].addEventListener('input', function() {
+      update();
+      clearTimeout(timer);
+      timer = setTimeout(persist, 300);
+    });
+  });
+  document.getElementById('report-version').textContent = window._version || '';
+  document.getElementById('report-windows').textContent = window._windowsVersion || '';
+  document.getElementById('report-clear').addEventListener('click', function() {
+    names.forEach(function(name) { fields[name].value = name === 'regression' ? 'Not sure' : ''; });
+    document.getElementById('report-status').hidden = true;
+    update();
+    persist();
+  });
+  submit.addEventListener('click', function() {
+    update();
+    if (submit.disabled) return;
+    persist();
+    window.ipc.postMessage(JSON.stringify({action: 'report_issue', report: draft()}));
+  });
+  window.addEventListener('pagehide', function() { if (timer !== null) persist(); });
+  window.reportStatus = function(status) {
+    var message = status.file ? (status.error ? t('settings.report.reveal_error', status) : t('settings.report.snapshot_ok', status)) : t('settings.report.snapshot_error', status);
+    if (status.truncated) message += ' ' + t(status.copied ? 'settings.report.copied' : 'settings.report.copy_failed');
+    document.getElementById('report-status-text').textContent = message;
+    document.getElementById('report-status').hidden = false;
+  };
+  update();
+})();
+
 /* ── Auto-save ────────────────────────────────────────────────────── */
 var _saveTimer = null;
 function autoSave(delay) {
@@ -2830,6 +2927,7 @@ document.querySelectorAll('input[type="checkbox"], input[type="color"], input[ty
 
 /* Debounced: text and number inputs */
 document.querySelectorAll('input[type="text"], input[type="number"]').forEach(function(el) {
+  if (el.hasAttribute('data-no-config')) return;
   el.addEventListener('input', function() { autoSave(500); });
 });
 </script>
@@ -2849,6 +2947,59 @@ pub(super) fn tray_config_script(
 #[cfg(test)]
 mod tests {
     use super::SETTINGS_HTML;
+
+    #[test]
+    #[ignore = "Needs Node.js on PATH for the optional Settings JavaScript check"]
+    fn report_draft_restores_and_required_fields_gate_submit() {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        let script = r#"
+const assert = require('assert');
+const html = require('fs').readFileSync(0, 'utf8');
+const start = html.indexOf('/* ── Report an Issue ── */');
+const end = html.indexOf('/* ── Auto-save', start);
+assert(start >= 0 && end > start);
+const els = {};
+function el(id) { return els[id] ||= {value:'', textContent:'', disabled:false, hidden:false,
+  listeners:{}, addEventListener(event, callback) { this.listeners[event] = callback; }}; }
+global.document = {getElementById: el};
+global.window = {_reportDraft:{title:'Saved title', actual:'Saved details', category:'Focus', regression:'Yes'},
+  _version:'1', _windowsVersion:'Windows', ipc:{postMessage(){}}, addEventListener(){}};
+global.t = key => key;
+eval(html.slice(start, end));
+assert.equal(el('report-title').value, 'Saved title');
+assert.equal(el('report-actual').value, 'Saved details');
+assert.equal(el('report-category').value, 'Focus');
+assert.equal(el('report-submit').disabled, false);
+el('report-title').value = '   '; el('report-title').listeners.input();
+assert.equal(el('report-submit').disabled, true);
+el('report-title').value = 'Title'; el('report-title').listeners.input();
+el('report-actual').value = ''; el('report-actual').listeners.input();
+assert.equal(el('report-submit').disabled, true);
+el('report-actual').value = 'Details'; el('report-actual').listeners.input();
+assert.equal(el('report-submit').disabled, false);
+"#;
+        let mut child = Command::new("node")
+            .args(["-e", script])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(SETTINGS_HTML.as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
     #[test]
     #[ignore = "Needs Node.js on PATH for the optional Settings JavaScript check"]

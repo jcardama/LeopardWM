@@ -95,6 +95,27 @@ const WM_SETTINGS_PUSH_BINDS: u32 = WM_APP + 1;
 const WM_SETTINGS_PUSH_RECORDED: u32 = WM_APP + 2;
 const WM_SETTINGS_PUSH_LOCALE: u32 = WM_APP + 3;
 const WM_SETTINGS_PUSH_TRAY_CONFIG: u32 = WM_APP + 4;
+const WM_SETTINGS_PUSH_REPORT: u32 = WM_APP + 5;
+static REPORT_DRAFT: Mutex<Option<super::issue_report::IssueReport>> = Mutex::new(None);
+static PENDING_REPORT: Mutex<Option<String>> = Mutex::new(None);
+
+pub fn push_report_status(
+    file: Option<String>,
+    error: Option<String>,
+    truncated: bool,
+    copied: bool,
+) {
+    let Ok(thread) = SETTINGS_THREAD.lock() else {
+        return;
+    };
+    let Some(thread_id) = *thread else { return };
+    if let Ok(mut pending) = PENDING_REPORT.lock() {
+        *pending = Some(serde_json::json!({ "file": file, "error": error, "truncated": truncated, "copied": copied }).to_string());
+        unsafe {
+            let _ = PostThreadMessageW(thread_id, WM_SETTINGS_PUSH_REPORT, WPARAM(0), LPARAM(0));
+        }
+    }
+}
 static PENDING_LOCALE: Mutex<Option<String>> = Mutex::new(None);
 static PENDING_TRAY_CONFIG: Mutex<Option<String>> = Mutex::new(None);
 
@@ -345,6 +366,11 @@ pub fn run_settings_window(
                 "window._initConfig = {}; window._hotkeyCatalog = {}; window._hotkeyCategories = {}; window._failedHotkeys = {}; window._localeStrings = {}; window._language = {}; window._version = {}; window._languages = {};",
                 config_json, catalog_json, categories_json, failed_binds_json, crate::locale::page_json(&config.appearance.language), serde_json::to_string(&config.appearance.language)?, serde_json::to_string(env!("CARGO_PKG_VERSION"))?, crate::locale::languages_json()
             ))
+            .with_initialization_script(format!(
+                "window._reportDraft = {}; window._windowsVersion = {};",
+                serde_json::to_string(&REPORT_DRAFT.lock().ok().and_then(|draft| draft.clone()))?,
+                serde_json::to_string(&leopardwm_platform_win32::get_windows_version())?
+            ))
             .with_ipc_handler(move |req| {
                 if let Some(event_tx) = event_tx.upgrade() {
                     handle_ipc(req.body(), &event_tx, hwnd);
@@ -408,6 +434,18 @@ pub fn run_settings_window(
                         "settings.text.leopardwm_settings",
                     ));
                     let _ = windows::Win32::UI::WindowsAndMessaging::SetWindowTextW(hwnd, &title);
+                }
+                continue;
+            }
+            if msg_buf.message == WM_SETTINGS_PUSH_REPORT {
+                if let Some(json) = PENDING_REPORT
+                    .lock()
+                    .ok()
+                    .and_then(|mut pending| pending.take())
+                {
+                    let _ = webview.evaluate_script(&format!(
+                        "if (window.reportStatus) window.reportStatus({json});"
+                    ));
                 }
                 continue;
             }
@@ -479,7 +517,7 @@ fn is_allowed_url(url: &str) -> bool {
         && !authority.chars().any(char::is_whitespace)
 }
 
-fn handle_ipc(body: &str, event_tx: &mpsc::Sender<SettingsEvent>, _hwnd: HWND) {
+fn handle_ipc(body: &str, event_tx: &mpsc::Sender<SettingsEvent>, hwnd: HWND) {
     let msg: serde_json::Value = match serde_json::from_str(body) {
         Ok(v) => v,
         Err(e) => {
@@ -491,6 +529,54 @@ fn handle_ipc(body: &str, event_tx: &mpsc::Sender<SettingsEvent>, _hwnd: HWND) {
     let action = msg.get("action").and_then(|v| v.as_str()).unwrap_or("");
 
     match action {
+        "report_draft" => {
+            if let Some(draft) = msg
+                .get("draft")
+                .and_then(|value| serde_json::from_value(value.clone()).ok())
+            {
+                if let Ok(mut stored) = REPORT_DRAFT.lock() {
+                    *stored = Some(draft);
+                }
+            }
+        }
+        "report_issue" => {
+            let Some(report): Option<super::issue_report::IssueReport> = msg
+                .get("report")
+                .and_then(|value| serde_json::from_value(value.clone()).ok())
+            else {
+                warn!("Settings: invalid issue report");
+                return;
+            };
+            if report.title.trim().is_empty() || report.actual.trim().is_empty() {
+                warn!("Settings: issue report is missing required fields");
+                return;
+            }
+            if let Ok(mut stored) = REPORT_DRAFT.lock() {
+                *stored = Some(report.clone());
+            }
+            let version = env!("CARGO_PKG_VERSION");
+            let windows = leopardwm_platform_win32::get_windows_version();
+            let (url, truncated) = super::issue_report::issue_url(&report, version, &windows);
+            let copied = if truncated {
+                match leopardwm_platform_win32::clipboard::set_text(
+                    hwnd.0 as isize,
+                    &super::issue_report::full_text(&report, version, &windows),
+                ) {
+                    Ok(()) => true,
+                    Err(error) => {
+                        warn!("Settings: clipboard copy failed: {}", log_text::text(error));
+                        false
+                    }
+                }
+            } else {
+                false
+            };
+            let _ = event_tx.send(SettingsEvent::ReportIssue {
+                url,
+                truncated,
+                copied,
+            });
+        }
         "save" => {
             if let Some(cfg_val) = msg.get("config") {
                 do_save(cfg_val, event_tx);

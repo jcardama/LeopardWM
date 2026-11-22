@@ -1,0 +1,47 @@
+name: Bug report
+description: Report a problem with LeopardWM
+labels: ["bug"]
+body:
+  - type: input
+    id: category
+    attributes:
+      label: Category
+      description: "Suggested categories: Layout and scrolling, Focus, Hotkeys and gestures, Window rules, Multiple monitors, Settings, Performance, Crash or freeze, Other."
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened?
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+  - type: input
+    id: affected-apps
+    attributes:
+      label: Affected apps
+  - type: input
+    id: version
+    attributes:
+      label: LeopardWM version
+    validations:
+      required: true
+  - type: input
+    id: windows-version
+    attributes:
+      label: Windows version
+  - type: input
+    id: regression
+    attributes:
+      label: Did this work in an earlier version?
+      description: Yes / No / Not sure
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostic snapshot
+      description: Create a snapshot with Settings → Report an Issue or run `lwm collect-logs`. Open and read the snapshot before attaching it by dragging the file into this field.

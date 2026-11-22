@@ -10,8 +10,17 @@ const document = {
   getElementById: id => id === 'cb-appearance-language' ? initialLanguageCombo : null,
   addEventListener: () => {}
 };
+function runSettings(source, ctx) {
+  const original = ctx.document.getElementById;
+  const report = {};
+  ctx.document.getElementById = id => id.startsWith('report-')
+    ? (report[id] ||= { value: '', addEventListener() {} }) : original.call(ctx.document, id);
+  ctx.window.addEventListener ||= () => {};
+  vm.runInContext(source, ctx);
+  ctx.document.getElementById = original;
+}
 const context = vm.createContext({ document, window: { _localeStrings: english, _language: 'en', _languages: bundledLanguages } });
-vm.runInContext(script, context);
+runSettings(script, context);
 const readPresetEntries = context.readPresetEntries;
 const languageMarkup = languagePopup.innerHTML;
 assert.equal((languageMarkup.match(/class="combobox-option"/g) || []).length, bundledLanguages.length);
@@ -142,7 +151,7 @@ function ruleFixture(source, rule = {}) {
     getElementById: () => null
   };
   const ctx = vm.createContext({ document: doc, window: { _localeStrings: english } });
-  vm.runInContext(source, ctx);
+  runSettings(source, ctx);
   doc.createElement = () => row;
   doc.getElementById = () => ({ appendChild() {} });
   ctx.addRuleRow(rule);
@@ -231,7 +240,7 @@ function presetFixture(values = [0.333, 0.5, 0.667]) {
     setTimeout(callback, delay) { timers.set(++nextTimer, { callback, delay }); return nextTimer; },
     clearTimeout(id) { timers.delete(id); }
   });
-  vm.runInContext(script, ctx);
+  runSettings(script, ctx);
   const trigger = eventElement();
   const triggerText = eventElement();
   const popup = eventElement();
@@ -355,7 +364,7 @@ function commandFixture({ saving = false } = {}) {
       scheduledSaves++;
     }, clearTimeout() { saveCallback = undefined; }
   });
-  vm.runInContext(script, ctx);
+  runSettings(script, ctx);
   const decode = text => text.replace(/&quot;/g, '"').replace(/&gt;/g, '>').replace(/&lt;/g, '<').replace(/&amp;/g, '&');
   doc.createElement = () => {
     const label = eventElement();

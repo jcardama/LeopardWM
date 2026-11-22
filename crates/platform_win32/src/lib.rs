@@ -10,6 +10,7 @@
 
 pub mod autostart;
 pub mod border;
+pub mod clipboard;
 pub mod dialog;
 pub mod focus_placeholder;
 pub mod gestures;

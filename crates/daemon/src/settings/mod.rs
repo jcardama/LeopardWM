@@ -2,9 +2,12 @@
 //! An AtomicBool singleton guard prevents multiple settings windows.
 
 mod html;
+mod issue_report;
 mod win32;
 
-pub use win32::{push_failed_binds, push_locale, push_recorded_chord, push_tray_config};
+pub use win32::{
+    push_failed_binds, push_locale, push_recorded_chord, push_report_status, push_tray_config,
+};
 
 use leopardwm_ipc::log_text;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -25,6 +28,11 @@ pub enum SettingsEvent {
     /// The settings window closed. Used as a safety net to resume hotkeys if
     /// the window was closed mid-recording.
     Closed,
+    ReportIssue {
+        url: String,
+        truncated: bool,
+        copied: bool,
+    },
 }
 
 static SETTINGS_OPEN: AtomicBool = AtomicBool::new(false);

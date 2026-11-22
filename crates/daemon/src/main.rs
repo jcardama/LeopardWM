@@ -3375,6 +3375,57 @@ async fn handle_settings_event(
     settings_event: settings::SettingsEvent,
 ) {
     match settings_event {
+        settings::SettingsEvent::ReportIssue {
+            url,
+            truncated,
+            copied,
+        } => {
+            use std::os::windows::process::CommandExt;
+            let snapshot = {
+                let state = ctx.state.lock().await;
+                crate::diagnostic_snapshot::create_diagnostic_snapshot(
+                    &state,
+                    "Settings",
+                    env!("CARGO_PKG_VERSION").to_owned(),
+                    leopardwm_platform_win32::current_process_integrity(),
+                )
+            };
+            let (file, error) = match snapshot {
+                Ok(path) => {
+                    let mut argument = std::ffi::OsString::from("/select,\"");
+                    argument.push(&path);
+                    argument.push("\"");
+                    let error = std::process::Command::new("explorer.exe")
+                        .raw_arg(argument)
+                        .spawn()
+                        .err();
+                    if let Some(ref error) = error {
+                        warn!(
+                            "Settings: cannot reveal diagnostic snapshot: {}",
+                            log_text::text(error)
+                        );
+                    }
+                    (
+                        Some(
+                            path.file_name()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                                .into_owned(),
+                        ),
+                        error.map(|e| e.to_string()),
+                    )
+                }
+                Err(error) => {
+                    warn!(
+                        "Settings: cannot create diagnostic snapshot: {}",
+                        log_text::text(&error)
+                    );
+                    (None, Some(error.to_string()))
+                }
+            };
+            leopardwm_platform_win32::shell::open(&url);
+            settings::push_report_status(file, error, truncated, copied);
+        }
         settings::SettingsEvent::Saved => {
             info!("Settings: config saved, triggering reload");
             let response = {
