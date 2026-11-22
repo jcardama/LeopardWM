@@ -22153,20 +22153,87 @@ fn center_columns_reload_off_animates_when_gap_changes() {
     monitors[0].work_area.width = 1000;
     let mut state = AppState::new_with_config(config.clone(), monitors);
     let ws = &mut state.workspaces.get_mut(&1).unwrap()[0];
-    ws.insert_window(100, Some(400)).unwrap();
+    ws.insert_window(100, Some(401)).unwrap();
     ws.set_reduce_motion(false);
     ws.ensure_focused_visible(1000);
-    assert_eq!(ws.effective_scroll_offset(), -280.0);
+    assert_eq!(ws.effective_scroll_offset(), -279.0);
 
     config.layout.center_columns.center_columns = CenterColumnsConfig::Off;
     config.layout.gap = 11;
     state.apply_config(config);
 
     let ws = &mut state.workspaces.get_mut(&1).unwrap()[0];
+    assert_eq!(ws.effective_scroll_offset(), -279.0);
     assert!(
         ws.is_animating(),
         "the gap change must not cancel the slide"
     );
+    ws.tick_animation(u64::MAX);
+    assert_eq!(ws.effective_scroll_offset(), 0.0);
+}
+
+#[test]
+fn center_columns_reload_off_keeps_fit_left_release_when_gap_changes() {
+    use crate::config::{CenterColumnsConfig, CenteringModeConfig};
+    use leopardwm_core_layout::ColumnAlignment;
+
+    let mut config = test_config();
+    config.layout.center_columns.center_columns = CenterColumnsConfig::Fit;
+    config.layout.centering_mode = CenteringModeConfig::JustInView;
+    config.layout.center_past_edges = true;
+    config.layout.gap = 10;
+    config.layout.outer_gap_left = 20;
+    config.layout.outer_gap_right = 20;
+    let mut monitors = test_monitors();
+    monitors[0].work_area.width = 1000;
+    let mut state = AppState::new_with_config(config.clone(), monitors);
+    let ws = &mut state.workspaces.get_mut(&1).unwrap()[0];
+    ws.insert_window(100, Some(400)).unwrap();
+    ws.set_reduce_motion(false);
+    ws.ensure_focused_visible(1000);
+    ws.align_focused_column_animated(ColumnAlignment::Left, 1000);
+    ws.stop_animation();
+    assert_eq!(ws.effective_scroll_offset(), 0.0);
+
+    config.layout.center_columns.center_columns = CenterColumnsConfig::Off;
+    config.layout.gap = 11;
+    state.apply_config(config);
+
+    let ws = &state.workspaces[&1][0];
+    assert!(!ws.is_animating());
+    assert_eq!(ws.effective_scroll_offset(), 0.0);
+}
+
+#[test]
+fn center_columns_reload_off_slides_when_gap_makes_fit_row_exactly_full() {
+    use crate::config::{CenterColumnsConfig, CenteringModeConfig};
+
+    let mut config = test_config();
+    config.layout.center_columns.center_columns = CenterColumnsConfig::Fit;
+    config.layout.centering_mode = CenteringModeConfig::JustInView;
+    config.layout.center_past_edges = true;
+    config.layout.gap = 10;
+    config.layout.outer_gap_left = 30;
+    config.layout.outer_gap_right = 30;
+    let mut monitors = test_monitors();
+    monitors[0].work_area.width = 1000;
+    let mut state = AppState::new_with_config(config.clone(), monitors);
+    let ws = &mut state.workspaces.get_mut(&1).unwrap()[0];
+    for id in 100..108 {
+        ws.insert_window(id, Some(100)).unwrap();
+    }
+    ws.set_reduce_motion(false);
+    ws.ensure_focused_visible(1000);
+    assert_eq!(ws.effective_scroll_offset(), -35.0);
+
+    config.layout.center_columns.center_columns = CenterColumnsConfig::Off;
+    config.layout.gap = 20;
+    state.apply_config(config);
+
+    let ws = &mut state.workspaces.get_mut(&1).unwrap()[0];
+    assert_eq!(ws.total_width(), ws.visible_width(1000));
+    assert_eq!(ws.effective_scroll_offset(), -35.0);
+    assert!(ws.is_animating());
     ws.tick_animation(u64::MAX);
     assert_eq!(ws.effective_scroll_offset(), 0.0);
 }

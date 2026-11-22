@@ -763,7 +763,13 @@ impl Workspace {
 
     /// Switch column centering off and slide automatically centered rows to their new positions.
     pub fn reconcile_leaving_column_centering(&mut self, viewport_width: i32) {
-        let centered_rows: Vec<_> = (0..self.rows.len())
+        let centered_rows = self.begin_leaving_column_centering(viewport_width);
+        self.finish_leaving_column_centering(viewport_width, centered_rows);
+    }
+
+    /// Capture automatically centered rows before a geometry change, then switch centering off.
+    pub fn begin_leaving_column_centering(&mut self, viewport_width: i32) -> Vec<(usize, f64)> {
+        let centered_rows = (0..self.rows.len())
             .filter(|&row_idx| {
                 self.automatic_center_offset_for_row(row_idx, viewport_width)
                     .is_some()
@@ -773,6 +779,17 @@ impl Workspace {
             .map(|row_idx| (row_idx, self.effective_scroll_offset_for_row(row_idx)))
             .collect();
         self.set_center_columns(CenterColumns::Off);
+        centered_rows
+    }
+
+    /// Compute Off landings in the current geometry, then animate from the captured offsets.
+    pub fn finish_leaving_column_centering(
+        &mut self,
+        viewport_width: i32,
+        mut centered_rows: Vec<(usize, f64)>,
+    ) {
+        // A config reload can merge trailing rows into the last surviving row.
+        centered_rows.retain(|&(row_idx, _)| row_idx < self.rows.len());
         for &(row_idx, _) in &centered_rows {
             let row = &mut self.rows[row_idx];
             row.active_animation = None;

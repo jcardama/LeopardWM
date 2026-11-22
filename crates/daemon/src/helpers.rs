@@ -231,13 +231,15 @@ impl AppState {
                 let new_center_columns = self.config.layout.center_columns.center_columns.into();
                 let leaving_column_centering = old_center_columns != CenterColumns::Off
                     && new_center_columns == CenterColumns::Off;
-                params.apply_to(workspace, ws_idx);
-                workspace.set_centering_mode(self.config.layout.centering_mode.into());
-                workspace.set_center_past_edges(self.config.layout.center_past_edges);
                 workspace.set_scroll_animation(
                     self.config.animation.scroll_duration_ms,
                     self.config.animation.easing,
                 );
+                let centered_rows = leaving_column_centering
+                    .then(|| workspace.begin_leaving_column_centering(viewport_width));
+                params.apply_to(workspace, ws_idx);
+                workspace.set_centering_mode(self.config.layout.centering_mode.into());
+                workspace.set_center_past_edges(self.config.layout.center_past_edges);
                 if !leaving_column_centering {
                     workspace.set_center_columns(new_center_columns);
                 }
@@ -249,8 +251,8 @@ impl AppState {
                     viewport_width,
                     viewport_width,
                 );
-                if leaving_column_centering {
-                    workspace.reconcile_leaving_column_centering(viewport_width);
+                if let Some(centered_rows) = centered_rows {
+                    workspace.finish_leaving_column_centering(viewport_width, centered_rows);
                 } else if old_center_columns == CenterColumns::Fit
                     && new_center_columns == CenterColumns::Single
                 {
