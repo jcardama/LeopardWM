@@ -4715,6 +4715,44 @@ mod tests {
     }
 
     #[test]
+    fn recovery_handles_same_errors_containers_datetimes_and_rule_elements() {
+        let cases: &[(&str, &[&str])] = &[
+            ("[behavior]\nfocus_new_windows = 123\ntrack_focus_changes = 123\n", &["behavior.focus_new_windows", "behavior.track_focus_changes"]),
+            ("[layout]\ngap = { x = 1 }\n", &["layout.gap"]),
+            ("[layout]\ngap = {}\n", &["layout.gap"]),
+            ("[layout]\ngap = 1979-05-27T07:32:00Z\n", &["layout.gap"]),
+            ("mystery_timestamp = 1979-05-27T07:32:00Z\n[layout]\ngap = 'bad'\n", &["layout.gap"]),
+            ("[[window_rules]]\nmatch_class = 'First'\nwidth = 'bad'\n[[window_rules]]\nmatch_class = 'Second'\nwidth = 321\n", &["window_rules[0].width"]),
+        ];
+        for (source, expected) in cases {
+            let fixture = ConfigFileFixture::new();
+            let path = fixture.0.join("config.toml");
+            fs::write(
+                &path,
+                format!("{source}\n[appearance]\nactive_border_width = 7\n"),
+            )
+            .unwrap();
+            let mut file = ConfigFile::default();
+            let config = file
+                .load(std::slice::from_ref(&path))
+                .unwrap_or_else(|error| panic!("{source}: {error:#}"));
+            assert_eq!(config.appearance.active_border_width, 7, "{source}");
+            let mut actual: Vec<_> = file.rejections[0]
+                .recovered_fields
+                .iter()
+                .map(|field| field.path.as_str())
+                .collect();
+            actual.sort_unstable();
+            assert_eq!(&actual, expected, "{source}");
+            if source.contains("[[window_rules]]") {
+                assert_eq!(config.window_rules.len(), 2);
+                assert_eq!(config.window_rules[0].match_class.as_deref(), Some("First"));
+                assert_eq!(config.window_rules[1].width, Some(321));
+            }
+        }
+    }
+
+    #[test]
     fn invalid_behavior_field_recovers_and_preserves_original() {
         let fixture = ConfigFileFixture::new();
         let path = fixture.0.join("config.toml");

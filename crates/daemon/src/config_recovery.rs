@@ -28,8 +28,12 @@ impl<'de> Deserialize<'de> for Node {
             }
             fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Node, A::Error> {
                 let mut result = BTreeMap::new();
-                while let Some((key, value)) = map.next_entry()? {
-                    result.insert(key, value);
+                while let Some(key) = map.next_key::<String>()? {
+                    if key == "$__toml_private_datetime" {
+                        let _: String = map.next_value()?;
+                        return Ok(Node::Value);
+                    }
+                    result.insert(key, map.next_value()?);
                 }
                 Ok(Node::Table(result))
             }
@@ -101,35 +105,6 @@ fn locate<'a>(
     (node_span.start <= span.start && node_span.end >= span.end).then_some(node.get_ref())
 }
 
-fn descendants(node: &Node, path: &mut Vec<Part>, result: &mut Vec<Vec<Part>>) {
-    match node {
-        Node::Table(entries) => {
-            for (key, child) in entries {
-                path.push(Part::Key(key.clone()));
-                descendants(child.get_ref(), path, result);
-                path.pop();
-            }
-        }
-        Node::Array(entries)
-            if !entries.is_empty()
-                && entries
-                    .iter()
-                    .all(|child| matches!(child.get_ref(), Node::Table(_))) =>
-        {
-            for (index, child) in entries.iter().enumerate() {
-                path.push(Part::Index(index));
-                descendants(child.get_ref(), path, result);
-                path.pop();
-            }
-        }
-        _ => {
-            if matches!(path.last(), Some(Part::Key(_))) {
-                result.push(path.clone());
-            }
-        }
-    }
-}
-
 fn remove(value: &mut toml::Value, path: &[Part]) -> bool {
     match path {
         [Part::Key(key)] => value
@@ -145,6 +120,27 @@ fn remove(value: &mut toml::Value, path: &[Part]) -> bool {
             .is_some_and(|child| remove(child, rest)),
         [] => false,
     }
+}
+
+fn table_at_mut<'a>(value: &'a mut toml::Value, path: &[Part]) -> Option<&'a mut toml::Table> {
+    match path {
+        [] => value.as_table_mut(),
+        [Part::Key(key), rest @ ..] => table_at_mut(value.as_table_mut()?.get_mut(key)?, rest),
+        [Part::Index(index), rest @ ..] => {
+            table_at_mut(value.as_array_mut()?.get_mut(*index)?, rest)
+        }
+    }
+}
+
+fn isolated_error(value: &toml::Value, path: &[Part]) -> Option<String> {
+    let text = toml::to_string(value).ok()?;
+    let error = Config::parse(&text).err()?;
+    let tree: toml::Spanned<Node> = toml::from_str(&text).ok()?;
+    let mut error_path = Vec::new();
+    locate(&tree, &error.span()?, &mut error_path)?;
+    error_path
+        .starts_with(path)
+        .then(|| error.message().to_owned())
 }
 
 fn node_at<'a>(node: &'a toml::Spanned<Node>, path: &[Part]) -> Option<&'a toml::Spanned<Node>> {
@@ -181,54 +177,58 @@ pub(super) fn recover(content: &str) -> Option<(Config, Vec<DroppedField>)> {
     let original: toml::Spanned<Node> = toml::from_str(content).ok()?;
     let table: toml::Table = toml::from_str(content).ok()?;
     let mut value = toml::Value::Table(table);
-    // Compare trial errors against the same serialized table order.
     let mut current = toml::to_string(&value).ok()?;
     let mut error = Config::parse(&current).err()?;
     let mut dropped = Vec::new();
-    for _ in 0..64 {
+    loop {
         let tree: toml::Spanned<Node> = toml::from_str(&current).ok()?;
         let mut path = Vec::new();
-        let mut node = locate(&tree, &error.span()?, &mut path)?;
-        if matches!(node, Node::Value) && matches!(path.last(), Some(Part::Index(_))) {
+        let node = locate(&tree, &error.span()?, &mut path)?;
+        let mut candidates = Vec::new();
+        if let Node::Table(entries) = node {
+            let mut empty = value.clone();
+            table_at_mut(&mut empty, &path)?.clear();
+            if matches!(path.last(), Some(Part::Key(_)))
+                && isolated_error(&empty, &path).as_deref() == Some(error.message())
+            {
+                candidates.push((path.clone(), error.message().to_owned()));
+            } else {
+                for key in entries.keys() {
+                    let mut trial = value.clone();
+                    table_at_mut(&mut trial, &path)?.retain(|name, _| name == key);
+                    if let Some(reason) = isolated_error(&trial, &path) {
+                        let mut candidate = path.clone();
+                        candidate.push(Part::Key(key.clone()));
+                        candidates.push((candidate, reason));
+                    }
+                }
+            }
+        } else {
             while matches!(path.last(), Some(Part::Index(_))) {
                 path.pop();
             }
-            node = node_at(&tree, &path)?.get_ref();
+            if matches!(path.last(), Some(Part::Key(_))) {
+                candidates.push((path, error.message().to_owned()));
+            }
         }
-        let mut candidates = Vec::new();
-        descendants(node, &mut path, &mut candidates);
-        if candidates.len() != 1 || !matches!(node, Node::Value) {
-            candidates.retain(|candidate| {
-                let mut trial = value.clone();
-                if !remove(&mut trial, candidate) {
-                    return false;
-                }
-                let Ok(text) = toml::to_string(&trial) else {
-                    return false;
-                };
-                match Config::parse(&text) {
-                    Ok(_) => true,
-                    Err(next) => next.message() != error.message(),
-                }
+        if candidates.is_empty() || dropped.len() + candidates.len() > 64 {
+            return None;
+        }
+        for (selected, reason) in candidates {
+            let original_span = node_at(&original, &selected)?.span();
+            let prefix = content.get(..original_span.start)?;
+            let location = Some((
+                prefix.bytes().filter(|&byte| byte == b'\n').count() + 1,
+                prefix.rsplit('\n').next()?.chars().count() + 1,
+            ));
+            dropped.push(DroppedField {
+                path: display_path(&selected),
+                location,
+                reason,
             });
-        }
-        if candidates.len() != 1 {
-            return None;
-        }
-        let selected = candidates.pop()?;
-        let original_span = node_at(&original, &selected)?.span();
-        let prefix = content.get(..original_span.start)?;
-        let location = Some((
-            prefix.bytes().filter(|&byte| byte == b'\n').count() + 1,
-            prefix.rsplit('\n').next()?.chars().count() + 1,
-        ));
-        dropped.push(DroppedField {
-            path: display_path(&selected),
-            location,
-            reason: error.message().to_string(),
-        });
-        if !remove(&mut value, &selected) {
-            return None;
+            if !remove(&mut value, &selected) {
+                return None;
+            }
         }
         current = toml::to_string(&value).ok()?;
         match Config::parse(&current) {
@@ -236,5 +236,4 @@ pub(super) fn recover(content: &str) -> Option<(Config, Vec<DroppedField>)> {
             Err(next) => error = next,
         }
     }
-    None
 }
