@@ -666,10 +666,12 @@ impl AppState {
             self.warp_cursor_if_focus_moved(focus_before);
             return resp;
         }
+        let cmd = self.cross_monitor_command(cmd);
+        let focus_before = (self.config.behavior.mouse_follows_focus && is_focus_navigation(&cmd))
+            .then_some(self.previous_focused_hwnd);
         if let Some(resp) = self.apply_fullscreen_policy(&cmd) {
             return resp;
         }
-        let cmd = self.cross_monitor_command(cmd);
         let resp = match cmd {
             IpcCommand::FocusFloating
             | IpcCommand::FocusTiling
@@ -1063,12 +1065,20 @@ impl AppState {
             }
             IpcCommand::MoveColumnLeft
                 if self.config.behavior.move_crosses_monitors
+                    && self
+                        .focused_workspace()
+                        .and_then(Workspace::focused_visible_window)
+                        .is_some()
                     && self.crosses_monitor_edge(true, monitor_to_left) =>
             {
                 IpcCommand::MoveWindowToMonitorLeft
             }
             IpcCommand::MoveColumnRight
                 if self.config.behavior.move_crosses_monitors
+                    && self
+                        .focused_workspace()
+                        .and_then(Workspace::focused_visible_window)
+                        .is_some()
                     && self.crosses_monitor_edge(false, monitor_to_right) =>
             {
                 IpcCommand::MoveWindowToMonitorRight
