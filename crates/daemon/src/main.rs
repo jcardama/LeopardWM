@@ -1671,7 +1671,7 @@ async fn setup_tray(
             leopardwm_platform_win32::emergency_restore_windows(&ids.window_ids, deadline);
         },
         |code| {
-            recording::stop_on_exit();
+            recording::stop_on_emergency_exit();
             std::process::exit(code)
         },
         quit_fallback::QuitTiming::default(),

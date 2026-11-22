@@ -1,6 +1,7 @@
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::os::windows::fs::OpenOptionsExt;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing_subscriber::{filter::LevelFilter, reload, Registry};
@@ -84,6 +85,23 @@ pub(crate) fn stop_on_exit() {
     }
 }
 
+pub(crate) fn stop_on_emergency_exit() {
+    if let Some(recording) = RECORDING.get() {
+        recording.stop_emergency();
+    }
+}
+
+fn reject_symlink(path: &Path) -> Result<(), String> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            Err(format!("Recording path is a link: {}", path.display()))
+        }
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("Cannot inspect {}: {error}", path.display())),
+    }
+}
+
 impl Recording {
     pub(crate) fn new(filter: FilterHandle, directory: PathBuf) -> Self {
         Self {
@@ -110,9 +128,32 @@ impl Recording {
         if state.active.is_some() {
             return Err("A recording is already active".into());
         }
+        reject_symlink(&self.inner.directory)?;
         fs::create_dir_all(&self.inner.directory).map_err(|e| e.to_string())?;
+        reject_symlink(&self.inner.directory)?;
         let path = self.inner.directory.join(FILE_NAME);
-        let mut file = File::create(&path).map_err(|e| e.to_string())?;
+        reject_symlink(&path)?;
+        match fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "Cannot replace recording file {} (it may be in use): {error}",
+                    path.display()
+                ))
+            }
+        }
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .share_mode(1)
+            .open(&path)
+            .map_err(|error| {
+                format!(
+                    "Cannot create recording file {} (it may be in use or already exist): {error}",
+                    path.display()
+                )
+            })?;
         let started = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -185,15 +226,17 @@ impl Recording {
             .inner
             .filter
             .modify(|filter| *filter = LevelFilter::OFF);
-        let mut active = state.active.take().unwrap();
-        let _ = writeln!(
-            active.file,
-            "Recording ended: {}; size cap hit: {}",
-            reason.label(),
-            active.capped
-        );
-        let _ = active.file.flush();
-        Some(RecordingInfo { path: active.path })
+        close_active(&mut state, reason)
+    }
+
+    fn stop_emergency(&self) {
+        let _ = self
+            .inner
+            .filter
+            .modify(|filter| *filter = LevelFilter::OFF);
+        if let Ok(mut state) = self.inner.state.try_lock() {
+            close_active(&mut state, StopReason::DaemonExit);
+        }
     }
 
     pub(crate) fn status(&self) -> Option<RecordingInfo> {
@@ -211,6 +254,18 @@ impl Recording {
     pub(crate) fn last_recording_path(&self) -> Option<PathBuf> {
         self.inner.state.lock().unwrap().last_path.clone()
     }
+}
+
+fn close_active(state: &mut State, reason: StopReason) -> Option<RecordingInfo> {
+    let mut active = state.active.take()?;
+    let _ = writeln!(
+        active.file,
+        "Recording ended: {}; size cap hit: {}",
+        reason.label(),
+        active.capped
+    );
+    let _ = active.file.flush();
+    Some(RecordingInfo { path: active.path })
 }
 
 fn stop_generation(inner: Weak<Inner>, generation: u64) {
@@ -265,6 +320,19 @@ mod tests {
         tracing::debug!("capture-marker");
     }
 
+    fn join_bounded(handle: std::thread::JoinHandle<()>) -> bool {
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while !handle.is_finished() && std::time::Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        if handle.is_finished() {
+            handle.join().unwrap();
+            true
+        } else {
+            false
+        }
+    }
+
     #[derive(Clone)]
     struct Buffer(Arc<Mutex<Vec<u8>>>);
     impl Write for Buffer {
@@ -275,6 +343,149 @@ mod tests {
         fn flush(&mut self) -> io::Result<()> {
             Ok(())
         }
+    }
+
+    #[test]
+    fn start_replaces_hard_link_without_modifying_its_target() {
+        let root = directory();
+        let dir = root.join("diagnostics");
+        fs::create_dir_all(&dir).unwrap();
+        let outside = root.join("outside.txt");
+        fs::write(&outside, b"preserve me").unwrap();
+        fs::hard_link(&outside, dir.join(FILE_NAME)).unwrap();
+        let (filter, handle) = reload::Layer::new(LevelFilter::OFF);
+        let recording = Recording::new(handle, dir);
+        let writer = recording.clone();
+        let subscriber = Registry::default().with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(move || writer.writer())
+                .with_filter(filter),
+        );
+        tracing::subscriber::with_default(subscriber, || {
+            recording.start(Some(60)).unwrap();
+            recording.stop(StopReason::Stopped);
+        });
+        assert_eq!(fs::read(outside).unwrap(), b"preserve me");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn start_refuses_file_open_without_delete_sharing() {
+        let dir = directory();
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(FILE_NAME);
+        fs::write(&path, b"existing capture").unwrap();
+        let held = OpenOptions::new()
+            .read(true)
+            .share_mode(1)
+            .open(&path)
+            .unwrap();
+        let (filter, handle) = reload::Layer::new(LevelFilter::OFF);
+        let recording = Recording::new(handle.clone(), dir.clone());
+        let other = Recording::new(handle, dir.clone());
+        let writer = recording.clone();
+        let subscriber = Registry::default().with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(move || writer.writer())
+                .with_filter(filter),
+        );
+        tracing::subscriber::with_default(subscriber, || {
+            let error = recording.start(Some(60)).err().unwrap();
+            assert!(error.contains("in use"), "{error}");
+            assert_eq!(fs::read(&path).unwrap(), b"existing capture");
+            drop(held);
+            recording.start(Some(60)).unwrap();
+            let error = other.start(Some(60)).err().unwrap();
+            assert!(error.contains("in use"), "{error}");
+            recording.stop(StopReason::Stopped);
+        });
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn start_rejects_junction_directory() {
+        let root = directory();
+        let target = root.join("outside");
+        let dir = root.join("diagnostics");
+        fs::create_dir_all(&target).unwrap();
+        let output = std::process::Command::new("cmd")
+            .args(["/D", "/C", "mklink", "/J"])
+            .arg(&dir)
+            .arg(&target)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(fs::symlink_metadata(&dir).unwrap().file_type().is_symlink());
+        let (filter, handle) = reload::Layer::new(LevelFilter::OFF);
+        let recording = Recording::new(handle, dir.clone());
+        let writer = recording.clone();
+        let subscriber = Registry::default().with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(move || writer.writer())
+                .with_filter(filter),
+        );
+        tracing::subscriber::with_default(subscriber, || {
+            assert!(recording.start(Some(60)).is_err());
+        });
+        assert!(!target.join(FILE_NAME).exists());
+        fs::remove_dir(dir).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn emergency_stop_does_not_wait_for_recording_state() {
+        let dir = directory();
+        let (filter, handle) = reload::Layer::new(LevelFilter::OFF);
+        let recording = Recording::new(handle.clone(), dir.clone());
+        let writer = recording.clone();
+        let subscriber = Registry::default().with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(move || writer.writer())
+                .with_filter(filter),
+        );
+        tracing::subscriber::with_default(subscriber, || {
+            let path = recording.start(Some(60)).unwrap().path;
+            let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+            let (release_tx, release_rx) = std::sync::mpsc::channel();
+            let holder_recording = recording.clone();
+            let holder = std::thread::spawn(move || {
+                let guard = holder_recording.inner.state.lock().unwrap();
+                locked_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                drop(guard);
+            });
+            locked_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            let (done_tx, done_rx) = std::sync::mpsc::channel();
+            let emergency_recording = recording.clone();
+            let emergency = std::thread::spawn(move || {
+                emergency_recording.stop_emergency();
+                done_tx.send(()).unwrap();
+            });
+            let returned = done_rx.recv_timeout(Duration::from_secs(2)).is_ok();
+            let filter_off = returned && handle.with_current(|f| *f).unwrap() == LevelFilter::OFF;
+            let footer_skipped = !fs::read_to_string(&path)
+                .unwrap()
+                .contains("Recording ended:");
+            release_tx.send(()).unwrap();
+            let holder_finished = join_bounded(holder);
+            let emergency_finished = join_bounded(emergency);
+            assert!(
+                holder_finished && emergency_finished,
+                "test threads did not finish"
+            );
+            assert!(returned, "emergency stop waited for the state lock");
+            assert!(filter_off);
+            assert!(footer_skipped);
+            recording.stop_emergency();
+            assert!(fs::read_to_string(path)
+                .unwrap()
+                .contains("Recording ended: daemon exit"));
+        });
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
