@@ -254,6 +254,9 @@ mod tests {
         assert!(!ws.is_animating());
         ws.reconcile_scroll_bounds(1000);
         assert_eq!(ws.scroll_offset(), -550.0);
+        assert!(ws.mark_restored(3));
+        ws.reconcile_scroll_bounds(1000);
+        assert_eq!(ws.scroll_offset(), -550.0);
     }
 
     #[test]
@@ -349,6 +352,58 @@ mod tests {
                     ws.scroll_offset(),
                     -275.0,
                     "{change}, fullscreen={fullscreen}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fit_release_expires_when_other_fullscreen_row_changes_active_columns() {
+        for alignment in [ColumnAlignment::Left, ColumnAlignment::Right] {
+            for initially_minimized in [false, true] {
+                let mut ws = Workspace::with_gaps(10, 20);
+                ws.set_row_layout(&[1.0, 1.0]);
+                ws.set_center_columns(CenterColumns::Fit);
+                ws.insert_column_at_row(Column::new(1, 200), 0, 0);
+                ws.insert_column_at_row(Column::new(2, 200), 0, 1);
+                ws.insert_column_at_row(Column::new(3, 400), 1, 0);
+                if initially_minimized {
+                    assert!(ws.mark_minimized(2));
+                }
+                ws.focus_window(1).unwrap();
+                ws.reconcile_scroll_bounds(1000);
+                ws.align_focused_column_animated(alignment, 1000);
+                ws.stop_animation();
+                let right_offset = if initially_minimized { -760.0 } else { -550.0 };
+                assert_eq!(
+                    ws.scroll_offset_for_row(0),
+                    if alignment == ColumnAlignment::Left {
+                        0.0
+                    } else {
+                        right_offset
+                    }
+                );
+
+                ws.focus_window(3).unwrap();
+                assert!(ws.toggle_fullscreen());
+                if initially_minimized {
+                    assert!(ws.mark_restored(2));
+                    ws.ensure_focused_visible_animated(1000);
+                    assert!(ws.mark_minimized(2));
+                } else {
+                    assert!(ws.mark_minimized(2));
+                    ws.ensure_focused_visible_animated(1000);
+                    assert!(ws.mark_restored(2));
+                }
+                ws.ensure_focused_visible_animated(1000);
+                assert!(ws.is_fullscreen());
+                assert!(!ws.toggle_fullscreen());
+                ws.reconcile_scroll_bounds(1000);
+                let centered_offset = if initially_minimized { -380.0 } else { -275.0 };
+                assert_eq!(
+                    ws.scroll_offset_for_row(0),
+                    centered_offset,
+                    "{alignment:?}, initially_minimized={initially_minimized}"
                 );
             }
         }

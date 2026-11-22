@@ -41,7 +41,15 @@ impl Workspace {
                     }
                 }
             }
-            self.minimized_windows.insert(window_id)
+            let changed = self.minimized_windows.insert(window_id);
+            if changed {
+                if let Some((row_idx, col_idx, _)) = self.find_window_location_rc(window_id) {
+                    if !self.is_column_active(&self.rows[row_idx].columns[col_idx]) {
+                        *self.rows[row_idx].fit_release.get_mut() = None;
+                    }
+                }
+            }
+            changed
         } else {
             false
         }
@@ -51,6 +59,13 @@ impl Workspace {
     pub fn mark_restored(&mut self, window_id: WindowId) -> bool {
         self.window_min_widths.remove(&window_id);
         self.window_min_heights.remove(&window_id);
+        if self.minimized_windows.contains(&window_id) {
+            if let Some((row_idx, col_idx, _)) = self.find_window_location_rc(window_id) {
+                if !self.is_column_active(&self.rows[row_idx].columns[col_idx]) {
+                    *self.rows[row_idx].fit_release.get_mut() = None;
+                }
+            }
+        }
         self.minimized_windows.remove(&window_id)
     }
 
