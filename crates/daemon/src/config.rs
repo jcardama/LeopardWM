@@ -2390,7 +2390,6 @@ impl ConfigFile {
     }
 
     fn load(&mut self, paths: &[PathBuf]) -> Result<Config> {
-        self.unknown_keys.clear();
         for path in paths {
             let bytes = match fs::read(path) {
                 Ok(bytes) => bytes,
@@ -2460,6 +2459,7 @@ impl ConfigFile {
         self.path = None;
         self.last_seen = None;
         self.rejections.clear();
+        self.unknown_keys.clear();
         tracing::info!("No config file found, using defaults");
         Ok(Config::default())
     }
@@ -2592,6 +2592,7 @@ impl ConfigFile {
     }
 
     fn finish_save(&mut self, path: PathBuf, content: String) {
+        self.unknown_keys.clear();
         for rejection in &mut self.rejections {
             rejection.pending = false;
         }
@@ -5031,6 +5032,51 @@ mod tests {
             ]
         );
         fs::write(&path, "[layout]\ngap = 8\n").unwrap();
+        file.load(std::slice::from_ref(&path)).unwrap();
+        assert!(file.unknown_keys.is_empty());
+    }
+
+    #[test]
+    fn unknown_keys_follow_successful_saves_but_not_failed_saves() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let fixture = ConfigFileFixture::new();
+        let path = fixture.0.join("config.toml");
+        fs::write(&path, "[layout]\ncenter_single_colum = true\n").unwrap();
+        let mut file = ConfigFile::default();
+        let config = file.load(std::slice::from_ref(&path)).unwrap();
+        assert_eq!(file.unknown_keys, ["layout.center_single_colum"]);
+        let lock = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(1)
+            .open(&path)
+            .unwrap();
+        assert!(file.save(&config, std::slice::from_ref(&path)).is_err());
+        assert_eq!(file.unknown_keys, ["layout.center_single_colum"]);
+        drop(lock);
+        file.save(&config, std::slice::from_ref(&path)).unwrap();
+        assert!(file.unknown_keys.is_empty());
+        assert!(!fs::read_to_string(&path)
+            .unwrap()
+            .contains("center_single_colum ="));
+    }
+
+    #[test]
+    fn unknown_keys_survive_failed_reload_but_clear_for_missing_file() {
+        let fixture = ConfigFileFixture::new();
+        let path = fixture.0.join("config.toml");
+        fs::write(&path, "[layout]\ncenter_single_colum = true\n").unwrap();
+        let mut file = ConfigFile::default();
+        file.load(std::slice::from_ref(&path)).unwrap();
+        assert_eq!(file.unknown_keys, ["layout.center_single_colum"]);
+        fs::write(&path, "[layout\n").unwrap();
+        assert!(file.load(std::slice::from_ref(&path)).is_err());
+        assert_eq!(file.unknown_keys, ["layout.center_single_colum"]);
+        fs::remove_file(&path).unwrap();
+        fs::create_dir(&path).unwrap();
+        assert!(file.load(std::slice::from_ref(&path)).is_err());
+        assert_eq!(file.unknown_keys, ["layout.center_single_colum"]);
+        fs::remove_dir(&path).unwrap();
         file.load(std::slice::from_ref(&path)).unwrap();
         assert!(file.unknown_keys.is_empty());
     }

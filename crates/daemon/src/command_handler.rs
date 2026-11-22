@@ -47,6 +47,51 @@ enum FloatingPolicy {
     Unchanged,
 }
 
+fn limit_unknown_config_keys(keys: Vec<String>) -> Vec<String> {
+    let omitted = keys.len().saturating_sub(50);
+    let mut bounded: Vec<_> = keys
+        .into_iter()
+        .take(50)
+        .map(|key| key.chars().take(200).collect())
+        .collect();
+    if omitted > 0 {
+        bounded.push(format!("... and {omitted} more"));
+    }
+    bounded
+}
+
+#[cfg(test)]
+mod unknown_config_key_health_tests {
+    use super::*;
+
+    #[test]
+    fn health_key_list_is_bounded_and_fits_a_response_frame() {
+        let keys = vec![format!("{}{}", "\u{1}".repeat(199), "界".repeat(20)); 60];
+        let bounded = limit_unknown_config_keys(keys);
+        assert_eq!(bounded.len(), 51);
+        assert_eq!(bounded[0].chars().count(), 200);
+        assert!(bounded[0].ends_with('界'));
+        assert_eq!(bounded[50], "... and 10 more");
+        let response = IpcResponse::HealthInfo {
+            healthy: true,
+            uptime_seconds: 0,
+            total_windows: 0,
+            monitors: 1,
+            paused: false,
+            thumbnail_register_balance: 0,
+            elevation_blocked_windows: vec![],
+            daemon_integrity: None,
+            elevation_blocked_records: Some(vec![]),
+            native_swipes: None,
+            daemon_log: None,
+            unknown_config_keys: Some(bounded),
+        };
+        assert!(serde_json::to_vec(&response).unwrap().len() < leopardwm_ipc::MAX_IPC_MESSAGE_SIZE);
+        assert_eq!(limit_unknown_config_keys(vec!["short".into()]), ["short"]);
+        assert_eq!(limit_unknown_config_keys(vec!["x".into(); 50]).len(), 50);
+    }
+}
+
 fn humanize_action_id(action_id: &str) -> String {
     let mut label = action_id.replace('_', " ");
     if let Some(first) = label.get_mut(0..1) {
@@ -2342,7 +2387,9 @@ impl AppState {
             elevation_blocked_windows: legacy,
             daemon_integrity: leopardwm_platform_win32::current_process_integrity(),
             elevation_blocked_records: Some(records),
-            unknown_config_keys: Some(crate::config::unknown_config_keys()),
+            unknown_config_keys: Some(limit_unknown_config_keys(
+                crate::config::unknown_config_keys(),
+            )),
             native_swipes: Some(self.native_swipes.clone()),
             daemon_log: self
                 .daemon_log
