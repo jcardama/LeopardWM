@@ -10776,6 +10776,80 @@ fn horizontal_edge_options_cross_only_with_a_neighbor() {
 }
 
 #[test]
+fn horizontal_edge_commands_do_not_cross_stacked_monitors() {
+    for source in [1, 2] {
+        for command in [
+            IpcCommand::FocusRight,
+            IpcCommand::FocusLeft,
+            IpcCommand::MoveColumnRight,
+            IpcCommand::MoveColumnLeft,
+        ] {
+            let mut monitors = two_monitors();
+            monitors[1].rect = Rect::new(0, 1080, 1920, 1080);
+            monitors[1].work_area = Rect::new(0, 1080, 1920, 1040);
+            let mut state = AppState::new_with_config(test_config(), monitors);
+            state.injected_apply_placements_behavior =
+                Some(TestApplyPlacementsBehavior::SleepAndSucceed(Duration::ZERO));
+            state.focused_monitor = source;
+            state.config.behavior.focus_crosses_monitors = true;
+            state.config.behavior.move_crosses_monitors = true;
+            state
+                .focused_workspace_mut()
+                .unwrap()
+                .insert_window(0, None)
+                .unwrap();
+            assert_eq!(state.handle_command(command.clone()), IpcResponse::Ok);
+            assert_eq!(
+                state.focused_monitor, source,
+                "source={source}, command={command:?}"
+            );
+            let other = if source == 1 { 2 } else { 1 };
+            assert!(state.workspaces[&source][0].contains_window(0));
+            assert!(!state.workspaces[&other][0].contains_window(0));
+        }
+    }
+}
+
+#[test]
+fn horizontal_crossing_compares_monitor_centers_not_left_edges() {
+    for (current, other, crosses) in [
+        (
+            Rect::new(0, 0, 2000, 1080),
+            Rect::new(100, 1080, 400, 1080),
+            false,
+        ),
+        (
+            Rect::new(0, 0, 400, 1080),
+            Rect::new(0, 1080, 2000, 1080),
+            true,
+        ),
+    ] {
+        for command in [IpcCommand::FocusRight, IpcCommand::MoveColumnRight] {
+            let mut monitors = two_monitors();
+            monitors[0].rect = current;
+            monitors[0].work_area = current;
+            monitors[1].rect = other;
+            monitors[1].work_area = other;
+            let mut state = AppState::new_with_config(test_config(), monitors);
+            state.injected_apply_placements_behavior =
+                Some(TestApplyPlacementsBehavior::SleepAndSucceed(Duration::ZERO));
+            state.config.behavior.focus_crosses_monitors = true;
+            state.config.behavior.move_crosses_monitors = true;
+            state
+                .focused_workspace_mut()
+                .unwrap()
+                .insert_window(0, None)
+                .unwrap();
+            let moves = matches!(command, IpcCommand::MoveColumnRight) && crosses;
+            assert_eq!(state.handle_command(command), IpcResponse::Ok);
+            assert_eq!(state.focused_monitor, if crosses { 2 } else { 1 });
+            assert_eq!(state.workspaces[&2][0].contains_window(0), moves);
+            assert_eq!(state.workspaces[&1][0].contains_window(0), !moves);
+        }
+    }
+}
+
+#[test]
 fn horizontal_edges_skip_minimized_columns_and_leave_normal_strip_navigation_alone() {
     const OTHER: u64 = 0xffff_ffff_0000_0000;
     for (source, focus, movement, left) in [

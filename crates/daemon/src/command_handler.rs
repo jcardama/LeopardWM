@@ -1093,13 +1093,26 @@ impl AppState {
         left: bool,
         select: fn(&[MonitorInfo], MonitorId) -> Option<&MonitorInfo>,
     ) -> bool {
-        self.focused_workspace()
+        if !self
+            .focused_workspace()
             .is_some_and(|ws| !ws.has_visible_column(left))
-            && select(
-                &self.monitors.values().cloned().collect::<Vec<_>>(),
-                self.focused_monitor,
-            )
-            .is_some()
+        {
+            return false;
+        }
+        let Some(current) = self.monitors.get(&self.focused_monitor) else {
+            return false;
+        };
+        let monitors: Vec<_> = self.monitors.values().cloned().collect();
+        let Some(target) = select(&monitors, self.focused_monitor) else {
+            return false;
+        };
+        let center_x =
+            |monitor: &MonitorInfo| i64::from(monitor.rect.x) + i64::from(monitor.rect.width / 2);
+        if left {
+            center_x(target) < center_x(current)
+        } else {
+            center_x(target) > center_x(current)
+        }
     }
 
     fn focus_monitor(
