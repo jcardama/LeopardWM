@@ -229,16 +229,16 @@ impl AppState {
                 let (old_ol, old_or, _, _) = workspace.outer_gaps();
                 let old_center_columns = workspace.center_columns();
                 let new_center_columns = self.config.layout.center_columns.center_columns.into();
+                params.apply_to(workspace, ws_idx);
+                workspace.set_centering_mode(self.config.layout.centering_mode.into());
+                workspace.set_center_past_edges(self.config.layout.center_past_edges);
                 if old_center_columns != CenterColumns::Off
                     && new_center_columns == CenterColumns::Off
                 {
                     workspace.reconcile_leaving_column_centering(viewport_width);
+                } else {
+                    workspace.set_center_columns(new_center_columns);
                 }
-
-                params.apply_to(workspace, ws_idx);
-                workspace.set_centering_mode(self.config.layout.centering_mode.into());
-                workspace.set_center_past_edges(self.config.layout.center_past_edges);
-                workspace.set_center_columns(new_center_columns);
 
                 workspace.rescale_column_widths(
                     old_gap,

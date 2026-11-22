@@ -76,43 +76,33 @@ impl Workspace {
         min_scroll: f64,
         max_scroll: f64,
     ) -> (f64, f64) {
-        let Some(row) = self.rows.get(row_idx) else {
+        if self.rows.get(row_idx).is_none() {
             return (min_scroll, max_scroll);
-        };
+        }
         if self.center_columns == CenterColumns::Fit {
-            let mut release = row.fit_release.borrow_mut();
-            if let Some(previous) = release.as_ref() {
-                let current = self.fit_signature(row_idx, viewport_width, previous.edge);
-                let same_columns = previous.columns.len() == current.columns.len()
-                    && previous.columns.iter().zip(&current.columns).all(
-                        |((old_ids, old_width), (new_ids, new_width))| {
-                            old_width == new_width && old_ids.iter().any(|id| new_ids.contains(id))
-                        },
-                    );
-                if previous.gap == current.gap
-                    && previous.visible_width == current.visible_width
-                    && same_columns
-                {
-                    let visible_width = current.visible_width;
-                    let edge = current.edge;
-                    *release = Some(current);
-                    if self.fullscreen_window.is_none() {
-                        let free_space =
-                            visible_width.saturating_sub(self.total_width_for_row(row_idx));
-                        let offset = match edge {
-                            crate::row::FitEdge::Left => 0.0,
-                            crate::row::FitEdge::Right => -(free_space as f64),
-                        };
-                        return (offset, offset);
-                    }
-                    return (min_scroll, max_scroll);
+            if let Some(edge) = self.fit_release_for_row(row_idx, viewport_width) {
+                if self.fullscreen_window.is_none() {
+                    let free_space = self
+                        .visible_width(viewport_width)
+                        .saturating_sub(self.total_width_for_row(row_idx));
+                    let offset = match edge {
+                        crate::row::FitEdge::Left => 0.0,
+                        crate::row::FitEdge::Right => -(free_space as f64),
+                    };
+                    return (offset, offset);
                 }
-                *release = None;
+                return (min_scroll, max_scroll);
             }
         }
         if self.center_columns == CenterColumns::Off || self.fullscreen_window.is_some() {
             return (min_scroll, max_scroll);
         }
+        self.automatic_center_offset_for_row(row_idx, viewport_width)
+            .map_or((min_scroll, max_scroll), |offset| (offset, offset))
+    }
+
+    fn automatic_center_offset_for_row(&self, row_idx: usize, viewport_width: i32) -> Option<f64> {
+        let row = self.rows.get(row_idx)?;
         let mut count = 0;
         let mut width = 0_i32;
         for column in row.columns.iter().filter(|c| self.is_column_active(c)) {
@@ -127,10 +117,36 @@ impl Workspace {
             && (self.center_columns == CenterColumns::Fit || count == 1)
             && width <= visible_width
         {
-            let offset = (-(visible_width - width) / 2) as f64;
-            return (offset, offset);
+            return Some((-(visible_width - width) / 2) as f64);
         }
-        (min_scroll, max_scroll)
+        None
+    }
+
+    fn fit_release_for_row(
+        &self,
+        row_idx: usize,
+        viewport_width: i32,
+    ) -> Option<crate::row::FitEdge> {
+        let mut release = self.rows[row_idx].fit_release.borrow_mut();
+        let previous = release.as_ref()?;
+        let current = self.fit_signature(row_idx, viewport_width, previous.edge);
+        let same_columns = previous.columns.len() == current.columns.len()
+            && previous.columns.iter().zip(&current.columns).all(
+                |((old_ids, old_width), (new_ids, new_width))| {
+                    old_width == new_width && old_ids.iter().any(|id| new_ids.contains(id))
+                },
+            );
+        if previous.gap == current.gap
+            && previous.visible_width == current.visible_width
+            && same_columns
+        {
+            let edge = current.edge;
+            *release = Some(current);
+            Some(edge)
+        } else {
+            *release = None;
+            None
+        }
     }
 
     fn fit_signature(
@@ -745,25 +761,22 @@ impl Workspace {
         (min_scroll, max_scroll)
     }
 
-    /// Release rows constrained by column centering before switching it off.
+    /// Switch column centering off and restore each automatically centered row's focus position.
     pub fn reconcile_leaving_column_centering(&mut self, viewport_width: i32) {
-        let vis_w = self.visible_width(viewport_width);
-        for row_idx in 0..self.rows.len() {
-            let (min, max) = self.scroll_bounds_for_row(
-                row_idx,
-                viewport_width,
-                f64::NEG_INFINITY,
-                f64::INFINITY,
-            );
-            if min != max {
-                continue;
-            }
-            let max_scroll = (self.total_width_for_row(row_idx) - vis_w).max(0) as f64;
+        let centered_rows: Vec<_> = (0..self.rows.len())
+            .filter(|&row_idx| {
+                self.automatic_center_offset_for_row(row_idx, viewport_width)
+                    .is_some()
+                    && (self.center_columns != CenterColumns::Fit
+                        || self.fit_release_for_row(row_idx, viewport_width).is_none())
+            })
+            .collect();
+        self.set_center_columns(CenterColumns::Off);
+        for row_idx in centered_rows {
             let row = &mut self.rows[row_idx];
-            if let Some(anim) = row.active_animation.take() {
-                row.scroll_offset = anim.current_offset();
-            }
-            row.scroll_offset = row.scroll_offset.clamp(0.0, max_scroll);
+            row.active_animation = None;
+            row.scroll_offset = 0.0;
+            self.ensure_focused_visible_for_row(row_idx, viewport_width);
         }
     }
 
