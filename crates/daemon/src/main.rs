@@ -3864,7 +3864,7 @@ fn spawn_tab_icon_poll(event_tx: &mpsc::Sender<DaemonEvent>) {
 
 fn notify_rejected_config() {
     for key in config::unknown_config_keys() {
-        warn!("Unknown config key: {key}");
+        warn!("Unknown config key: {}", log_text::text(&key));
     }
     if let Some(rejection) = config::config_rejection() {
         let location = rejection

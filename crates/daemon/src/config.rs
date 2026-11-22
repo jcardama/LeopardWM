@@ -2385,7 +2385,7 @@ impl ConfigFile {
     ) {
         self.unknown_keys = find_unknown_config_keys(content, config, dropped);
         for key in &self.unknown_keys {
-            tracing::warn!("Unknown config key: {key}");
+            tracing::warn!("Unknown config key: {}", log_text::text(key));
         }
     }
 

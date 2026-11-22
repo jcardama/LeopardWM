@@ -407,7 +407,7 @@ pub(crate) async fn handle_doctor() -> Result<()> {
                 if let Some(keys) = unknown_config_keys.filter(|keys| !keys.is_empty()) {
                     CheckResult::Warn("Unknown configuration keys:".to_string()).print();
                     for key in keys {
-                        println!("  {key}");
+                        println!("  {}", key.escape_debug());
                     }
                 }
                 if thumbnail_register_balance == 0 {
