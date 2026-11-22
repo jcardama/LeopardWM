@@ -11195,6 +11195,8 @@ fn horizontal_column_crossing_restores_maximized_width() {
     let original = ws.columns()[0].width();
     assert!(ws.toggle_maximize_column(1920));
     assert_ne!(ws.columns()[0].width(), original);
+    assert!(ws.rescale_column_widths(ws.gap(), left, right, 1920, 1280));
+    assert!(ws.rescale_column_widths(ws.gap(), left, right, 1280, 1920));
 
     assert_eq!(
         state.handle_command(IpcCommand::MoveColumnRight),

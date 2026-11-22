@@ -437,12 +437,14 @@ impl Workspace {
         self.clamp_focus_indices_for_row(row_idx);
         if removed_focused {
             let row = &mut self.rows[row_idx];
-            if let Some(active_tab) = row
-                .columns
-                .get(row.focused_column)
-                .and_then(Column::active_tab_idx)
-            {
-                row.focused_window_in_column = active_tab;
+            if let Some(column) = row.columns.get_mut(row.focused_column) {
+                if let Some(active_tab) = column
+                    .effective_visible_tab(|window| self.minimized_windows.contains(&window))
+                    .or_else(|| column.active_tab_idx())
+                {
+                    row.focused_window_in_column = active_tab;
+                    column.set_active_tab(active_tab);
+                }
             }
         }
         if row_idx == self.focused_row {

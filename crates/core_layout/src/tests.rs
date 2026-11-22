@@ -5629,63 +5629,92 @@ mod tests {
     }
 
     #[test]
-    fn test_column_removal_synchronizes_replacement_tab() {
-        for remove_whole_column in [false, true] {
-            for remove_left in [false, true] {
-                let mut ws = ws_3_tabs();
-                ws.toggle_focused_column_tabbed_mode();
-                ws.set_active_tab(0, 2).unwrap();
-                ws.insert_window(99, Some(400)).unwrap();
-                if remove_left {
-                    ws.reorder_column(1, 0);
-                }
-                assert_eq!(ws.focused_window(), Some(99));
-
-                if remove_whole_column {
-                    let removed = ws.remove_column(ws.focused_column_index()).unwrap();
-                    assert_eq!(removed.windows(), &[99]);
-                } else {
-                    ws.remove_window(99).unwrap();
-                }
-
-                // Replacement focus and the visible tab must identify the same window.
-                assert_eq!(ws.column_count(), 1);
-                assert_eq!(ws.columns()[0].windows(), &[1, 2, 3]);
-                assert_eq!(ws.focused_column_index(), 0);
-                let expected_index = if remove_whole_column { 2 } else { 0 };
-                let expected_window = if remove_whole_column { 3 } else { 1 };
-                assert_eq!(ws.focused_window_index_in_column(), expected_index);
-                assert_eq!(ws.focused_window(), Some(expected_window));
-                assert_eq!(ws.columns()[0].active_tab_idx(), Some(expected_index));
-                let visible: Vec<_> = ws
-                    .compute_placements(Rect::new(0, 0, 1920, 1080))
-                    .into_iter()
-                    .filter(|p| p.visibility == Visibility::Visible)
-                    .map(|p| p.window_id)
-                    .collect();
-                assert_eq!(visible, vec![expected_window]);
+    fn test_removing_window_synchronizes_replacement_tab() {
+        for remove_left in [false, true] {
+            let mut ws = ws_3_tabs();
+            ws.toggle_focused_column_tabbed_mode();
+            ws.set_active_tab(0, 2).unwrap();
+            ws.insert_window(99, Some(400)).unwrap();
+            if remove_left {
+                ws.reorder_column(1, 0);
             }
+            ws.remove_window(99).unwrap();
+            assert_eq!(ws.focused_window(), Some(1));
+            assert_eq!(ws.columns()[0].active_tab_idx(), Some(0));
+            let visible: Vec<_> = ws
+                .compute_placements(Rect::new(0, 0, 1920, 1080))
+                .into_iter()
+                .filter(|p| p.visibility == Visibility::Visible)
+                .map(|p| p.window_id)
+                .collect();
+            assert_eq!(visible, vec![1]);
         }
     }
 
     #[test]
-    fn test_column_removal_restores_replacement_tab_focus() {
-        let mut ws = ws_3_tabs();
-        ws.remove_window(3).unwrap();
-        ws.toggle_focused_column_tabbed_mode();
-        ws.set_active_tab(0, 0).unwrap();
-        ws.insert_window(99, Some(400)).unwrap();
-        ws.insert_window_in_column(100, 1).unwrap();
-        ws.insert_window_in_column(101, 1).unwrap();
-        ws.set_focus(1, 2).unwrap();
-
-        let removed = ws.remove_column(1).unwrap();
-        assert_eq!(removed.windows(), &[99, 100, 101]);
-        assert_eq!(ws.columns()[0].windows(), &[1, 2]);
-        assert_eq!(ws.focused_column_index(), 0);
-        assert_eq!(ws.focused_window_index_in_column(), 0);
-        assert_eq!(ws.focused_window(), Some(1));
-        assert_eq!(ws.columns()[0].active_tab_idx(), Some(0));
+    fn test_removing_focused_column_selects_replacement_tab() {
+        for (remove_left, inactive_row) in
+            [(false, false), (true, false), (false, true), (true, true)]
+        {
+            for tabbed in [false, true] {
+                for minimized in [0, 1, 2] {
+                    for removed_index in 0..3 {
+                        let mut ws = ws_3_tabs();
+                        ws.set_focus(0, 1).unwrap();
+                        if tabbed {
+                            ws.toggle_focused_column_tabbed_mode();
+                        }
+                        ws.insert_window(99, Some(400)).unwrap();
+                        ws.insert_window_in_column(100, 1).unwrap();
+                        ws.insert_window_in_column(101, 1).unwrap();
+                        if remove_left {
+                            ws.reorder_column(1, 0);
+                        }
+                        let removed_column = usize::from(!remove_left);
+                        ws.set_focus(removed_column, removed_index).unwrap();
+                        if minimized >= 1 {
+                            ws.mark_minimized(2);
+                        }
+                        if minimized == 2 {
+                            ws.mark_minimized(1);
+                            ws.mark_minimized(3);
+                        }
+                        if inactive_row {
+                            ws.set_row_layout(&[1.0, 1.0]);
+                            ws.focus_row(1);
+                        }
+                        assert!(ws.remove_column_in_row(0, removed_column).is_some());
+                        let expected = if !tabbed {
+                            removed_index
+                        } else if minimized == 1 {
+                            0
+                        } else {
+                            1
+                        };
+                        let row = ws.row(0).unwrap();
+                        assert_eq!(row.focused_window_in_column(), expected, "left={remove_left} inactive_row={inactive_row} tabbed={tabbed} minimized={minimized} removed_index={removed_index}");
+                        assert_eq!(row.focused_window(), Some([1, 2, 3][expected]));
+                        if !inactive_row {
+                            assert_eq!(ws.focused_window(), row.focused_window());
+                        }
+                        let column = &row.columns()[0];
+                        assert_eq!(column.active_tab_idx(), tabbed.then_some(expected));
+                        let visible =
+                            column.effective_visible_tab(|window| ws.is_minimized(window));
+                        if tabbed && minimized != 2 {
+                            assert_eq!(visible, Some(expected));
+                            let placements = ws.compute_placements(Rect::new(0, 0, 1920, 1080));
+                            assert!(placements
+                                .iter()
+                                .any(|p| p.window_id == row.focused_window().unwrap()
+                                    && p.visibility == Visibility::Visible));
+                        } else {
+                            assert_eq!(visible, None);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]
