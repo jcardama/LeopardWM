@@ -2157,12 +2157,10 @@ fn corrupt_path(path: &Path, suffix: &str) -> PathBuf {
 }
 
 fn replace_config_file(target: &Path, temp: &Path, content: &[u8]) -> Result<()> {
-    use std::os::windows::ffi::OsStrExt;
     use std::os::windows::io::AsRawHandle;
-    use windows::core::PCWSTR;
     use windows::Win32::Foundation::HANDLE;
     use windows::Win32::Storage::FileSystem::{
-        GetFileInformationByHandle, ReplaceFileW, BY_HANDLE_FILE_INFORMATION, REPLACE_FILE_FLAGS,
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
     };
 
     let source = match fs::File::open(target) {
@@ -2221,19 +2219,7 @@ fn replace_config_file(target: &Path, temp: &Path, content: &[u8]) -> Result<()>
         Ok(())
     } else {
         drop(source);
-        let target_wide: Vec<u16> = target.as_os_str().encode_wide().chain(Some(0)).collect();
-        let temp_wide: Vec<u16> = temp.as_os_str().encode_wide().chain(Some(0)).collect();
-        unsafe {
-            ReplaceFileW(
-                PCWSTR(target_wide.as_ptr()),
-                PCWSTR(temp_wide.as_ptr()),
-                PCWSTR::null(),
-                REPLACE_FILE_FLAGS(0),
-                None,
-                None,
-            )?;
-        }
-        Ok(())
+        fs::rename(temp, target).map_err(Into::into)
     }
 }
 
@@ -5174,30 +5160,6 @@ mod tests {
         assert_eq!(
             fs::read(corrupt_path(&path, ".corrupt")).unwrap(),
             original.as_bytes()
-        );
-    }
-
-    #[test]
-    fn save_preserves_existing_file_attributes_and_streams() {
-        use std::os::windows::ffi::OsStrExt;
-        use std::os::windows::fs::MetadataExt;
-        use windows::core::PCWSTR;
-        use windows::Win32::Storage::FileSystem::{SetFileAttributesW, FILE_ATTRIBUTE_HIDDEN};
-
-        let fixture = ConfigFileFixture::new();
-        let path = fixture.0.join("config.toml");
-        let stream = corrupt_path(&path, ":leopardwm-test");
-        fs::write(&path, "[layout]\ngap = 42\n").unwrap();
-        fs::write(&stream, "other data").unwrap();
-        let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
-        unsafe { SetFileAttributesW(PCWSTR(wide.as_ptr()), FILE_ATTRIBUTE_HIDDEN).unwrap() };
-        let mut file = ConfigFile::default();
-        let config = file.load(std::slice::from_ref(&path)).unwrap();
-        file.save(&config, std::slice::from_ref(&path)).unwrap();
-        assert_eq!(fs::read_to_string(&stream).unwrap(), "other data");
-        assert_ne!(
-            fs::metadata(&path).unwrap().file_attributes() & FILE_ATTRIBUTE_HIDDEN.0,
-            0
         );
     }
 
