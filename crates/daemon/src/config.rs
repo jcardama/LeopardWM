@@ -783,6 +783,9 @@ pub struct BehaviorConfig {
     #[serde(default = "default_false")]
     pub focus_follows_mouse: bool,
 
+    #[serde(default)]
+    pub keep_awake: bool,
+
     /// Delay in milliseconds before focus changes on mouse enter.
     /// Only applies when focus_follows_mouse is true.
     #[serde(default = "default_focus_delay")]
@@ -924,6 +927,7 @@ impl Default for BehaviorConfig {
             track_focus_changes: true,
             log_level: default_log_level(),
             focus_follows_mouse: false,
+            keep_awake: false,
             focus_follows_mouse_delay_ms: default_focus_delay(),
             disable_snap_layouts: true,
             check_for_updates: true,
@@ -3351,6 +3355,17 @@ mod tests {
                 .any(|w| w.field == "behavior.move_step"));
             assert_eq!(config.behavior.move_step, expected);
         }
+    }
+
+    #[test]
+    fn keep_awake_defaults_off_and_round_trips() {
+        let missing: Config = toml::from_str("[behavior]").unwrap();
+        assert!(!missing.behavior.keep_awake);
+        assert!(!Config::default().behavior.keep_awake);
+        let enabled: Config = toml::from_str("[behavior]\nkeep_awake = true").unwrap();
+        assert!(enabled.behavior.keep_awake);
+        let roundtrip: Config = toml::from_str(&toml::to_string(&enabled).unwrap()).unwrap();
+        assert!(roundtrip.behavior.keep_awake);
     }
 
     #[test]

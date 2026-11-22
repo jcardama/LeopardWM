@@ -71,6 +71,7 @@ mod menu_ids {
     pub const TOGGLE_ACTIVE_BORDER: &str = "toggle_active_border";
     pub const TOGGLE_FOCUS_NEW_WINDOWS: &str = "toggle_focus_new_windows";
     pub const TOGGLE_FOCUS_FOLLOWS_MOUSE: &str = "toggle_focus_follows_mouse";
+    pub const TOGGLE_KEEP_AWAKE: &str = "toggle_keep_awake";
     pub const TASKBAR_HIDE_OFFSCREEN: &str = "taskbar_hide_offscreen";
     pub const TASKBAR_HIDE_INACTIVE_WORKSPACES: &str = "taskbar_hide_inactive_workspaces";
     pub const TASKBAR_SHOW_ALL: &str = "taskbar_show_all";
@@ -100,6 +101,7 @@ pub enum TrayEvent {
     ToggleActiveBorder,
     ToggleFocusNewWindows,
     ToggleFocusFollowsMouse,
+    ToggleKeepAwake,
     SetTaskbarButtons(crate::config::TaskbarButtons),
     ToggleAutoStart,
     SetCenteringCenter,
@@ -137,6 +139,7 @@ struct SharedState {
     active_border: AtomicBool,
     focus_new_windows: AtomicBool,
     focus_follows_mouse: AtomicBool,
+    keep_awake: AtomicBool,
     taskbar_buttons: AtomicU8,
     auto_start: AtomicBool,
     centering_mode: AtomicU8,
@@ -151,6 +154,7 @@ struct TrayItems {
     active_border_item: CheckMenuItem,
     focus_new_windows_item: CheckMenuItem,
     focus_follows_mouse_item: CheckMenuItem,
+    keep_awake_item: CheckMenuItem,
     taskbar_hide_offscreen_item: CheckMenuItem,
     taskbar_hide_inactive_workspaces_item: CheckMenuItem,
     taskbar_show_all_item: CheckMenuItem,
@@ -171,6 +175,7 @@ pub struct QuickToggleState {
     pub active_border: bool,
     pub focus_new_windows: bool,
     pub focus_follows_mouse: bool,
+    pub keep_awake: bool,
     pub taskbar_buttons: u8,
     pub auto_start: bool,
     /// 0 = Center, 1 = JustInView, 2 = OnOverflow
@@ -212,6 +217,7 @@ impl TrayManager {
             active_border: AtomicBool::new(initial.active_border),
             focus_new_windows: AtomicBool::new(initial.focus_new_windows),
             focus_follows_mouse: AtomicBool::new(initial.focus_follows_mouse),
+            keep_awake: AtomicBool::new(initial.keep_awake),
             taskbar_buttons: AtomicU8::new(initial.taskbar_buttons),
             auto_start: AtomicBool::new(initial.auto_start),
             centering_mode: AtomicU8::new(initial.centering_mode),
@@ -304,6 +310,9 @@ impl TrayManager {
         self.shared
             .focus_follows_mouse
             .store(toggles.focus_follows_mouse, Ordering::Relaxed);
+        self.shared
+            .keep_awake
+            .store(toggles.keep_awake, Ordering::Relaxed);
         self.shared
             .taskbar_buttons
             .store(toggles.taskbar_buttons, Ordering::Relaxed);
@@ -534,6 +543,9 @@ fn run_tray_thread(
                         items
                             .focus_follows_mouse_item
                             .set_checked(shared.focus_follows_mouse.load(Ordering::Relaxed));
+                        items
+                            .keep_awake_item
+                            .set_checked(shared.keep_awake.load(Ordering::Relaxed));
                         let tb = shared.taskbar_buttons.load(Ordering::Relaxed);
                         items
                             .taskbar_hide_offscreen_item
@@ -612,6 +624,7 @@ fn menu_label(language: &str, id: &str) -> String {
         "toggle_focus_follows_mouse" => {
             crate::locale::text(language, "tray.toggle_focus_follows_mouse")
         }
+        "toggle_keep_awake" => crate::locale::text(language, "tray.toggle_keep_awake"),
         "taskbar_hide_offscreen" => crate::locale::text(language, "tray.taskbar_hide_offscreen"),
         "taskbar_hide_inactive_workspaces" => {
             crate::locale::text(language, "tray.taskbar_hide_inactive_workspaces")
@@ -732,6 +745,15 @@ fn build_tray(initial: &QuickToggleState) -> Result<(tray_icon::TrayIcon, TrayIt
         None,
     );
     append(&focus_follows_mouse_item)?;
+
+    let keep_awake_item = CheckMenuItem::with_id(
+        menu_ids::TOGGLE_KEEP_AWAKE,
+        menu_label(&initial.language, "toggle_keep_awake"),
+        true,
+        initial.keep_awake,
+        None,
+    );
+    append(&keep_awake_item)?;
 
     let taskbar_sub = Submenu::with_id("taskbar", menu_label(&initial.language, "taskbar"), true);
     let taskbar_hide_offscreen_item = CheckMenuItem::with_id(
@@ -963,6 +985,7 @@ fn build_tray(initial: &QuickToggleState) -> Result<(tray_icon::TrayIcon, TrayIt
         active_border_item,
         focus_new_windows_item,
         focus_follows_mouse_item,
+        keep_awake_item,
         taskbar_hide_offscreen_item,
         taskbar_hide_inactive_workspaces_item,
         taskbar_show_all_item,
@@ -1018,6 +1041,7 @@ fn map_menu_id_to_event(menu_id: &str) -> Option<TrayEvent> {
         menu_ids::TOGGLE_ACTIVE_BORDER => Some(TrayEvent::ToggleActiveBorder),
         menu_ids::TOGGLE_FOCUS_NEW_WINDOWS => Some(TrayEvent::ToggleFocusNewWindows),
         menu_ids::TOGGLE_FOCUS_FOLLOWS_MOUSE => Some(TrayEvent::ToggleFocusFollowsMouse),
+        menu_ids::TOGGLE_KEEP_AWAKE => Some(TrayEvent::ToggleKeepAwake),
         menu_ids::TASKBAR_HIDE_OFFSCREEN => Some(TrayEvent::SetTaskbarButtons(
             crate::config::TaskbarButtons::HideOffscreen,
         )),

@@ -15,6 +15,7 @@ mod glazewm_compat;
 mod helpers;
 mod hotkey_resolution;
 mod ipc_server;
+mod keep_awake;
 mod layout_apply;
 mod locale;
 mod managed_lifetime;
@@ -339,6 +340,7 @@ fn quick_toggle_state(config: &Config) -> tray::QuickToggleState {
         active_border: config.appearance.active_border,
         focus_new_windows: config.behavior.focus_new_windows,
         focus_follows_mouse: config.behavior.focus_follows_mouse,
+        keep_awake: config.behavior.keep_awake,
         taskbar_buttons: match config.behavior.taskbar_buttons {
             config::TaskbarButtons::HideOffscreen => tray::TASKBAR_HIDE_OFFSCREEN,
             config::TaskbarButtons::HideInactiveWorkspaces => {
@@ -375,15 +377,15 @@ fn sync_tray_after_quick_toggle(tray_manager: &Option<tray::TrayManager>, config
     settings::push_tray_config(config);
 }
 
-async fn reload_config_and_hotkeys(
-    state: &Arc<Mutex<AppState>>,
-    hotkey_state: &mut HotkeyState,
-    event_tx: &mpsc::Sender<DaemonEvent>,
-    tray_manager: &Option<tray::TrayManager>,
-    snap_hint_overlay: &Option<OverlayWindow>,
-    mouse_hook_handle: &mut Option<MouseHookHandle>,
-    glazewm_compat: &mut glazewm_compat::Server,
-) {
+async fn reload_config_and_hotkeys(ctx: &mut EventLoopCtx<'_>) {
+    let state = ctx.state;
+    let hotkey_state = &mut *ctx.hotkey_state;
+    let event_tx = ctx.event_tx;
+    let tray_manager = ctx.tray_manager;
+    let snap_hint_overlay = ctx.snap_hint_overlay;
+    let mouse_hook_handle = &mut *ctx.mouse_hook_handle;
+    let keep_awake = ctx.keep_awake;
+    let glazewm_compat = &mut *ctx.glazewm_compat;
     // Drop both handles BEFORE setup_hotkeys rebuilds them: assignment drops the
     // old HotkeyState last, so an unhook-then-reinstall must happen here or the
     // keyboard hook's double-install guard would reject the new one.
@@ -394,6 +396,7 @@ async fn reload_config_and_hotkeys(
         let state = state.lock().await;
         state.config.clone()
     };
+    keep_awake.set(new_config.behavior.keep_awake);
     glazewm_compat
         .configure(&new_config.glazewm_compat, event_tx.clone())
         .await;
@@ -781,6 +784,7 @@ struct EventLoopCtx<'a> {
     idle_layout_reapply_timer: &'a mut Option<tokio::task::JoinHandle<()>>,
     display_change_apply_retry_timer: &'a mut Option<(u64, tokio::task::JoinHandle<()>)>,
     mouse_hook_handle: &'a mut Option<MouseHookHandle>,
+    keep_awake: &'a keep_awake::KeepAwake,
     gestures: &'a mut GestureRuntime,
     glazewm_compat: &'a mut glazewm_compat::Server,
 }
@@ -1855,16 +1859,7 @@ async fn handle_ipc_command(
     };
 
     if is_reload && matches!(response, IpcResponse::Ok) {
-        reload_config_and_hotkeys(
-            ctx.state,
-            ctx.hotkey_state,
-            ctx.event_tx,
-            ctx.tray_manager,
-            ctx.snap_hint_overlay,
-            ctx.mouse_hook_handle,
-            ctx.glazewm_compat,
-        )
-        .await;
+        reload_config_and_hotkeys(ctx).await;
         info!("Hotkeys reloaded after config reload");
     }
 
@@ -2399,16 +2394,7 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
             };
 
             if matches!(response, IpcResponse::Ok) {
-                reload_config_and_hotkeys(
-                    ctx.state,
-                    ctx.hotkey_state,
-                    ctx.event_tx,
-                    ctx.tray_manager,
-                    ctx.snap_hint_overlay,
-                    ctx.mouse_hook_handle,
-                    ctx.glazewm_compat,
-                )
-                .await;
+                reload_config_and_hotkeys(ctx).await;
                 info!("Hotkeys reloaded after tray config reload");
             } else if let IpcResponse::Error { message } = response {
                 warn!("Reload failed: {}", log_text::text(message));
@@ -2534,6 +2520,15 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
                     handle.abort();
                 }
             }
+        }
+        tray::TrayEvent::ToggleKeepAwake => {
+            let mut state = ctx.state.lock().await;
+            state.config.behavior.keep_awake = !state.config.behavior.keep_awake;
+            let on = state.config.behavior.keep_awake;
+            info!("Tray: Keep awake toggled to {}", on);
+            let _ = state.config.save();
+            ctx.keep_awake.set(on);
+            sync_tray_after_quick_toggle(ctx.tray_manager, &state.config);
         }
         tray::TrayEvent::SetTaskbarButtons(mode) => {
             let mut state = ctx.state.lock().await;
@@ -3335,16 +3330,7 @@ async fn handle_settings_event(
                 state.reload_config(false)
             };
             if matches!(response, IpcResponse::Ok) {
-                reload_config_and_hotkeys(
-                    ctx.state,
-                    ctx.hotkey_state,
-                    ctx.event_tx,
-                    ctx.tray_manager,
-                    ctx.snap_hint_overlay,
-                    ctx.mouse_hook_handle,
-                    ctx.glazewm_compat,
-                )
-                .await;
+                reload_config_and_hotkeys(ctx).await;
                 info!("Hotkeys reloaded after settings save");
             } else if let IpcResponse::Error { message } = response {
                 warn!(
@@ -3986,6 +3972,8 @@ async fn main() -> Result<()> {
     let (mut hotkey_state, _mouse_press_hook) =
         setup_input_hooks(&config, event_tx.clone(), args.skip_hotkeys());
 
+    let keep_awake = keep_awake::KeepAwake::new(leopardwm_platform_win32::set_keep_awake);
+    keep_awake.set(config.behavior.keep_awake);
     let mut mouse_hook_handle = setup_mouse_hook(&config, &event_tx, &mut thread_handles);
 
     let mut gestures = setup_gestures(&config, &event_tx, &state).await;
@@ -4116,6 +4104,7 @@ async fn main() -> Result<()> {
         idle_layout_reapply_timer: &mut idle_layout_reapply_timer,
         display_change_apply_retry_timer: &mut display_change_apply_retry_timer,
         mouse_hook_handle: &mut mouse_hook_handle,
+        keep_awake: &keep_awake,
         gestures: &mut gestures,
         glazewm_compat: &mut glazewm_compat,
     };
@@ -4252,6 +4241,7 @@ async fn main() -> Result<()> {
         finish_daemon_event(&mut ctx).await;
     }
 
+    ctx.keep_awake.set(false);
     ctx.glazewm_compat.stop().await;
     update_check_cancel.store(true, std::sync::atomic::Ordering::SeqCst);
     abort_event_timers(&mut ctx);

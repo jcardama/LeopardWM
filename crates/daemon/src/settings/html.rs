@@ -1157,6 +1157,10 @@ input[type="range"]::-webkit-slider-thumb {
             <label class="toggle"><input type="checkbox" id="behavior-focus_follows_mouse"><span class="track"></span><span class="thumb"></span></label>
           </div>
           <div class="field">
+            <div class="field-info"><div class="field-label" data-i18n="settings.behavior.keep_awake.label"></div><div class="field-desc" data-i18n="settings.behavior.keep_awake.description"></div></div>
+            <label class="toggle"><input type="checkbox" id="behavior-keep_awake"><span class="track"></span><span class="thumb"></span></label>
+          </div>
+          <div class="field">
             <div class="field-info"><div class="field-label" data-i18n="settings.behavior.focus_follows_mouse_delay_ms.label"></div><div class="field-desc" data-i18n="settings.behavior.focus_follows_mouse_delay_ms.description"></div></div>
             <input type="number" id="behavior-focus_follows_mouse_delay_ms" min="50" max="2000">
           </div>
@@ -1738,6 +1742,7 @@ function applyTrayConfig(cfg) {
   setChecked('appearance-active_border', cfg.appearance.active_border);
   setChecked('behavior-focus_new_windows', cfg.behavior.focus_new_windows);
   setChecked('behavior-focus_follows_mouse', cfg.behavior.focus_follows_mouse);
+  setChecked('behavior-keep_awake', cfg.behavior.keep_awake);
   setCb('cb-behavior-taskbar_buttons', cfg.behavior.taskbar_buttons || 'hide_offscreen');
   setCb('cb-behavior-new_window_placement', cfg.behavior.new_window_placement || 'new_column');
 }
@@ -1793,6 +1798,7 @@ function init(cfg) {
   setChecked('behavior-focus_new_windows', cfg.behavior.focus_new_windows);
   setChecked('behavior-track_focus_changes', cfg.behavior.track_focus_changes);
   setChecked('behavior-focus_follows_mouse', cfg.behavior.focus_follows_mouse);
+  setChecked('behavior-keep_awake', cfg.behavior.keep_awake);
   setVal('behavior-focus_follows_mouse_delay_ms', cfg.behavior.focus_follows_mouse_delay_ms);
   setVal('behavior-move_step', cfg.behavior.move_step);
   setChecked('behavior-mouse_follows_focus', cfg.behavior.mouse_follows_focus === true);
@@ -2630,6 +2636,7 @@ function readConfig() {
       fixed_size_windows: cbVal('cb-behavior-fixed_size_windows'),
       track_focus_changes: checked('behavior-track_focus_changes'),
       focus_follows_mouse: checked('behavior-focus_follows_mouse'),
+      keep_awake: checked('behavior-keep_awake'),
       focus_follows_mouse_delay_ms: num('behavior-focus_follows_mouse_delay_ms'),
       move_step: num('behavior-move_step'),
       mouse_follows_focus: checked('behavior-mouse_follows_focus'),
@@ -2924,12 +2931,12 @@ document.getElementById('cb-behavior-taskbar_buttons').dataset.value = 'hide_off
 document.getElementById('cb-behavior-new_window_placement').dataset.value = 'new_column';
 const cfg = { layout: { centering_mode: 'on_overflow', center_columns: 'fit' },
   appearance: { active_border: true }, behavior: { focus_new_windows: false,
-  focus_follows_mouse: true, taskbar_buttons: 'show_all', new_window_placement: 'in_column' } };
+  focus_follows_mouse: true, keep_awake: true, taskbar_buttons: 'show_all', new_window_placement: 'in_column' } };
 eval(payload.script);
 const saved = readConfig();
 assert.strictEqual(saved.layout.gap, 37);
 for (const [section, keys] of Object.entries({layout: ['centering_mode', 'center_columns'],
-  appearance: ['active_border'], behavior: ['focus_new_windows', 'focus_follows_mouse', 'taskbar_buttons', 'new_window_placement']})) {
+  appearance: ['active_border'], behavior: ['focus_new_windows', 'focus_follows_mouse', 'keep_awake', 'taskbar_buttons', 'new_window_placement']})) {
   for (const key of keys) assert.strictEqual(saved[section][key], cfg[section][key], section + '.' + key);
 }
 "#;
@@ -2946,6 +2953,7 @@ for (const [section, keys] of Object.entries({layout: ['centering_mode', 'center
         config.appearance.active_border = true;
         config.behavior.focus_new_windows = false;
         config.behavior.focus_follows_mouse = true;
+        config.behavior.keep_awake = true;
         config.behavior.taskbar_buttons = crate::config::TaskbarButtons::ShowAll;
         config.behavior.new_window_placement = crate::config::NewWindowPlacement::InColumn;
         let payload = serde_json::json!({

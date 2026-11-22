@@ -89,6 +89,7 @@ pub use placement::{
 pub use system::{
     are_animations_enabled, get_system_highlight_color_bgr, get_windows_version,
     is_high_contrast_enabled, is_on_battery_or_power_saver, scale_px, set_dpi_awareness,
+    set_keep_awake,
 };
 pub use types::{MonitorId, MonitorInfo, PlatformConfig, Win32Error, WindowInfo};
 pub use virtual_desktop::{is_window_on_current_virtual_desktop, warm_virtual_desktop_queries};

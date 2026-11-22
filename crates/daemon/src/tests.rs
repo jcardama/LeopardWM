@@ -13835,6 +13835,7 @@ async fn test_animation_frame_handler_updates_border_once() {
         idle_layout_reapply_timer: &mut None,
         display_change_apply_retry_timer: &mut None,
         mouse_hook_handle: &mut None,
+        keep_awake: &keep_awake::KeepAwake::new(|_| {}),
         gestures: &mut GestureRuntime {
             startup_raw_input: false,
             handle: None,
@@ -25119,6 +25120,7 @@ async fn test_taskbar_buttons_paused_tray_selection_keeps_buttons_shown_until_re
         idle_layout_reapply_timer: &mut None,
         display_change_apply_retry_timer: &mut None,
         mouse_hook_handle: &mut None,
+        keep_awake: &keep_awake::KeepAwake::new(|_| {}),
         gestures: &mut GestureRuntime {
             startup_raw_input: false,
             handle: None,

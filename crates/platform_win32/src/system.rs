@@ -17,6 +17,22 @@ pub fn get_windows_version() -> String {
     "Unknown".to_string()
 }
 
+/// Set the calling thread's continuous execution state.
+pub fn set_keep_awake(on: bool) {
+    use windows::Win32::System::Power::{
+        SetThreadExecutionState, ES_CONTINUOUS, ES_DISPLAY_REQUIRED, ES_SYSTEM_REQUIRED,
+    };
+
+    let flags = if on {
+        ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED
+    } else {
+        ES_CONTINUOUS
+    };
+    if unsafe { SetThreadExecutionState(flags) }.0 == 0 {
+        tracing::warn!("Failed to update keep-awake execution state");
+    }
+}
+
 /// Scale a pixel value by the given DPI scale factor.
 ///
 /// Config values are in logical pixels (96 DPI). This function converts them

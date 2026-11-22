@@ -91,6 +91,9 @@ log_level = "info"
 # Focus follows mouse (hover to focus)
 focus_follows_mouse = false
 
+# Keep the PC and display awake while LeopardWM runs
+# keep_awake = false
+
 # Disable Windows 11 Snap Layouts for tiled windows (also disables maximize button)
 # disable_snap_layouts = false
 
