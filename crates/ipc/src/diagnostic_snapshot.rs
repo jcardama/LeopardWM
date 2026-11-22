@@ -224,7 +224,7 @@ impl<'a> Redactor<'a> {
                 },
                 Kind::Path => output.push_str(&self.path(&decoded)),
                 Kind::Text => output.push_str("<redacted>"),
-                Kind::Name => output.push_str(encoded),
+                Kind::Name => output.push_str(&self.mask_profile(encoded)),
             }
             line = rest;
         }
@@ -505,6 +505,11 @@ mod tests {
                 "Window created"
             );
             tracing::info!(
+                target: "leopardwm::window_rules",
+                "Profile-shaped name: {}",
+                log_text::name(r"C:\Users\NameSpanCanary\x")
+            );
+            tracing::info!(
                 target: "leopardwm_platform_win32::shell",
                 "Sources: {} | {} | {} | {} | fallback C:/Users/Unmarked/notes.txt",
                 log_text::path(r"d:/profiles/PrivateHome/first.toml"),
@@ -525,7 +530,12 @@ mod tests {
             "{report}"
         );
         assert!(report.contains(r"%USERPROFILE%/first.toml | %USERPROFILE%\second.toml | Network.EXE | \\.\pipe\leopardwm_<pipe-scope> | fallback %USERPROFILE%/notes.txt"), "{report}");
+        assert!(
+            report.contains(r"Profile-shaped name: %USERPROFILE%\\x"),
+            "{report}"
+        );
         for secret in [
+            "NameSpanCanary",
             r"D:\Private",
             "x title=y",
             "PrivateHome",

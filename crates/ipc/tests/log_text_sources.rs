@@ -1,4 +1,4 @@
-use proc_macro2::{TokenStream, TokenTree};
+use proc_macro2::{Group, TokenStream, TokenTree};
 use regex::Regex;
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -133,24 +133,31 @@ fn punct(token: &TokenTree, expected: char) -> bool {
     matches!(token, TokenTree::Punct(p) if p.as_char() == expected)
 }
 
-fn wrapped(tokens: &[TokenTree]) -> Option<usize> {
+fn wrapped(tokens: &[TokenTree]) -> Option<(usize, Option<&Group>)> {
     if let [crate_name, a, b, inner @ ..] = tokens {
         if ident(crate_name).as_deref() == Some("leopardwm_ipc") && punct(a, ':') && punct(b, ':') {
-            return wrapped(inner).map(|width| width + 3);
+            return wrapped(inner).map(|(width, visible_args)| (width + 3, visible_args));
         }
     }
     let [module, a, b, kind, TokenTree::Group(group), ..] = tokens else {
         return None;
     };
-    (ident(module).as_deref() == Some("log_text")
-        && punct(a, ':')
-        && punct(b, ':')
-        && matches!(
-            ident(kind).as_deref(),
-            Some("title" | "path" | "text" | "name")
-        )
-        && group.delimiter() == proc_macro2::Delimiter::Parenthesis)
-        .then_some(5)
+    if ident(module).as_deref() != Some("log_text")
+        || !punct(a, ':')
+        || !punct(b, ':')
+        || group.delimiter() != proc_macro2::Delimiter::Parenthesis
+    {
+        return None;
+    }
+    match ident(kind).as_deref() {
+        Some("title" | "path" | "text") => Some((5, None)),
+        Some("name") => Some((5, Some(group))),
+        _ => None,
+    }
+}
+
+fn safe_name_ident(name: &str) -> bool {
+    matches!(name, "class" | "class_name" | "device_name")
 }
 
 static FOREIGN: LazyLock<Regex> = LazyLock::new(|| {
@@ -170,17 +177,30 @@ fn inspect(
     tokens: &[TokenTree],
     debug: bool,
     error_context: bool,
+    in_name: bool,
     title_values: &BTreeSet<String>,
     suspect: &mut BTreeSet<String>,
 ) {
     let mut index = 0;
     while index < tokens.len() {
-        if let Some(width) = wrapped(&tokens[index..]) {
-            index += width;
-            continue;
+        if !in_name {
+            if let Some((width, visible_args)) = wrapped(&tokens[index..]) {
+                if let Some(group) = visible_args {
+                    inspect(
+                        &group.stream().into_iter().collect::<Vec<_>>(),
+                        debug,
+                        error_context,
+                        true,
+                        title_values,
+                        suspect,
+                    );
+                }
+                index += width;
+                continue;
+            }
         }
         let flag = |name: &str, debug: bool| {
-            FOREIGN.is_match(name)
+            (FOREIGN.is_match(name) && !(in_name && safe_name_ident(name)))
                 || (error_context && matches!(name, "e" | "err" | "error"))
                 || (debug
                     && (TITLE_TYPES.contains(&name)
@@ -220,6 +240,7 @@ fn inspect(
                 &group.stream().into_iter().collect::<Vec<_>>(),
                 debug,
                 error_context,
+                in_name,
                 title_values,
                 suspect,
             ),
@@ -237,10 +258,17 @@ fn suspects(call: &syn::Macro, title_values: &BTreeSet<String>) -> BTreeSet<Stri
         _ => false,
     });
     let mut found = BTreeSet::new();
-    for arg in tokens.split(|token| punct(token, ',')) {
-        if let [_, eq, sigil, rest @ ..] = arg {
-            if punct(eq, '=') && punct(sigil, '%') && wrapped(rest) == Some(rest.len()) {
-                continue;
+    for mut arg in tokens.split(|token| punct(token, ',')) {
+        if let [field, eq, sigil, rest @ ..] = arg {
+            if punct(eq, '=') && punct(sigil, '%') {
+                if let Some((width, visible_args)) = wrapped(rest) {
+                    if width == rest.len()
+                        && (visible_args.is_none()
+                            || ident(field).as_deref().is_some_and(safe_name_ident))
+                    {
+                        arg = rest;
+                    }
+                }
             }
         }
         inspect(
@@ -249,6 +277,7 @@ fn suspects(call: &syn::Macro, title_values: &BTreeSet<String>) -> BTreeSet<Stri
                 || rendered.contains(":#?")
                 || arg.iter().any(|t| punct(t, '?')),
             error_context,
+            false,
             title_values,
             &mut found,
         );
@@ -267,6 +296,16 @@ const ALLOW: &[(&str, &str, &str)] = &[
         "daemon/src/main.rs",
         r#""Rejecting tab title override ({} bytes > {} max)" , title . len () , leopardwm_platform_win32 :: dialog :: TAB_TITLE_MAX_BYTES"#,
         "The call emits title.len(), a byte count, not the title.",
+    ),
+    (
+        "daemon/src/layout_apply.rs",
+        r#""Timed-out placement batch candidate (not a proven blocker): hwnd={:#x} class={} title={} executable={}" , candidate . hwnd , log_text :: name (candidate . class_name . as_deref () . unwrap_or ("")) , log_text :: title (candidate . title . as_deref () . unwrap_or ("")) , log_text :: name (candidate . executable . as_deref () . unwrap_or (""))"#,
+        "collect_layout_apply_candidates fills executable with the basename from get_process_executable.",
+    ),
+    (
+        "platform_win32/src/placement/mover.rs",
+        r#""Window ignores queued moves; LeopardWM now moves it synchronously on the mover thread: hwnd={:#x} class={} executable={}" , window_id , log_text :: name (& class) , log_text :: name (executable . as_deref () . unwrap_or (""))"#,
+        "get_process_executable returns only the executable basename.",
     ),
 ];
 
@@ -331,13 +370,17 @@ fn guard_detects_unwrapped_positional_inline_and_structured_values() {
                 exe_path.display(),
             ); }
             tracing::info!(path = %leopardwm_ipc::log_text::path(exe_path.display()), "good call");
+            tracing::info!("{}", log_text::name(win_info.title));
+            tracing::info!(label = %leopardwm_ipc::log_text::name(path.display()), "bad path");
+            tracing::warn!("Watchdog fatal error: {}", log_text::name(err));
+            tracing::info!(class = %log_text::name(&win_info.class_name), "good class");
         }
     "#,
     )
     .unwrap();
     let mut source = Source::default();
     source.visit_file(&file);
-    assert_eq!(source.calls.len(), 2);
+    assert_eq!(source.calls.len(), 6);
     assert_eq!(
         suspects(&source.calls[0], &source.title_values),
         [
@@ -352,4 +395,17 @@ fn guard_detects_unwrapped_positional_inline_and_structured_values() {
         .into()
     );
     assert!(suspects(&source.calls[1], &source.title_values).is_empty());
+    for (call, expected) in source.calls[2..].iter().zip([
+        &["title"][..],
+        &["display", "path"][..],
+        &["err"][..],
+        &[][..],
+    ]) {
+        assert_eq!(
+            suspects(call, &source.title_values),
+            expected.iter().map(|name| (*name).to_owned()).collect(),
+            "{}",
+            call.tokens
+        );
+    }
 }
