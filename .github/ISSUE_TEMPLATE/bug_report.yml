@@ -44,4 +44,4 @@ body:
     id: diagnostics
     attributes:
       label: Diagnostic snapshot
-      description: Create a snapshot with Settings → Report an Issue or run `lwm collect-logs`. Open and read the snapshot before attaching it by dragging the file into this field.
+      description: Create a snapshot on the Report an Issue page in Settings, or run `lwm collect-logs`. Open and read the snapshot before attaching it by dragging the file into this field.
