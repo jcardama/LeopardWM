@@ -1,6 +1,47 @@
 use super::*;
 use serde::Deserialize;
 
+#[test]
+fn recording_wire_contract_is_additive() {
+    let command: IpcCommand =
+        serde_json::from_str(r#"{"type":"record","action":"start"}"#).unwrap();
+    assert_eq!(
+        command,
+        IpcCommand::Record {
+            action: RecordAction::Start,
+            timeout_secs: None
+        }
+    );
+    let command = IpcCommand::Record {
+        action: RecordAction::Start,
+        timeout_secs: Some(42),
+    };
+    assert_eq!(
+        serde_json::from_str::<IpcCommand>(&serde_json::to_string(&command).unwrap()).unwrap(),
+        command
+    );
+    let response = IpcResponse::Recording {
+        active: Some(true),
+        path: Some("capture.log".into()),
+    };
+    let wire = serde_json::to_string(&response).unwrap();
+    assert_eq!(
+        serde_json::from_str::<IpcResponse>(&wire).unwrap(),
+        response
+    );
+    assert_eq!(
+        serde_json::from_str::<OldResponse>(&wire).unwrap(),
+        OldResponse::Unknown
+    );
+    assert_eq!(
+        serde_json::from_str::<IpcResponse>(r#"{"status":"recording"}"#).unwrap(),
+        IpcResponse::Recording {
+            active: None,
+            path: None
+        }
+    );
+}
+
 // Wire shapes from the 0.3.5 release, limited to the variants exercised here.
 #[derive(Debug, Deserialize, PartialEq)]
 #[serde(tag = "status", rename_all = "snake_case")]

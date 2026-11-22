@@ -4,6 +4,17 @@
 
 Arguments in the tables are required unless marked optional. Commands that take subcommands are listed along with each full path.
 
+## Record a problem
+
+| Command | Arguments and effect |
+|---|---|
+| `lwm record` | Choose a recording action. |
+| `lwm record start` | Capture debug logs for ten minutes, or for optional `--timeout <SECS>` clamped to 1–3600 seconds. |
+| `lwm record stop` | Stop the active recording; stopping while idle is harmless. |
+| `lwm record status` | Show whether recording is active and the most recent path. |
+
+The file `%LOCALAPPDATA%\leopardwm\diagnostics\leopardwm-recording.log` is overwritten on each start and is limited to 20 MiB. A second start while recording is an error. Recording stops on timeout or daemon exit and does not change the normal log level. The capture is not redacted and may contain sensitive information; review it before sharing.
+
 ## Focus and scrolling
 
 | Command | Arguments and effect |

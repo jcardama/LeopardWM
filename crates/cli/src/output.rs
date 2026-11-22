@@ -2,6 +2,19 @@ use leopardwm_ipc::IpcResponse;
 
 pub(crate) fn print_response(response: &IpcResponse) {
     match response {
+        IpcResponse::Recording { active, path } => {
+            println!(
+                "Recording {}",
+                match active {
+                    Some(true) => "active",
+                    Some(false) => "stopped",
+                    None => "state unknown",
+                }
+            );
+            if let Some(path) = path {
+                println!("{path}");
+            }
+        }
         IpcResponse::Ok => {
             println!("OK");
         }

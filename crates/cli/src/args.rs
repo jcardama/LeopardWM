@@ -35,7 +35,26 @@ pub(crate) struct Cli {
 }
 
 #[derive(Subcommand)]
+pub(crate) enum RecordAction {
+    /// Start recording (defaults to ten minutes)
+    Start {
+        /// Maximum recording duration in seconds (1 to 3600)
+        #[arg(long)]
+        timeout: Option<u64>,
+    },
+    /// Stop recording
+    Stop,
+    /// Show the recording state
+    Status,
+}
+
+#[derive(Subcommand)]
 pub(crate) enum Commands {
+    /// Start, stop, or inspect a temporary debug recording
+    Record {
+        #[command(subcommand)]
+        action: RecordAction,
+    },
     /// Focus commands
     Focus {
         #[command(subcommand)]

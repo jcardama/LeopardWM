@@ -3,6 +3,17 @@ use leopardwm_ipc::IpcCommand;
 
 pub(crate) fn to_ipc_command(cmd: &Commands) -> IpcCommand {
     match cmd {
+        Commands::Record { action } => {
+            let (action, timeout_secs) = match action {
+                RecordAction::Start { timeout } => (leopardwm_ipc::RecordAction::Start, *timeout),
+                RecordAction::Stop => (leopardwm_ipc::RecordAction::Stop, None),
+                RecordAction::Status => (leopardwm_ipc::RecordAction::Status, None),
+            };
+            IpcCommand::Record {
+                action,
+                timeout_secs,
+            }
+        }
         Commands::Focus { direction } => match direction {
             FocusDirection::Left => IpcCommand::FocusLeft,
             FocusDirection::Right => IpcCommand::FocusRight,

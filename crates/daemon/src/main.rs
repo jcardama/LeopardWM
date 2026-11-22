@@ -27,6 +27,7 @@ mod overview;
 mod persistence;
 mod physical_placement;
 mod quit_fallback;
+mod recording;
 mod recreated_window_slot;
 #[cfg(test)]
 mod recreated_window_slot_tests;
@@ -610,6 +611,7 @@ async fn run_shutdown_cleanup(
     mode: ShutdownMode,
     quit_fallback: &quit_fallback::QuitFallback,
 ) {
+    recording::stop_on_exit();
     quit_fallback.started();
     info!("Running {} shutdown cleanup", mode.label());
 
@@ -862,11 +864,16 @@ async fn apply_initial_layout(
     sync_pending_layout_apply_timeout_ui(state, tray_manager, hotkey_state).await;
 }
 
+struct LoggingState {
+    health: daemon_log::LogHealth,
+    _recording_guard: recording::Guard,
+}
+
 fn bootstrap_config() -> Result<(
     Config,
     Vec<config::ConfigWarning>,
     Option<gesture_diagnostics::GestureCaptureHandle>,
-    daemon_log::LogHealth,
+    LoggingState,
 )> {
     // Set DPI awareness before any window/GDI operations
     if set_dpi_awareness() {
@@ -915,14 +922,23 @@ fn bootstrap_config() -> Result<(
     // bound for the in-memory config. Zero does not open or truncate a file.
     let capture_secs =
         config::clamp_diagnostic_capture_secs(config.gestures.diagnostic_capture_secs);
-    let (capture_handle, log_health) = init_logging(log_level, &config, capture_secs)?;
+    let (capture_handle, log_health, recording_guard) =
+        init_logging(log_level, &config, capture_secs)?;
 
     let config_warnings = config.validate();
     for w in &config_warnings {
         warn!("Config: {} - {}", w.field, log_text::text(&w.message));
     }
 
-    Ok((config, config_warnings, capture_handle, log_health))
+    Ok((
+        config,
+        config_warnings,
+        capture_handle,
+        LoggingState {
+            health: log_health,
+            _recording_guard: recording_guard,
+        },
+    ))
 }
 
 /// Install stdout + daemon-log layers at the configured level, and optionally a
@@ -935,6 +951,7 @@ fn init_logging(
 ) -> Result<(
     Option<gesture_diagnostics::GestureCaptureHandle>,
     daemon_log::LogHealth,
+    recording::Guard,
 )> {
     use tracing_subscriber::prelude::*;
     let log_dir = leopardwm_ipc::log_dir();
@@ -956,7 +973,17 @@ fn init_logging(
         None
     };
 
+    let (recording_filter, filter_handle) =
+        tracing_subscriber::reload::Layer::new(tracing_subscriber::filter::LevelFilter::OFF);
+    let recording = recording::Recording::new(filter_handle, leopardwm_ipc::diagnostics_dir());
+    let writer = recording.clone();
     tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .with_writer(move || writer.writer())
+                .with_filter(recording_filter),
+        )
         .with(
             tracing_subscriber::fmt::layer()
                 .with_writer(std::io::stdout)
@@ -993,7 +1020,7 @@ fn init_logging(
         }
     }
 
-    Ok((capture_handle, log_health))
+    Ok((capture_handle, log_health, recording::install(recording)))
 }
 
 fn install_panic_hook() {
@@ -1643,7 +1670,10 @@ async fn setup_tray(
             let ids = leopardwm_platform_win32::collect_all_top_level_window_ids();
             leopardwm_platform_win32::emergency_restore_windows(&ids.window_ids, deadline);
         },
-        |code| std::process::exit(code),
+        |code| {
+            recording::stop_on_exit();
+            std::process::exit(code)
+        },
         quit_fallback::QuitTiming::default(),
     ));
     let (tray_sync_tx, tray_sync_rx) = std::sync::mpsc::channel();
@@ -1820,6 +1850,34 @@ async fn handle_ipc_command(
     cmd: IpcCommand,
     responder: tokio::sync::oneshot::Sender<IpcResponse>,
 ) -> bool {
+    if let IpcCommand::Record {
+        action,
+        timeout_secs,
+    } = cmd
+    {
+        use leopardwm_ipc::RecordAction;
+        let recording = recording::global();
+        let result = match action {
+            RecordAction::Start => recording.start(timeout_secs).map(|info| Some(info.path)),
+            RecordAction::Stop => Ok(recording
+                .stop(recording::StopReason::Stopped)
+                .map(|info| info.path)
+                .or_else(|| recording.last_recording_path())),
+            RecordAction::Status => Ok(recording
+                .status()
+                .map(|info| info.path)
+                .or_else(|| recording.last_recording_path())),
+        };
+        let response = match result {
+            Ok(path) => IpcResponse::Recording {
+                active: Some(recording.status().is_some()),
+                path: path.map(|path| path.to_string_lossy().into_owned()),
+            },
+            Err(message) => IpcResponse::error(message),
+        };
+        let _ = responder.send(response);
+        return false;
+    }
     if let Some(mode) = shutdown_mode_for_command(&cmd) {
         if mode == ShutdownMode::PanicRevert {
             warn!("IPC: panic_revert requested");
@@ -3921,10 +3979,15 @@ async fn main() -> Result<()> {
             "[leopardwm] Another instance is already running (active pipe candidates: {})",
             ipc_pipe_names.join(", ")
         );
+        recording::stop_on_exit();
         std::process::exit(1);
     }
 
-    let (config, config_warnings, _gesture_capture, log_health) = bootstrap_config()?;
+    let (config, config_warnings, _gesture_capture, logging) = bootstrap_config()?;
+    let LoggingState {
+        health: log_health,
+        _recording_guard,
+    } = logging;
 
     install_panic_hook();
 

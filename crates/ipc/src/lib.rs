@@ -33,7 +33,7 @@ const MAX_PIPE_SCOPE_SEGMENT_LEN: usize = 64;
 /// - v4: complete workspace-state snapshots and monitor-targeted
 ///   workspace switching. `ReleaseAllWindows` and `ToggleIgnore` are
 ///   additive and retain v4 compatibility. Multi-row commands and optional row
-///   fields are also additive v4 extensions.
+///   fields and the recording command/response are also additive v4 extensions.
 pub const IPC_PROTOCOL_VERSION: u32 = 4;
 /// Minimum protocol version this crate supports.
 pub const IPC_MIN_SUPPORTED_PROTOCOL_VERSION: u32 = 1;
@@ -64,7 +64,7 @@ pub fn log_dir() -> std::path::PathBuf {
         .unwrap_or_else(|| std::env::temp_dir().join("leopardwm").join("logs"))
 }
 
-/// Diagnostic snapshot directory alongside [`log_dir`].
+/// Diagnostics directory alongside [`log_dir`], holding snapshots and recordings.
 pub fn diagnostics_dir() -> std::path::PathBuf {
     directories::BaseDirs::new()
         .map(|d| d.data_local_dir().join("leopardwm").join("diagnostics"))
@@ -412,10 +412,25 @@ impl IpcEvent {
     }
 }
 
+/// Recording operation for the additive v4 recording command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecordAction {
+    Start,
+    Stop,
+    Status,
+}
+
 /// Commands that can be sent from the CLI to the daemon.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum IpcCommand {
+    /// Control a temporary debug recording.
+    Record {
+        action: RecordAction,
+        #[serde(default)]
+        timeout_secs: Option<u64>,
+    },
     /// Focus the column to the left.
     FocusLeft,
     /// Focus the column to the right.
@@ -747,6 +762,13 @@ pub struct ElevationBlockedWindow {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum IpcResponse {
+    /// Current recording state and most recent recording path.
+    Recording {
+        #[serde(default)]
+        active: Option<bool>,
+        #[serde(default)]
+        path: Option<String>,
+    },
     /// Command executed successfully.
     Ok,
     /// Command failed with an error.

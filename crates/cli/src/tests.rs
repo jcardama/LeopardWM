@@ -15,6 +15,41 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 #[test]
+fn recording_commands_parse_to_wire_actions() {
+    for (args, action, timeout_secs) in [
+        (
+            vec!["lwm", "record", "start"],
+            leopardwm_ipc::RecordAction::Start,
+            None,
+        ),
+        (
+            vec!["lwm", "record", "start", "--timeout", "42"],
+            leopardwm_ipc::RecordAction::Start,
+            Some(42),
+        ),
+        (
+            vec!["lwm", "record", "stop"],
+            leopardwm_ipc::RecordAction::Stop,
+            None,
+        ),
+        (
+            vec!["lwm", "record", "status"],
+            leopardwm_ipc::RecordAction::Status,
+            None,
+        ),
+    ] {
+        let cli = Cli::try_parse_from(args).unwrap();
+        assert_eq!(
+            to_ipc_command(&cli.command),
+            IpcCommand::Record {
+                action,
+                timeout_secs
+            }
+        );
+    }
+}
+
+#[test]
 fn cli_reference_lists_every_command_path() {
     fn check_paths(command: &clap::Command, prefix: &str, reference: &str) {
         for subcommand in command

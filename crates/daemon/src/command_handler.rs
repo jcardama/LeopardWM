@@ -739,6 +739,7 @@ impl AppState {
             return resp;
         }
         let resp = match cmd {
+            IpcCommand::Record { .. } => IpcResponse::error("Recording requires IPC dispatch"),
             IpcCommand::FocusFloating
             | IpcCommand::FocusTiling
             | IpcCommand::SwitchFocusFloatingTiling => self.focus_layer(&cmd),
