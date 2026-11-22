@@ -745,6 +745,28 @@ impl Workspace {
         (min_scroll, max_scroll)
     }
 
+    /// Release rows constrained by column centering before switching it off.
+    pub fn reconcile_leaving_column_centering(&mut self, viewport_width: i32) {
+        let vis_w = self.visible_width(viewport_width);
+        for row_idx in 0..self.rows.len() {
+            let (min, max) = self.scroll_bounds_for_row(
+                row_idx,
+                viewport_width,
+                f64::NEG_INFINITY,
+                f64::INFINITY,
+            );
+            if min != max {
+                continue;
+            }
+            let max_scroll = (self.total_width_for_row(row_idx) - vis_w).max(0) as f64;
+            let row = &mut self.rows[row_idx];
+            if let Some(anim) = row.active_animation.take() {
+                row.scroll_offset = anim.current_offset();
+            }
+            row.scroll_offset = row.scroll_offset.clamp(0.0, max_scroll);
+        }
+    }
+
     /// Repair bounds without revealing focus across all rows.
     pub fn reconcile_scroll_bounds(&mut self, viewport_width: i32) {
         let vis_w = self.visible_width(viewport_width);
