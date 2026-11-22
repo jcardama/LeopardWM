@@ -64,11 +64,21 @@ pub fn log_dir() -> std::path::PathBuf {
         .unwrap_or_else(|| std::env::temp_dir().join("leopardwm").join("logs"))
 }
 
-/// Diagnostics directory alongside [`log_dir`], holding snapshots and recordings.
+/// Diagnostic snapshot directory alongside [`log_dir`].
 pub fn diagnostics_dir() -> std::path::PathBuf {
+    leopardwm_data_dir("diagnostics")
+}
+
+/// Debug recording directory alongside [`log_dir`]. Recordings are not redacted,
+/// so they stay out of [`diagnostics_dir`], which Settings opens for attaching.
+pub fn recordings_dir() -> std::path::PathBuf {
+    leopardwm_data_dir("recordings")
+}
+
+fn leopardwm_data_dir(name: &str) -> std::path::PathBuf {
     directories::BaseDirs::new()
-        .map(|d| d.data_local_dir().join("leopardwm").join("diagnostics"))
-        .unwrap_or_else(|| std::env::temp_dir().join("leopardwm").join("diagnostics"))
+        .map(|d| d.data_local_dir().join("leopardwm").join(name))
+        .unwrap_or_else(|| std::env::temp_dir().join("leopardwm").join(name))
 }
 
 /// Dedicated opt-in gesture diagnostic capture file inside [`log_dir`].

@@ -13,7 +13,7 @@ Arguments in the tables are required unless marked optional. Commands that take 
 | `lwm record stop` | Stop the active recording; stopping while idle is harmless. |
 | `lwm record status` | Show whether recording is active and the most recent path. |
 
-The file `%LOCALAPPDATA%\leopardwm\diagnostics\leopardwm-recording.log` is overwritten on each start and is limited to 20 MiB. A second start while recording is an error. Recording stops on timeout or daemon exit and does not change the normal log level. The capture is not redacted and may contain sensitive information; review it before sharing.
+The file `%LOCALAPPDATA%\leopardwm\recordings\leopardwm-recording.log` is overwritten on each start and is limited to 20 MiB. A second start while recording is an error. Recording stops on timeout or daemon exit and does not change the normal log level. The capture is not redacted and may contain sensitive information; review it before sharing.
 
 ## Focus and scrolling
 

@@ -975,7 +975,7 @@ fn init_logging(
 
     let (recording_filter, filter_handle) =
         tracing_subscriber::reload::Layer::new(tracing_subscriber::filter::LevelFilter::OFF);
-    let recording = recording::Recording::new(filter_handle, leopardwm_ipc::diagnostics_dir());
+    let recording = recording::Recording::new(filter_handle, leopardwm_ipc::recordings_dir());
     let writer = recording.clone();
     tracing_subscriber::registry()
         .with(log_text::file_layer(

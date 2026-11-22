@@ -1454,7 +1454,7 @@ input[type="range"]::-webkit-slider-thumb {
         </div>
       </div>
 
-      <!-- About -->
+      <!-- Report an Issue -->
       <div id="sec-report" class="section">
         <h2 class="section-title" data-i18n="settings.report.title"></h2>
         <p class="report-note" data-i18n="settings.report.guide"></p>
@@ -1462,7 +1462,7 @@ input[type="range"]::-webkit-slider-thumb {
         <p class="report-note" data-i18n="settings.report.long"></p>
         <div class="info-bar report-status" id="report-status" role="status" hidden><div class="info-bar-content" id="report-status-text"></div></div>
         <div class="card report-form">
-          <label><span data-i18n="settings.report.subject"></span><input type="text" id="report-title" data-no-config></label>
+          <label><span data-i18n="settings.report.subject"></span><input type="text" id="report-title" data-no-config autocomplete="off"></label>
           <label><span data-i18n="settings.report.category"></span><select id="report-category">
             <option value="" data-i18n="settings.report.unsure"></option>
             <option value="Layout and scrolling" data-i18n="settings.report.layout"></option>
@@ -1475,10 +1475,10 @@ input[type="range"]::-webkit-slider-thumb {
             <option value="Crash or freeze" data-i18n="settings.report.crash"></option>
             <option value="Other" data-i18n="settings.report.other"></option>
           </select></label>
-          <label><span data-i18n="settings.report.actual"></span><textarea id="report-actual"></textarea></label>
-          <label><span data-i18n="settings.report.expected"></span><textarea id="report-expected"></textarea></label>
-          <label><span data-i18n="settings.report.repro"></span><textarea id="report-repro"></textarea></label>
-          <label><span data-i18n="settings.report.apps"></span><input type="text" id="report-affected_apps" data-no-config></label>
+          <label><span data-i18n="settings.report.actual"></span><textarea id="report-actual" autocomplete="off"></textarea></label>
+          <label><span data-i18n="settings.report.expected"></span><textarea id="report-expected" autocomplete="off"></textarea></label>
+          <label><span data-i18n="settings.report.repro"></span><textarea id="report-repro" autocomplete="off"></textarea></label>
+          <label><span data-i18n="settings.report.apps"></span><input type="text" id="report-affected_apps" data-no-config autocomplete="off"></label>
           <label><span data-i18n="settings.report.regression"></span><select id="report-regression">
             <option value="Not sure" data-i18n="settings.report.unsure"></option><option value="Yes" data-i18n="settings.report.yes"></option><option value="No" data-i18n="settings.report.no"></option>
           </select></label>
@@ -1487,6 +1487,8 @@ input[type="range"]::-webkit-slider-thumb {
           <div class="report-actions"><button class="btn" type="button" id="report-submit" data-i18n="settings.report.submit" disabled></button><button class="btn" type="button" id="report-clear" data-i18n="settings.report.clear"></button></div>
         </div>
       </div>
+
+      <!-- About -->
       <div id="sec-about" class="section">
         <h2 class="section-title" data-i18n="settings.text.about"></h2>
         <div class="card about-card">
@@ -3127,6 +3129,18 @@ for (const [section, keys] of Object.entries({layout: ['centering_mode', 'center
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+
+    #[test]
+    fn report_text_inputs_stay_out_of_config_autosave() {
+        for id in ["report-title", "report-affected_apps"] {
+            let input = SETTINGS_HTML
+                .split("<input")
+                .find(|tag| tag.contains(&format!("id=\"{id}\"")))
+                .unwrap_or_else(|| panic!("{id} input missing"));
+            let tag = &input[..input.find('>').unwrap()];
+            assert!(tag.contains("data-no-config"), "{id}: {tag}");
+        }
     }
 
     #[test]

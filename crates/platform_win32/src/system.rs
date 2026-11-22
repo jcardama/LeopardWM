@@ -11,10 +11,23 @@ pub fn get_windows_version() -> String {
         let display: String = key.get_value("DisplayVersion").unwrap_or_default();
         let product: String = key.get_value("ProductName").unwrap_or_default();
         if !build.is_empty() {
+            let product = windows_product_name(&product, &build);
             return format!("{} ({}, Build {})", product, display, build);
         }
     }
     "Unknown".to_string()
+}
+
+/// Windows 11 keeps "Windows 10" in `ProductName`; only the build number tells them apart.
+fn windows_product_name(product: &str, build: &str) -> String {
+    let is_windows_11 = build
+        .trim()
+        .parse::<u32>()
+        .is_ok_and(|build| build >= 22000);
+    match product.strip_prefix("Windows 10") {
+        Some(edition) if is_windows_11 => format!("Windows 11{edition}"),
+        _ => product.to_string(),
+    }
 }
 
 /// Set the calling thread's continuous execution state.
@@ -148,6 +161,26 @@ static TEST_PROCESS_DPI_AWARENESS: extern "C" fn() = {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_11_builds_report_windows_11() {
+        assert_eq!(
+            windows_product_name("Windows 10 Pro", "26300"),
+            "Windows 11 Pro"
+        );
+        assert_eq!(
+            windows_product_name("Windows 10 Pro", "22000"),
+            "Windows 11 Pro"
+        );
+        assert_eq!(
+            windows_product_name("Windows 10 Pro", "19045"),
+            "Windows 10 Pro"
+        );
+        assert_eq!(
+            windows_product_name("Windows Server 2022", "26300"),
+            "Windows Server 2022"
+        );
+    }
 
     #[test]
     fn test_threads_inherit_per_monitor_dpi_awareness() {
