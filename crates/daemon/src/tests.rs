@@ -11024,7 +11024,7 @@ fn fullscreen_horizontal_edges_follow_monitor_command_policy() {
 }
 
 #[test]
-fn horizontal_move_uses_actual_target_and_preserves_minimized_windows() {
+fn horizontal_move_uses_tiled_focus_and_preserves_minimized_windows() {
     const VISIBLE: u64 = 0;
     const MINIMIZED: u64 = 0xffff_ffff_0000_0000;
     const OUTSIDE: u64 = 0xffff_fffe_0000_0000;
@@ -11060,11 +11060,7 @@ fn horizontal_move_uses_actual_target_and_preserves_minimized_windows() {
                         .unwrap();
                 }
                 state.previous_focused_hwnd = tracked;
-                let crosses = match tracked {
-                    Some(MINIMIZED) => false,
-                    Some(VISIBLE) => true,
-                    _ => !strip_minimized,
-                };
+                let crosses = !strip_minimized;
                 assert_eq!(state.handle_command(command.clone()), IpcResponse::Ok);
                 assert_eq!(
                     state.focused_monitor,
@@ -11160,6 +11156,97 @@ fn horizontal_edge_moves_complete_column_to_near_edge() {
 }
 
 #[test]
+fn horizontal_column_crossing_preserves_source_active_tab() {
+    let mut state = AppState::new_with_config(test_config(), two_monitors());
+    state.injected_apply_placements_behavior =
+        Some(TestApplyPlacementsBehavior::SleepAndSucceed(Duration::ZERO));
+    state.config.appearance.active_border = false;
+    state.config.behavior.move_crosses_monitors = true;
+    let ws = state.focused_workspace_mut().unwrap();
+    ws.insert_window(101, Some(700)).unwrap();
+    ws.insert_window_in_column(102, 0).unwrap();
+    ws.insert_window_in_column(103, 0).unwrap();
+    ws.toggle_focused_column_tabbed_mode();
+    ws.set_active_tab(0, 2).unwrap();
+    ws.insert_window(0, Some(700)).unwrap();
+
+    assert_eq!(
+        state.handle_command(IpcCommand::MoveColumnRight),
+        IpcResponse::Ok
+    );
+    let source = &state.workspaces[&1][0];
+    assert_eq!(source.focused_window(), Some(103));
+    assert_eq!(source.columns()[0].active_tab_idx(), Some(2));
+}
+
+#[test]
+fn horizontal_column_crossing_restores_maximized_width() {
+    let mut state = AppState::new_with_config(test_config(), two_monitors());
+    state.injected_apply_placements_behavior =
+        Some(TestApplyPlacementsBehavior::SleepAndSucceed(Duration::ZERO));
+    state.config.appearance.active_border = false;
+    state.config.behavior.move_crosses_monitors = true;
+    let ws = state.focused_workspace_mut().unwrap();
+    ws.insert_window(0, Some(700)).unwrap();
+    ws.set_focused_column_width_fraction(0.333, 5120);
+    let original_large = ws.columns()[0].width();
+    let (left, right, _, _) = ws.outer_gaps();
+    assert!(ws.rescale_column_widths(ws.gap(), left, right, 5120, 1920));
+    let original = ws.columns()[0].width();
+    assert!(ws.toggle_maximize_column(1920));
+    assert_ne!(ws.columns()[0].width(), original);
+
+    assert_eq!(
+        state.handle_command(IpcCommand::MoveColumnRight),
+        IpcResponse::Ok
+    );
+    let target = &state.workspaces[&2][0];
+    assert_eq!(target.columns()[0].width(), original);
+    let mut resized = target.clone();
+    let (left, right, _, _) = resized.outer_gaps();
+    assert!(resized.rescale_column_widths(resized.gap(), left, right, 1920, 5120));
+    assert_eq!(resized.columns()[0].width(), original_large);
+}
+
+#[test]
+fn column_transfer_clears_only_departed_window_minimum_state() {
+    use leopardwm_core_layout::Column;
+
+    let mut state = AppState::new_with_config(test_config(), two_monitors());
+    let ws = state.focused_workspace_mut().unwrap();
+    ws.insert_window(101, Some(700)).unwrap();
+    ws.insert_window_in_column(102, 0).unwrap();
+    ws.insert_window(0, Some(700)).unwrap();
+    ws.insert_window_in_column(100, 1).unwrap();
+    ws.set_window_min_width(0, 1200);
+    ws.set_window_min_height(0, 900);
+    ws.set_window_min_width(100, 1300);
+    ws.set_window_min_height(100, 950);
+    ws.set_window_min_width(101, 1100);
+    ws.set_window_min_height(101, 800);
+
+    assert_eq!(
+        state
+            .move_focused_column_to_monitor_transactional(2, true)
+            .unwrap(),
+        Some(0)
+    );
+    let source = &mut state.workspaces.get_mut(&1).unwrap()[0];
+    for window in [0, 100] {
+        assert_eq!(
+            source.effective_column_width(&Column::new(window, 100)),
+            100
+        );
+        assert_eq!(source.window_min_height(window), None);
+    }
+    assert_eq!(source.effective_column_width(&Column::new(101, 100)), 1100);
+    assert_eq!(source.window_min_height(101), Some(800));
+    let pending = source.take_pending_min_size_clears();
+    assert_eq!(pending.len(), 1);
+    assert!(pending.contains(&101));
+}
+
+#[test]
 fn horizontal_column_crossing_rolls_back_on_duplicate_window() {
     use leopardwm_core_layout::Column;
 
@@ -11169,7 +11256,7 @@ fn horizontal_column_crossing_rolls_back_on_duplicate_window() {
     column.add_window(100);
     state.workspaces.get_mut(&1).unwrap()[0].insert_column_at(column, 0);
     state.workspaces.get_mut(&2).unwrap()[0]
-        .insert_window(100, Some(800))
+        .insert_window(0, Some(800))
         .unwrap();
     let before_source = state.workspaces[&1][0].columns().to_vec();
     let before_target = state.workspaces[&2][0].columns().to_vec();
@@ -11179,6 +11266,8 @@ fn horizontal_column_crossing_rolls_back_on_duplicate_window() {
     ));
     assert_eq!(state.focused_monitor, 1);
     assert_eq!(state.workspaces[&1][0].columns(), before_source);
+    assert!(state.workspaces[&1][0].contains_window(100));
+    assert!(!state.workspaces[&2][0].contains_window(100));
     assert_eq!(state.workspaces[&2][0].columns(), before_target);
 }
 

@@ -5652,22 +5652,24 @@ mod tests {
                 assert_eq!(ws.column_count(), 1);
                 assert_eq!(ws.columns()[0].windows(), &[1, 2, 3]);
                 assert_eq!(ws.focused_column_index(), 0);
-                assert_eq!(ws.focused_window_index_in_column(), 0);
-                assert_eq!(ws.focused_window(), Some(1));
-                assert_eq!(ws.columns()[0].active_tab_idx(), Some(0));
+                let expected_index = if remove_whole_column { 2 } else { 0 };
+                let expected_window = if remove_whole_column { 3 } else { 1 };
+                assert_eq!(ws.focused_window_index_in_column(), expected_index);
+                assert_eq!(ws.focused_window(), Some(expected_window));
+                assert_eq!(ws.columns()[0].active_tab_idx(), Some(expected_index));
                 let visible: Vec<_> = ws
                     .compute_placements(Rect::new(0, 0, 1920, 1080))
                     .into_iter()
                     .filter(|p| p.visibility == Visibility::Visible)
                     .map(|p| p.window_id)
                     .collect();
-                assert_eq!(visible, vec![1]);
+                assert_eq!(visible, vec![expected_window]);
             }
         }
     }
 
     #[test]
-    fn test_column_removal_clamps_replacement_tab_focus() {
+    fn test_column_removal_restores_replacement_tab_focus() {
         let mut ws = ws_3_tabs();
         ws.remove_window(3).unwrap();
         ws.toggle_focused_column_tabbed_mode();
@@ -5681,9 +5683,9 @@ mod tests {
         assert_eq!(removed.windows(), &[99, 100, 101]);
         assert_eq!(ws.columns()[0].windows(), &[1, 2]);
         assert_eq!(ws.focused_column_index(), 0);
-        assert_eq!(ws.focused_window_index_in_column(), 1);
-        assert_eq!(ws.focused_window(), Some(2));
-        assert_eq!(ws.columns()[0].active_tab_idx(), Some(1));
+        assert_eq!(ws.focused_window_index_in_column(), 0);
+        assert_eq!(ws.focused_window(), Some(1));
+        assert_eq!(ws.columns()[0].active_tab_idx(), Some(0));
     }
 
     #[test]

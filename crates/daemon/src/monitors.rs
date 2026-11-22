@@ -598,7 +598,7 @@ impl AppState {
             return Err("Target workspace already contains a moved window".to_string());
         }
         let column = source
-            .remove_column_in_row(source_row, column_index)
+            .remove_column_for_transfer(source_row, column_index)
             .ok_or_else(|| "Focused column missing from source workspace".to_string())?;
         let target_row = target.focused_row();
         let index = if insert_at_start {

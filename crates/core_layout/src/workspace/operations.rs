@@ -403,6 +403,7 @@ impl Workspace {
         if index >= row.columns.len() {
             return None;
         }
+        let removed_focused = row.focused_column == index;
         let col = row.columns.remove(index);
         if row
             .maximized_column
@@ -434,10 +435,42 @@ impl Workspace {
             }
         }
         self.clamp_focus_indices_for_row(row_idx);
+        if removed_focused {
+            let row = &mut self.rows[row_idx];
+            if let Some(active_tab) = row
+                .columns
+                .get(row.focused_column)
+                .and_then(Column::active_tab_idx)
+            {
+                row.focused_window_in_column = active_tab;
+            }
+        }
         if row_idx == self.focused_row {
             self.sync_active_tab_to_focus();
         }
         Some(col)
+    }
+
+    /// Remove a column leaving this workspace, restoring its unmaximized width and clearing its cached minima.
+    pub fn remove_column_for_transfer(&mut self, row_idx: usize, index: usize) -> Option<Column> {
+        let row = self.rows.get_mut(row_idx)?;
+        let column = row.columns.get_mut(index)?;
+        if row
+            .maximized_column
+            .as_ref()
+            .is_some_and(|state| column.contains(state.sentinel_window))
+        {
+            let state = row.maximized_column.take().unwrap();
+            column.set_width(state.original_width);
+            column.width_fraction_cache = state.width_fraction_cache;
+        }
+        let column = self.remove_column_in_row(row_idx, index)?;
+        for window in column.windows() {
+            self.window_min_widths.remove(window);
+            self.window_min_heights.remove(window);
+            self.pending_min_size_clears.remove(window);
+        }
+        Some(column)
     }
 
     /// Insert a column at the given index in the focused row.

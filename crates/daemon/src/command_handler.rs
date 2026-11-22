@@ -1063,14 +1063,14 @@ impl AppState {
             }
             IpcCommand::MoveColumnLeft
                 if self.config.behavior.move_crosses_monitors
-                    && self.has_non_minimized_monitor_move_target()
+                    && self.has_non_minimized_tiled_focus()
                     && self.crosses_monitor_edge(true, monitor_left_of) =>
             {
                 (IpcCommand::MoveWindowToMonitorLeft, Some(monitor_left_of))
             }
             IpcCommand::MoveColumnRight
                 if self.config.behavior.move_crosses_monitors
-                    && self.has_non_minimized_monitor_move_target()
+                    && self.has_non_minimized_tiled_focus()
                     && self.crosses_monitor_edge(false, monitor_right_of) =>
             {
                 (IpcCommand::MoveWindowToMonitorRight, Some(monitor_right_of))
@@ -1079,10 +1079,10 @@ impl AppState {
         }
     }
 
-    fn has_non_minimized_monitor_move_target(&self) -> bool {
-        self.monitor_move_target().is_some_and(|target| {
-            self.focused_workspace()
-                .is_some_and(|ws| !ws.is_minimized(target))
+    fn has_non_minimized_tiled_focus(&self) -> bool {
+        self.focused_workspace().is_some_and(|ws| {
+            ws.focused_window()
+                .is_some_and(|window| !ws.is_minimized(window))
         })
     }
 
