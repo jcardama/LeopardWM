@@ -6,7 +6,7 @@ All notable changes to LeopardWM will be documented in this file.
 
 ### Features
 
-- **Cross monitors at horizontal strip edges.** Enable `focus_crosses_monitors` or `move_crosses_monitors` under `[behavior]` or in Settings to focus or move a window to a neighboring monitor.
+- **Cross monitors at horizontal strip edges.** Enable `focus_crosses_monitors` or `move_crosses_monitors` under `[behavior]` or in Settings to focus the neighboring monitor or move the focused column there.
 - **Center columns until the row fills.** Set `[layout] center_columns = "fit"` or choose Until full under Settings → Layout → Center columns to center each row's active columns while they fit. The tray's Center Columns submenu also offers these settings. `"single"` keeps the previous single-column behavior, and the legacy `center_single_column` key still works.
 - **Turn off modifier-wheel navigation.** Clear the scroll modifier in Settings or set `[hotkeys] scroll_modifier = "none"`; other wheel gestures remain available. Thanks to @gczark for the request. (#185)
 - **Floating windows now appear in the overview.** They sit in a group at the start of each workspace row, where they can be activated, closed and moved like tiled windows. Thanks to @gczark for the request. (#184)

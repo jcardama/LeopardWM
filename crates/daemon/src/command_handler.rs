@@ -790,12 +790,8 @@ impl AppState {
             IpcCommand::FocusMonitorRight => self.focus_monitor(cross_selector.unwrap_or(monitor_to_right), "right"),
             IpcCommand::FocusMonitorUp => self.focus_monitor(monitor_above, "up"),
             IpcCommand::FocusMonitorDown => self.focus_monitor(monitor_below, "down"),
-            IpcCommand::MoveWindowToMonitorLeft => {
-                self.move_to_monitor(None, cross_selector.unwrap_or(monitor_to_left), "left")
-            }
-            IpcCommand::MoveWindowToMonitorRight => {
-                self.move_to_monitor(None, cross_selector.unwrap_or(monitor_to_right), "right")
-            }
+            IpcCommand::MoveWindowToMonitorLeft => self.dispatch_horizontal_monitor_move(cross_selector, false),
+            IpcCommand::MoveWindowToMonitorRight => self.dispatch_horizontal_monitor_move(cross_selector, true),
             IpcCommand::MoveWindowToMonitorUp => self.move_to_monitor(None, monitor_above, "up"),
             IpcCommand::MoveWindowToMonitorDown => {
                 self.move_to_monitor(None, monitor_below, "down")
@@ -1411,6 +1407,45 @@ impl AppState {
                 ws.at_workspace_bottom()
             }
         })
+    }
+
+    fn dispatch_horizontal_monitor_move(
+        &mut self,
+        cross_selector: Option<MonitorSelector>,
+        right: bool,
+    ) -> IpcResponse {
+        if let Some(select) = cross_selector {
+            self.move_column_to_monitor(select, right)
+        } else if right {
+            self.move_to_monitor(None, monitor_to_right, "right")
+        } else {
+            self.move_to_monitor(None, monitor_to_left, "left")
+        }
+    }
+
+    fn move_column_to_monitor(
+        &mut self,
+        select: MonitorSelector,
+        insert_at_start: bool,
+    ) -> IpcResponse {
+        let monitors: Vec<_> = self.monitors.values().cloned().collect();
+        if let Some(target) = select(&monitors, self.focused_monitor) {
+            match self.move_focused_column_to_monitor_transactional(target.id, insert_at_start) {
+                Ok(Some(hwnd)) => {
+                    info!(
+                        "Moved column containing window {} to monitor {}",
+                        hwnd, target.id
+                    );
+                    if let Err(e) = self.apply_layout() {
+                        return IpcResponse::error(format!("Failed to apply layout: {}", e));
+                    }
+                    self.sync_foreground_window();
+                }
+                Ok(None) => info!("No focused column to move"),
+                Err(message) => return IpcResponse::error(message),
+            }
+        }
+        IpcResponse::Ok
     }
 
     /// Moves `window`, or the focused window when `None`.

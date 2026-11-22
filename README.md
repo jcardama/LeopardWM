@@ -432,7 +432,7 @@ Set `floating_above_tiled = true` under `[behavior]` or enable **Settings → Be
 
 Disabling the option simply stops re-raising. There is no daemon-owned Z-order state to restore on disable, ignore, release, or shutdown.
 
-Set `focus_crosses_monitors = true` or `move_crosses_monitors = true` under `[behavior]`, or enable the corresponding Settings toggles, to focus the neighboring monitor or move the focused window there when a tiled horizontal command reaches the strip edge. Both default to false; floating focus is unchanged. These horizontal options are independent of `workspace_edge_wrap`, which only affects vertical navigation and moves.
+Set `focus_crosses_monitors = true` or `move_crosses_monitors = true` under `[behavior]`, or enable the corresponding Settings toggles, to focus the neighboring monitor or move the focused column there when a tiled horizontal command reaches the strip edge. Both default to false; floating focus is unchanged. `lwm move-to-monitor` and the `move_to_monitor_*` hotkeys still move one window. These horizontal options are independent of `workspace_edge_wrap`, which only affects vertical navigation and moves.
 
 Set `workspace_edge_wrap` under `[behavior]` or in Settings to `"off"` (default) to leave edge focus and moves on the current workspace, `"wrap"` to switch or move to the adjacent workspace and wrap between 1 and 9, or `"clamp"` to stop at workspace 1 and 9. Legacy `true` and `false` still mean `"wrap"` and `"off"` respectively.
 

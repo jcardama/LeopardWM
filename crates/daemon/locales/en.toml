@@ -223,7 +223,7 @@
 "settings.behavior.focus_crosses_monitors.label" = "Focus across monitors"
 "settings.behavior.focus_crosses_monitors.description" = "At a horizontal tiled edge, focus the neighboring monitor; independent of vertical workspace edge wrap"
 "settings.behavior.move_crosses_monitors.label" = "Move across monitors"
-"settings.behavior.move_crosses_monitors.description" = "At a horizontal tiled edge, move the focused window to the neighboring monitor; independent of vertical workspace edge wrap"
+"settings.behavior.move_crosses_monitors.description" = "At a horizontal tiled edge, move the focused column to the neighboring monitor; independent of vertical workspace edge wrap"
 "settings.behavior.move_window_across_rows.label" = "Move window across rows"
 "settings.behavior.move_window_across_rows.description" = "Move window up/down at a column edge shifts it into the adjacent row"
 "settings.behavior.fullscreen_follows_focus.label" = "Fullscreen follows focus"

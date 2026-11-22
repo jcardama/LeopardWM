@@ -554,6 +554,74 @@ impl AppState {
         Ok(Some(window_id))
     }
 
+    pub(crate) fn move_focused_column_to_monitor_transactional(
+        &mut self,
+        target_monitor: MonitorId,
+        insert_at_start: bool,
+    ) -> std::result::Result<Option<u64>, String> {
+        let source_monitor = self.focused_monitor;
+        if source_monitor == target_monitor {
+            return Ok(None);
+        }
+        let src_idx = self.active_workspace_idx(source_monitor);
+        let tgt_idx = self.active_workspace_idx(target_monitor);
+        let mut source = self
+            .workspaces
+            .get(&source_monitor)
+            .and_then(|workspaces| workspaces.get(src_idx))
+            .cloned()
+            .ok_or_else(|| format!("Source workspace missing for monitor {}", source_monitor))?;
+        let mut target = self
+            .workspaces
+            .get(&target_monitor)
+            .and_then(|workspaces| workspaces.get(tgt_idx))
+            .cloned()
+            .ok_or_else(|| format!("Target workspace missing for monitor {}", target_monitor))?;
+
+        let Some(focused) = source.focused_window() else {
+            return Ok(None);
+        };
+        let source_row = source.focused_row();
+        let column_index = source.focused_column_index();
+        let column = &source.columns_for_row(source_row)[column_index];
+        let minimized: Vec<_> = column
+            .windows()
+            .iter()
+            .copied()
+            .filter(|&window| source.is_minimized(window))
+            .collect();
+        if column
+            .windows()
+            .iter()
+            .any(|&window| target.contains_window(window))
+        {
+            return Err("Target workspace already contains a moved window".to_string());
+        }
+        let column = source
+            .remove_column_in_row(source_row, column_index)
+            .ok_or_else(|| "Focused column missing from source workspace".to_string())?;
+        let target_row = target.focused_row();
+        let index = if insert_at_start {
+            0
+        } else {
+            target.columns_for_row(target_row).len()
+        };
+        target.insert_column_at_row(column, target_row, index);
+        for window in minimized {
+            target.mark_minimized(window);
+        }
+        target
+            .focus_window(focused)
+            .map_err(|e| format!("Failed to focus moved window: {}", e))?;
+        target.ensure_focused_visible(self.viewport_width_for(target_monitor));
+        source.reconcile_scroll_bounds(self.viewport_width_for(source_monitor));
+
+        self.workspaces.get_mut(&source_monitor).unwrap()[src_idx] = source;
+        self.workspaces.get_mut(&target_monitor).unwrap()[tgt_idx] = target;
+        self.focused_monitor = target_monitor;
+        Ok(Some(focused))
+    }
+
     /// The layout viewport for a monitor: its full work area. Single source of
     /// truth for the rect fed into `compute_placements*`; columns fill the work
     /// area edge to edge with no shared-edge inset.

@@ -11071,23 +11071,141 @@ fn horizontal_move_uses_actual_target_and_preserves_minimized_windows() {
                     if crosses { target } else { source },
                     "source={source}, tracked={tracked:?}, strip_minimized={strip_minimized}"
                 );
+                let moved_visible = crosses && !strip_minimized;
+                let moved_minimized = crosses && strip_minimized;
                 assert_eq!(
                     state.workspaces[&target][0].contains_window(VISIBLE),
-                    crosses
+                    moved_visible
                 );
                 assert_eq!(
                     state.workspaces[&source][0].contains_window(VISIBLE),
-                    !crosses
+                    !moved_visible
                 );
-                assert!(state.workspaces[&source][0].contains_window(MINIMIZED));
-                assert!(state.workspaces[&source][0].is_minimized(MINIMIZED));
-                assert!(!state.workspaces[&target][0].contains_window(MINIMIZED));
+                assert_eq!(
+                    state.workspaces[&target][0].contains_window(MINIMIZED),
+                    moved_minimized
+                );
+                assert_eq!(
+                    state.workspaces[&source][0].contains_window(MINIMIZED),
+                    !moved_minimized
+                );
+                assert!(
+                    state.workspaces[&if moved_minimized { target } else { source }][0]
+                        .is_minimized(MINIMIZED)
+                );
                 if tracked == Some(OUTSIDE) {
                     assert!(state.workspaces[&source][1].contains_window(OUTSIDE));
                     assert!(!state.workspaces[&target][0].contains_window(OUTSIDE));
                 }
             }
         }
+    }
+}
+
+#[test]
+fn horizontal_edge_moves_complete_column_to_near_edge() {
+    use leopardwm_core_layout::Column;
+
+    const MINIMIZED: u64 = 0xffff_ffff_0000_0000;
+    for (source, target, command, insert_at_start) in [
+        (1, 2, IpcCommand::MoveColumnRight, true),
+        (2, 1, IpcCommand::MoveColumnLeft, false),
+    ] {
+        for tabbed in [false, true] {
+            let mut state = AppState::new_with_config(test_config(), two_monitors());
+            state.injected_apply_placements_behavior =
+                Some(TestApplyPlacementsBehavior::SleepAndSucceed(Duration::ZERO));
+            state.config.appearance.active_border = false;
+            state.config.behavior.move_crosses_monitors = true;
+            state.focused_monitor = source;
+            let ws = &mut state.workspaces.get_mut(&source).unwrap()[0];
+            ws.insert_window(101, Some(800)).unwrap();
+            let mut column = Column::new(MINIMIZED, 700);
+            column.add_window(0);
+            column.set_height_weight(0, 0.3);
+            if tabbed {
+                column.set_tabbed(1);
+            }
+            let index = if insert_at_start { 1 } else { 0 };
+            ws.insert_column_at(column, index);
+            ws.focus_window(0).unwrap();
+            ws.mark_minimized(MINIMIZED);
+            let expected = ws.columns()[index].clone();
+            ws.set_scroll_offset(600.0);
+            let target_ws = &mut state.workspaces.get_mut(&target).unwrap()[0];
+            target_ws.set_row_layout(&[1.0, 1.0]);
+            target_ws.focus_row(1);
+            target_ws.insert_window(201, Some(1200)).unwrap();
+            target_ws.insert_window(202, Some(1200)).unwrap();
+
+            assert_eq!(state.handle_command(command.clone()), IpcResponse::Ok);
+            assert_eq!(state.focused_monitor, target);
+            let source_ws = &state.workspaces[&source][0];
+            assert_eq!(source_ws.column_count(), 1);
+            assert!(!source_ws.contains_window(0));
+            assert!(!source_ws.contains_window(MINIMIZED));
+            assert_eq!(source_ws.scroll_offset(), 0.0);
+            let target_ws = &state.workspaces[&target][0];
+            let index = if insert_at_start { 0 } else { 2 };
+            assert_eq!(target_ws.columns()[index], expected);
+            assert!(target_ws.is_minimized(MINIMIZED));
+            assert_eq!(target_ws.focused_window(), Some(0));
+            assert_eq!(target_ws.focused_row(), 1);
+            assert_eq!(target_ws.focused_column_index(), index);
+            if !insert_at_start {
+                assert!(target_ws.scroll_offset() > 0.0);
+            }
+        }
+    }
+}
+
+#[test]
+fn horizontal_column_crossing_rolls_back_on_duplicate_window() {
+    use leopardwm_core_layout::Column;
+
+    let mut state = AppState::new_with_config(test_config(), two_monitors());
+    state.config.behavior.move_crosses_monitors = true;
+    let mut column = Column::new(0, 700);
+    column.add_window(100);
+    state.workspaces.get_mut(&1).unwrap()[0].insert_column_at(column, 0);
+    state.workspaces.get_mut(&2).unwrap()[0]
+        .insert_window(100, Some(800))
+        .unwrap();
+    let before_source = state.workspaces[&1][0].columns().to_vec();
+    let before_target = state.workspaces[&2][0].columns().to_vec();
+    assert!(matches!(
+        state.handle_command(IpcCommand::MoveColumnRight),
+        IpcResponse::Error { .. }
+    ));
+    assert_eq!(state.focused_monitor, 1);
+    assert_eq!(state.workspaces[&1][0].columns(), before_source);
+    assert_eq!(state.workspaces[&2][0].columns(), before_target);
+}
+
+#[test]
+fn explicit_monitor_move_still_moves_only_one_window() {
+    use leopardwm_core_layout::Column;
+
+    for (source, target, command) in [
+        (1, 2, IpcCommand::MoveWindowToMonitorRight),
+        (2, 1, IpcCommand::MoveWindowToMonitorLeft),
+    ] {
+        let mut state = AppState::new_with_config(test_config(), two_monitors());
+        state.injected_apply_placements_behavior =
+            Some(TestApplyPlacementsBehavior::SleepAndSucceed(Duration::ZERO));
+        state.config.appearance.active_border = false;
+        state.config.behavior.move_crosses_monitors = true;
+        state.focused_monitor = source;
+        let mut column = Column::new(100, 700);
+        column.add_window(0);
+        let ws = &mut state.workspaces.get_mut(&source).unwrap()[0];
+        ws.insert_column_at(column, 0);
+        ws.focus_window(0).unwrap();
+        assert_eq!(state.handle_command(command), IpcResponse::Ok);
+        assert!(state.workspaces[&source][0].contains_window(100));
+        assert!(!state.workspaces[&source][0].contains_window(0));
+        assert!(state.workspaces[&target][0].contains_window(0));
+        assert!(!state.workspaces[&target][0].contains_window(100));
     }
 }
 
