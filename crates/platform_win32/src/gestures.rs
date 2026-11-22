@@ -512,7 +512,7 @@ pub fn set_scroll_modifier(modifier_str: &str) {
     SCROLL_MODIFIER_FLAGS.store(flags, std::sync::atomic::Ordering::Relaxed);
     tracing::debug!(
         "Scroll modifier set to: {} (flags=0x{:02x})",
-        modifier_str,
+        leopardwm_ipc::log_text::text(modifier_str),
         flags
     );
 }

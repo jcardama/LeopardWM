@@ -520,13 +520,10 @@ mod tests {
         let normal = Buffer(Arc::new(Mutex::new(Vec::new())));
         let normal_writer = normal.clone();
         let subscriber = Registry::default()
-            .with(
-                tracing_subscriber::fmt::layer()
-                    .with_ansi(false)
-                    .without_time()
-                    .with_writer(move || writer.writer())
-                    .with_filter(filter),
-            )
+            .with(leopardwm_ipc::log_text::file_layer(
+                move || writer.writer(),
+                filter,
+            ))
             .with(
                 tracing_subscriber::fmt::layer()
                     .with_ansi(false)
@@ -539,10 +536,17 @@ mod tests {
             let info = recording.start(Some(60)).unwrap();
             assert!(recording.start(Some(60)).is_err());
             emit_debug();
+            tracing::debug!(target: "other_crate", "foreign-marker");
             recording.stop(StopReason::Stopped).unwrap();
             emit_debug();
             let contents = fs::read_to_string(info.path).unwrap();
             assert_eq!(contents.matches("capture-marker").count(), 1);
+            let marker = contents
+                .lines()
+                .find(|line| line.contains("capture-marker"))
+                .unwrap();
+            assert!(marker.starts_with("[lwm-log-v1] "), "{marker}");
+            assert!(!contents.contains("foreign-marker"));
             assert!(!contents.contains("previous recording marker"));
             assert!(contents.contains("Recording ended: stopped"));
             assert_eq!(handle.with_current(|f| *f).unwrap(), LevelFilter::OFF);
