@@ -978,12 +978,10 @@ fn init_logging(
     let recording = recording::Recording::new(filter_handle, leopardwm_ipc::diagnostics_dir());
     let writer = recording.clone();
     tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::fmt::layer()
-                .with_ansi(false)
-                .with_writer(move || writer.writer())
-                .with_filter(recording_filter),
-        )
+        .with(log_text::file_layer(
+            move || writer.writer(),
+            recording_filter,
+        ))
         .with(
             tracing_subscriber::fmt::layer()
                 .with_writer(std::io::stdout)
@@ -3976,15 +3974,11 @@ async fn main() -> Result<()> {
             "[leopardwm] Another instance is already running (active pipe candidates: {})",
             ipc_pipe_names.join(", ")
         );
-        recording::stop_on_exit();
         std::process::exit(1);
     }
 
+    // `logging` keeps the recording guard alive until main returns.
     let (config, config_warnings, _gesture_capture, logging) = bootstrap_config()?;
-    let LoggingState {
-        health: log_health,
-        _recording_guard,
-    } = logging;
 
     install_panic_hook();
 
@@ -4012,7 +4006,7 @@ async fn main() -> Result<()> {
 
     let monitors = detect_monitors();
 
-    let state = initialize_state(config.clone(), monitors, log_health).await;
+    let state = initialize_state(config.clone(), monitors, logging.health).await;
 
     info!("Enumerating windows...");
     {

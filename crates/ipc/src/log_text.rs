@@ -3,10 +3,10 @@
 use std::fmt::{self, Display, Write};
 use std::panic::Location;
 use tracing::Subscriber;
-use tracing_subscriber::filter::{filter_fn, FilterExt, LevelFilter};
+use tracing_subscriber::filter::{filter_fn, FilterExt};
 use tracing_subscriber::fmt::time::{FormatTime, SystemTime};
 use tracing_subscriber::fmt::{self as tracing_fmt, format::Writer, MakeWriter};
-use tracing_subscriber::layer::Layer;
+use tracing_subscriber::layer::{Filter, Layer};
 use tracing_subscriber::registry::LookupSpan;
 
 pub(crate) const RECORD_TAG: &str = "[lwm-log-v1] ";
@@ -21,10 +21,11 @@ impl FormatTime for RecordTime {
     }
 }
 
-pub fn file_layer<S, W>(writer: W, level: LevelFilter) -> impl Layer<S>
+pub fn file_layer<S, W, L>(writer: W, level: L) -> impl Layer<S>
 where
     S: Subscriber + for<'a> LookupSpan<'a>,
     W: for<'a> MakeWriter<'a> + 'static,
+    L: Filter<S> + 'static,
 {
     tracing_fmt::layer()
         .with_ansi(false)
