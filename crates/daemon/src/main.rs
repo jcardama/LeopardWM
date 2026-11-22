@@ -1670,10 +1670,7 @@ async fn setup_tray(
             let ids = leopardwm_platform_win32::collect_all_top_level_window_ids();
             leopardwm_platform_win32::emergency_restore_windows(&ids.window_ids, deadline);
         },
-        |code| {
-            recording::stop_on_emergency_exit();
-            std::process::exit(code)
-        },
+        |code| std::process::exit(code),
         quit_fallback::QuitTiming::default(),
     ));
     let (tray_sync_tx, tray_sync_rx) = std::sync::mpsc::channel();
