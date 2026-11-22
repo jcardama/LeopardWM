@@ -2126,6 +2126,7 @@ pub(crate) struct ConfigRejection {
     pub preserved_at: Option<PathBuf>,
     pub recovered_fields: Vec<recovery::DroppedField>,
     bytes: Option<Vec<u8>>,
+    pending: bool,
 }
 
 #[derive(Default)]
@@ -2269,6 +2270,7 @@ impl ConfigFile {
             let mut rejection = self.rejections.remove(index);
             rejection.reason = reason;
             rejection.location = location;
+            rejection.pending = true;
             rejection.recovered_fields.clear();
             self.rejections.push(rejection);
         } else {
@@ -2279,6 +2281,7 @@ impl ConfigFile {
                 preserved_at: None,
                 recovered_fields: Vec::new(),
                 bytes,
+                pending: true,
             });
         }
     }
@@ -2292,7 +2295,11 @@ impl ConfigFile {
             .clone();
         let content =
             toml::to_string_pretty(config).context("Failed to serialize config to TOML")?;
-        for rejection in &mut self.rejections {
+        for rejection in self
+            .rejections
+            .iter_mut()
+            .filter(|rejection| rejection.pending)
+        {
             let bytes = rejection.bytes.as_ref().ok_or_else(|| {
                 anyhow::anyhow!(
                     "Cannot preserve unreadable config file: {}",
@@ -2315,9 +2322,7 @@ impl ConfigFile {
                         fs::write(&path, &content).with_context(|| {
                             format!("Failed to write config file: {}", path.display())
                         })?;
-                        self.path = Some(path.clone());
-                        self.last_seen = Some(content.into_bytes());
-                        tracing::info!("Config saved to: {}", path.display());
+                        self.finish_save(path, content);
                         return Ok(());
                     }
                     _ => {
@@ -2347,7 +2352,7 @@ impl ConfigFile {
             if self
                 .rejections
                 .iter()
-                .any(|rejection| rejection.path == path)
+                .any(|rejection| rejection.pending && rejection.path == path)
             {
                 match fs::read(&target) {
                     Ok(current) => {
@@ -2373,10 +2378,17 @@ impl ConfigFile {
             let _ = fs::remove_file(&temp);
         }
         result.with_context(|| format!("Failed to write config file: {}", path.display()))?;
-        self.path = Some(path.clone());
-        self.last_seen = Some(content.into_bytes());
-        tracing::info!("Config saved to: {}", path.display());
+        self.finish_save(path, content);
         Ok(())
+    }
+
+    fn finish_save(&mut self, path: PathBuf, content: String) {
+        for rejection in &mut self.rejections {
+            rejection.pending = false;
+        }
+        tracing::info!("Config saved to: {}", path.display());
+        self.path = Some(path);
+        self.last_seen = Some(content.into_bytes());
     }
 }
 
@@ -5042,6 +5054,57 @@ mod tests {
     }
 
     #[test]
+    fn edits_after_preserved_save_do_not_consume_backup_slots() {
+        for (source, recovered) in [("broken = [", false), ("[layout]\ngap = 'bad'\n", true)] {
+            let fixture = ConfigFileFixture::new();
+            let path = fixture.0.join("config.toml");
+            fs::write(&path, source).unwrap();
+            let mut file = ConfigFile::default();
+            assert_eq!(file.load(std::slice::from_ref(&path)).is_ok(), recovered);
+            file.save(&Config::default(), std::slice::from_ref(&path))
+                .unwrap();
+            for gap in [21, 31] {
+                fs::write(&path, format!("[layout]\ngap = {gap}\n")).unwrap();
+                file.save(&Config::default(), std::slice::from_ref(&path))
+                    .unwrap();
+                assert!(!corrupt_path(&path, ".corrupt.1").exists());
+            }
+            assert_eq!(
+                fs::read(corrupt_path(&path, ".corrupt")).unwrap(),
+                source.as_bytes()
+            );
+            assert_eq!(
+                file.rejections[0].preserved_at,
+                Some(corrupt_path(&path, ".corrupt"))
+            );
+        }
+    }
+
+    #[test]
+    fn archived_backup_stays_gone_until_a_new_rejection() {
+        for (source, recovered) in [("broken = [", false), ("[layout]\ngap = 'bad'\n", true)] {
+            let fixture = ConfigFileFixture::new();
+            let path = fixture.0.join("config.toml");
+            let backup = corrupt_path(&path, ".corrupt");
+            fs::write(&path, source).unwrap();
+            let mut file = ConfigFile::default();
+            assert_eq!(file.load(std::slice::from_ref(&path)).is_ok(), recovered);
+            file.save(&Config::default(), std::slice::from_ref(&path))
+                .unwrap();
+            fs::remove_file(&backup).unwrap();
+            file.save(&Config::default(), std::slice::from_ref(&path))
+                .unwrap();
+            assert!(!backup.exists());
+            assert_eq!(file.rejections[0].preserved_at, Some(backup.clone()));
+            fs::write(&path, source).unwrap();
+            assert_eq!(file.load(std::slice::from_ref(&path)).is_ok(), recovered);
+            file.save(&Config::default(), std::slice::from_ref(&path))
+                .unwrap();
+            assert_eq!(fs::read(&backup).unwrap(), source.as_bytes());
+        }
+    }
+
+    #[test]
     fn repeated_saves_after_rejection_do_not_preserve_own_writes() {
         let fixture = ConfigFileFixture::new();
         let path = fixture.0.join("config.toml");
@@ -5106,6 +5169,16 @@ mod tests {
             .file_type()
             .is_symlink());
         assert_eq!(Config::load_from_path(&target).unwrap().layout.gap, 17);
+
+        fs::write(&target, "broken = [").unwrap();
+        assert!(file.load(std::slice::from_ref(&path)).is_err());
+        fs::remove_file(&target).unwrap();
+        file.save(&config, std::slice::from_ref(&path)).unwrap();
+        let backup = corrupt_path(&path, ".corrupt");
+        assert_eq!(fs::read(&backup).unwrap(), b"broken = [");
+        fs::remove_file(&backup).unwrap();
+        file.save(&config, std::slice::from_ref(&path)).unwrap();
+        assert!(!backup.exists());
     }
 
     #[test]
