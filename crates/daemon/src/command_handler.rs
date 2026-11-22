@@ -12,11 +12,13 @@ use leopardwm_ipc::{
     ElevationBlockReason, ElevationBlockedWindow, HotkeyBindingInfo, IpcCommand, IpcResponse,
 };
 use leopardwm_platform_win32::{
-    enumerate_windows, get_process_executable, monitor_above, monitor_below, monitor_to_left,
-    monitor_to_right, ManageBlock, MonitorId, MonitorInfo,
+    enumerate_windows, get_process_executable, monitor_above, monitor_below, monitor_left_of,
+    monitor_right_of, monitor_to_left, monitor_to_right, ManageBlock, MonitorId, MonitorInfo,
 };
 use std::collections::HashMap;
 use tracing::{debug, info, warn};
+
+type MonitorSelector = fn(&[MonitorInfo], MonitorId) -> Option<&MonitorInfo>;
 
 enum FullscreenPolicy {
     /// Drop fullscreen first, then run the command against the visible strip.
@@ -666,7 +668,7 @@ impl AppState {
             self.warp_cursor_if_focus_moved(focus_before);
             return resp;
         }
-        let cmd = self.cross_monitor_command(cmd);
+        let (cmd, cross_selector) = self.cross_monitor_command(cmd);
         let focus_before = (self.config.behavior.mouse_follows_focus && is_focus_navigation(&cmd))
             .then_some(self.previous_focused_hwnd);
         if let Some(resp) = self.apply_fullscreen_policy(&cmd) {
@@ -784,15 +786,15 @@ impl AppState {
                 ws.ensure_focused_visible_animated(vw);
                 info!("Moved window to row down -> row {}", ws.focused_row());
             }),
-            IpcCommand::FocusMonitorLeft => self.focus_monitor(monitor_to_left, "left"),
-            IpcCommand::FocusMonitorRight => self.focus_monitor(monitor_to_right, "right"),
+            IpcCommand::FocusMonitorLeft => self.focus_monitor(cross_selector.unwrap_or(monitor_to_left), "left"),
+            IpcCommand::FocusMonitorRight => self.focus_monitor(cross_selector.unwrap_or(monitor_to_right), "right"),
             IpcCommand::FocusMonitorUp => self.focus_monitor(monitor_above, "up"),
             IpcCommand::FocusMonitorDown => self.focus_monitor(monitor_below, "down"),
             IpcCommand::MoveWindowToMonitorLeft => {
-                self.move_to_monitor(None, monitor_to_left, "left")
+                self.move_to_monitor(None, cross_selector.unwrap_or(monitor_to_left), "left")
             }
             IpcCommand::MoveWindowToMonitorRight => {
-                self.move_to_monitor(None, monitor_to_right, "right")
+                self.move_to_monitor(None, cross_selector.unwrap_or(monitor_to_right), "right")
             }
             IpcCommand::MoveWindowToMonitorUp => self.move_to_monitor(None, monitor_above, "up"),
             IpcCommand::MoveWindowToMonitorDown => {
@@ -1049,35 +1051,35 @@ impl AppState {
         }
     }
 
-    fn cross_monitor_command(&self, cmd: IpcCommand) -> IpcCommand {
+    fn cross_monitor_command(&self, cmd: IpcCommand) -> (IpcCommand, Option<MonitorSelector>) {
         match cmd {
             IpcCommand::FocusLeft
                 if self.config.behavior.focus_crosses_monitors
-                    && self.crosses_monitor_edge(true, monitor_to_left) =>
+                    && self.crosses_monitor_edge(true, monitor_left_of) =>
             {
-                IpcCommand::FocusMonitorLeft
+                (IpcCommand::FocusMonitorLeft, Some(monitor_left_of))
             }
             IpcCommand::FocusRight
                 if self.config.behavior.focus_crosses_monitors
-                    && self.crosses_monitor_edge(false, monitor_to_right) =>
+                    && self.crosses_monitor_edge(false, monitor_right_of) =>
             {
-                IpcCommand::FocusMonitorRight
+                (IpcCommand::FocusMonitorRight, Some(monitor_right_of))
             }
             IpcCommand::MoveColumnLeft
                 if self.config.behavior.move_crosses_monitors
                     && self.has_non_minimized_monitor_move_target()
-                    && self.crosses_monitor_edge(true, monitor_to_left) =>
+                    && self.crosses_monitor_edge(true, monitor_left_of) =>
             {
-                IpcCommand::MoveWindowToMonitorLeft
+                (IpcCommand::MoveWindowToMonitorLeft, Some(monitor_left_of))
             }
             IpcCommand::MoveColumnRight
                 if self.config.behavior.move_crosses_monitors
                     && self.has_non_minimized_monitor_move_target()
-                    && self.crosses_monitor_edge(false, monitor_to_right) =>
+                    && self.crosses_monitor_edge(false, monitor_right_of) =>
             {
-                IpcCommand::MoveWindowToMonitorRight
+                (IpcCommand::MoveWindowToMonitorRight, Some(monitor_right_of))
             }
-            _ => cmd,
+            _ => (cmd, None),
         }
     }
 
@@ -1093,26 +1095,13 @@ impl AppState {
         left: bool,
         select: fn(&[MonitorInfo], MonitorId) -> Option<&MonitorInfo>,
     ) -> bool {
-        if !self
-            .focused_workspace()
+        self.focused_workspace()
             .is_some_and(|ws| !ws.has_visible_column(left))
-        {
-            return false;
-        }
-        let Some(current) = self.monitors.get(&self.focused_monitor) else {
-            return false;
-        };
-        let monitors: Vec<_> = self.monitors.values().cloned().collect();
-        let Some(target) = select(&monitors, self.focused_monitor) else {
-            return false;
-        };
-        let center_x =
-            |monitor: &MonitorInfo| i64::from(monitor.rect.x) + i64::from(monitor.rect.width / 2);
-        if left {
-            center_x(target) < center_x(current)
-        } else {
-            center_x(target) > center_x(current)
-        }
+            && select(
+                &self.monitors.values().cloned().collect::<Vec<_>>(),
+                self.focused_monitor,
+            )
+            .is_some()
     }
 
     fn focus_monitor(

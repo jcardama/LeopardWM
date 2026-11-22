@@ -25,6 +25,30 @@ mod tests {
     }
 
     #[test]
+    fn visible_column_query_skips_minimized_and_detects_edges() {
+        let mut ws = Workspace::new();
+        assert!(!ws.has_visible_column(true));
+        assert!(!ws.has_visible_column(false));
+        for id in [1, 2, 3, 4, 5] {
+            ws.insert_window(id, None).unwrap();
+        }
+        ws.focus_window(3).unwrap();
+        assert!(ws.mark_minimized(2));
+        assert!(ws.mark_minimized(4));
+        assert!(ws.has_visible_column(true));
+        assert!(ws.has_visible_column(false));
+        assert!(ws.mark_minimized(1));
+        assert!(ws.mark_minimized(5));
+        assert!(!ws.has_visible_column(true));
+        assert!(!ws.has_visible_column(false));
+        assert!(ws.mark_restored(1));
+        assert!(ws.has_visible_column(true));
+        ws.focus_window(1).unwrap();
+        assert!(!ws.has_visible_column(true));
+        assert!(ws.has_visible_column(false));
+    }
+
+    #[test]
     fn explicit_column_alignment_obeys_edges_and_scroll_bounds() {
         for reduce_motion in [false, true] {
             for mode in [

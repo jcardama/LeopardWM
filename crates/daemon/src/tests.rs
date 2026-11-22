@@ -10776,6 +10776,34 @@ fn horizontal_edge_options_cross_only_with_a_neighbor() {
 }
 
 #[test]
+fn horizontal_edge_crosses_past_stacked_monitor_to_right_neighbor() {
+    for command in [IpcCommand::FocusRight, IpcCommand::MoveColumnRight] {
+        let mut monitors = two_monitors();
+        let mut lower = monitors[1].clone();
+        lower.id = 3;
+        lower.rect = Rect::new(0, 1080, 1920, 1080);
+        lower.work_area = Rect::new(0, 1080, 1920, 1040);
+        monitors.push(lower);
+        let mut state = AppState::new_with_config(test_config(), monitors);
+        state.injected_apply_placements_behavior =
+            Some(TestApplyPlacementsBehavior::SleepAndSucceed(Duration::ZERO));
+        state.config.behavior.focus_crosses_monitors = true;
+        state.config.behavior.move_crosses_monitors = true;
+        state
+            .focused_workspace_mut()
+            .unwrap()
+            .insert_window(0, None)
+            .unwrap();
+        let moving = matches!(command, IpcCommand::MoveColumnRight);
+        assert_eq!(state.handle_command(command), IpcResponse::Ok);
+        assert_eq!(state.focused_monitor, 2);
+        assert_eq!(state.workspaces[&2][0].contains_window(0), moving);
+        assert_eq!(state.workspaces[&1][0].contains_window(0), !moving);
+        assert!(!state.workspaces[&3][0].contains_window(0));
+    }
+}
+
+#[test]
 fn horizontal_edge_commands_do_not_cross_stacked_monitors() {
     for source in [1, 2] {
         for command in [
