@@ -1890,18 +1890,17 @@ impl Config {
     pub fn compile_window_rules(&self) -> Vec<CompiledWindowRule> {
         let mut compiled = Vec::new();
 
-        for rule in &self.window_rules {
+        for (index, rule) in self.window_rules.iter().enumerate() {
             let class_regex = match &rule.match_class {
                 Some(pattern) => match regex::RegexBuilder::new(pattern)
                     .size_limit(1_000_000)
                     .build()
                 {
                     Ok(re) => Some(re),
-                    Err(e) => {
+                    Err(_) => {
                         tracing::warn!(
-                            "Invalid regex in window rule match_class '{}': {}. Skipping rule.",
-                            pattern,
-                            e
+                            "Window rule {}: invalid regex in match_class; skipping rule",
+                            index + 1
                         );
                         continue;
                     }
@@ -1915,11 +1914,10 @@ impl Config {
                     .build()
                 {
                     Ok(re) => Some(re),
-                    Err(e) => {
+                    Err(_) => {
                         tracing::warn!(
-                            "Invalid regex in window rule match_title '{}': {}. Skipping rule.",
-                            pattern,
-                            e
+                            "Window rule {}: invalid regex in match_title; skipping rule",
+                            index + 1
                         );
                         continue;
                     }
@@ -4029,6 +4027,49 @@ mod tests {
                 .map(|rule| rule.action);
             assert_eq!(action, expected, "title={title}, executable={executable}");
         }
+    }
+
+    #[test]
+    fn invalid_rule_warnings_do_not_log_private_patterns() {
+        use std::io::{self, Write};
+        use std::sync::{Arc, Mutex};
+
+        struct Capture(Arc<Mutex<Vec<u8>>>);
+        impl Write for Capture {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                self.0.lock().unwrap().write(bytes)
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let writer = output.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .without_time()
+            .with_writer(move || Capture(writer.clone()))
+            .finish();
+        let config = Config {
+            window_rules: vec![
+                WindowRule {
+                    match_class: Some("private-class(".into()),
+                    ..Default::default()
+                },
+                WindowRule {
+                    match_title: Some("private-title(".into()),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        tracing::subscriber::with_default(subscriber, || config.compile_window_rules());
+        let text = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+        assert!(!text.contains("private-class"), "{text}");
+        assert!(!text.contains("private-title"), "{text}");
+        assert!(!text.contains("regex parse error"), "{text}");
+        assert!(text.contains("Window rule 1: invalid regex"), "{text}");
+        assert!(text.contains("Window rule 2: invalid regex"), "{text}");
     }
 
     #[test]

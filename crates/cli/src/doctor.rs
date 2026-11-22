@@ -458,22 +458,52 @@ pub(crate) async fn handle_doctor() -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug)]
+enum SnapshotOutcome {
+    Written(String),
+    Fallback(&'static str),
+}
+
+fn snapshot_outcome(
+    result: std::result::Result<IpcResponse, crate::ipc_client::SnapshotRequestError>,
+) -> Result<SnapshotOutcome> {
+    use crate::ipc_client::SnapshotRequestError;
+    match result {
+        Ok(IpcResponse::DiagnosticSnapshotWritten { path }) => Ok(SnapshotOutcome::Written(path)),
+        Ok(IpcResponse::Error { .. }) => Ok(SnapshotOutcome::Fallback(
+            "daemon rejected snapshot capture",
+        )),
+        Err(SnapshotRequestError::Connection) => {
+            Ok(SnapshotOutcome::Fallback("could not connect to the daemon"))
+        }
+        Err(SnapshotRequestError::Indeterminate(error)) => Err(anyhow::anyhow!(
+            "The daemon may still be writing the snapshot. Check {}. Request failed: {error}",
+            leopardwm_ipc::diagnostics_dir().display()
+        )),
+        Ok(_) => Err(anyhow::anyhow!(
+            "The daemon may still be writing the snapshot; its response was unexpected. Check {}.",
+            leopardwm_ipc::diagnostics_dir().display()
+        )),
+    }
+}
+
 pub(crate) async fn handle_collect_logs() -> Result<()> {
     use leopardwm_ipc::diagnostic_snapshot::{self, ConfigLoadStatus, Monitor, SnapshotInput};
     let version = env!("CARGO_PKG_VERSION").to_string();
     let integrity = leopardwm_platform_win32::current_process_integrity();
     let reason = match probe_daemon_running() {
-        Ok(true) => match send_command(IpcCommand::WriteDiagnosticSnapshot {
-            requester_version: version.clone(),
-            requester_integrity: integrity,
-        })
-        .await
-        {
-            Ok(IpcResponse::DiagnosticSnapshotWritten { path }) => {
+        Ok(true) => match snapshot_outcome(
+            crate::ipc_client::send_snapshot_command(IpcCommand::WriteDiagnosticSnapshot {
+                requester_version: version.clone(),
+                requester_integrity: integrity,
+            })
+            .await,
+        )? {
+            SnapshotOutcome::Written(path) => {
                 println!("{path}");
                 return Ok(());
             }
-            _ => "daemon does not support snapshot capture or the request failed",
+            SnapshotOutcome::Fallback(reason) => reason,
         },
         Ok(false) => "daemon not running",
         Err(_) => "daemon state could not be checked",
@@ -486,6 +516,7 @@ pub(crate) async fn handle_collect_logs() -> Result<()> {
             Err(error) => (ConfigLoadStatus::ReadFailed(error.to_string()), None),
         },
     };
+    leopardwm_platform_win32::set_dpi_awareness();
     let input = SnapshotInput {
         requester: "CLI".into(),
         requester_version: version,
@@ -524,4 +555,38 @@ pub(crate) async fn handle_collect_logs() -> Result<()> {
     println!("{}", path.display());
     println!("Daemon data unavailable: {reason}.");
     Ok(())
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+    use crate::ipc_client::SnapshotRequestError;
+
+    #[test]
+    fn fallback_requires_presend_failure_or_definite_rejection() {
+        assert!(matches!(
+            snapshot_outcome(Err(SnapshotRequestError::Connection)).unwrap(),
+            SnapshotOutcome::Fallback(_)
+        ));
+        assert!(matches!(
+            snapshot_outcome(Ok(IpcResponse::error("unknown command"))).unwrap(),
+            SnapshotOutcome::Fallback(_)
+        ));
+        assert!(
+            matches!(snapshot_outcome(Ok(IpcResponse::DiagnosticSnapshotWritten { path: "snapshot.txt".into() })).unwrap(), SnapshotOutcome::Written(path) if path == "snapshot.txt")
+        );
+        for response in [
+            Err(SnapshotRequestError::Indeterminate(anyhow::anyhow!(
+                "response timed out"
+            ))),
+            Err(SnapshotRequestError::Indeterminate(anyhow::anyhow!(
+                "response lost"
+            ))),
+            Ok(IpcResponse::Unknown),
+        ] {
+            let error = snapshot_outcome(response).unwrap_err().to_string();
+            assert!(error.contains("may still be writing"), "{error}");
+            assert!(error.contains("diagnostics"), "{error}");
+        }
+    }
 }

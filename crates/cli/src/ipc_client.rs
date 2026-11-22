@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use leopardwm_ipc::{pipe_name_candidates, IpcCommand, IpcResponse, MAX_IPC_MESSAGE_SIZE};
 use std::os::windows::io::AsRawHandle;
 use std::time::{Duration, Instant};
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeClient};
 use tokio::time::{sleep, timeout};
 use windows::Win32::Foundation::HANDLE;
@@ -299,6 +299,35 @@ pub(crate) async fn send_command(cmd: IpcCommand) -> Result<IpcResponse> {
     send_command_with_timeouts(cmd, connect_timeout, response_timeout).await
 }
 
+#[derive(Debug)]
+pub(crate) enum SnapshotRequestError {
+    Connection,
+    Indeterminate(anyhow::Error),
+}
+
+pub(crate) async fn send_snapshot_command(
+    cmd: IpcCommand,
+) -> std::result::Result<IpcResponse, SnapshotRequestError> {
+    let client = open_pipe_with_retry(
+        command_connect_timeout(&cmd),
+        Some(IPC_NOT_FOUND_FAST_FAIL_AFTER),
+    )
+    .await
+    .map_err(|_| SnapshotRequestError::Connection)?;
+    let response_timeout = command_response_timeout(&cmd);
+    exchange_snapshot(client, cmd, response_timeout).await
+}
+
+async fn exchange_snapshot<T: AsyncRead + AsyncWrite + Unpin>(
+    client: T,
+    cmd: IpcCommand,
+    response_timeout: Duration,
+) -> std::result::Result<IpcResponse, SnapshotRequestError> {
+    exchange_command(client, cmd, response_timeout)
+        .await
+        .map_err(SnapshotRequestError::Indeterminate)
+}
+
 async fn send_command_with_timeouts(
     cmd: IpcCommand,
     connect_timeout: Duration,
@@ -317,6 +346,14 @@ async fn send_command_inner(
         allow_daemon_foreground(&client);
     }
 
+    exchange_command(client, cmd, response_timeout).await
+}
+
+async fn exchange_command<T: AsyncRead + AsyncWrite + Unpin>(
+    client: T,
+    cmd: IpcCommand,
+    response_timeout: Duration,
+) -> Result<IpcResponse> {
     let (reader, mut writer) = tokio::io::split(client);
 
     let json = serde_json::to_string(&cmd)? + "\n";
@@ -336,4 +373,34 @@ async fn send_command_inner(
             response_timeout.as_millis()
         )
     })?
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn timeout_and_disconnect_after_send_are_indeterminate() {
+        let command = IpcCommand::WriteDiagnosticSnapshot {
+            requester_version: "1".into(),
+            requester_integrity: None,
+        };
+        let (client, _server) = tokio::io::duplex(1024);
+        let result = exchange_snapshot(client, command.clone(), Duration::from_millis(10)).await;
+        assert!(matches!(
+            result,
+            Err(SnapshotRequestError::Indeterminate(_))
+        ));
+        let (client, mut server) = tokio::io::duplex(1024);
+        let peer = tokio::spawn(async move {
+            let mut request = vec![0; 1024];
+            assert!(server.read(&mut request).await.unwrap() > 0);
+        });
+        let result = exchange_snapshot(client, command, Duration::from_secs(1)).await;
+        peer.await.unwrap();
+        assert!(matches!(
+            result,
+            Err(SnapshotRequestError::Indeterminate(_))
+        ));
+    }
 }
