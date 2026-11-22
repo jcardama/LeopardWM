@@ -3897,7 +3897,7 @@ fn notify_rejected_config() {
             for field in &rejection.recovered_fields {
                 warn!(
                     "Config: {} reset to default: {}",
-                    log_text::name(&field.path),
+                    log_text::path(&field.path),
                     log_text::text(&field.reason)
                 );
             }

@@ -2324,7 +2324,7 @@ impl ConfigFile {
                         for field in &fields {
                             tracing::warn!(
                                 "Config: {} reset to default: {}",
-                                log_text::name(&field.path),
+                                log_text::path(&field.path),
                                 log_text::text(&field.reason)
                             );
                         }
