@@ -2342,6 +2342,7 @@ impl AppState {
             elevation_blocked_windows: legacy,
             daemon_integrity: leopardwm_platform_win32::current_process_integrity(),
             elevation_blocked_records: Some(records),
+            unknown_config_keys: Some(crate::config::unknown_config_keys()),
             native_swipes: Some(self.native_swipes.clone()),
             daemon_log: self
                 .daemon_log

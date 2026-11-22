@@ -2156,6 +2156,7 @@ struct ConfigFile {
     last_seen: Option<Vec<u8>>,
     rejections: Vec<ConfigRejection>,
     rejected_paths: Vec<PathBuf>,
+    unknown_keys: Vec<String>,
 }
 
 static CONFIG_FILE: Mutex<ConfigFile> = Mutex::new(ConfigFile {
@@ -2163,7 +2164,12 @@ static CONFIG_FILE: Mutex<ConfigFile> = Mutex::new(ConfigFile {
     last_seen: None,
     rejections: Vec::new(),
     rejected_paths: Vec::new(),
+    unknown_keys: Vec::new(),
 });
+
+pub(crate) fn unknown_config_keys() -> Vec<String> {
+    CONFIG_FILE.lock().unwrap().unknown_keys.clone()
+}
 
 pub(crate) fn config_rejection() -> Option<ConfigRejection> {
     CONFIG_FILE.lock().unwrap().rejections.last().cloned()
@@ -2285,8 +2291,106 @@ fn preserve_config_bytes(path: &Path, bytes: &[u8]) -> Result<PathBuf> {
     Ok(copy)
 }
 
+fn find_unknown_config_keys(
+    content: &str,
+    config: &Config,
+    dropped: &[recovery::DroppedField],
+) -> Vec<String> {
+    fn walk(
+        input: &toml::Value,
+        output: &toml::Value,
+        path: &str,
+        pattern: &str,
+        dropped: &[recovery::DroppedField],
+        keys: &mut Vec<String>,
+    ) {
+        match (input, output) {
+            (toml::Value::Table(input), toml::Value::Table(output)) => {
+                for (key, value) in input {
+                    let name = if path.is_empty() {
+                        key.clone()
+                    } else {
+                        format!("{path}.{key}")
+                    };
+                    let canonical = if pattern.is_empty() {
+                        key.clone()
+                    } else {
+                        format!("{pattern}.{key}")
+                    };
+                    if matches!(
+                        canonical.as_str(),
+                        "hotkeys"
+                            | "layout.center_single_column"
+                            | "layout.outer_gap"
+                            | "layout.default_column_width"
+                            | "layout.min_column_width"
+                            | "layout.max_column_width"
+                            | "behavior.hide_offscreen_taskbar_buttons"
+                            | "layout.rows.workspaces[].workspace"
+                            | "gestures.raw_input"
+                            | "gestures.diagnostic_capture_secs"
+                    ) {
+                        continue;
+                    }
+                    if dropped.iter().any(|field| field.path == name) {
+                        continue;
+                    }
+                    if let Some(other) = output.get(key) {
+                        walk(value, other, &name, &canonical, dropped, keys);
+                    } else {
+                        keys.push(name);
+                    }
+                }
+            }
+            (toml::Value::Array(input), toml::Value::Array(output)) => {
+                let mut retained = output.iter();
+                for (index, value) in input.iter().enumerate() {
+                    let name = format!("{path}[{index}]");
+                    // Recovery already reports the whole dropped element.
+                    if dropped.iter().any(|field| field.path == name) {
+                        continue;
+                    }
+                    if let Some(other) = retained.next() {
+                        walk(value, other, &name, &format!("{pattern}[]"), dropped, keys);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let Ok(input) = toml::from_str::<toml::Table>(content) else {
+        return Vec::new();
+    };
+    let Ok(output) = toml::Value::try_from(config) else {
+        return Vec::new();
+    };
+    let mut keys = Vec::new();
+    walk(
+        &toml::Value::Table(input),
+        &output,
+        "",
+        "",
+        dropped,
+        &mut keys,
+    );
+    keys
+}
+
 impl ConfigFile {
+    fn record_unknown_keys(
+        &mut self,
+        content: &str,
+        config: &Config,
+        dropped: &[recovery::DroppedField],
+    ) {
+        self.unknown_keys = find_unknown_config_keys(content, config, dropped);
+        for key in &self.unknown_keys {
+            tracing::warn!("Unknown config key: {key}");
+        }
+    }
+
     fn load(&mut self, paths: &[PathBuf]) -> Result<Config> {
+        self.unknown_keys.clear();
         for path in paths {
             let bytes = match fs::read(path) {
                 Ok(bytes) => bytes,
@@ -2319,12 +2423,14 @@ impl ConfigFile {
             };
             match Config::parse(content) {
                 Ok(config) => {
+                    self.record_unknown_keys(content, &config, &[]);
                     self.rejections.clear();
                     tracing::info!("Loading config from: {}", log_text::path(path.display()));
                     return Ok(config);
                 }
                 Err(error) => {
                     if let Some((config, fields)) = recovery::recover(content) {
+                        self.record_unknown_keys(content, &config, &fields);
                         for field in &fields {
                             tracing::warn!(
                                 "Config: {} reset to default: {}",
@@ -4881,6 +4987,84 @@ mod tests {
         fn drop(&mut self) {
             fs::remove_dir_all(&self.0).unwrap();
         }
+    }
+
+    #[test]
+    fn unknown_keys_are_reported_and_compatibility_keys_are_accepted() {
+        let fixture = ConfigFileFixture::new();
+        let path = fixture.0.join("config.toml");
+        fs::write(
+            &path,
+            r#"
+            typo = true
+            [layout]
+            center_single_colum = true
+            center_single_column = true
+            outer_gap = 8
+            default_column_width = 200
+            min_column_width = 100
+            max_column_width = 800
+            [layout.rows]
+            bogus = true
+            [[layout.rows.workspaces]]
+            workspace = 1
+            split = ["100%"]
+            [behavior]
+            hide_offscreen_taskbar_buttons = true
+            [gestures]
+            raw_input = false
+            diagnostic_capture_secs = 0
+            [[window_rules]]
+            match_clas = "example"
+        "#,
+        )
+        .unwrap();
+        let mut file = ConfigFile::default();
+        file.load(std::slice::from_ref(&path)).unwrap();
+        assert_eq!(
+            file.unknown_keys,
+            [
+                "layout.center_single_colum",
+                "layout.rows.bogus",
+                "typo",
+                "window_rules[0].match_clas"
+            ]
+        );
+        fs::write(&path, "[layout]\ngap = 8\n").unwrap();
+        file.load(std::slice::from_ref(&path)).unwrap();
+        assert!(file.unknown_keys.is_empty());
+    }
+
+    #[test]
+    fn default_template_has_no_unknown_keys() {
+        let content = leopardwm_ipc::config_template::render_default_config();
+        let config = Config::parse(&content).unwrap();
+        assert_eq!(
+            find_unknown_config_keys(&content, &config, &[]),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn recovered_config_still_reports_unknown_keys() {
+        let fixture = ConfigFileFixture::new();
+        let path = fixture.0.join("config.toml");
+        fs::write(&path, "[layout]\ngap = 'bad'\ncenter_single_colum = true\n").unwrap();
+        let mut file = ConfigFile::default();
+        file.load(std::slice::from_ref(&path)).unwrap();
+        assert!(!file.rejections.is_empty());
+        assert_eq!(file.unknown_keys, ["layout.center_single_colum"]);
+    }
+
+    #[test]
+    fn recovered_rule_indices_remain_aligned_after_a_rule_is_dropped() {
+        let fixture = ConfigFileFixture::new();
+        let path = fixture.0.join("config.toml");
+        fs::write(&path, "[[window_rules]]\nwidth = 'bad'\n[[window_rules]]\nmatch_class = 'second'\nmatch_clas = 'typo'\n").unwrap();
+        let mut file = ConfigFile::default();
+        let config = file.load(std::slice::from_ref(&path)).unwrap();
+        assert_eq!(config.window_rules.len(), 1);
+        assert_eq!(file.unknown_keys, ["window_rules[1].match_clas"]);
     }
 
     #[test]

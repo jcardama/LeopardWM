@@ -903,6 +903,9 @@ pub enum IpcResponse {
         /// None means an older daemon did not report this field.
         #[serde(default)]
         daemon_log: Option<DaemonLogStatus>,
+        /// Unknown config key paths. `None` means an older daemon omitted this field.
+        #[serde(default)]
+        unknown_config_keys: Option<Vec<String>>,
     },
     /// Forward-compatibility fallback for newer daemon responses unknown to this client.
     #[serde(other)]
@@ -1255,6 +1258,7 @@ mod tests {
                 daemon_log: Some(DaemonLogStatus::Writing {
                     path: "daemon.log".into(),
                 }),
+                unknown_config_keys: Some(vec!["layout.typo".into()]),
             },
         ];
 
@@ -1715,8 +1719,10 @@ mod tests {
                 elevation_blocked_records,
                 native_swipes,
                 daemon_log,
+                unknown_config_keys,
                 ..
             } => {
+                assert_eq!(unknown_config_keys, None);
                 assert!(elevation_blocked_windows.is_empty());
                 assert_eq!(daemon_integrity, None);
                 assert_eq!(elevation_blocked_records, None);
@@ -1768,6 +1774,7 @@ mod tests {
             daemon_log: Some(DaemonLogStatus::Writing {
                 path: "daemon.log".into(),
             }),
+            unknown_config_keys: Some(vec![]),
         };
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["elevation_blocked_windows"][0][0], 16);

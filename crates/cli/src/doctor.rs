@@ -400,9 +400,16 @@ pub(crate) async fn handle_doctor() -> Result<()> {
                 elevation_blocked_records,
                 native_swipes,
                 daemon_log,
+                unknown_config_keys,
                 uptime_seconds,
                 ..
             }) => {
+                if let Some(keys) = unknown_config_keys.filter(|keys| !keys.is_empty()) {
+                    CheckResult::Warn("Unknown configuration keys:".to_string()).print();
+                    for key in keys {
+                        println!("  {key}");
+                    }
+                }
                 if thumbnail_register_balance == 0 {
                     CheckResult::Pass(
                         "Ghost-animation thumbnail balance is 0 (no leak)".to_string(),

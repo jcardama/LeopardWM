@@ -139,6 +139,7 @@ fn test_all_responses_roundtrip() {
             elevation_blocked_records: Some(vec![]),
             native_swipes: None,
             daemon_log: None,
+            unknown_config_keys: None,
         },
     ];
 

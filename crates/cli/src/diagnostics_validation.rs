@@ -467,6 +467,7 @@ fn required_health_and_status_are_not_optional() {
         elevation_blocked_records: Some(Vec::new()),
         native_swipes: None,
         daemon_log: None,
+        unknown_config_keys: None,
     };
     assert!(require_health_info(&health).is_ok());
     assert!(require_status_info(&IpcResponse::StatusInfo {
@@ -525,6 +526,7 @@ fn health_info_uses_reported_daemon_rid_not_cli() {
         elevation_blocked_records: Some(Vec::new()),
         native_swipes: None,
         daemon_log: None,
+        unknown_config_keys: None,
     };
     let (daemon, cli) = render_integrity_pair(
         Some(&health),
