@@ -2291,6 +2291,15 @@ impl ConfigFile {
             Err(error) if error.kind() == ErrorKind::NotFound => {
                 match fs::symlink_metadata(&path) {
                     Err(missing) if missing.kind() == ErrorKind::NotFound => path.clone(),
+                    Ok(metadata) if metadata.file_type().is_symlink() => {
+                        fs::write(&path, &content).with_context(|| {
+                            format!("Failed to write config file: {}", path.display())
+                        })?;
+                        self.path = Some(path.clone());
+                        self.last_seen = Some(content.into_bytes());
+                        tracing::info!("Config saved to: {}", path.display());
+                        return Ok(());
+                    }
                     _ => {
                         return Err(error).with_context(|| {
                             format!("Failed to resolve config file: {}", path.display())
@@ -4896,6 +4905,30 @@ mod tests {
         }
         let mut file = ConfigFile::default();
         let mut config = file.load(std::slice::from_ref(&path)).unwrap();
+        config.layout.gap = 17;
+        file.save(&config, std::slice::from_ref(&path)).unwrap();
+        assert!(fs::symlink_metadata(&path)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(Config::load_from_path(&target).unwrap().layout.gap, 17);
+    }
+
+    #[test]
+    fn save_creates_missing_symlink_target() {
+        use std::os::windows::fs::symlink_file;
+
+        let fixture = ConfigFileFixture::new();
+        let path = fixture.0.join("config.toml");
+        let target = fixture.0.join("missing.toml");
+        if let Err(error) = symlink_file(&target, &path) {
+            if error.raw_os_error() == Some(1314) {
+                return;
+            }
+            panic!("failed to create test symlink: {error}");
+        }
+        let mut file = ConfigFile::default();
+        let mut config = Config::default();
         config.layout.gap = 17;
         file.save(&config, std::slice::from_ref(&path)).unwrap();
         assert!(fs::symlink_metadata(&path)
