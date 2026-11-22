@@ -2113,6 +2113,10 @@ impl Config {
         let result = CONFIG_FILE.lock().unwrap().save(self, &config_paths());
         if let Err(error) = &result {
             tracing::warn!("Failed to save config: {error:#}");
+            crate::notify::show_toast(
+                "Settings not saved",
+                "The settings were not saved. config.toml may have changed outside LeopardWM, or no backup slot is free. Reload the config or move the .corrupt files, then try again.",
+            );
         }
         result
     }
@@ -2150,6 +2154,87 @@ fn corrupt_path(path: &Path, suffix: &str) -> PathBuf {
     let mut name = path.as_os_str().to_owned();
     name.push(suffix);
     PathBuf::from(name)
+}
+
+fn replace_config_file(target: &Path, temp: &Path, content: &[u8]) -> Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::io::AsRawHandle;
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, ReplaceFileW, BY_HANDLE_FILE_INFORMATION, REPLACE_FILE_FLAGS,
+    };
+
+    let source = match fs::File::open(target) {
+        Ok(source) => source,
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            return fs::rename(temp, target).map_err(Into::into)
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let mut info = BY_HANDLE_FILE_INFORMATION::default();
+    unsafe {
+        GetFileInformationByHandle(HANDLE(source.as_raw_handle()), &mut info)?;
+    }
+    if info.nNumberOfLinks > 1 {
+        let backup = corrupt_path(target, &format!(".{}.backup", uuid::Uuid::new_v4()));
+        let mut copy = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&backup)?;
+        let mut source = source;
+        if let Err(error) = std::io::copy(&mut source, &mut copy).and_then(|_| copy.sync_all()) {
+            drop(copy);
+            let _ = fs::remove_file(&backup);
+            return Err(error).with_context(|| {
+                format!("Failed to back up hard-linked config: {}", backup.display())
+            });
+        }
+        drop(copy);
+        drop(source);
+        let result = (|| -> std::io::Result<()> {
+            let mut destination = fs::OpenOptions::new()
+                .write(true)
+                .truncate(true)
+                .open(target)?;
+            destination.write_all(content)?;
+            destination.sync_all()
+        })();
+        result.with_context(|| {
+            format!(
+                "Failed to write hard-linked config; original copy kept at {}",
+                backup.display()
+            )
+        })?;
+        if let Err(error) = fs::remove_file(&backup) {
+            tracing::warn!(
+                "Could not remove config backup {}: {error}",
+                backup.display()
+            );
+        }
+        if let Err(error) = fs::remove_file(temp) {
+            tracing::warn!(
+                "Could not remove temporary config {}: {error}",
+                temp.display()
+            );
+        }
+        Ok(())
+    } else {
+        drop(source);
+        let target_wide: Vec<u16> = target.as_os_str().encode_wide().chain(Some(0)).collect();
+        let temp_wide: Vec<u16> = temp.as_os_str().encode_wide().chain(Some(0)).collect();
+        unsafe {
+            ReplaceFileW(
+                PCWSTR(target_wide.as_ptr()),
+                PCWSTR(temp_wide.as_ptr()),
+                PCWSTR::null(),
+                REPLACE_FILE_FLAGS(0),
+                None,
+                None,
+            )?;
+        }
+        Ok(())
+    }
 }
 
 fn preserve_config_bytes(path: &Path, bytes: &[u8]) -> Result<PathBuf> {
@@ -2200,6 +2285,8 @@ impl ConfigFile {
                     return Err(anyhow::anyhow!(reason));
                 }
             };
+            self.rejections
+                .retain(|rejection| rejection.path != *path || rejection.bytes.is_some());
             self.path = Some(path.clone());
             self.last_seen = Some(bytes.clone());
             let content = match std::str::from_utf8(&bytes) {
@@ -2352,7 +2439,7 @@ impl ConfigFile {
             if self
                 .rejections
                 .iter()
-                .any(|rejection| rejection.pending && rejection.path == path)
+                .any(|rejection| rejection.path == path)
             {
                 match fs::read(&target) {
                     Ok(current) => {
@@ -2371,13 +2458,15 @@ impl ConfigFile {
                     }
                 }
             }
-            fs::rename(&temp, &target)?;
+            replace_config_file(&target, &temp, content.as_bytes())?;
             Ok(())
         })();
         if result.is_err() {
             let _ = fs::remove_file(&temp);
         }
-        result.with_context(|| format!("Failed to write config file: {}", path.display()))?;
+        result.map_err(|error| {
+            anyhow::anyhow!("Failed to write config file {}: {error:#}", path.display())
+        })?;
         self.finish_save(path, content);
         Ok(())
     }
@@ -4734,7 +4823,7 @@ mod tests {
             ("[layout]\ngap = {}\n", &["layout.gap"]),
             ("[layout]\ngap = 1979-05-27T07:32:00Z\n", &["layout.gap"]),
             ("mystery_timestamp = 1979-05-27T07:32:00Z\n[layout]\ngap = 'bad'\n", &["layout.gap"]),
-            ("[[window_rules]]\nmatch_class = 'First'\nwidth = 'bad'\n[[window_rules]]\nmatch_class = 'Second'\nwidth = 321\n", &["window_rules[0].width"]),
+            ("[[window_rules]]\nmatch_class = 'First'\nwidth = 'bad'\n[[window_rules]]\nmatch_class = 'Second'\nwidth = 321\n", &["window_rules[0]"]),
         ];
         for (source, expected) in cases {
             let fixture = ConfigFileFixture::new();
@@ -4757,9 +4846,12 @@ mod tests {
             actual.sort_unstable();
             assert_eq!(&actual, expected, "{source}");
             if source.contains("[[window_rules]]") {
-                assert_eq!(config.window_rules.len(), 2);
-                assert_eq!(config.window_rules[0].match_class.as_deref(), Some("First"));
-                assert_eq!(config.window_rules[1].width, Some(321));
+                assert_eq!(config.window_rules.len(), 1);
+                assert_eq!(
+                    config.window_rules[0].match_class.as_deref(),
+                    Some("Second")
+                );
+                assert_eq!(config.window_rules[0].width, Some(321));
             }
         }
     }
@@ -4793,19 +4885,76 @@ mod tests {
     }
 
     #[test]
+    fn invalid_match_title_drops_entire_rule() {
+        let fixture = ConfigFileFixture::new();
+        let path = fixture.0.join("config.toml");
+        let source = "[[window_rules]]\nmatch_class = 'Chrome'\nmatch_title = 123\naction = 'ignore'\n[[window_rules]]\nmatch_class = 'Other'\naction = 'float'\n";
+        fs::write(&path, source).unwrap();
+        let mut file = ConfigFile::default();
+        let config = file.load(std::slice::from_ref(&path)).unwrap();
+        assert_eq!(config.window_rules.len(), 1);
+        assert_eq!(config.window_rules[0].match_class.as_deref(), Some("Other"));
+        assert_eq!(
+            file.rejections[0].recovered_fields[0].path,
+            "window_rules[0]"
+        );
+        file.save(&config, std::slice::from_ref(&path)).unwrap();
+        let saved = Config::load_from_path(&path).unwrap();
+        assert_eq!(saved.window_rules.len(), 1);
+        assert_eq!(saved.window_rules[0].match_class.as_deref(), Some("Other"));
+    }
+
+    #[test]
+    fn recovery_reports_original_indices_for_multiple_removed_rules() {
+        let fixture = ConfigFileFixture::new();
+        let path = fixture.0.join("config.toml");
+        let source = "[[window_rules]]\nmatch_class = 'A'\n[[window_rules]]\nmatch_class = 'B'\nmatch_title = 123\n[[window_rules]]\nmatch_class = 'C'\n[[window_rules]]\nmatch_class = 'D'\nmatch_title = 456\n";
+        fs::write(&path, source).unwrap();
+        let mut file = ConfigFile::default();
+        let config = file.load(std::slice::from_ref(&path)).unwrap();
+        assert_eq!(config.window_rules.len(), 2);
+        assert_eq!(config.window_rules[0].match_class.as_deref(), Some("A"));
+        assert_eq!(config.window_rules[1].match_class.as_deref(), Some("C"));
+        let paths: Vec<_> = file.rejections[0]
+            .recovered_fields
+            .iter()
+            .map(|field| field.path.as_str())
+            .collect();
+        assert_eq!(paths, ["window_rules[1]", "window_rules[3]"]);
+    }
+
+    #[test]
+    fn recovery_drops_invalid_row_rule_without_widening_it() {
+        let fixture = ConfigFileFixture::new();
+        let path = fixture.0.join("config.toml");
+        let source = "[[layout.rows.workspaces]]\nworkspace = 1\nsplit = 123\n[[layout.rows.workspaces]]\nworkspace = 2\nsplit = ['50%', '50%']\n";
+        fs::write(&path, source).unwrap();
+        let mut file = ConfigFile::default();
+        let config = file.load(std::slice::from_ref(&path)).unwrap();
+        assert_eq!(config.layout.rows.workspaces.len(), 1);
+        assert_eq!(config.layout.rows.workspaces[0].workspaces, [2]);
+        assert_eq!(
+            file.rejections[0].recovered_fields[0].path,
+            "layout.rows.workspaces[0]"
+        );
+    }
+
+    #[test]
     fn invalid_window_rule_field_does_not_discard_other_rules() {
         let fixture = ConfigFileFixture::new();
         let path = fixture.0.join("config.toml");
         fs::write(&path, "[[window_rules]]\nmatch_class = 'First'\nwidth = 'bad'\n[[window_rules]]\nmatch_class = 'Second'\nwidth = 321\n").unwrap();
         let mut file = ConfigFile::default();
         let config = file.load(std::slice::from_ref(&path)).unwrap();
-        assert_eq!(config.window_rules.len(), 2);
-        assert_eq!(config.window_rules[0].match_class.as_deref(), Some("First"));
-        assert_eq!(config.window_rules[0].width, None);
-        assert_eq!(config.window_rules[1].width, Some(321));
+        assert_eq!(config.window_rules.len(), 1);
+        assert_eq!(
+            config.window_rules[0].match_class.as_deref(),
+            Some("Second")
+        );
+        assert_eq!(config.window_rules[0].width, Some(321));
         assert_eq!(
             file.rejections[0].recovered_fields[0].path,
-            "window_rules[0].width"
+            "window_rules[0]"
         );
     }
 
@@ -4869,7 +5018,7 @@ mod tests {
         let rule = "[[window_rules]]\nwidth = 'bad'\n";
         fs::write(&path, rule.repeat(64)).unwrap();
         let config = file.load(std::slice::from_ref(&path)).unwrap();
-        assert_eq!(config.window_rules.len(), 64);
+        assert!(config.window_rules.is_empty());
         assert_eq!(file.rejections[0].recovered_fields.len(), 64);
         fs::write(&path, rule.repeat(65)).unwrap();
         assert!(file.load(std::slice::from_ref(&path)).is_err());
@@ -5011,6 +5160,93 @@ mod tests {
     }
 
     #[test]
+    fn unreadable_rejection_is_cleared_after_readable_recovery() {
+        let fixture = ConfigFileFixture::new();
+        let path = fixture.0.join("config.toml");
+        fs::create_dir(&path).unwrap();
+        let mut file = ConfigFile::default();
+        assert!(file.load(std::slice::from_ref(&path)).is_err());
+        fs::remove_dir(&path).unwrap();
+        let original = "[layout]\ngap = 'bad'\n";
+        fs::write(&path, original).unwrap();
+        let config = file.load(std::slice::from_ref(&path)).unwrap();
+        file.save(&config, std::slice::from_ref(&path)).unwrap();
+        assert_eq!(
+            fs::read(corrupt_path(&path, ".corrupt")).unwrap(),
+            original.as_bytes()
+        );
+    }
+
+    #[test]
+    fn save_preserves_existing_file_attributes_and_streams() {
+        use std::os::windows::ffi::OsStrExt;
+        use std::os::windows::fs::MetadataExt;
+        use windows::core::PCWSTR;
+        use windows::Win32::Storage::FileSystem::{SetFileAttributesW, FILE_ATTRIBUTE_HIDDEN};
+
+        let fixture = ConfigFileFixture::new();
+        let path = fixture.0.join("config.toml");
+        let stream = corrupt_path(&path, ":leopardwm-test");
+        fs::write(&path, "[layout]\ngap = 42\n").unwrap();
+        fs::write(&stream, "other data").unwrap();
+        let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+        unsafe { SetFileAttributesW(PCWSTR(wide.as_ptr()), FILE_ATTRIBUTE_HIDDEN).unwrap() };
+        let mut file = ConfigFile::default();
+        let config = file.load(std::slice::from_ref(&path)).unwrap();
+        file.save(&config, std::slice::from_ref(&path)).unwrap();
+        assert_eq!(fs::read_to_string(&stream).unwrap(), "other data");
+        assert_ne!(
+            fs::metadata(&path).unwrap().file_attributes() & FILE_ATTRIBUTE_HIDDEN.0,
+            0
+        );
+    }
+
+    #[test]
+    fn save_updates_all_hard_links() {
+        let fixture = ConfigFileFixture::new();
+        let path = fixture.0.join("config.toml");
+        let linked = fixture.0.join("linked.toml");
+        fs::write(&path, "[layout]\ngap = 42\n").unwrap();
+        fs::hard_link(&path, &linked).unwrap();
+        let mut file = ConfigFile::default();
+        let mut config = file.load(std::slice::from_ref(&path)).unwrap();
+        config.layout.gap = 17;
+        file.save(&config, std::slice::from_ref(&path)).unwrap();
+        assert_eq!(Config::load_from_path(&path).unwrap().layout.gap, 17);
+        assert_eq!(Config::load_from_path(&linked).unwrap().layout.gap, 17);
+    }
+
+    #[test]
+    fn failed_hard_link_write_keeps_recovery_copy() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let fixture = ConfigFileFixture::new();
+        let path = fixture.0.join("config.toml");
+        let linked = fixture.0.join("linked.toml");
+        let original = b"[layout]\ngap = 42\n";
+        fs::write(&path, original).unwrap();
+        fs::hard_link(&path, &linked).unwrap();
+        let mut file = ConfigFile::default();
+        let config = file.load(std::slice::from_ref(&path)).unwrap();
+        let lock = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(1)
+            .open(&path)
+            .unwrap();
+        let error = file.save(&config, std::slice::from_ref(&path)).unwrap_err();
+        drop(lock);
+        let backup = fs::read_dir(&fixture.0)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|entry| entry.extension().is_some_and(|ext| ext == "backup"))
+            .unwrap();
+        assert!(error.to_string().contains(&backup.display().to_string()));
+        assert_eq!(fs::read(&backup).unwrap(), original);
+        assert_eq!(fs::read(&path).unwrap(), original);
+        assert_eq!(fs::read(&linked).unwrap(), original);
+    }
+
+    #[test]
     fn config_save_uses_loaded_path_and_existing_serializer() {
         let fixture = ConfigFileFixture::new();
         let paths = [
@@ -5054,7 +5290,7 @@ mod tests {
     }
 
     #[test]
-    fn edits_after_preserved_save_do_not_consume_backup_slots() {
+    fn edits_after_preserved_save_are_backed_up_or_blocked() {
         for (source, recovered) in [("broken = [", false), ("[layout]\ngap = 'bad'\n", true)] {
             let fixture = ConfigFileFixture::new();
             let path = fixture.0.join("config.toml");
@@ -5063,12 +5299,20 @@ mod tests {
             assert_eq!(file.load(std::slice::from_ref(&path)).is_ok(), recovered);
             file.save(&Config::default(), std::slice::from_ref(&path))
                 .unwrap();
-            for gap in [21, 31] {
-                fs::write(&path, format!("[layout]\ngap = {gap}\n")).unwrap();
-                file.save(&Config::default(), std::slice::from_ref(&path))
-                    .unwrap();
-                assert!(!corrupt_path(&path, ".corrupt.1").exists());
-            }
+            let first_edit = "[layout]\ngap = 21\n";
+            fs::write(&path, first_edit).unwrap();
+            file.save(&Config::default(), std::slice::from_ref(&path))
+                .unwrap();
+            assert_eq!(
+                fs::read(corrupt_path(&path, ".corrupt.1")).unwrap(),
+                first_edit.as_bytes()
+            );
+            let second_edit = "[layout]\ngap = 31\n";
+            fs::write(&path, second_edit).unwrap();
+            assert!(file
+                .save(&Config::default(), std::slice::from_ref(&path))
+                .is_err());
+            assert_eq!(fs::read(&path).unwrap(), second_edit.as_bytes());
             assert_eq!(
                 fs::read(corrupt_path(&path, ".corrupt")).unwrap(),
                 source.as_bytes()
@@ -5132,6 +5376,7 @@ mod tests {
         fs::write(&target, "[layout]\ngap = 42\n").unwrap();
         if let Err(error) = symlink_file(&target, &path) {
             if error.raw_os_error() == Some(1314) {
+                eprintln!("skipped: symlink privilege unavailable");
                 return;
             }
             panic!("failed to create test symlink: {error}");
@@ -5156,6 +5401,7 @@ mod tests {
         let target = fixture.0.join("missing.toml");
         if let Err(error) = symlink_file(&target, &path) {
             if error.raw_os_error() == Some(1314) {
+                eprintln!("skipped: symlink privilege unavailable");
                 return;
             }
             panic!("failed to create test symlink: {error}");

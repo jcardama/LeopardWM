@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::ops::Range;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum Part {
     Key(String),
     Index(usize),
@@ -114,6 +114,13 @@ fn remove(value: &mut toml::Value, path: &[Part]) -> bool {
             .as_table_mut()
             .and_then(|table| table.get_mut(key))
             .is_some_and(|child| remove(child, rest)),
+        [Part::Index(index)] => value.as_array_mut().is_some_and(|array| {
+            if *index >= array.len() {
+                return false;
+            }
+            array.remove(*index);
+            true
+        }),
         [Part::Index(index), rest @ ..] => value
             .as_array_mut()
             .and_then(|array| array.get_mut(*index))
@@ -157,6 +164,32 @@ fn node_at<'a>(node: &'a toml::Spanned<Node>, path: &[Part]) -> Option<&'a toml:
     }
 }
 
+fn original_path(path: &[Part], removed: &[Vec<Part>]) -> Vec<Part> {
+    let mut original = Vec::new();
+    for part in path {
+        match part {
+            Part::Key(key) => original.push(Part::Key(key.clone())),
+            Part::Index(index) => {
+                let mut original_index = *index;
+                loop {
+                    let count = removed.iter().filter(|entry| {
+                        entry.len() == original.len() + 1
+                            && entry.starts_with(&original)
+                            && matches!(entry.last(), Some(Part::Index(removed_index)) if *removed_index <= original_index)
+                    }).count();
+                    let next = index + count;
+                    if next == original_index {
+                        break;
+                    }
+                    original_index = next;
+                }
+                original.push(Part::Index(original_index));
+            }
+        }
+    }
+    original
+}
+
 fn display_path(path: &[Part]) -> String {
     let mut result = String::new();
     for part in path {
@@ -180,6 +213,7 @@ pub(super) fn recover(content: &str) -> Option<(Config, Vec<DroppedField>)> {
     let mut current = toml::to_string(&value).ok()?;
     let mut error = Config::parse(&current).err()?;
     let mut dropped = Vec::new();
+    let mut removed_elements = Vec::new();
     loop {
         let tree: toml::Spanned<Node> = toml::from_str(&current).ok()?;
         let mut path = Vec::new();
@@ -211,23 +245,49 @@ pub(super) fn recover(content: &str) -> Option<(Config, Vec<DroppedField>)> {
                 candidates.push((path, error.message().to_owned()));
             }
         }
+        for (selected, _) in &mut candidates {
+            if let Some(index) = selected.iter().enumerate().rev().find_map(|(index, part)| {
+                if matches!(part, Part::Index(_))
+                    && matches!(
+                        node_at(&tree, &selected[..index]).map(|n| n.get_ref()),
+                        Some(Node::Array(_))
+                    )
+                    && matches!(
+                        node_at(&tree, &selected[..=index]).map(|n| n.get_ref()),
+                        Some(Node::Table(_))
+                    )
+                {
+                    Some(index)
+                } else {
+                    None
+                }
+            }) {
+                selected.truncate(index + 1);
+            }
+        }
+        candidates.sort_by(|a, b| b.0.cmp(&a.0));
+        candidates.dedup_by(|a, b| a.0 == b.0);
         if candidates.is_empty() || dropped.len() + candidates.len() > 64 {
             return None;
         }
         for (selected, reason) in candidates {
-            let original_span = node_at(&original, &selected)?.span();
+            let original_selected = original_path(&selected, &removed_elements);
+            let original_span = node_at(&original, &original_selected)?.span();
             let prefix = content.get(..original_span.start)?;
             let location = Some((
                 prefix.bytes().filter(|&byte| byte == b'\n').count() + 1,
                 prefix.rsplit('\n').next()?.chars().count() + 1,
             ));
             dropped.push(DroppedField {
-                path: display_path(&selected),
+                path: display_path(&original_selected),
                 location,
                 reason,
             });
             if !remove(&mut value, &selected) {
                 return None;
+            }
+            if matches!(selected.last(), Some(Part::Index(_))) {
+                removed_elements.push(original_selected);
             }
         }
         current = toml::to_string(&value).ok()?;
