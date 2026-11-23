@@ -791,6 +791,9 @@ pub struct BehaviorConfig {
     #[serde(default = "default_focus_delay")]
     pub focus_follows_mouse_delay_ms: u32,
 
+    #[serde(default = "default_focus_lock_modifier")]
+    pub focus_lock_modifier: String,
+
     /// Whether to disable Windows 11 Snap Layouts for tiled windows.
     /// Removes WS_MAXIMIZEBOX from managed tiled windows to prevent edge-drag
     /// snapping and the snap layout flyout. Restored when windows leave tiling.
@@ -929,6 +932,7 @@ impl Default for BehaviorConfig {
             focus_follows_mouse: false,
             keep_awake: false,
             focus_follows_mouse_delay_ms: default_focus_delay(),
+            focus_lock_modifier: default_focus_lock_modifier(),
             disable_snap_layouts: true,
             check_for_updates: true,
             tab_close_action: TabCloseAction::default(),
@@ -1019,6 +1023,23 @@ fn default_log_level() -> String {
 
 fn default_focus_delay() -> u32 {
     100
+}
+
+fn default_focus_lock_modifier() -> String {
+    "none".to_string()
+}
+
+fn normalize_focus_lock_modifier(modifier: &str) -> Option<String> {
+    match modifier.to_ascii_lowercase().as_str() {
+        "none" => Some("none".to_string()),
+        "ctrl" => Some("Ctrl".to_string()),
+        "alt" => Some("Alt".to_string()),
+        "shift" => Some("Shift".to_string()),
+        "win" => Some("Win".to_string()),
+        _ => leopardwm_platform_win32::parse_vk(modifier)
+            .filter(|vk| leopardwm_platform_win32::fn_mod_bit(*vk).is_some())
+            .map(|vk| format!("F{}", vk - 0x6f)),
+    }
 }
 
 fn default_active_border_color() -> String {
@@ -1441,6 +1462,22 @@ pub struct ConfigWarning {
     pub message: String,
 }
 
+fn focus_lock_hotkey_warning(
+    behavior: &BehaviorConfig,
+    hotkeys: &HotkeyConfig,
+) -> Option<ConfigWarning> {
+    let vk = leopardwm_platform_win32::parse_vk(&behavior.focus_lock_modifier)?;
+    leopardwm_platform_win32::fn_mod_bit(vk)?;
+    let binding = crate::hotkey_resolution::resolve_hotkeys(hotkeys)
+        .bindings
+        .into_iter()
+        .find(|binding| binding.executable && binding.hook_binding.vk == vk)?;
+    Some(ConfigWarning {
+        field: "behavior.focus_lock_modifier".to_string(),
+        message: format!("focus_lock_modifier '{}' is also the trigger of hotkey '{}'; the hotkey may prevent focus lock from engaging", behavior.focus_lock_modifier, binding.binding),
+    })
+}
+
 /// A window rule with pre-compiled regex patterns for efficient matching.
 #[derive(Debug, Clone)]
 pub struct CompiledWindowRule {
@@ -1740,6 +1777,17 @@ impl Config {
             });
             self.layout.height_presets = default_height_presets();
         }
+
+        let modifier = self.behavior.focus_lock_modifier.trim();
+        let canonical = normalize_focus_lock_modifier(modifier);
+        self.behavior.focus_lock_modifier = canonical.unwrap_or_else(|| {
+            warnings.push(ConfigWarning {
+                field: "behavior.focus_lock_modifier".to_string(),
+                message: format!("Invalid focus_lock_modifier '{modifier}', reset to none"),
+            });
+            default_focus_lock_modifier()
+        });
+        warnings.extend(focus_lock_hotkey_warning(&self.behavior, &self.hotkeys));
 
         if self.behavior.focus_follows_mouse && self.behavior.focus_follows_mouse_delay_ms < 50 {
             warnings.push(ConfigWarning {
@@ -3480,6 +3528,73 @@ mod tests {
         let config = Config::default();
         assert!(!config.behavior.focus_follows_mouse);
         assert_eq!(config.behavior.focus_follows_mouse_delay_ms, 100);
+    }
+
+    #[test]
+    fn focus_lock_modifier_defaults_and_validates() {
+        let old: Config = toml::from_str("[behavior]\nfocus_follows_mouse = true\n").unwrap();
+        assert_eq!(old.behavior.focus_lock_modifier, "none");
+        for (input, expected) in [
+            ("none", "none"),
+            ("cTrL", "Ctrl"),
+            ("alt", "Alt"),
+            ("shift", "Shift"),
+            ("win", "Win"),
+            ("f13", "F13"),
+            ("f24", "F24"),
+        ] {
+            let mut config: Config =
+                toml::from_str(&format!("[behavior]\nfocus_lock_modifier = '{input}'\n")).unwrap();
+            assert!(!config
+                .validate()
+                .iter()
+                .any(|w| w.field == "behavior.focus_lock_modifier"));
+            assert_eq!(config.behavior.focus_lock_modifier, expected);
+        }
+        for input in ["F12", "F25", "Ctrl+Alt", "garbage"] {
+            let mut config: Config =
+                toml::from_str(&format!("[behavior]\nfocus_lock_modifier = '{input}'\n")).unwrap();
+            assert!(config
+                .validate()
+                .iter()
+                .any(|w| w.field == "behavior.focus_lock_modifier"));
+            assert_eq!(config.behavior.focus_lock_modifier, "none");
+        }
+    }
+
+    #[test]
+    fn focus_lock_warns_when_function_key_is_hotkey_trigger() {
+        let mut config = Config::default();
+        config.behavior.focus_lock_modifier = "f13".to_string();
+        config.hotkeys.bindings.clear();
+        config
+            .hotkeys
+            .bindings
+            .insert("F13+H".into(), "focus_left".into());
+        assert!(!config
+            .validate()
+            .iter()
+            .any(|warning| warning.field == "behavior.focus_lock_modifier"));
+        config.hotkeys.bindings.clear();
+        config
+            .hotkeys
+            .bindings
+            .insert("F13".into(), "focus_left".into());
+        let warnings = config.validate();
+        assert!(warnings
+            .iter()
+            .any(|warning| warning.field == "behavior.focus_lock_modifier"
+                && warning.message.contains("F13")));
+        assert_eq!(config.behavior.focus_lock_modifier, "F13");
+        config
+            .hotkeys
+            .bindings
+            .insert("F13+H".into(), "focus_left".into());
+        assert!(!config
+            .validate()
+            .iter()
+            .any(|warning| warning.field == "behavior.focus_lock_modifier"));
+        assert_eq!(config.behavior.focus_lock_modifier, "F13");
     }
 
     #[test]

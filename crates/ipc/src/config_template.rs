@@ -94,6 +94,10 @@ focus_follows_mouse = false
 # Keep the PC and display awake while LeopardWM runs
 # keep_awake = false
 
+# Hold one modifier to temporarily prevent mouse-driven focus changes.
+# Options: none, Ctrl, Alt, Shift, Win, F13 through F24.
+# focus_lock_modifier = "none"
+
 # Disable Windows 11 Snap Layouts for tiled windows (also disables maximize button)
 # disable_snap_layouts = false
 

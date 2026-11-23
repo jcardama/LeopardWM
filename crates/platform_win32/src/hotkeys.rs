@@ -14,8 +14,9 @@ use windows::Win32::Foundation::HWND;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW, PostMessageW,
-    PostThreadMessageW, RegisterClassW, UnregisterClassW, MSG, WM_USER, WNDCLASSW,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP,
+    PostThreadMessageW, RegisterClassW, UnregisterClassW, MSG, WM_USER, WM_WTSSESSION_CHANGE,
+    WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP, WTS_CONSOLE_CONNECT,
+    WTS_SESSION_UNLOCK,
 };
 
 /// Window message asking whether an interactive session may end.
@@ -348,6 +349,17 @@ pub fn register_system_events() -> Result<SystemEventHandle, Win32Error> {
             }
 
             let hwnd = hwnd.unwrap();
+            let session_registered =
+                match windows::Win32::System::RemoteDesktop::WTSRegisterSessionNotification(
+                    hwnd,
+                    windows::Win32::System::RemoteDesktop::NOTIFY_FOR_THIS_SESSION,
+                ) {
+                    Ok(()) => true,
+                    Err(error) => {
+                        tracing::warn!("Failed to register session notifications: {}", error);
+                        false
+                    }
+                };
             let suspend_resume_registration = {
                 use windows::Win32::System::Power::RegisterSuspendResumeNotification;
                 use windows::Win32::UI::WindowsAndMessaging::DEVICE_NOTIFY_WINDOW_HANDLE;
@@ -418,6 +430,10 @@ pub fn register_system_events() -> Result<SystemEventHandle, Win32Error> {
             }
 
             SUSPEND_RESUME_REGISTERED.set(false);
+            if session_registered {
+                let _ =
+                    windows::Win32::System::RemoteDesktop::WTSUnRegisterSessionNotification(hwnd);
+            }
             if let Some(registration) = suspend_resume_registration {
                 let _ = windows::Win32::System::Power::UnregisterSuspendResumeNotification(
                     registration,
@@ -526,7 +542,17 @@ fn sysevent_window_proc_inner(
             }
             windows::Win32::Foundation::LRESULT(0)
         }
+        WM_WTSSESSION_CHANGE
+            if wparam.0 == WTS_SESSION_UNLOCK as usize
+                || wparam.0 == WTS_CONSOLE_CONNECT as usize =>
+        {
+            crate::keyboard_hook::reset_focus_lock_state();
+            windows::Win32::Foundation::LRESULT(0)
+        }
         WM_POWERBROADCAST => {
+            if matches!(wparam.0, PBT_APMRESUMEAUTOMATIC | PBT_APMRESUMESUSPEND) {
+                crate::keyboard_hook::reset_focus_lock_state();
+            }
             let lifecycle = match wparam.0 {
                 PBT_APMSUSPEND => Some(SuspendResumeEvent::Suspend),
                 PBT_APMRESUMEAUTOMATIC | PBT_APMRESUMESUSPEND => Some(SuspendResumeEvent::Resume),
@@ -873,7 +899,46 @@ mod tests {
     }
 
     #[test]
+    fn session_and_resume_messages_clear_stale_function_keys() {
+        use crate::keyboard_hook::{HOOK_FN_HELD, HOOK_RECORDING_FN_HELD, HOOK_STATE_TEST_LOCK};
+        let _hook_guard = HOOK_STATE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(recover_poisoned_mutex);
+        let _guard = HOTKEY_TEST_LOCK
+            .lock()
+            .unwrap_or_else(recover_poisoned_mutex);
+        for (message, kind) in [
+            (WM_WTSSESSION_CHANGE, WTS_SESSION_UNLOCK as usize),
+            (WM_WTSSESSION_CHANGE, WTS_CONSOLE_CONNECT as usize),
+            (WM_POWERBROADCAST, PBT_APMRESUMEAUTOMATIC),
+            (WM_POWERBROADCAST, PBT_APMRESUMESUSPEND),
+        ] {
+            *HOOK_FN_HELD.lock().unwrap() = 1;
+            *HOOK_RECORDING_FN_HELD.lock().unwrap() = 2;
+            sysevent_window_proc_inner(
+                HWND::default(),
+                message,
+                windows::Win32::Foundation::WPARAM(kind),
+                windows::Win32::Foundation::LPARAM(0),
+            );
+            assert_eq!(
+                *HOOK_FN_HELD.lock().unwrap(),
+                0,
+                "message={message} kind={kind}"
+            );
+            assert_eq!(
+                *HOOK_RECORDING_FN_HELD.lock().unwrap(),
+                0,
+                "message={message} kind={kind}"
+            );
+        }
+    }
+
+    #[test]
     fn suspend_resume_messages_forward_only_after_registration() {
+        let _hook_guard = crate::keyboard_hook::HOOK_STATE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(recover_poisoned_mutex);
         let _guard = HOTKEY_TEST_LOCK
             .lock()
             .unwrap_or_else(recover_poisoned_mutex);

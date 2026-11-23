@@ -1462,6 +1462,7 @@ fn setup_mouse_hook(
     event_tx: &mpsc::Sender<DaemonEvent>,
     thread_handles: &mut Vec<std::thread::JoinHandle<()>>,
 ) -> Option<MouseHookHandle> {
+    leopardwm_platform_win32::set_focus_lock_modifier(&config.behavior.focus_lock_modifier);
     if config.behavior.focus_follows_mouse {
         install_ffm_hook(event_tx, Some(thread_handles))
     } else {
@@ -1977,6 +1978,38 @@ async fn handle_ipc_command(
     false
 }
 
+fn schedule_mouse_focus(
+    timer: &mut Option<tokio::task::JoinHandle<()>>,
+    event_tx: &tokio::sync::mpsc::Sender<DaemonEvent>,
+    hwnd: u64,
+    delay_ms: u32,
+    locked: bool,
+    generation: u64,
+    held: impl FnOnce() -> bool + Send + 'static,
+) {
+    if let Some(handle) = timer.take() {
+        handle.abort();
+    }
+    if locked {
+        return;
+    }
+    let focus_tx = event_tx.clone();
+    *timer = Some(tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(delay_ms as u64)).await;
+        if held() {
+            return;
+        }
+        let _ = focus_tx
+            .send(DaemonEvent::FocusFollowsMouse(
+                events::FocusFollowsMouseRequest {
+                    window_id: hwnd,
+                    generation,
+                },
+            ))
+            .await;
+    }));
+}
+
 async fn process_window_event(ctx: &mut EventLoopCtx<'_>, win_event: WindowEvent) {
     // Debounce DisplayChange / WorkAreaChanged into a single reconcile.
     // Contrast/DPI changes fire multiple WM_DISPLAYCHANGE messages with
@@ -2019,30 +2052,35 @@ async fn process_window_event(ctx: &mut EventLoopCtx<'_>, win_event: WindowEvent
         }));
         return;
     }
-    if let WindowEvent::MouseEnterWindow(hwnd) = win_event {
-        let (enabled, delay_ms) = {
-            let state = ctx.state.lock().await;
+    if let WindowEvent::MouseEnterWindow(hwnd, locked) = win_event {
+        let (enabled, delay_ms, generation) = {
+            let mut state = ctx.state.lock().await;
+            state.focus_follows_mouse_generation =
+                state.focus_follows_mouse_generation.wrapping_add(1);
             (
                 state.config.behavior.focus_follows_mouse,
                 state.config.behavior.focus_follows_mouse_delay_ms,
+                state.focus_follows_mouse_generation,
             )
         };
 
         if enabled {
-            if let Some(handle) = ctx.focus_follows_mouse_timer.take() {
-                handle.abort();
-            }
-
-            let focus_tx = ctx.event_tx.clone();
-            let delay = delay_ms;
-            *ctx.focus_follows_mouse_timer = Some(tokio::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_millis(delay as u64)).await;
-                let _ = focus_tx
-                    .send(DaemonEvent::FocusFollowsMouse { window_id: hwnd })
-                    .await;
-            }));
+            schedule_mouse_focus(
+                ctx.focus_follows_mouse_timer,
+                ctx.event_tx,
+                hwnd,
+                delay_ms,
+                locked,
+                generation,
+                leopardwm_platform_win32::focus_lock_blocks_focus,
+            );
         }
     } else if let WindowEvent::MouseLeftManaged = win_event {
+        {
+            let mut state = ctx.state.lock().await;
+            state.focus_follows_mouse_generation =
+                state.focus_follows_mouse_generation.wrapping_add(1);
+        }
         // The cursor left a managed window for the taskbar/a popup. Drop any
         // pending focus so the debounce doesn't foreground the window we just
         // left (which makes Windows flash that window's taskbar button).
@@ -2567,6 +2605,10 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
                 let mut state = ctx.state.lock().await;
                 state.config.behavior.focus_follows_mouse =
                     !state.config.behavior.focus_follows_mouse;
+                if !state.config.behavior.focus_follows_mouse {
+                    state.focus_follows_mouse_generation =
+                        state.focus_follows_mouse_generation.wrapping_add(1);
+                }
                 info!(
                     "Tray: Focus follows mouse toggled to {}",
                     state.config.behavior.focus_follows_mouse
@@ -3771,9 +3813,18 @@ async fn handle_animation_frame_applied(
     }
 }
 
-async fn handle_focus_follows_mouse(ctx: &mut EventLoopCtx<'_>, window_id: u64) {
+async fn handle_focus_follows_mouse(
+    ctx: &mut EventLoopCtx<'_>,
+    request: events::FocusFollowsMouseRequest,
+) {
     let mut state = ctx.state.lock().await;
-    if state.config.behavior.focus_follows_mouse {
+    if request.generation != state.focus_follows_mouse_generation {
+        return;
+    }
+    let window_id = request.window_id;
+    if state.config.behavior.focus_follows_mouse
+        && !leopardwm_platform_win32::focus_lock_blocks_focus()
+    {
         // Last gate before forcing foreground: the debounce may have elapsed
         // after the cursor moved off this window without a cancel reaching us
         // (window closed mid-delay, or an event we never got). Skip unless the
@@ -4396,8 +4447,8 @@ async fn main() -> Result<()> {
                     debug!("Snap hint hidden");
                 }
             }
-            DaemonEvent::FocusFollowsMouse { window_id } => {
-                handle_focus_follows_mouse(&mut ctx, window_id).await;
+            DaemonEvent::FocusFollowsMouse(request) => {
+                handle_focus_follows_mouse(&mut ctx, request).await;
             }
             DaemonEvent::SuspendResume(event) => state.lock().await.handle_suspend_resume(event),
             DaemonEvent::PowerStateChanged {

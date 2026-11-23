@@ -23,6 +23,11 @@ pub(crate) struct SubscribeStartup {
     pub(crate) receiver: broadcast::Receiver<IpcEvent>,
 }
 
+pub(crate) struct FocusFollowsMouseRequest {
+    pub(crate) window_id: u64,
+    pub(crate) generation: u64,
+}
+
 pub(crate) enum DaemonEvent {
     IpcCommand {
         cmd: IpcCommand,
@@ -60,9 +65,7 @@ pub(crate) enum DaemonEvent {
         epoch: u64,
     },
     HideSnapHint,
-    FocusFollowsMouse {
-        window_id: u64,
-    },
+    FocusFollowsMouse(FocusFollowsMouseRequest),
     /// Debounced display change — fires after WM_DISPLAYCHANGE settles.
     DisplayChangeSettled,
     PowerStateChanged {

@@ -591,6 +591,8 @@ Failed physical gestures are diagnosed with an opt-in, short capture — not by 
 
 `track_focus_changes` under `[behavior]` synchronizes managed focus with Windows focus changes such as Alt-Tab. It defaults to `true`; changes to focus tracking hooks take effect the next time LeopardWM starts, not on config reload or Settings save.
 
+With `[behavior] focus_follows_mouse = true`, set `focus_lock_modifier` to `"Ctrl"`, `"Alt"`, `"Shift"`, `"Win"`, or `"F13"` through `"F24"` to hold that key while moving the mouse without changing focus. The default is `"none"`. Releasing the key does not change focus until the next mouse enter. When Alt or Win blocks a focus change, LeopardWM masks the key while it is held to avoid opening an app menu or Start. If an F-key is also a hotkey's trigger, that hotkey can prevent the lock from engaging; LeopardWM warns about this configuration.
+
 > **Note:** Crate names and on-disk paths still use `leopardwm` internally. A full crate rename is future work.
 
 | Item | Path |

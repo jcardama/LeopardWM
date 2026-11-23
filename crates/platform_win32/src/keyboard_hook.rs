@@ -98,13 +98,31 @@ static HOOK_OVERVIEW_HELD: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Ve
 static HOOK_FN_MOD_MASK: std::sync::Mutex<u16> = std::sync::Mutex::new(0);
 /// Which masked F13–F24 modifiers are currently held. Maintained from the hook's
 /// own key-down/up events (a swallowed key never updates `GetAsyncKeyState`).
-static HOOK_FN_HELD: std::sync::Mutex<u16> = std::sync::Mutex::new(0);
+pub(crate) static HOOK_FN_HELD: std::sync::Mutex<u16> = std::sync::Mutex::new(0);
 /// F13–F24 keys held while Settings recording is active, including keys that
 /// are not configured as normal hotkey modifiers.
-static HOOK_RECORDING_FN_HELD: std::sync::Mutex<u16> = std::sync::Mutex::new(0);
+pub(crate) static HOOK_RECORDING_FN_HELD: std::sync::Mutex<u16> = std::sync::Mutex::new(0);
 static HOOK_RECORDING: AtomicBool = AtomicBool::new(false);
 /// Recorded key whose auto-repeat remains swallowed until its key-up arrives.
 static HOOK_RECORDED_PENDING: std::sync::Mutex<Option<u32>> = std::sync::Mutex::new(None);
+
+pub(crate) fn focus_lock_held(vk: u32) -> bool {
+    if vk == 0 {
+        return false;
+    }
+    if vk == VK_LWIN as u32 {
+        return unsafe { GetAsyncKeyState(VK_LWIN) < 0 || GetAsyncKeyState(VK_RWIN) < 0 };
+    }
+    if let Some(bit) = fn_mod_bit(vk) {
+        let mask = HOOK_FN_MOD_MASK
+            .lock()
+            .unwrap_or_else(recover_poisoned_mutex);
+        if *mask & bit != 0 {
+            return *HOOK_FN_HELD.lock().unwrap_or_else(recover_poisoned_mutex) & bit != 0;
+        }
+    }
+    unsafe { GetAsyncKeyState(vk as i32) < 0 }
+}
 
 const VK_SHIFT: i32 = 0x10;
 const VK_CONTROL: i32 = 0x11;
@@ -186,6 +204,28 @@ enum Action {
 // Bare Esc/Tab/Backspace/Delete must remain usable as Settings recording controls.
 fn is_recording_control(vk: u32, modifiers: Modifiers) -> bool {
     modifiers == Modifiers::default() && matches!(vk, VK_ESCAPE | VK_TAB | VK_BACK | VK_DELETE)
+}
+
+fn focus_lock_mask(vk: u32, held: bool, ctrl_held: bool) -> Option<u16> {
+    if !held {
+        return None;
+    }
+    match vk as i32 {
+        VK_MENU => Some(VK_MENU_MASK),
+        VK_LWIN if !ctrl_held => Some(VK_CONTROL as u16),
+        _ => None,
+    }
+}
+
+pub(crate) fn mask_focus_lock(vk: u32) {
+    if vk != VK_MENU as u32 && vk != VK_LWIN as u32 {
+        return;
+    }
+    let held = focus_lock_held(vk);
+    let ctrl_held = unsafe { GetAsyncKeyState(VK_CONTROL) < 0 };
+    if let Some(mask) = focus_lock_mask(vk, held, ctrl_held) {
+        unsafe { send_menu_mask(mask) };
+    }
 }
 
 fn menu_mask(modifiers: Modifiers) -> Option<u16> {
@@ -414,20 +454,20 @@ impl Drop for KeyboardHookHandle {
             .unwrap_or_else(recover_poisoned_mutex);
         *mask = 0;
         drop(mask);
-        let mut fn_held = HOOK_FN_HELD.lock().unwrap_or_else(recover_poisoned_mutex);
-        *fn_held = 0;
-        drop(fn_held);
-        let mut recording_fn_held = HOOK_RECORDING_FN_HELD
-            .lock()
-            .unwrap_or_else(recover_poisoned_mutex);
-        *recording_fn_held = 0;
-        drop(recording_fn_held);
+        reset_focus_lock_state();
         let mut pending = HOOK_RECORDED_PENDING
             .lock()
             .unwrap_or_else(recover_poisoned_mutex);
         *pending = None;
         tracing::debug!("Keyboard hook stopped");
     }
+}
+
+pub(crate) fn reset_focus_lock_state() {
+    *HOOK_FN_HELD.lock().unwrap_or_else(recover_poisoned_mutex) = 0;
+    *HOOK_RECORDING_FN_HELD
+        .lock()
+        .unwrap_or_else(recover_poisoned_mutex) = 0;
 }
 
 fn reset_held_keys() -> Result<(), Win32Error> {
@@ -437,18 +477,7 @@ fn reset_held_keys() -> Result<(), Win32Error> {
             .map_err(|_| Win32Error::HookInstallFailed("Hook held mutex poisoned".to_string()))?;
         held.clear();
     }
-    {
-        let mut fn_held = HOOK_FN_HELD.lock().map_err(|_| {
-            Win32Error::HookInstallFailed("Hook fn-held mutex poisoned".to_string())
-        })?;
-        *fn_held = 0;
-    }
-    {
-        let mut recording_fn_held = HOOK_RECORDING_FN_HELD.lock().map_err(|_| {
-            Win32Error::HookInstallFailed("Recording fn-held mutex poisoned".to_string())
-        })?;
-        *recording_fn_held = 0;
-    }
+    reset_focus_lock_state();
     {
         let mut pending = HOOK_RECORDED_PENDING.lock().map_err(|_| {
             Win32Error::HookInstallFailed("Recorded-pending mutex poisoned".to_string())
@@ -842,10 +871,11 @@ unsafe fn send_menu_mask(vk: u16) {
 }
 
 #[cfg(test)]
+pub(crate) static HOOK_STATE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
 mod tests {
     use super::*;
-
-    static HOOK_STATE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
     fn keyboard_hook_counts_only_new_non_modifier_presses() {
@@ -1171,6 +1201,38 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn focus_lock_mask_respects_held_keys() {
+        for (vk, held, ctrl, expected) in [
+            (VK_MENU as u32, true, false, Some(VK_MENU_MASK)),
+            (VK_MENU as u32, false, false, None),
+            (VK_LWIN as u32, true, false, Some(VK_CONTROL as u16)),
+            (VK_LWIN as u32, true, true, None),
+            (VK_LWIN as u32, false, false, None),
+            (VK_CONTROL as u32, true, false, None),
+            (VK_SHIFT as u32, true, false, None),
+            (0x7c, true, false, None),
+        ] {
+            assert_eq!(
+                focus_lock_mask(vk, held, ctrl),
+                expected,
+                "vk={vk:#x} held={held} ctrl={ctrl}"
+            );
+        }
+    }
+
+    #[test]
+    fn focus_lock_reads_swallowed_function_modifier_from_hook() {
+        let _guard = HOOK_STATE_TEST_LOCK.lock().unwrap();
+        let bit = fn_mod_bit(crate::parse_vk("F13").unwrap()).unwrap();
+        *HOOK_FN_MOD_MASK.lock().unwrap() = bit;
+        *HOOK_FN_HELD.lock().unwrap() = bit;
+        assert!(focus_lock_held(0x7c));
+        *HOOK_FN_HELD.lock().unwrap() = 0;
+        assert!(!focus_lock_held(0x7c));
+        *HOOK_FN_MOD_MASK.lock().unwrap() = 0;
     }
 
     #[test]

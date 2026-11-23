@@ -12,7 +12,7 @@ leopardwm-core-layout = { path = "../core_layout" }
 leopardwm-ipc = { path = "../ipc" }
 # UI_Notifications + Data_Xml_Dom power the WinRT toasts in toast.rs (shared by
 # the daemon and watchdog). Additive over the workspace's Win32_* features.
-windows = { workspace = true, features = ["UI_Notifications", "Data_Xml_Dom", "Win32_UI_Input", "Win32_Devices_HumanInterfaceDevice"] }
+windows = { workspace = true, features = ["UI_Notifications", "Data_Xml_Dom", "Win32_UI_Input", "Win32_Devices_HumanInterfaceDevice", "Win32_System_RemoteDesktop"] }
 tracing = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }

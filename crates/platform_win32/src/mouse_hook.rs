@@ -5,16 +5,47 @@ use crate::{
     WindowEvent, WM_QUIT_LLHOOK_THREAD,
 };
 use leopardwm_core_layout::WindowId;
-use std::sync::mpsc;
+use std::sync::{
+    atomic::{AtomicU32, Ordering},
+    mpsc,
+};
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetMessageW, PeekMessageW, PostThreadMessageW,
     SetWindowsHookExW, UnhookWindowsHookEx, WindowFromPoint, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE,
-    WH_MOUSE_LL, WM_MOUSEMOVE,
+    WH_MOUSE_LL, WM_MOUSEMOVE, WM_USER,
 };
 
 static MOUSE_EVENT_SENDER: std::sync::Mutex<Option<mpsc::Sender<WindowEvent>>> =
     std::sync::Mutex::new(None);
+static FOCUS_LOCK_MODIFIER: AtomicU32 = AtomicU32::new(0);
+const WM_FOCUS_LOCK_MASK: u32 = WM_USER + 3;
+
+pub fn set_focus_lock_modifier(modifier: &str) {
+    let vk = match modifier {
+        "Ctrl" => 0x11,
+        "Alt" => 0x12,
+        "Shift" => 0x10,
+        "Win" => 0x5b,
+        _ => crate::parse_vk(modifier)
+            .filter(|vk| crate::fn_mod_bit(*vk).is_some())
+            .unwrap_or(0),
+    };
+    FOCUS_LOCK_MODIFIER.store(vk, Ordering::SeqCst);
+}
+
+pub(crate) fn configured_focus_lock_vk() -> u32 {
+    FOCUS_LOCK_MODIFIER.load(Ordering::SeqCst)
+}
+
+pub fn focus_lock_blocks_focus() -> bool {
+    let vk = configured_focus_lock_vk();
+    let held = crate::keyboard_hook::focus_lock_held(vk);
+    if held {
+        crate::keyboard_hook::mask_focus_lock(vk);
+    }
+    held
+}
 
 static CURRENT_MOUSE_WINDOW: std::sync::Mutex<Option<WindowId>> = std::sync::Mutex::new(None);
 
@@ -117,6 +148,10 @@ pub fn install_mouse_hook(
                     if msg.message == WM_QUIT_LLHOOK_THREAD {
                         break;
                     }
+                    if msg.message == WM_FOCUS_LOCK_MASK {
+                        crate::keyboard_hook::mask_focus_lock(msg.wParam.0 as u32);
+                        continue;
+                    }
                     let _ = DispatchMessageW(&msg);
                 }
 
@@ -171,6 +206,8 @@ unsafe extern "system" fn mouse_ll_hook_proc(
             .unwrap_or_else(recover_poisoned_mutex);
         if *current != candidate_window_id {
             *current = candidate_window_id;
+            let focus_lock_vk = configured_focus_lock_vk();
+            let focus_locked = crate::keyboard_hook::focus_lock_held(focus_lock_vk);
             // Gate on window transitions so moves within one window do not repeat events.
             let candidate_managed = candidate_hwnd.is_some_and(should_emit_window_event);
             let mut over_managed = CURRENT_OVER_MANAGED
@@ -186,7 +223,20 @@ unsafe extern "system" fn mouse_ll_hook_proc(
                         .lock()
                         .unwrap_or_else(recover_poisoned_mutex);
                     if let Some(sender) = sender_guard.as_ref() {
-                        let _ = sender.send(WindowEvent::MouseEnterWindow(hwnd.0 as WindowId));
+                        if focus_locked && matches!(focus_lock_vk, 0x12 | 0x5b) {
+                            if let Err(error) = PostThreadMessageW(
+                                GetCurrentThreadId(),
+                                WM_FOCUS_LOCK_MASK,
+                                windows::Win32::Foundation::WPARAM(focus_lock_vk as usize),
+                                windows::Win32::Foundation::LPARAM(0),
+                            ) {
+                                tracing::warn!("Failed to queue focus-lock mask: {}", error);
+                            }
+                        }
+                        let _ = sender.send(WindowEvent::MouseEnterWindow(
+                            hwnd.0 as WindowId,
+                            focus_locked,
+                        ));
                     }
                 }
             } else if was_managed {

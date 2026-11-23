@@ -1193,6 +1193,31 @@ input[type="range"]::-webkit-slider-thumb {
             <input type="number" id="behavior-focus_follows_mouse_delay_ms" min="50" max="2000">
           </div>
           <div class="field">
+            <div class="field-info"><div class="field-label" data-i18n="settings.behavior.focus_lock_modifier.label"></div><div class="field-desc" data-i18n="settings.behavior.focus_lock_modifier.description"></div></div>
+            <div class="combobox" id="cb-behavior-focus_lock_modifier">
+              <button class="combobox-trigger" type="button"><span class="combobox-text" data-i18n="settings.text.focus_lock_none"></span><svg class="combobox-chevron" viewBox="0 0 12 12"><path d="M2.15 4.65a.5.5 0 01.7 0L6 7.79l3.15-3.14a.5.5 0 11.7.7l-3.5 3.5a.5.5 0 01-.7 0l-3.5-3.5a.5.5 0 010-.7z"/></svg></button>
+              <div class="combobox-popup">
+                <div class="combobox-option selected" data-value="none" data-i18n="settings.text.focus_lock_none"></div>
+                <div class="combobox-option" data-value="Ctrl">Ctrl</div>
+                <div class="combobox-option" data-value="Alt">Alt</div>
+                <div class="combobox-option" data-value="Shift">Shift</div>
+                <div class="combobox-option" data-value="Win">Win</div>
+                <div class="combobox-option" data-value="F13">F13</div>
+                <div class="combobox-option" data-value="F14">F14</div>
+                <div class="combobox-option" data-value="F15">F15</div>
+                <div class="combobox-option" data-value="F16">F16</div>
+                <div class="combobox-option" data-value="F17">F17</div>
+                <div class="combobox-option" data-value="F18">F18</div>
+                <div class="combobox-option" data-value="F19">F19</div>
+                <div class="combobox-option" data-value="F20">F20</div>
+                <div class="combobox-option" data-value="F21">F21</div>
+                <div class="combobox-option" data-value="F22">F22</div>
+                <div class="combobox-option" data-value="F23">F23</div>
+                <div class="combobox-option" data-value="F24">F24</div>
+              </div>
+            </div>
+          </div>
+          <div class="field">
             <div class="field-info"><div class="field-label" data-i18n="settings.behavior.move_step.label"></div><div class="field-desc" data-i18n="settings.behavior.move_step.description"></div></div>
             <input type="number" id="behavior-move_step" min="1" max="1000">
           </div>
@@ -1825,6 +1850,7 @@ function applyTrayConfig(cfg) {
   setChecked('behavior-focus_new_windows', cfg.behavior.focus_new_windows);
   setChecked('behavior-focus_follows_mouse', cfg.behavior.focus_follows_mouse);
   setChecked('behavior-keep_awake', cfg.behavior.keep_awake);
+  setCb('cb-behavior-focus_lock_modifier', cfg.behavior.focus_lock_modifier || 'none');
   setCb('cb-behavior-taskbar_buttons', cfg.behavior.taskbar_buttons || 'hide_offscreen');
   setCb('cb-behavior-new_window_placement', cfg.behavior.new_window_placement || 'new_column');
 }
@@ -1881,6 +1907,7 @@ function init(cfg) {
   setChecked('behavior-track_focus_changes', cfg.behavior.track_focus_changes);
   setChecked('behavior-focus_follows_mouse', cfg.behavior.focus_follows_mouse);
   setChecked('behavior-keep_awake', cfg.behavior.keep_awake);
+  setCb('cb-behavior-focus_lock_modifier', cfg.behavior.focus_lock_modifier || 'none');
   setVal('behavior-focus_follows_mouse_delay_ms', cfg.behavior.focus_follows_mouse_delay_ms);
   setVal('behavior-move_step', cfg.behavior.move_step);
   setChecked('behavior-mouse_follows_focus', cfg.behavior.mouse_follows_focus === true);
@@ -2720,6 +2747,7 @@ function readConfig() {
       focus_follows_mouse: checked('behavior-focus_follows_mouse'),
       keep_awake: checked('behavior-keep_awake'),
       focus_follows_mouse_delay_ms: num('behavior-focus_follows_mouse_delay_ms'),
+      focus_lock_modifier: cbVal('cb-behavior-focus_lock_modifier'),
       move_step: num('behavior-move_step'),
       mouse_follows_focus: checked('behavior-mouse_follows_focus'),
       workspace_edge_wrap: cbVal('cb-behavior-workspace_edge_wrap'),
@@ -3244,16 +3272,17 @@ document.getElementById('layout-gap').value = '37';
 document.getElementById('cb-layout-centering_mode').dataset.value = 'center';
 document.getElementById('cb-layout-center_columns').dataset.value = 'off';
 document.getElementById('behavior-focus_new_windows').checked = true;
+document.getElementById('cb-behavior-focus_lock_modifier').dataset.value = 'Alt';
 document.getElementById('cb-behavior-taskbar_buttons').dataset.value = 'hide_offscreen';
 document.getElementById('cb-behavior-new_window_placement').dataset.value = 'new_column';
 const cfg = { layout: { centering_mode: 'on_overflow', center_columns: 'fit' },
   appearance: { active_border: true }, behavior: { focus_new_windows: false,
-  focus_follows_mouse: true, keep_awake: true, taskbar_buttons: 'show_all', new_window_placement: 'in_column' } };
+  focus_follows_mouse: true, keep_awake: true, focus_lock_modifier: 'F13', taskbar_buttons: 'show_all', new_window_placement: 'in_column' } };
 eval(payload.script);
 const saved = readConfig();
 assert.strictEqual(saved.layout.gap, 37);
 for (const [section, keys] of Object.entries({layout: ['centering_mode', 'center_columns'],
-  appearance: ['active_border'], behavior: ['focus_new_windows', 'focus_follows_mouse', 'keep_awake', 'taskbar_buttons', 'new_window_placement']})) {
+  appearance: ['active_border'], behavior: ['focus_new_windows', 'focus_follows_mouse', 'keep_awake', 'focus_lock_modifier', 'taskbar_buttons', 'new_window_placement']})) {
   for (const key of keys) assert.strictEqual(saved[section][key], cfg[section][key], section + '.' + key);
 }
 "#;
@@ -3271,6 +3300,7 @@ for (const [section, keys] of Object.entries({layout: ['centering_mode', 'center
         config.behavior.focus_new_windows = false;
         config.behavior.focus_follows_mouse = true;
         config.behavior.keep_awake = true;
+        config.behavior.focus_lock_modifier = "F13".to_string();
         config.behavior.taskbar_buttons = crate::config::TaskbarButtons::ShowAll;
         config.behavior.new_window_placement = crate::config::NewWindowPlacement::InColumn;
         let payload = serde_json::json!({

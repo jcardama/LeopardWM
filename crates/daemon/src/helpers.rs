@@ -188,6 +188,9 @@ impl AppState {
 
         self.config = config;
 
+        leopardwm_platform_win32::set_focus_lock_modifier(
+            &self.config.behavior.focus_lock_modifier,
+        );
         leopardwm_platform_win32::set_scroll_modifier(&self.config.hotkeys.scroll_modifier);
         leopardwm_platform_win32::set_wheel_swipes(self.config.gestures.wheel_swipes);
 

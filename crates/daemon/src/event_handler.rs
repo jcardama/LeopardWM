@@ -480,7 +480,7 @@ impl AppState {
             | WindowEvent::MaximizedAdmissionRestored { window_id: id, .. } => Some(*id),
             WindowEvent::DisplayChange
             | WindowEvent::WorkAreaChanged
-            | WindowEvent::MouseEnterWindow(_)
+            | WindowEvent::MouseEnterWindow(..)
             | WindowEvent::MouseLeftManaged => None,
         };
 
@@ -541,7 +541,7 @@ impl AppState {
             // Work-area changes normally reconcile through the debounced
             // DisplayChangeSettled path; handle direct dispatch defensively.
             WindowEvent::WorkAreaChanged => self.on_display_change(),
-            WindowEvent::MouseEnterWindow(_) | WindowEvent::MouseLeftManaged => {
+            WindowEvent::MouseEnterWindow(..) | WindowEvent::MouseLeftManaged => {
                 // Both are handled by the main event loop's focus-follows-mouse
                 // debouncing (schedule on enter, cancel on leave).
             }

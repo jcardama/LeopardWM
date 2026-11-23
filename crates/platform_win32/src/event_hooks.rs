@@ -77,8 +77,8 @@ pub enum WindowEvent {
     /// taskbar toggled between auto-hide and always-on). Reconciled on a
     /// shorter debounce than `DisplayChange` since it settles quickly.
     WorkAreaChanged,
-    /// Mouse cursor entered a window (for focus-follows-mouse).
-    MouseEnterWindow(WindowId),
+    /// Mouse cursor entered a window, with focus-lock state captured on entry.
+    MouseEnterWindow(WindowId, bool),
     /// Mouse cursor left a manageable window for a non-manageable one (the
     /// taskbar, a popup, etc.). Cancels any pending focus-follows-mouse focus
     /// so a debounced focus doesn't fire on a window the cursor has left.

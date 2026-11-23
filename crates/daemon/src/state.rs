@@ -461,6 +461,7 @@ pub(crate) struct AppState {
     /// Cleared on consume, abort, or a newer transition start.
     pub(crate) pending_suppress_landing_focus_resync: bool,
     pub(crate) previous_focused_hwnd: Option<u64>,
+    pub(crate) focus_follows_mouse_generation: u64,
     /// Suppresses delayed focus notifications for the exact window left by a
     /// successful workspace switch whose destination has no visible focus.
     pub(crate) pending_workspace_switch_focus: Option<PendingWorkspaceSwitchFocus>,
@@ -1073,6 +1074,7 @@ impl AppState {
             pending_sticky_refocus: None,
             pending_suppress_landing_focus_resync: false,
             previous_focused_hwnd: None,
+            focus_follows_mouse_generation: 0,
             pending_workspace_switch_focus: None,
             pending_last_window_departure: None,
             recently_restored_managed_windows: HashMap::new(),

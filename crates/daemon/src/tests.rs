@@ -13298,6 +13298,134 @@ fn test_focused_event_updates_previous_focused_hwnd_for_tiled() {
     assert_eq!(state.previous_focused_hwnd, Some(200));
 }
 
+#[tokio::test]
+async fn locked_mouse_enters_cancel_pending_and_invalidate_queued_focus() {
+    let mut app = AppState::new_with_config(test_config(), test_monitors());
+    app.config.behavior.focus_follows_mouse = true;
+    app.config.behavior.focus_follows_mouse_delay_ms = 50;
+    app.config.behavior.focus_lock_modifier = "none".to_string();
+    app.focused_workspace_mut()
+        .unwrap()
+        .add_floating(100, Rect::new(100, 100, 400, 300))
+        .unwrap();
+    app.previous_focused_hwnd = None;
+    let cancelled = app.apply_worker_cancelled.clone();
+    let epoch = app.apply_epoch.clone();
+    #[allow(clippy::arc_with_non_send_sync)]
+    let state = Arc::new(Mutex::new(app));
+    let (event_tx, mut event_rx) = mpsc::channel(8);
+    let (settings_tx, _settings_rx) = std::sync::mpsc::channel();
+    let settings_tx = Arc::new(settings_tx);
+    let worker =
+        animation_worker::AnimationWorkerHandle::spawn(event_tx.clone(), cancelled.clone())
+            .unwrap();
+    let quit = quit_fallback::QuitFallback::new(
+        cancelled,
+        epoch,
+        || {},
+        |_| {},
+        |_| {},
+        quit_fallback::QuitTiming::default(),
+    );
+    let mut ctx = EventLoopCtx {
+        quit_fallback: &quit,
+        state: &state,
+        event_tx: &event_tx,
+        glazewm_compat: &mut glazewm_compat::Server::default(),
+        hotkey_state: &mut HotkeyState {
+            handle: None,
+            hook: None,
+            mapping: HashMap::new(),
+            requested_count: 0,
+            registered_count: 0,
+            failed_binds: Vec::new(),
+            recording: false,
+        },
+        tray_manager: &None,
+        snap_hint_overlay: &None,
+        settings_sync_tx: &settings_tx,
+        settings_handle: &mut None,
+        animation_worker: &worker,
+        animation_active: &mut false,
+        last_frame_instant: &mut None,
+        snap_hint_timer_handle: &mut None,
+        focus_follows_mouse_timer: &mut None,
+        display_change_timer: &mut None,
+        idle_layout_reapply_timer: &mut None,
+        display_change_apply_retry_timer: &mut None,
+        mouse_hook_handle: &mut None,
+        keep_awake: &keep_awake::KeepAwake::new(|_| {}),
+        gestures: &mut GestureRuntime {
+            startup_raw_input: false,
+            handle: None,
+            cancel: None,
+            retry_install: true,
+        },
+    };
+    process_window_event(&mut ctx, WindowEvent::MouseEnterWindow(100, false)).await;
+    assert!(ctx.focus_follows_mouse_timer.is_some());
+    process_window_event(&mut ctx, WindowEvent::MouseEnterWindow(200, true)).await;
+    assert!(ctx.focus_follows_mouse_timer.is_none());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(150), event_rx.recv())
+            .await
+            .is_err()
+    );
+
+    process_window_event(&mut ctx, WindowEvent::MouseEnterWindow(100, false)).await;
+    let Some(DaemonEvent::FocusFollowsMouse(request)) =
+        tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
+            .await
+            .unwrap()
+    else {
+        panic!("expected a queued focus request");
+    };
+    process_window_event(&mut ctx, WindowEvent::MouseEnterWindow(200, true)).await;
+    process_window_event(&mut ctx, WindowEvent::MouseEnterWindow(100, true)).await;
+    handle_focus_follows_mouse(&mut ctx, request).await;
+    assert_eq!(state.lock().await.previous_focused_hwnd, None);
+
+    process_window_event(&mut ctx, WindowEvent::MouseEnterWindow(100, false)).await;
+    let Some(DaemonEvent::FocusFollowsMouse(request)) =
+        tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
+            .await
+            .unwrap()
+    else {
+        panic!("expected a new focus request");
+    };
+    handle_focus_follows_mouse(&mut ctx, request).await;
+    assert_eq!(state.lock().await.previous_focused_hwnd, Some(100));
+}
+
+#[tokio::test]
+async fn focus_timer_drops_event_if_locked_at_expiry_before_release() {
+    use std::sync::atomic::AtomicBool;
+    let (tx, mut rx) = mpsc::channel(4);
+    let mut timer = None;
+    let held = Arc::new(AtomicBool::new(false));
+    let at_expiry = held.clone();
+    schedule_mouse_focus(&mut timer, &tx, 100, 200, false, 1, move || {
+        at_expiry.load(Ordering::SeqCst)
+    });
+    tokio::task::yield_now().await;
+    held.store(true, Ordering::SeqCst);
+    timer.take().unwrap().await.unwrap();
+    held.store(false, Ordering::SeqCst);
+    assert!(rx.try_recv().is_err());
+    schedule_mouse_focus(&mut timer, &tx, 200, 20, false, 2, || false);
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .unwrap(),
+        Some(DaemonEvent::FocusFollowsMouse(
+            events::FocusFollowsMouseRequest {
+                window_id: 200,
+                generation: 2
+            }
+        ))
+    ));
+}
+
 #[test]
 fn test_focus_follows_mouse_updates_previous_focused_hwnd() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
