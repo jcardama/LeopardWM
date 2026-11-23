@@ -4378,6 +4378,7 @@ fn maximized_column_drag_restores_width_at_destination() {
         let source = &mut state.workspaces.get_mut(&1).unwrap()[0];
         source.set_row_layout(&[0.5, 0.5]);
         source.insert_window_in_row(0, 0, Some(550)).unwrap();
+        source.set_window_min_width(0, 700);
         source.focus_window(0).unwrap();
         assert!(source.toggle_maximize_column(source_width));
         if target_idx == 1 {
@@ -4400,14 +4401,52 @@ fn maximized_column_drag_restores_width_at_destination() {
         );
 
         let destination_width = state.viewport_width_for(target_monitor);
+        let viewport = state.layout_viewport(target_monitor);
         let destination = &mut state.workspaces.get_mut(&target_monitor).unwrap()[target_idx];
         let (row, column, _) = destination.find_window_location_rc(0).unwrap();
         assert_eq!(row, target_row);
         assert_eq!(destination.rows()[row].column(column).unwrap().width(), 550);
+        if (target_monitor, target_idx) == (1, 0) {
+            let placement = destination
+                .compute_placements(viewport)
+                .into_iter()
+                .find(|p| p.window_id == 0)
+                .unwrap();
+            assert_eq!(placement.rect.width, 700);
+        }
         assert!(destination.toggle_maximize_column(destination_width));
         assert!(!destination.toggle_maximize_column(destination_width));
         assert_eq!(destination.rows()[row].column(column).unwrap().width(), 550);
     }
+}
+
+#[test]
+fn plain_drag_from_maximized_column_restores_width_in_new_row() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = false;
+    state.reduce_motion = true;
+    let monitor = state.focused_monitor;
+    let viewport_width = state.viewport_width_for(monitor);
+    let workspace = state.focused_workspace_mut().unwrap();
+    workspace.set_row_gap(0);
+    workspace.set_row_layout(&[0.5, 0.5]);
+    workspace.insert_window_in_row(0, 0, Some(550)).unwrap();
+    workspace.focus_window(0).unwrap();
+    assert!(workspace.toggle_maximize_column(viewport_width));
+
+    state.handle_window_event(WindowEvent::MoveSizeStart(0, None));
+    state.update_drag_hint_at(0, 200, 700, monitor, false);
+    let drag = state.drag_state.take().expect("move drag");
+    assert_eq!(
+        drag.last_drop_target.map(|target| target.target_row),
+        Some(1)
+    );
+    state.finalize_drag_merge(0, &drag, monitor, &Rect::new(200, 700, 550, 400));
+
+    let workspace = state.focused_workspace().unwrap();
+    let (row, column, _) = workspace.find_window_location_rc(0).unwrap();
+    assert_eq!(row, 1);
+    assert_eq!(workspace.rows()[row].column(column).unwrap().width(), 550);
 }
 
 #[test]

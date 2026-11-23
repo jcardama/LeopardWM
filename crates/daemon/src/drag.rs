@@ -1694,8 +1694,14 @@ impl AppState {
             .workspaces
             .get_mut(&source_monitor)
             .and_then(|v| v.get_mut(src_idx))
-            .and_then(|ws| ws.remove_column_for_transfer(src_row, col_idx))
-        {
+            .and_then(|ws| {
+                if (source_monitor, src_idx) == (target_monitor, tgt_idx) {
+                    ws.restore_column_width_for_move(src_row, col_idx);
+                    ws.remove_column_in_row(src_row, col_idx)
+                } else {
+                    ws.remove_column_for_transfer(src_row, col_idx)
+                }
+            }) {
             Some(col) => col,
             None => {
                 self.snap_back_tiled(source_monitor, drag.source_workspace_idx);

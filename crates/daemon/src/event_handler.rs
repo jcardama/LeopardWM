@@ -3229,11 +3229,8 @@ impl AppState {
                     .and_then(|v| v.get(ws_idx))
                     .and_then(|ws| {
                         ws.find_window_location_rc(hwnd).map(|(row, col, slot)| {
-                            let width = ws
-                                .rows()
-                                .get(row)
-                                .and_then(|r| r.column(col))
-                                .map(|c| c.width());
+                            let width =
+                                ws.rows().get(row).and_then(|r| r.column_restore_width(col));
                             (row, slot, col, width)
                         })
                     })

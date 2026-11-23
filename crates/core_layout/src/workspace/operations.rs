@@ -453,10 +453,14 @@ impl Workspace {
         Some(col)
     }
 
-    /// Remove a column leaving this workspace, restoring its unmaximized width and clearing its cached minima.
-    pub fn remove_column_for_transfer(&mut self, row_idx: usize, index: usize) -> Option<Column> {
-        let row = self.rows.get_mut(row_idx)?;
-        let column = row.columns.get_mut(index)?;
+    /// Restore a maximized column's original width before moving it.
+    pub fn restore_column_width_for_move(&mut self, row_idx: usize, index: usize) {
+        let Some(row) = self.rows.get_mut(row_idx) else {
+            return;
+        };
+        let Some(column) = row.columns.get_mut(index) else {
+            return;
+        };
         if row
             .maximized_column
             .as_ref()
@@ -466,6 +470,11 @@ impl Workspace {
             column.set_width(state.original_width);
             column.width_fraction_cache = state.width_fraction_cache;
         }
+    }
+
+    /// Remove a column leaving this workspace, restoring its unmaximized width and clearing its cached minima.
+    pub fn remove_column_for_transfer(&mut self, row_idx: usize, index: usize) -> Option<Column> {
+        self.restore_column_width_for_move(row_idx, index);
         let column = self.remove_column_in_row(row_idx, index)?;
         for window in column.windows() {
             self.window_min_widths.remove(window);

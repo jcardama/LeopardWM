@@ -91,6 +91,17 @@ impl WorkspaceRow {
         self.columns.get(index)
     }
 
+    /// Get a column's width before maximization, or its current width otherwise.
+    pub fn column_restore_width(&self, index: usize) -> Option<i32> {
+        let column = self.columns.get(index)?;
+        Some(
+            self.maximized_column
+                .as_ref()
+                .filter(|state| column.contains(state.sentinel_window))
+                .map_or(column.width(), |state| state.original_width),
+        )
+    }
+
     /// Get a mutable reference to a column by index.
     pub fn column_mut(&mut self, index: usize) -> Option<&mut Column> {
         self.columns.get_mut(index)
