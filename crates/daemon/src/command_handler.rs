@@ -1254,7 +1254,6 @@ impl AppState {
                     }
                 }
                 self.config_warnings = warnings;
-                self.settings_health_dirty = true;
                 self.apply_config(new_config);
                 if let Err(e) = self.apply_layout() {
                     return IpcResponse::error(format!("Failed to apply layout: {}", e));

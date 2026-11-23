@@ -373,9 +373,11 @@ fn sync_tray_toggles(tray_manager: &Option<tray::TrayManager>, config: &Config) 
     }
 }
 
-fn sync_tray_after_quick_toggle(tray_manager: &Option<tray::TrayManager>, config: &Config) {
-    sync_tray_toggles(tray_manager, config);
-    settings::push_tray_config(config);
+fn sync_tray_after_quick_toggle(tray_manager: &Option<tray::TrayManager>, state: &mut AppState) {
+    sync_tray_toggles(tray_manager, &state.config);
+    settings::push_tray_config(&state.config);
+    // Tray saves rewrite the config file, which can clear unknown keys and rejections.
+    state.settings_health_dirty = true;
 }
 
 async fn reload_config_and_hotkeys(ctx: &mut EventLoopCtx<'_>) {
@@ -2587,7 +2589,7 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
             info!("Tray: Keep awake toggled to {}", on);
             let _ = state.config.save();
             ctx.keep_awake.set(on);
-            sync_tray_after_quick_toggle(ctx.tray_manager, &state.config);
+            sync_tray_after_quick_toggle(ctx.tray_manager, &mut state);
         }
         tray::TrayEvent::SetTaskbarButtons(mode) => {
             let mut state = ctx.state.lock().await;
@@ -2595,7 +2597,7 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
             info!("Tray: Taskbar buttons set to {:?}", mode);
             let _ = state.config.save();
             state.sync_taskbar_buttons();
-            sync_tray_after_quick_toggle(ctx.tray_manager, &state.config);
+            sync_tray_after_quick_toggle(ctx.tray_manager, &mut state);
         }
         tray::TrayEvent::ToggleAutoStart => {
             use leopardwm_platform_win32::autostart;
@@ -2630,7 +2632,7 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
                 }
                 let _ = state.config.save();
             }
-            sync_tray_after_quick_toggle(ctx.tray_manager, &state.config);
+            sync_tray_after_quick_toggle(ctx.tray_manager, &mut state);
         }
         tray::TrayEvent::OpenReleasesPage => {
             info!("Tray: opening releases page");
@@ -2648,7 +2650,7 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
                 }
                 let _ = state.config.save();
             }
-            sync_tray_after_quick_toggle(ctx.tray_manager, &state.config);
+            sync_tray_after_quick_toggle(ctx.tray_manager, &mut state);
         }
         tray::TrayEvent::SetCenteringOnOverflow => {
             let mut state = ctx.state.lock().await;
@@ -2662,7 +2664,7 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
                 }
                 let _ = state.config.save();
             }
-            sync_tray_after_quick_toggle(ctx.tray_manager, &state.config);
+            sync_tray_after_quick_toggle(ctx.tray_manager, &mut state);
         }
         tray::TrayEvent::SetCenterColumnsOff => {
             let mut state = ctx.state.lock().await;
@@ -2678,7 +2680,7 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
                 }
                 let _ = state.config.save();
             }
-            sync_tray_after_quick_toggle(ctx.tray_manager, &state.config);
+            sync_tray_after_quick_toggle(ctx.tray_manager, &mut state);
         }
         tray::TrayEvent::SetCenterColumnsSingle => {
             let mut state = ctx.state.lock().await;
@@ -2695,7 +2697,7 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
                 }
                 let _ = state.config.save();
             }
-            sync_tray_after_quick_toggle(ctx.tray_manager, &state.config);
+            sync_tray_after_quick_toggle(ctx.tray_manager, &mut state);
         }
         tray::TrayEvent::SetCenterColumnsFit => {
             let mut state = ctx.state.lock().await;
@@ -2711,7 +2713,7 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
                 }
                 let _ = state.config.save();
             }
-            sync_tray_after_quick_toggle(ctx.tray_manager, &state.config);
+            sync_tray_after_quick_toggle(ctx.tray_manager, &mut state);
         }
         tray::TrayEvent::SetPlacementNewColumn => {
             let mut state = ctx.state.lock().await;
@@ -2720,7 +2722,7 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
                 info!("Tray: New-window placement set to NewColumn");
                 let _ = state.config.save();
             }
-            sync_tray_after_quick_toggle(ctx.tray_manager, &state.config);
+            sync_tray_after_quick_toggle(ctx.tray_manager, &mut state);
         }
         tray::TrayEvent::SetPlacementInColumn => {
             let mut state = ctx.state.lock().await;
@@ -2729,7 +2731,7 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
                 info!("Tray: New-window placement set to InColumn");
                 let _ = state.config.save();
             }
-            sync_tray_after_quick_toggle(ctx.tray_manager, &state.config);
+            sync_tray_after_quick_toggle(ctx.tray_manager, &mut state);
         }
     }
 }
@@ -3436,6 +3438,7 @@ async fn handle_settings_event(
             info!("Settings: config saved, triggering reload");
             let response = {
                 let mut state = ctx.state.lock().await;
+                // Settings already logged validation warnings before saving the clamped config.
                 state.reload_config(false)
             };
             if matches!(response, IpcResponse::Ok) {
@@ -3456,7 +3459,7 @@ async fn handle_settings_event(
             let state = ctx.state.lock().await;
             let result = diagnostic_snapshot::create_diagnostic_snapshot(
                 &state,
-                "settings",
+                "Settings",
                 env!("CARGO_PKG_VERSION").to_string(),
                 leopardwm_platform_win32::current_process_integrity(),
             );
@@ -4006,6 +4009,8 @@ async fn initialize_settings_health(
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(0);
+    // Processes the daemon starts (Explorer, browsers) must not inherit the restart count.
+    std::env::remove_var("LEOPARDWM_WATCHDOG_RESTARTS");
     state.settings_failed_binds = hotkeys.failed_binds.clone();
     state.keyboard_hook_unavailable = hotkeys_enabled && hotkeys.hook.is_none();
     if let Some(log) = &state.daemon_log {

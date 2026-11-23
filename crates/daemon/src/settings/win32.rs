@@ -619,7 +619,14 @@ fn list_diagnostics(dir: &std::path::Path) -> std::io::Result<Vec<DiagnosticFile
     let mut files = Vec::new();
     for entry in entries {
         let entry = entry?;
-        let metadata = entry.metadata()?;
+        // Only snapshots are redacted; anything else in the folder stays off the list.
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !(name.starts_with("leopardwm-snapshot-") && name.ends_with(".txt")) {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
         if !metadata.is_file() {
             continue;
         }
@@ -627,7 +634,7 @@ fn list_diagnostics(dir: &std::path::Path) -> std::io::Result<Vec<DiagnosticFile
         files.push((
             modified,
             DiagnosticFile {
-                name: entry.file_name().to_string_lossy().into_owned(),
+                name,
                 size: metadata.len(),
                 modified: modified
                     .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
@@ -1000,8 +1007,9 @@ mod tests {
         ));
         std::fs::create_dir(&dir).unwrap();
         for (name, bytes, nanos) in [
-            ("a-older.txt", &b"old"[..], 100_000_000),
-            ("z-newer.txt", &b"newer"[..], 800_000_000),
+            ("leopardwm-snapshot-a-older.txt", &b"old"[..], 100_000_000),
+            ("leopardwm-snapshot-z-newer.txt", &b"newer"[..], 800_000_000),
+            ("leopardwm-recording.log", &b"unredacted"[..], 900_000_000),
         ] {
             let path = dir.join(name);
             std::fs::write(&path, bytes).unwrap();
@@ -1020,8 +1028,8 @@ mod tests {
                 .map(|file| (file.name.as_str(), file.size, file.modified))
                 .collect::<Vec<_>>(),
             vec![
-                ("z-newer.txt", 5, Some(1_700_000_000)),
-                ("a-older.txt", 3, Some(1_700_000_000))
+                ("leopardwm-snapshot-z-newer.txt", 5, Some(1_700_000_000)),
+                ("leopardwm-snapshot-a-older.txt", 3, Some(1_700_000_000))
             ]
         );
         std::fs::remove_dir_all(dir).unwrap();
