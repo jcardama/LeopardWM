@@ -993,7 +993,10 @@ impl AppState {
             IpcCommand::WriteDiagnosticSnapshot { requester_version, requester_integrity } => {
                 match crate::diagnostic_snapshot::create_diagnostic_snapshot(self, "CLI", requester_version, requester_integrity) {
                     Ok(path) => IpcResponse::DiagnosticSnapshotWritten { path: path.to_string_lossy().into_owned() },
-                    Err(error) => IpcResponse::error(format!("Failed to write diagnostic snapshot: {error}")),
+                    Err(error) => {
+                        warn!("IPC: cannot create diagnostic snapshot: {}", log_text::text(&error));
+                        IpcResponse::error(format!("Failed to write diagnostic snapshot: {error}"))
+                    },
                 }
             }
             IpcCommand::GetAutoStart => {

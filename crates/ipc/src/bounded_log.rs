@@ -11,15 +11,17 @@ pub const LOG_FILE_MAX_BYTES: u64 = 20 * 1024 * 1024;
 ///
 /// An existing file at or over the limit is rolled over on open when possible.
 /// An oversized old log remains there until the next rollover replaces it.
-/// If a rollover fails, both files are preserved and writes keep appending; the
-/// current file can exceed the limit until a later rollover succeeds. A single
-/// write larger than the limit can also exceed it.
+/// If renaming during rollover fails but reopening succeeds, writes keep appending
+/// and the current file can exceed the limit until a later rollover succeeds.
+/// A failed reopen is reported once per failure streak; later writes retry the
+/// reopen and are discarded until it succeeds. A single write larger than the
+/// limit can also exceed it.
 pub struct BoundedLogFile {
     dir: AnchoredDir,
     name: OsString,
     previous_name: OsString,
     file: Option<File>,
-    disabled: bool,
+    reopen_failure_reported: bool,
     length: u64,
     max_bytes: u64,
 }
@@ -48,7 +50,7 @@ impl BoundedLogFile {
             name,
             previous_name,
             file: Some(file),
-            disabled: false,
+            reopen_failure_reported: false,
             length,
             max_bytes,
         };
@@ -58,36 +60,40 @@ impl BoundedLogFile {
         Ok(log)
     }
 
-    fn rollover(&mut self) -> io::Result<()> {
-        drop(self.file.take());
-        let _ = self.dir.rename_replace(&self.name, &self.previous_name);
+    fn reopen(&mut self) -> io::Result<()> {
         let file = self.dir.open_append(&self.name)?;
         self.length = file.metadata()?.len();
         self.file = Some(file);
+        self.reopen_failure_reported = false;
         Ok(())
+    }
+
+    fn rollover(&mut self) -> io::Result<()> {
+        drop(self.file.take());
+        let _ = self.dir.rename_replace(&self.name, &self.previous_name);
+        self.reopen()
+    }
+
+    fn reopen_error(&mut self, error: io::Error, len: usize) -> io::Result<usize> {
+        if self.reopen_failure_reported {
+            Ok(len)
+        } else {
+            self.reopen_failure_reported = true;
+            Err(error)
+        }
     }
 }
 
 impl Write for BoundedLogFile {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        if self.disabled {
-            return Ok(buf.len());
-        }
         if self.file.is_none() {
-            let file = match self.dir.open_append(&self.name) {
-                Ok(file) => file,
-                Err(error) => {
-                    self.disabled = true;
-                    return Err(error);
-                }
-            };
-            self.length = file.metadata()?.len();
-            self.file = Some(file);
+            if let Err(error) = self.reopen() {
+                return self.reopen_error(error, buf.len());
+            }
         }
         if self.length != 0 && self.length.saturating_add(buf.len() as u64) > self.max_bytes {
             if let Err(error) = self.rollover() {
-                self.disabled = true;
-                return Err(error);
+                return self.reopen_error(error, buf.len());
             }
         }
         let written = self.file.as_mut().expect("log file is open").write(buf)?;
@@ -200,7 +206,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn unsafe_reopen_is_reported_once_and_then_discarded() {
+    fn unsafe_reopen_is_reported_once_per_failure_streak() {
         let root = temp_dir();
         let dir = root.join("logs");
         let target = root.join("outside");
@@ -222,6 +228,7 @@ mod tests {
         );
         let first = log.write(b"e");
         let second = log.write(b"f");
+        let third = log.write(b"g");
         drop(log);
         let target_was_modified = fs::read_dir(&target).unwrap().next().is_some();
         if current.is_dir() {
@@ -236,7 +243,50 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
         assert!(first.is_err(), "unsafe reopen was accepted");
         assert_eq!(second.unwrap(), 1);
+        assert_eq!(third.unwrap(), 1);
         assert!(!target_was_modified, "junction target was modified");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn reopen_retries_after_transient_sharing_failure() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let dir = temp_dir();
+        let current = dir.join("example.log");
+        let mut log = BoundedLogFile::open(&dir, "example.log", 4).unwrap();
+        log.write_all(b"abcd").unwrap();
+        fs::rename(&current, dir.join("saved.log")).unwrap();
+        fs::write(&current, b"x").unwrap();
+        let locked = OpenOptions::new()
+            .read(true)
+            .share_mode(1)
+            .open(&current)
+            .unwrap();
+        let first = log.write(b"e");
+        let second = log.write(b"f");
+        drop(locked);
+        let recovered = log.write(b"g");
+        let contents = fs::read(&current).unwrap();
+        log.write_all(b"hi").unwrap();
+        fs::rename(&current, dir.join("saved-again.log")).unwrap();
+        fs::write(&current, b"y").unwrap();
+        let locked_again = OpenOptions::new()
+            .read(true)
+            .share_mode(1)
+            .open(&current)
+            .unwrap();
+        let next_failure = log.write(b"j");
+        drop(locked_again);
+        drop(log);
+        fs::remove_dir_all(dir).unwrap();
+        assert!(first.is_err(), "sharing violation was not reported");
+        assert_eq!(second.unwrap(), 1);
+        assert_eq!(recovered.unwrap(), 1);
+        assert_eq!(contents, b"xg");
+        assert!(
+            next_failure.is_err(),
+            "a new failure streak was not reported"
+        );
     }
 
     #[test]

@@ -1877,7 +1877,10 @@ async fn handle_ipc_command(
                 active: Some(recording.status().is_some()),
                 path: path.map(|path| path.to_string_lossy().into_owned()),
             },
-            Err(message) => IpcResponse::error(message),
+            Err(message) => {
+                warn!("Cannot start recording: {}", log_text::text(&message));
+                IpcResponse::error(message)
+            }
         };
         let _ = responder.send(response);
         return false;
@@ -3505,6 +3508,12 @@ async fn handle_settings_event(
                 env!("CARGO_PKG_VERSION").to_string(),
                 leopardwm_platform_win32::current_process_integrity(),
             );
+            if let Err(error) = &result {
+                warn!(
+                    "Settings: cannot create diagnostic snapshot: {}",
+                    log_text::text(error)
+                );
+            }
             settings::push_snapshot_result(id, result);
         }
         settings::SettingsEvent::SetRecording(true) => {
