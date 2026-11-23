@@ -152,7 +152,7 @@ pub const SETTINGS_HTML: &str = r##"<!DOCTYPE html>
   .field-label, .field-desc {
     color: CanvasText !important;
   }
-  input, select, button, .combobox-trigger {
+  input, textarea, select, button, .combobox-trigger {
     background: ButtonFace !important;
     color: ButtonText !important;
     border-color: ButtonBorder !important;
@@ -376,6 +376,7 @@ html, body {
 /* ── Inputs / Selects ─────────────────────────────────────────────── */
 input[type="text"],
 input[type="number"],
+textarea,
 select {
   font-family: var(--font);
   font-size: 14px;
@@ -392,11 +393,13 @@ select {
 }
 input[type="text"]:hover,
 input[type="number"]:hover,
+textarea:hover,
 select:hover {
   background: var(--ctrl-fill-secondary);
 }
 input[type="text"]:focus,
 input[type="number"]:focus,
+textarea:focus,
 select:focus {
   background: var(--ctrl-fill-input-active);
   border-color: var(--ctrl-stroke);
@@ -898,24 +901,12 @@ input[type="range"]::-webkit-slider-thumb {
 .info-bar.error  { background: var(--error-bg); }
 .info-bar.error .info-bar-icon { fill: var(--error-stroke); }
 
-.report-form { display: grid; gap: 14px; padding: 18px; }
-.report-form label { display: grid; gap: 6px; font-weight: 600; }
-.report-form input, .report-form textarea, .report-form select { width: 100%; box-sizing: border-box; font: inherit; color: var(--text-primary); background: var(--ctrl-fill); border: 1px solid var(--ctrl-stroke); border-radius: 4px; padding: 8px; }
-.report-form input:focus-visible, .report-form textarea:focus-visible, .report-form select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.report-form textarea { min-height: 90px; resize: vertical; }
-.report-form .input-wrap { width: 100%; }
-.report-note { line-height: 1.5; margin: 0 0 12px; }
-.report-actions { display: flex; gap: 8px; }
-.report-status { margin-bottom: 12px; overflow-wrap: anywhere; }
-
-/* Troubleshooting */
+.field.stacked { flex-direction: column; align-items: stretch; gap: 6px; }
+.field.stacked .input-wrap { display: block; width: 100%; }
+.field.stacked textarea { box-sizing: border-box; width: 100%; min-height: 90px; resize: vertical; }
+.info-bar-message, #sec-troubleshooting .field-info { overflow-wrap: anywhere; }
 #sec-troubleshooting .troubleshooting-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
-#sec-troubleshooting .field-info { overflow-wrap: anywhere; }
 #sec-troubleshooting .troubleshooting-hint { color: var(--text-primary); margin-top: 6px; }
-#sec-troubleshooting .troubleshooting-status { color: var(--text-secondary); overflow-wrap: anywhere; margin-bottom: 12px; }
-/* Keep the empty live region in the accessibility tree so its first update is announced. */
-#sec-troubleshooting .troubleshooting-status:empty { margin-bottom: 0; }
-/* End Troubleshooting */
 </style>
 </head>
 <body>
@@ -1497,34 +1488,42 @@ input[type="range"]::-webkit-slider-thumb {
       <!-- Report an Issue -->
       <div id="sec-report" class="section">
         <h2 class="section-title" data-i18n="settings.report.title"></h2>
-        <p class="report-note" data-i18n="settings.report.guide"></p>
-        <p class="report-note" data-i18n="settings.report.privacy"></p>
-        <p class="report-note" data-i18n="settings.report.long"></p>
-        <div class="info-bar report-status" id="report-status" role="status" hidden><div class="info-bar-content" id="report-status-text"></div></div>
-        <div class="card report-form">
-          <label><span data-i18n="settings.report.subject"></span><input type="text" id="report-title" data-no-config autocomplete="off"></label>
-          <label><span data-i18n="settings.report.category"></span><select id="report-category">
-            <option value="" data-i18n="settings.report.unsure"></option>
-            <option value="Layout and scrolling" data-i18n="settings.report.layout"></option>
-            <option value="Focus" data-i18n="settings.report.focus"></option>
-            <option value="Hotkeys and gestures" data-i18n="settings.report.hotkeys"></option>
-            <option value="Window rules" data-i18n="settings.report.rules"></option>
-            <option value="Multiple monitors" data-i18n="settings.report.monitors"></option>
-            <option value="Settings" data-i18n="settings.report.settings"></option>
-            <option value="Performance" data-i18n="settings.report.performance"></option>
-            <option value="Crash or freeze" data-i18n="settings.report.crash"></option>
-            <option value="Other" data-i18n="settings.report.other"></option>
-          </select></label>
-          <label><span data-i18n="settings.report.actual"></span><textarea id="report-actual" autocomplete="off"></textarea></label>
-          <label><span data-i18n="settings.report.expected"></span><textarea id="report-expected" autocomplete="off"></textarea></label>
-          <label><span data-i18n="settings.report.repro"></span><textarea id="report-repro" autocomplete="off"></textarea></label>
-          <label><span data-i18n="settings.report.apps"></span><input type="text" id="report-affected_apps" data-no-config autocomplete="off"></label>
-          <label><span data-i18n="settings.report.regression"></span><select id="report-regression">
-            <option value="Not sure" data-i18n="settings.report.unsure"></option><option value="Yes" data-i18n="settings.report.yes"></option><option value="No" data-i18n="settings.report.no"></option>
-          </select></label>
-          <div><span data-i18n="settings.report.version"></span>: <span id="report-version"></span></div>
-          <div><span data-i18n="settings.report.windows"></span>: <span id="report-windows"></span></div>
-          <div class="report-actions"><button class="btn" type="button" id="report-submit" data-i18n="settings.report.submit" disabled></button><button class="btn" type="button" id="report-clear" data-i18n="settings.report.clear"></button></div>
+        <p class="section-desc" data-i18n="settings.report.guide"></p>
+        <div class="info-bar"><svg class="info-bar-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1a7 7 0 100 14A7 7 0 008 1zm0 3a1 1 0 110 2 1 1 0 010-2zm-1 3h2v5H7z"/></svg><div class="info-bar-content"><span class="info-bar-message" data-i18n="settings.report.privacy"></span></div></div>
+        <p class="section-desc" data-i18n="settings.report.long"></p>
+        <div class="info-bar" id="report-status" role="status" hidden><svg class="info-bar-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1a7 7 0 100 14A7 7 0 008 1zm0 3a1 1 0 110 2 1 1 0 010-2zm-1 3h2v5H7z"/></svg><div class="info-bar-content"><span class="info-bar-message" id="report-status-text"></span></div></div>
+        <div class="card">
+          <div class="field"><div class="field-info"><label class="field-label" for="report-title" data-i18n="settings.report.subject"></label></div><input type="text" id="report-title" data-no-config autocomplete="off"></div>
+          <div class="field"><div class="field-info"><div class="field-label" id="report-category-label" data-i18n="settings.report.category"></div></div>
+            <div class="combobox" id="report-category" data-no-config data-value="">
+              <button class="combobox-trigger" type="button" aria-labelledby="report-category-label"><span class="combobox-text" data-i18n="settings.report.unsure"></span><svg class="combobox-chevron" viewBox="0 0 12 12"><path d="M2.15 4.65a.5.5 0 01.7 0L6 7.79l3.15-3.14a.5.5 0 11.7.7l-3.5 3.5a.5.5 0 01-.7 0l-3.5-3.5a.5.5 0 010-.7z"/></svg></button>
+              <div class="combobox-popup">
+                <div class="combobox-option selected" data-value="" data-i18n="settings.report.unsure"></div>
+                <div class="combobox-option" data-value="Layout and scrolling" data-i18n="settings.report.layout"></div>
+                <div class="combobox-option" data-value="Focus" data-i18n="settings.report.focus"></div>
+                <div class="combobox-option" data-value="Hotkeys and gestures" data-i18n="settings.report.hotkeys"></div>
+                <div class="combobox-option" data-value="Window rules" data-i18n="settings.report.rules"></div>
+                <div class="combobox-option" data-value="Multiple monitors" data-i18n="settings.report.monitors"></div>
+                <div class="combobox-option" data-value="Settings" data-i18n="settings.report.settings"></div>
+                <div class="combobox-option" data-value="Performance" data-i18n="settings.report.performance"></div>
+                <div class="combobox-option" data-value="Crash or freeze" data-i18n="settings.report.crash"></div>
+                <div class="combobox-option" data-value="Other" data-i18n="settings.report.other"></div>
+              </div>
+            </div>
+          </div>
+          <div class="field stacked"><div class="field-info"><label class="field-label" for="report-actual" data-i18n="settings.report.actual"></label></div><textarea id="report-actual" data-no-config autocomplete="off"></textarea></div>
+          <div class="field stacked"><div class="field-info"><label class="field-label" for="report-expected" data-i18n="settings.report.expected"></label></div><textarea id="report-expected" data-no-config autocomplete="off"></textarea></div>
+          <div class="field stacked"><div class="field-info"><label class="field-label" for="report-repro" data-i18n="settings.report.repro"></label></div><textarea id="report-repro" data-no-config autocomplete="off"></textarea></div>
+          <div class="field"><div class="field-info"><label class="field-label" for="report-affected_apps" data-i18n="settings.report.apps"></label></div><input type="text" id="report-affected_apps" data-no-config autocomplete="off"></div>
+          <div class="field"><div class="field-info"><div class="field-label" id="report-regression-label" data-i18n="settings.report.regression"></div></div>
+            <div class="combobox" id="report-regression" data-no-config data-value="Not sure">
+              <button class="combobox-trigger" type="button" aria-labelledby="report-regression-label"><span class="combobox-text" data-i18n="settings.report.unsure"></span><svg class="combobox-chevron" viewBox="0 0 12 12"><path d="M2.15 4.65a.5.5 0 01.7 0L6 7.79l3.15-3.14a.5.5 0 11.7.7l-3.5 3.5a.5.5 0 01-.7 0l-3.5-3.5a.5.5 0 010-.7z"/></svg></button>
+              <div class="combobox-popup"><div class="combobox-option selected" data-value="Not sure" data-i18n="settings.report.unsure"></div><div class="combobox-option" data-value="Yes" data-i18n="settings.report.yes"></div><div class="combobox-option" data-value="No" data-i18n="settings.report.no"></div></div>
+            </div>
+          </div>
+          <div class="field"><div class="field-info"><div class="field-label" data-i18n="settings.report.version"></div></div><span id="report-version"></span></div>
+          <div class="field"><div class="field-info"><div class="field-label" data-i18n="settings.report.windows"></div></div><span id="report-windows"></span></div>
+          <div class="field"><div class="field-info"></div><div><button class="btn btn-sm btn-accent" type="button" id="report-submit" data-i18n="settings.report.submit" disabled></button> <button class="btn btn-sm" type="button" id="report-clear" data-i18n="settings.report.clear"></button></div></div>
         </div>
       </div>
 
@@ -1536,15 +1535,15 @@ input[type="range"]::-webkit-slider-thumb {
         <h3 class="section-subtitle" data-i18n="settings.troubleshooting.saved_diagnostics"></h3>
         <div class="card">
           <div id="troubleshooting-files" aria-live="polite"></div>
-          <div class="about-divider"></div>
+          <div class="card-divider"></div>
           <div class="troubleshooting-actions">
             <button class="btn btn-sm" id="troubleshooting-refresh" data-i18n="settings.troubleshooting.refresh"></button>
             <button class="btn btn-sm" id="troubleshooting-reveal" data-i18n="settings.troubleshooting.reveal_folder"></button>
             <button class="btn btn-sm btn-accent" id="troubleshooting-create" data-i18n="settings.troubleshooting.create_snapshot"></button>
+            <button class="btn btn-sm" id="troubleshooting-report" hidden data-i18n="settings.troubleshooting.report_issue"></button>
           </div>
-          <p class="troubleshooting-status" id="troubleshooting-status" role="status"></p>
+          <div class="info-bar" id="troubleshooting-status" role="status" hidden><svg class="info-bar-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1a7 7 0 100 14A7 7 0 008 1zm0 3a1 1 0 110 2 1 1 0 010-2zm-1 3h2v5H7z"/></svg><div class="info-bar-content"><span class="info-bar-message" id="troubleshooting-status-text"></span></div></div>
         </div>
-        <button class="btn" id="troubleshooting-report" hidden data-i18n="settings.troubleshooting.report_issue"></button>
       </div>
       <!-- End Troubleshooting -->
 
@@ -1697,7 +1696,8 @@ function initCombobox(cb) {
       cb.classList.remove('open');
       cb.querySelectorAll('.combobox-option').forEach(function(o) { o.classList.remove('selected'); });
       opt.classList.add('selected');
-      autoSave(0);
+      if (cb.dataset.noConfig !== undefined) cb.dispatchEvent(new Event('change'));
+      else autoSave(0);
     });
   });
 }
@@ -2910,7 +2910,7 @@ function wrapInput(input) {
   wrap.appendChild(input);
 }
 function wrapAllInputs(root) {
-  (root || document).querySelectorAll('input[type="text"], input[type="number"]').forEach(wrapInput);
+  (root || document).querySelectorAll('input[type="text"], input[type="number"], textarea').forEach(wrapInput);
 }
 wrapAllInputs();
 
@@ -2920,9 +2920,14 @@ wrapAllInputs();
   var fields = {};
   names.forEach(function(name) { fields[name] = document.getElementById('report-' + name); });
   var submit = document.getElementById('report-submit');
+  function isCombo(name) { return name === 'category' || name === 'regression'; }
+  function setField(name, value) {
+    if (isCombo(name)) setCb('report-' + name, value);
+    else fields[name].value = value;
+  }
   function draft() {
     var result = {};
-    names.forEach(function(name) { result[name] = fields[name].value; });
+    names.forEach(function(name) { result[name] = isCombo(name) ? cbVal('report-' + name) : fields[name].value; });
     return result;
   }
   function persist() {
@@ -2933,7 +2938,7 @@ wrapAllInputs();
   }
   var saved = window._reportDraft || {};
   names.forEach(function(name) {
-    if (typeof saved[name] === 'string') fields[name].value = saved[name];
+    if (typeof saved[name] === 'string') setField(name, saved[name]);
     function onChange() {
       update();
       persist();
@@ -2944,7 +2949,7 @@ wrapAllInputs();
   document.getElementById('report-version').textContent = window._version || '';
   document.getElementById('report-windows').textContent = window._windowsVersion || '';
   document.getElementById('report-clear').addEventListener('click', function() {
-    names.forEach(function(name) { fields[name].value = name === 'regression' ? 'Not sure' : ''; });
+    names.forEach(function(name) { setField(name, name === 'regression' ? 'Not sure' : ''); });
     document.getElementById('report-status').hidden = true;
     update();
     persist();
@@ -2959,7 +2964,10 @@ wrapAllInputs();
     var message = status.file ? (status.error ? t('settings.report.reveal_error', status) : t('settings.report.snapshot_ok', status)) : t('settings.report.snapshot_error', status);
     if (status.truncated) message += ' ' + t(status.copied ? 'settings.report.copied' : 'settings.report.copy_failed');
     document.getElementById('report-status-text').textContent = message;
-    document.getElementById('report-status').hidden = false;
+    var bar = document.getElementById('report-status');
+    bar.classList.remove('success', 'warning', 'error');
+    bar.classList.add(!status.file ? 'error' : (status.error || (status.truncated && !status.copied)) ? 'warning' : 'success');
+    bar.hidden = false;
   };
   update();
 })();
@@ -3071,10 +3079,13 @@ document.querySelectorAll('input[type="text"], input[type="number"]').forEach(fu
   document.getElementById('troubleshooting-reveal').addEventListener('click', function() { send('reveal_diagnostics'); });
   document.getElementById('troubleshooting-create').addEventListener('click', function() {
     var button = this, status = document.getElementById('troubleshooting-status');
-    button.disabled = true; status.textContent = t(prefix + 'creating');
+    var text = document.getElementById('troubleshooting-status-text');
+    button.disabled = true; status.classList.remove('success', 'error'); status.hidden = false;
+    text.textContent = t(prefix + 'creating');
     window.lwmCreateSnapshot().then(function(result) {
       button.disabled = false;
-      status.textContent = result.ok ? t(prefix + 'created', {path: result.path}) : t(prefix + 'create_failed', {error: result.error});
+      status.classList.add(result.ok ? 'success' : 'error');
+      text.textContent = result.ok ? t(prefix + 'created', {path: result.path}) : t(prefix + 'create_failed', {error: result.error});
     });
   });
   var report = document.querySelector('.nav-item[data-section="report"]');
@@ -3114,9 +3125,27 @@ const start = html.indexOf('/* ── Report an Issue ── */');
 const end = html.indexOf('/* ── Auto-save', start);
 assert(start >= 0 && end > start);
 const els = {};
-function el(id) { return els[id] ||= {value:'', textContent:'', disabled:false, hidden:false,
-  listeners:{}, addEventListener(event, callback) { this.listeners[event] = callback; }}; }
+function node() { const classes = new Set(); return {value:'', textContent:'', disabled:false, hidden:false, dataset:{},
+  classList:{add(...names){names.forEach(name => classes.add(name));}, remove(...names){names.forEach(name => classes.delete(name));}, contains(name){return classes.has(name);}},
+  listeners:{}, addEventListener(event, callback) { this.listeners[event] = callback; },
+  dispatchEvent(event) { this.listeners[event.type]?.call(this, event); }}; }
+function el(id) { return els[id] ||= node(); }
+function combo(id, values) {
+  const cb = el(id), trigger = node(), text = node(), popup = node();
+  const options = values.map(value => Object.assign(node(), {dataset:{value}, textContent:value}));
+  cb.dataset.value = values[0]; cb.dataset.noConfig = '';
+  cb.querySelector = selector => ({'.combobox-trigger':trigger, '.combobox-text':text, '.combobox-popup':popup})[selector];
+  cb.querySelectorAll = () => options;
+  return {cb, options};
+}
+const category = combo('report-category', ['', 'Focus', 'Settings']);
+const regression = combo('report-regression', ['Not sure', 'Yes', 'No']);
 global.document = {getElementById: el};
+let saves = 0; global.autoSave = () => saves++;
+const comboStart = html.indexOf('function initCombobox(');
+eval(html.slice(comboStart, html.indexOf("document.querySelectorAll('.combobox').forEach", comboStart)));
+eval(html.slice(html.indexOf('function cbVal('), html.indexOf('function hexToInput(')));
+initCombobox(category.cb); initCombobox(regression.cb);
 const messages = [];
 global.window = {_reportDraft:{title:'Saved title', actual:'Saved details', category:'Focus', regression:'Yes'},
   _version:'1', _windowsVersion:'Windows', ipc:{postMessage(message){messages.push(JSON.parse(message));}}, addEventListener(){}};
@@ -3124,7 +3153,8 @@ global.t = key => key;
 eval(html.slice(start, end));
 assert.equal(el('report-title').value, 'Saved title');
 assert.equal(el('report-actual').value, 'Saved details');
-assert.equal(el('report-category').value, 'Focus');
+assert.equal(cbVal('report-category'), 'Focus');
+assert.equal(cbVal('report-regression'), 'Yes');
 assert.equal(el('report-submit').disabled, false);
 el('report-title').value = '   '; el('report-title').listeners.input();
 assert.equal(el('report-submit').disabled, true);
@@ -3135,8 +3165,17 @@ el('report-actual').value = 'Details'; el('report-actual').listeners.input();
 assert.equal(el('report-submit').disabled, false);
 assert.equal(messages.at(-1).action, 'report_draft');
 assert.equal(messages.at(-1).draft.actual, 'Details');
-el('report-category').value = 'Settings'; el('report-category').listeners.change();
+category.options[2].listeners.click({stopPropagation(){}});
 assert.equal(messages.at(-1).draft.category, 'Settings');
+regression.options[2].listeners.click({stopPropagation(){}});
+assert.equal(messages.at(-1).draft.regression, 'No');
+assert.equal(saves, 0);
+window.reportStatus({file:'snapshot'}); assert(el('report-status').classList.contains('success'));
+window.reportStatus({file:'snapshot', error:'reveal'}); assert(el('report-status').classList.contains('warning'));
+window.reportStatus({error:'snapshot'}); assert(el('report-status').classList.contains('error'));
+el('report-clear').listeners.click();
+assert.equal(messages.at(-1).draft.category, '');
+assert.equal(messages.at(-1).draft.regression, 'Not sure');
 "#;
         let mut child = Command::new("node")
             .args(["-e", script])
@@ -3324,13 +3363,24 @@ for (const [section, keys] of Object.entries({layout: ['centering_mode', 'center
 
     #[test]
     fn report_text_inputs_stay_out_of_config_autosave() {
-        for id in ["report-title", "report-affected_apps"] {
+        for (element, id) in [
+            ("input", "report-title"),
+            ("input", "report-affected_apps"),
+            ("textarea", "report-actual"),
+            ("textarea", "report-expected"),
+            ("textarea", "report-repro"),
+            ("div", "report-category"),
+            ("div", "report-regression"),
+        ] {
             let input = SETTINGS_HTML
-                .split("<input")
+                .split(&format!("<{element}"))
                 .find(|tag| tag.contains(&format!("id=\"{id}\"")))
-                .unwrap_or_else(|| panic!("{id} input missing"));
+                .unwrap_or_else(|| panic!("{id} control missing"));
             let tag = &input[..input.find('>').unwrap()];
             assert!(tag.contains("data-no-config"), "{id}: {tag}");
+            if element != "div" {
+                assert!(tag.contains("autocomplete=\"off\""), "{id}: {tag}");
+            }
         }
     }
 

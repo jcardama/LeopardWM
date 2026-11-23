@@ -5,8 +5,11 @@ const start = page.lastIndexOf('/* Troubleshooting */');
 const end = page.indexOf('/* End Troubleshooting */', start);
 assert(start >= 0 && end > start);
 const elements = {};
-for (const id of ['health', 'files', 'refresh', 'reveal', 'create', 'status', 'report']) {
-  elements['troubleshooting-' + id] = {dataset: {}, hidden: id === 'report', listeners: {}, addEventListener(type, fn) { this.listeners[type] = fn; }};
+for (const id of ['health', 'files', 'refresh', 'reveal', 'create', 'status', 'status-text', 'report']) {
+  const classes = new Set();
+  elements['troubleshooting-' + id] = {dataset: {}, hidden: id === 'report' || id === 'status', listeners: {},
+    classList: {add(name) { classes.add(name); }, remove(...names) { names.forEach(name => classes.delete(name)); }, contains(name) { return classes.has(name); }},
+    addEventListener(type, fn) { this.listeners[type] = fn; }};
 }
 const messages = [];
 let onLanguageChange;
@@ -85,4 +88,18 @@ assert.match(elements['troubleshooting-files'].innerHTML, /1,000 字节/);
   assert.deepEqual(JSON.parse(JSON.stringify(await first)), {ok: true, path: hostile});
   assert.deepEqual(JSON.parse(JSON.stringify(await second)), {ok: false, error: hostile});
   assert.equal(messages.filter(message => message.action === 'list_diagnostics').length, 3);
+  context.localeStrings = english;
+  const button = elements['troubleshooting-create'], status = elements['troubleshooting-status'];
+  button.listeners.click.call(button);
+  assert.equal(status.hidden, false);
+  assert.equal(button.disabled, true);
+  assert.match(elements['troubleshooting-status-text'].textContent, /Creating/);
+  window.lwmReceiveSnapshot({id: messages.at(-1).id, ok: true, path: 'snapshot'});
+  await Promise.resolve(); await Promise.resolve();
+  assert(status.classList.contains('success'));
+  button.listeners.click.call(button);
+  assert(!status.classList.contains('success'));
+  window.lwmReceiveSnapshot({id: messages.at(-1).id, ok: false, error: 'failed'});
+  await Promise.resolve(); await Promise.resolve();
+  assert(status.classList.contains('error'));
 })().catch(error => { console.error(error); process.exitCode = 1; });
