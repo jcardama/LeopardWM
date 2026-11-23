@@ -5,10 +5,54 @@ use leopardwm_ipc::diagnostic_snapshot::{
 use leopardwm_ipc::{log_text, DaemonLogStatus, NativeSwipeStatus};
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::time::SystemTime;
+use std::sync::Mutex;
+use std::time::{Duration, Instant, SystemTime};
+
+pub(crate) fn config_health_rows(
+    rejection: Option<crate::config::ConfigRejection>,
+    unknown_count: usize,
+) -> Vec<HealthRow> {
+    let mut rows = Vec::new();
+    if let Some(rejection) = rejection {
+        let location = rejection
+            .location
+            .map_or_else(String::new, |(line, column)| {
+                format!(" at line {line}, column {column}")
+            });
+        rows.push(HealthRow {
+            summary: format!(
+                "Config rejected{location}: {}",
+                log_text::text(rejection.reason)
+            ),
+            hint: None,
+        });
+        if !rejection.recovered_fields.is_empty() {
+            let fields = rejection
+                .recovered_fields
+                .iter()
+                .map(|field| log_text::name(&field.path).to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            rows.push(HealthRow {
+                summary: format!("Recovered settings: {fields}"),
+                hint: None,
+            });
+        }
+    }
+    if unknown_count != 0 {
+        rows.push(HealthRow {
+            summary: format!("Unknown configuration keys: {unknown_count}"),
+            hint: None,
+        });
+    }
+    rows
+}
 
 fn diagnostic_health_rows(state: &AppState) -> Vec<HealthRow> {
-    let mut rows = Vec::new();
+    let mut rows = config_health_rows(
+        crate::config::config_rejection(),
+        crate::config::unknown_config_keys().len(),
+    );
     if let Some(
         DaemonLogStatus::OpenFailed { error, .. } | DaemonLogStatus::WriteFailed { error, .. },
     ) = state.daemon_log.as_ref().map(|log| log.status())
@@ -83,8 +127,42 @@ fn collect_workspace(
     }
 }
 
+#[derive(Default)]
+struct SnapshotCache {
+    last: Option<(Instant, PathBuf)>,
+}
+
+impl SnapshotCache {
+    fn get_or_write(
+        &mut self,
+        write: impl FnOnce() -> anyhow::Result<PathBuf>,
+    ) -> anyhow::Result<PathBuf> {
+        if let Some((written, path)) = &self.last {
+            if written.elapsed() < Duration::from_secs(5) && path.is_file() {
+                return Ok(path.clone());
+            }
+        }
+        let path = write()?;
+        self.last = Some((Instant::now(), path.clone()));
+        Ok(path)
+    }
+}
+
+static SNAPSHOT_CACHE: Mutex<SnapshotCache> = Mutex::new(SnapshotCache { last: None });
+
 /// Settings calls this same entry point when it offers snapshot capture.
 pub(crate) fn create_diagnostic_snapshot(
+    state: &AppState,
+    requester: &str,
+    requester_version: String,
+    requester_integrity: Option<u32>,
+) -> anyhow::Result<PathBuf> {
+    SNAPSHOT_CACHE.lock().unwrap().get_or_write(|| {
+        write_diagnostic_snapshot(state, requester, requester_version, requester_integrity)
+    })
+}
+
+fn write_diagnostic_snapshot(
     state: &AppState,
     requester: &str,
     requester_version: String,
@@ -187,4 +265,49 @@ pub(crate) fn create_diagnostic_snapshot(
         &input,
         &leopardwm_ipc::diagnostics_dir(),
     )?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recent_snapshot_is_reused_until_missing_or_expired() {
+        let dir = std::env::temp_dir().join(format!("lwm-snapshot-cache-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        let mut cache = SnapshotCache::default();
+        let input = SnapshotInput {
+            requester: "test".into(),
+            requester_version: "1.0.0".into(),
+            requester_integrity: None,
+            daemon_version: None,
+            daemon_integrity: None,
+            daemon_uptime: None,
+            unavailable_reason: "test".into(),
+            windows_version: "test".into(),
+            monitors: None,
+            health: None,
+            config_path: dir.join("config.toml"),
+            config_status: ConfigLoadStatus::NotFound,
+            config_text: None,
+            workspaces: None,
+            known_titles: vec![],
+            userprofile: None,
+            log_dir: dir.clone(),
+            timestamp: SystemTime::now(),
+        };
+        let write = || Ok(diagnostic_snapshot::write(&input, &dir)?);
+        let first = cache.get_or_write(write).unwrap();
+        let second = cache.get_or_write(write).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        std::fs::remove_file(&first).unwrap();
+        let third = cache.get_or_write(write).unwrap();
+        assert!(third.is_file());
+        cache.last.as_mut().unwrap().0 = Instant::now() - Duration::from_secs(5);
+        let fourth = cache.get_or_write(write).unwrap();
+        assert_ne!(third, fourth);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

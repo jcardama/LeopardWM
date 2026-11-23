@@ -34,7 +34,7 @@ All notable changes to LeopardWM will be documented in this file.
 
 ### Improvements
 
-- **Collect a redacted diagnostic snapshot for bug reports.** Run `lwm collect-logs` to write a text file with configuration, health, layout structure and recent logs. Private log values are quoted for redaction, and older, unmarked log entries are omitted.
+- **Collect a redacted diagnostic snapshot for bug reports.** Run `lwm collect-logs` to write a text file with configuration, health, layout structure and recent logs. Workspace names are masked, and paths outside your user folder are reduced to file names. The snapshot reports rejected configuration and recovered settings; while the daemon is running, repeated requests within a few seconds reuse the last snapshot. Private log values are quoted for redaction, and older, unmarked log entries are omitted.
 - **Unknown configuration keys are now reported.** Check the daemon log or run `lwm doctor` to find misspelled or unrecognized settings.
 - **Fixed-size windows with a title bar and minimize button now open floating.** Windows without a resize frame or maximize button keep their own size and position; set `[behavior] fixed_size_windows = "tile"` to tile them by default, or use a per-app `action = "tile"` rule to keep one tiled.
 - **Settings groups hotkeys by category.** Monitor and LeopardWM start collapsed. Thanks to @gczark for the suggestion. (#182)

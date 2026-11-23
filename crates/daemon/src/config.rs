@@ -5321,6 +5321,55 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_health_reports_recovery_without_config_values_or_unknown_names() {
+        use leopardwm_ipc::diagnostic_snapshot::{render, ConfigLoadStatus, SnapshotInput};
+        let fixture = ConfigFileFixture::new();
+        let path = fixture.0.join("config.toml");
+        fs::write(
+            &path,
+            "[behavior]\nmove_step = 'private-value'\nprivate_unknown = 'another-value'\n",
+        )
+        .unwrap();
+        let mut file = ConfigFile::default();
+        file.load(std::slice::from_ref(&path)).unwrap();
+        let rows = crate::diagnostic_snapshot::config_health_rows(
+            file.rejections.last().cloned(),
+            file.unknown_keys.len(),
+        );
+        let input = SnapshotInput {
+            requester: "test".into(),
+            requester_version: "1.0.0".into(),
+            requester_integrity: None,
+            daemon_version: None,
+            daemon_integrity: None,
+            daemon_uptime: None,
+            unavailable_reason: "test".into(),
+            windows_version: "test".into(),
+            monitors: None,
+            health: Some(rows),
+            config_path: path,
+            config_status: ConfigLoadStatus::Loaded,
+            config_text: None,
+            workspaces: None,
+            known_titles: vec![],
+            userprofile: None,
+            log_dir: fixture.0.clone(),
+            timestamp: std::time::SystemTime::now(),
+        };
+        let report = render(&input);
+        assert!(report.contains("Config rejected at line"), "{report}");
+        assert!(report.contains("<redacted>"), "{report}");
+        assert!(
+            report.contains("Recovered settings: behavior.move_step"),
+            "{report}"
+        );
+        assert!(report.contains("Unknown configuration keys: 1"), "{report}");
+        for secret in ["private-value", "another-value", "private_unknown"] {
+            assert!(!report.contains(secret), "{report}");
+        }
+    }
+
+    #[test]
     fn invalid_behavior_field_recovers_and_preserves_original() {
         let fixture = ConfigFileFixture::new();
         let path = fixture.0.join("config.toml");

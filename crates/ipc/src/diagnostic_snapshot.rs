@@ -82,6 +82,14 @@ fn masked_config(text: &str) -> String {
     match text.parse::<toml::Table>() {
         Ok(table) => {
             let mut value = toml::Value::Table(table);
+            if let Some(toml::Value::Array(names)) = value
+                .get_mut("workspaces")
+                .and_then(|workspaces| workspaces.get_mut("names"))
+            {
+                for name in names {
+                    *name = toml::Value::String("<masked>".into());
+                }
+            }
             mask(&mut value);
             toml::to_string_pretty(&value)
                 .unwrap_or_else(|_| "config text omitted: serialization failed".into())
@@ -140,8 +148,9 @@ fn file_section(path: &Path, tail: Option<usize>, stitch: bool, redactor: &Redac
         Ok(result) => result,
         Err(error) => {
             return format!(
-                "unavailable: {}\n",
-                redactor.mask_profile(&error.to_string())
+                "unavailable: {} ({:?})\n",
+                redactor.path(&path.to_string_lossy()),
+                error.kind()
             )
         }
     };
@@ -219,10 +228,16 @@ impl<'a> Redactor<'a> {
         {
             return log_text::single_line(basename).to_string();
         }
-        // Preserve Windows separators while keeping the rendered value on one line.
+        let inside_profile = self.profile.as_ref().is_some_and(|profile| {
+            profile.find(value).is_some_and(|found| {
+                found.start() == 0
+                    && (found.end() == value.len() || value[found.end()..].starts_with(['\\', '/']))
+            })
+        });
         let masked = self.mask_profile(value);
-        let masked = log_text::single_line(&masked).to_string();
-        masked
+        let result =
+            log_text::single_line(if inside_profile { &masked } else { basename }).to_string();
+        result
     }
 
     fn spans(&self, mut line: &str) -> Option<String> {
@@ -579,7 +594,16 @@ mod tests {
         let (root, mut input) = fixture();
         let missing = root.join("missing");
         input.log_dir = missing.join("logs");
+        input.userprofile = Some(r"D:\unrelated-profile".into());
         let report = render(&input);
+        assert!(
+            !report.contains(root.to_string_lossy().as_ref()),
+            "{report}"
+        );
+        assert!(
+            report.contains("unavailable: leopardwm-daemon.log"),
+            "{report}"
+        );
         let created = missing.exists();
         fs::remove_dir_all(root).unwrap();
         assert!(!created, "snapshot created the missing log directory");
@@ -633,9 +657,10 @@ mod tests {
             );
             tracing::info!(
                 target: "leopardwm_platform_win32::shell",
-                "Sources: {} | {} | {} | {} | fallback C:/Users/Unmarked/notes.txt",
+                "Sources: {} | {} | {} | {} | {} | fallback C:/Users/Unmarked/notes.txt",
                 log_text::path(r"d:/profiles/PrivateHome/first.toml"),
                 log_text::path(r"C:\Users\O'Connor\second.toml"),
+                log_text::path(r"D:\Clients\PrivateClient\config.toml"),
                 log_text::path(r"\\PrivateServer\PrivateShare\Network.EXE"),
                 log_text::path(crate::scoped_pipe_name_for_user(
                     r"DOMAIN\PrivateAccount.exe"
@@ -651,7 +676,7 @@ mod tests {
             report.contains("Window created title=<title#1> class=ExampleClass"),
             "{report}"
         );
-        assert!(report.contains(r"%USERPROFILE%/first.toml | %USERPROFILE%\second.toml | Network.EXE | \\.\pipe\leopardwm_<pipe-scope> | fallback %USERPROFILE%/notes.txt"), "{report}");
+        assert!(report.contains(r"%USERPROFILE%/first.toml | second.toml | config.toml | Network.EXE | \\.\pipe\leopardwm_<pipe-scope> | fallback %USERPROFILE%/notes.txt"), "{report}");
         assert!(
             report.contains(r"Profile-shaped name: %USERPROFILE%\\x"),
             "{report}"
@@ -738,6 +763,7 @@ mod tests {
         input.known_titles = vec!["canary-known-title".into()];
         input.requester_version = "canary-requester-version".into();
         input.config_path = PathBuf::from(r"C:\Users\canary-source\config.toml");
+        input.userprofile = Some(r"C:\Users\canary-source".into());
         input.config_text = Some(
             concat!(
                 "[[window_rules]]\n",
@@ -814,11 +840,13 @@ mod tests {
     #[test]
     fn config_masks_rules_and_omits_invalid_input() {
         let (dir, mut input) = fixture();
-        input.config_text = Some("[[window_rules]]\nmatch_title = 'private title'\nmatch_class = 'private class'\naction = 'float'\n[behavior]\ngap = 7\n".into());
+        input.config_text = Some("[[window_rules]]\nmatch_title = 'private title'\nmatch_class = 'private class'\naction = 'float'\n[behavior]\ngap = 7\n[workspaces]\nnames = ['private client', 'private project']\n".into());
         let report = render(&input);
         assert!(!report.contains("private title"));
         assert!(!report.contains("private class"));
-        assert!(report.contains("<masked>"), "{report}");
+        assert!(!report.contains("private client"));
+        assert!(!report.contains("private project"));
+        assert_eq!(report.matches("<masked>").count(), 4, "{report}");
         assert!(report.contains("gap = 7"), "{report}");
         input.config_text = Some("[[window_rules]]\nmatch_title = '''\nmultiline secret\n".into());
         let report = render(&input);
