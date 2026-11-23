@@ -903,7 +903,8 @@ input[type="range"]::-webkit-slider-thumb {
 
 .field.stacked { flex-direction: column; align-items: stretch; gap: 6px; }
 .field.stacked .input-wrap { display: block; width: 100%; }
-.field.stacked textarea { box-sizing: border-box; width: 100%; min-height: 90px; resize: vertical; }
+.field.stacked input[type="text"], .field.stacked textarea { box-sizing: border-box; width: 100%; }
+.field.stacked textarea { min-height: 90px; resize: vertical; }
 .info-bar-message, #sec-troubleshooting .field-info { overflow-wrap: anywhere; }
 #sec-troubleshooting .troubleshooting-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
 #sec-troubleshooting .troubleshooting-hint { color: var(--text-primary); margin-top: 6px; }
@@ -1489,14 +1490,14 @@ input[type="range"]::-webkit-slider-thumb {
       <div id="sec-report" class="section">
         <h2 class="section-title" data-i18n="settings.report.title"></h2>
         <p class="section-desc" data-i18n="settings.report.guide"></p>
-        <div class="info-bar"><svg class="info-bar-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1a7 7 0 100 14A7 7 0 008 1zm0 3a1 1 0 110 2 1 1 0 010-2zm-1 3h2v5H7z"/></svg><div class="info-bar-content"><span class="info-bar-message" data-i18n="settings.report.privacy"></span></div></div>
         <p class="section-desc" data-i18n="settings.report.long"></p>
-        <div class="info-bar" id="report-status" role="status" hidden><svg class="info-bar-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1a7 7 0 100 14A7 7 0 008 1zm0 3a1 1 0 110 2 1 1 0 010-2zm-1 3h2v5H7z"/></svg><div class="info-bar-content"><span class="info-bar-message" id="report-status-text"></span></div></div>
+        <div class="info-bar"><svg class="info-bar-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1a7 7 0 100 14A7 7 0 008 1zm-.75 3.5a.75.75 0 011.5 0v4a.75.75 0 01-1.5 0v-4zm.75 7a.75.75 0 110-1.5.75.75 0 010 1.5z"/></svg><div class="info-bar-content"><span class="info-bar-message" data-i18n="settings.report.privacy"></span></div></div>
+        <div id="report-status" role="status"><div class="info-bar" id="report-status-bar" hidden><svg class="info-bar-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill-rule="evenodd"/></svg><div class="info-bar-content"><span class="info-bar-message" id="report-status-text"></span></div></div></div>
         <div class="card">
-          <div class="field"><div class="field-info"><label class="field-label" for="report-title" data-i18n="settings.report.subject"></label></div><input type="text" id="report-title" data-no-config autocomplete="off"></div>
+          <div class="field stacked"><div class="field-info"><label class="field-label" for="report-title" data-i18n="settings.report.subject"></label></div><input type="text" id="report-title" data-no-config autocomplete="off"></div>
           <div class="field"><div class="field-info"><div class="field-label" id="report-category-label" data-i18n="settings.report.category"></div></div>
             <div class="combobox" id="report-category" data-no-config data-value="">
-              <button class="combobox-trigger" type="button" aria-labelledby="report-category-label"><span class="combobox-text" data-i18n="settings.report.unsure"></span><svg class="combobox-chevron" viewBox="0 0 12 12"><path d="M2.15 4.65a.5.5 0 01.7 0L6 7.79l3.15-3.14a.5.5 0 11.7.7l-3.5 3.5a.5.5 0 01-.7 0l-3.5-3.5a.5.5 0 010-.7z"/></svg></button>
+              <button class="combobox-trigger" type="button" aria-labelledby="report-category-label report-category-text"><span class="combobox-text" id="report-category-text" data-i18n="settings.report.unsure"></span><svg class="combobox-chevron" viewBox="0 0 12 12"><path d="M2.15 4.65a.5.5 0 01.7 0L6 7.79l3.15-3.14a.5.5 0 11.7.7l-3.5 3.5a.5.5 0 01-.7 0l-3.5-3.5a.5.5 0 010-.7z"/></svg></button>
               <div class="combobox-popup">
                 <div class="combobox-option selected" data-value="" data-i18n="settings.report.unsure"></div>
                 <div class="combobox-option" data-value="Layout and scrolling" data-i18n="settings.report.layout"></div>
@@ -1514,10 +1515,10 @@ input[type="range"]::-webkit-slider-thumb {
           <div class="field stacked"><div class="field-info"><label class="field-label" for="report-actual" data-i18n="settings.report.actual"></label></div><textarea id="report-actual" data-no-config autocomplete="off"></textarea></div>
           <div class="field stacked"><div class="field-info"><label class="field-label" for="report-expected" data-i18n="settings.report.expected"></label></div><textarea id="report-expected" data-no-config autocomplete="off"></textarea></div>
           <div class="field stacked"><div class="field-info"><label class="field-label" for="report-repro" data-i18n="settings.report.repro"></label></div><textarea id="report-repro" data-no-config autocomplete="off"></textarea></div>
-          <div class="field"><div class="field-info"><label class="field-label" for="report-affected_apps" data-i18n="settings.report.apps"></label></div><input type="text" id="report-affected_apps" data-no-config autocomplete="off"></div>
+          <div class="field stacked"><div class="field-info"><label class="field-label" for="report-affected_apps" data-i18n="settings.report.apps"></label></div><input type="text" id="report-affected_apps" data-no-config autocomplete="off"></div>
           <div class="field"><div class="field-info"><div class="field-label" id="report-regression-label" data-i18n="settings.report.regression"></div></div>
             <div class="combobox" id="report-regression" data-no-config data-value="Not sure">
-              <button class="combobox-trigger" type="button" aria-labelledby="report-regression-label"><span class="combobox-text" data-i18n="settings.report.unsure"></span><svg class="combobox-chevron" viewBox="0 0 12 12"><path d="M2.15 4.65a.5.5 0 01.7 0L6 7.79l3.15-3.14a.5.5 0 11.7.7l-3.5 3.5a.5.5 0 01-.7 0l-3.5-3.5a.5.5 0 010-.7z"/></svg></button>
+              <button class="combobox-trigger" type="button" aria-labelledby="report-regression-label report-regression-text"><span class="combobox-text" id="report-regression-text" data-i18n="settings.report.unsure"></span><svg class="combobox-chevron" viewBox="0 0 12 12"><path d="M2.15 4.65a.5.5 0 01.7 0L6 7.79l3.15-3.14a.5.5 0 11.7.7l-3.5 3.5a.5.5 0 01-.7 0l-3.5-3.5a.5.5 0 010-.7z"/></svg></button>
               <div class="combobox-popup"><div class="combobox-option selected" data-value="Not sure" data-i18n="settings.report.unsure"></div><div class="combobox-option" data-value="Yes" data-i18n="settings.report.yes"></div><div class="combobox-option" data-value="No" data-i18n="settings.report.no"></div></div>
             </div>
           </div>
@@ -1542,7 +1543,7 @@ input[type="range"]::-webkit-slider-thumb {
             <button class="btn btn-sm btn-accent" id="troubleshooting-create" data-i18n="settings.troubleshooting.create_snapshot"></button>
             <button class="btn btn-sm" id="troubleshooting-report" hidden data-i18n="settings.troubleshooting.report_issue"></button>
           </div>
-          <div class="info-bar" id="troubleshooting-status" role="status" hidden><svg class="info-bar-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1a7 7 0 100 14A7 7 0 008 1zm0 3a1 1 0 110 2 1 1 0 010-2zm-1 3h2v5H7z"/></svg><div class="info-bar-content"><span class="info-bar-message" id="troubleshooting-status-text"></span></div></div>
+          <div id="troubleshooting-status" role="status"><div class="info-bar" id="troubleshooting-status-bar" hidden><svg class="info-bar-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill-rule="evenodd"/></svg><div class="info-bar-content"><span class="info-bar-message" id="troubleshooting-status-text"></span></div></div></div>
         </div>
       </div>
       <!-- End Troubleshooting -->
@@ -2914,6 +2915,19 @@ function wrapAllInputs(root) {
 }
 wrapAllInputs();
 
+function showInfoBar(bar, severity, text) {
+  var icon = bar.querySelector('.info-bar-icon');
+  var source = document.querySelector(severity === 'warning' || severity === 'error' ? '#hotkey-warn-bar .info-bar-icon' : '#hc-info-bar .info-bar-icon');
+  icon.setAttribute('viewBox', severity === 'success' ? '0 0 16 16' : source.getAttribute('viewBox'));
+  icon.querySelector('path').setAttribute('d', severity === 'success'
+    ? 'M8 1a7 7 0 100 14A7 7 0 008 1zm-1 9.5L3.75 7.25l1.06-1.06L7 8.38l4.19-4.19 1.06 1.06z'
+    : source.querySelector('path').getAttribute('d'));
+  bar.classList.remove('success', 'warning', 'error');
+  if (severity) bar.classList.add(severity);
+  bar.querySelector('.info-bar-message').textContent = text;
+  bar.hidden = false;
+}
+
 /* ── Report an Issue ── */
 (function() {
   var names = ['title', 'category', 'actual', 'expected', 'repro', 'affected_apps', 'regression'];
@@ -2950,7 +2964,7 @@ wrapAllInputs();
   document.getElementById('report-windows').textContent = window._windowsVersion || '';
   document.getElementById('report-clear').addEventListener('click', function() {
     names.forEach(function(name) { setField(name, name === 'regression' ? 'Not sure' : ''); });
-    document.getElementById('report-status').hidden = true;
+    document.getElementById('report-status-bar').hidden = true;
     update();
     persist();
   });
@@ -2963,11 +2977,8 @@ wrapAllInputs();
   window.reportStatus = function(status) {
     var message = status.file ? (status.error ? t('settings.report.reveal_error', status) : t('settings.report.snapshot_ok', status)) : t('settings.report.snapshot_error', status);
     if (status.truncated) message += ' ' + t(status.copied ? 'settings.report.copied' : 'settings.report.copy_failed');
-    document.getElementById('report-status-text').textContent = message;
-    var bar = document.getElementById('report-status');
-    bar.classList.remove('success', 'warning', 'error');
-    bar.classList.add(!status.file ? 'error' : (status.error || (status.truncated && !status.copied)) ? 'warning' : 'success');
-    bar.hidden = false;
+    var severity = !status.file ? 'error' : (status.error || (status.truncated && !status.copied)) ? 'warning' : 'success';
+    showInfoBar(document.getElementById('report-status-bar'), severity, message);
   };
   update();
 })();
@@ -3078,14 +3089,12 @@ document.querySelectorAll('input[type="text"], input[type="number"]').forEach(fu
   document.getElementById('troubleshooting-refresh').addEventListener('click', function() { send('list_diagnostics'); });
   document.getElementById('troubleshooting-reveal').addEventListener('click', function() { send('reveal_diagnostics'); });
   document.getElementById('troubleshooting-create').addEventListener('click', function() {
-    var button = this, status = document.getElementById('troubleshooting-status');
-    var text = document.getElementById('troubleshooting-status-text');
-    button.disabled = true; status.classList.remove('success', 'error'); status.hidden = false;
-    text.textContent = t(prefix + 'creating');
+    var button = this, bar = document.getElementById('troubleshooting-status-bar');
+    button.disabled = true;
+    showInfoBar(bar, '', t(prefix + 'creating'));
     window.lwmCreateSnapshot().then(function(result) {
       button.disabled = false;
-      status.classList.add(result.ok ? 'success' : 'error');
-      text.textContent = result.ok ? t(prefix + 'created', {path: result.path}) : t(prefix + 'create_failed', {error: result.error});
+      showInfoBar(bar, result.ok ? 'success' : 'error', result.ok ? t(prefix + 'created', {path: result.path}) : t(prefix + 'create_failed', {error: result.error}));
     });
   });
   var report = document.querySelector('.nav-item[data-section="report"]');
@@ -3140,7 +3149,18 @@ function combo(id, values) {
 }
 const category = combo('report-category', ['', 'Focus', 'Settings']);
 const regression = combo('report-regression', ['Not sure', 'Yes', 'No']);
-global.document = {getElementById: el};
+const iconPath = {setAttribute(name, value) { this[name] = value; }};
+const icon = {setAttribute(name, value) { this[name] = value; }, querySelector() { return iconPath; }};
+const bar = el('report-status-bar'); bar.hidden = true;
+bar.querySelector = selector => selector === '.info-bar-icon' ? icon : el('report-status-text');
+const sources = {};
+for (const id of ['hc-info-bar', 'hotkey-warn-bar']) {
+  const source = html.slice(html.indexOf('id="' + id + '"'));
+  const viewBox = source.match(/viewBox="([^"]+)"/)[1], path = source.match(/<path d="([^"]+)"/)[1];
+  sources[id] = {getAttribute: () => viewBox, querySelector: () => ({getAttribute: () => path})};
+}
+global.document = {getElementById: el, querySelector: selector => sources[selector.split(' ')[0].slice(1)]};
+eval(html.slice(html.indexOf('function showInfoBar('), start));
 let saves = 0; global.autoSave = () => saves++;
 const comboStart = html.indexOf('function initCombobox(');
 eval(html.slice(comboStart, html.indexOf("document.querySelectorAll('.combobox').forEach", comboStart)));
@@ -3170,10 +3190,15 @@ assert.equal(messages.at(-1).draft.category, 'Settings');
 regression.options[2].listeners.click({stopPropagation(){}});
 assert.equal(messages.at(-1).draft.regression, 'No');
 assert.equal(saves, 0);
-window.reportStatus({file:'snapshot'}); assert(el('report-status').classList.contains('success'));
-window.reportStatus({file:'snapshot', error:'reveal'}); assert(el('report-status').classList.contains('warning'));
-window.reportStatus({error:'snapshot'}); assert(el('report-status').classList.contains('error'));
+window.reportStatus({file:'snapshot'}); assert(bar.classList.contains('success'));
+const successGlyph = iconPath.d;
+window.reportStatus({file:'snapshot', error:'reveal'}); assert(bar.classList.contains('warning'));
+window.reportStatus({error:'snapshot'}); assert(bar.classList.contains('error'));
+assert.notEqual(iconPath.d, successGlyph);
+assert.equal(el('report-status').hidden, false);
 el('report-clear').listeners.click();
+assert.equal(bar.hidden, true);
+assert.equal(el('report-status').hidden, false);
 assert.equal(messages.at(-1).draft.category, '');
 assert.equal(messages.at(-1).draft.regression, 'Not sure');
 "#;

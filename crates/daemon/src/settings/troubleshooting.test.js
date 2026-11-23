@@ -5,15 +5,25 @@ const start = page.lastIndexOf('/* Troubleshooting */');
 const end = page.indexOf('/* End Troubleshooting */', start);
 assert(start >= 0 && end > start);
 const elements = {};
-for (const id of ['health', 'files', 'refresh', 'reveal', 'create', 'status', 'status-text', 'report']) {
+for (const id of ['health', 'files', 'refresh', 'reveal', 'create', 'status', 'status-bar', 'status-text', 'report']) {
   const classes = new Set();
-  elements['troubleshooting-' + id] = {dataset: {}, hidden: id === 'report' || id === 'status', listeners: {},
+  elements['troubleshooting-' + id] = {dataset: {}, hidden: id === 'report' || id === 'status-bar', listeners: {},
     classList: {add(name) { classes.add(name); }, remove(...names) { names.forEach(name => classes.delete(name)); }, contains(name) { return classes.has(name); }},
     addEventListener(type, fn) { this.listeners[type] = fn; }};
 }
+assert.match(page, /<div id="troubleshooting-status" role="status"><div class="info-bar" id="troubleshooting-status-bar" hidden>/);
+const iconPath = {setAttribute(name, value) { this[name] = value; }};
+const icon = {setAttribute(name, value) { this[name] = value; }, querySelector() { return iconPath; }};
+elements['troubleshooting-status-bar'].querySelector = selector => selector === '.info-bar-icon' ? icon : elements['troubleshooting-status-text'];
+const sources = {};
+for (const id of ['hc-info-bar', 'hotkey-warn-bar']) {
+  const source = page.slice(page.indexOf('id="' + id + '"'));
+  const viewBox = source.match(/viewBox="([^"]+)"/)[1], path = source.match(/<path d="([^"]+)"/)[1];
+  sources[id] = {getAttribute: () => viewBox, querySelector: () => ({getAttribute: () => path})};
+}
 const messages = [];
 let onLanguageChange;
-const document = {documentElement: {lang: 'en'}, getElementById: id => elements[id], querySelector: () => null};
+const document = {documentElement: {lang: 'en'}, getElementById: id => elements[id], querySelector: selector => sources[selector.split(' ')[0].slice(1)] || null};
 const window = {ipc: {postMessage: message => messages.push(JSON.parse(message))}};
 const context = vm.createContext({window, document, localeStrings: english, MutationObserver: class {
   constructor(callback) { onLanguageChange = callback; }
@@ -25,6 +35,7 @@ const functionText = name => {
   return match[0];
 };
 vm.runInContext(page.slice(page.indexOf('function t('), page.indexOf('function applyLocale(')) + '\n' + functionText('escHtml'), context);
+vm.runInContext(page.slice(page.indexOf('function showInfoBar('), page.indexOf('/* ── Report an Issue ── */')), context);
 vm.runInContext(page.slice(start, end), context);
 assert.equal(elements['troubleshooting-report'].hidden, true);
 assert.match(elements['troubleshooting-health'].innerHTML, /Loading…/);
@@ -89,8 +100,12 @@ assert.match(elements['troubleshooting-files'].innerHTML, /1,000 字节/);
   assert.deepEqual(JSON.parse(JSON.stringify(await second)), {ok: false, error: hostile});
   assert.equal(messages.filter(message => message.action === 'list_diagnostics').length, 3);
   context.localeStrings = english;
-  const button = elements['troubleshooting-create'], status = elements['troubleshooting-status'];
+  const button = elements['troubleshooting-create'], status = elements['troubleshooting-status-bar'];
+  const wrapper = elements['troubleshooting-status'];
+  assert.equal(wrapper.hidden, false);
+  assert.equal(status.hidden, true);
   button.listeners.click.call(button);
+  assert.equal(wrapper.hidden, false);
   assert.equal(status.hidden, false);
   assert.equal(button.disabled, true);
   assert.match(elements['troubleshooting-status-text'].textContent, /Creating/);
@@ -102,4 +117,5 @@ assert.match(elements['troubleshooting-files'].innerHTML, /1,000 字节/);
   window.lwmReceiveSnapshot({id: messages.at(-1).id, ok: false, error: 'failed'});
   await Promise.resolve(); await Promise.resolve();
   assert(status.classList.contains('error'));
+  assert.equal(wrapper.hidden, false);
 })().catch(error => { console.error(error); process.exitCode = 1; });
