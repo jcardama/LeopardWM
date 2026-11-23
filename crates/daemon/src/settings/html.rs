@@ -2978,7 +2978,10 @@ function showInfoBar(bar, severity, text) {
     var message = status.file ? (status.error ? t('settings.report.reveal_error', status) : t('settings.report.snapshot_ok', status)) : t('settings.report.snapshot_error', status);
     if (status.truncated) message += ' ' + t(status.copied ? 'settings.report.copied' : 'settings.report.copy_failed');
     var severity = !status.file ? 'error' : (status.error || (status.truncated && !status.copied)) ? 'warning' : 'success';
-    showInfoBar(document.getElementById('report-status-bar'), severity, message);
+    var bar = document.getElementById('report-status-bar');
+    showInfoBar(bar, severity, message);
+    // The result sits below Submit, which can be at the bottom edge of the pane.
+    bar.scrollIntoView({block: 'nearest'});
   };
   update();
 })();
@@ -3138,6 +3141,7 @@ const els = {};
 function node() { const classes = new Set(); return {value:'', textContent:'', disabled:false, hidden:false, dataset:{},
   classList:{add(...names){names.forEach(name => classes.add(name));}, remove(...names){names.forEach(name => classes.delete(name));}, contains(name){return classes.has(name);}},
   listeners:{}, addEventListener(event, callback) { this.listeners[event] = callback; },
+  scrolled:0, scrollIntoView() { this.scrolled++; },
   dispatchEvent(event) { this.listeners[event.type]?.call(this, event); }}; }
 function el(id) { return els[id] ||= node(); }
 function combo(id, values) {
@@ -3192,6 +3196,7 @@ regression.options[2].listeners.click({stopPropagation(){}});
 assert.equal(messages.at(-1).draft.regression, 'No');
 assert.equal(saves, 0);
 window.reportStatus({file:'snapshot'}); assert(bar.classList.contains('success'));
+assert(bar.scrolled > 0, 'the report result must scroll into view');
 const successGlyph = iconPath.d;
 window.reportStatus({file:'snapshot', error:'reveal'}); assert(bar.classList.contains('warning'));
 window.reportStatus({error:'snapshot'}); assert(bar.classList.contains('error'));
