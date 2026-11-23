@@ -7,11 +7,13 @@ use leopardwm_platform_win32::MonitorId;
 use std::collections::{HashMap, HashSet};
 use tracing::{debug, info, warn};
 
+const MAX_SAVED_WORKSPACES: usize = 9;
+
 fn saved_workspace_slot(index: usize) -> usize {
     // Clamp to the 1-9 workspace range (0-based 0..=8). The snapshot is
     // user-writable JSON, so a garbage index must not drive the vec to
     // pathological length on startup.
-    index.min(8)
+    index.min(MAX_SAVED_WORKSPACES - 1)
 }
 
 impl AppState {
@@ -344,6 +346,7 @@ impl AppState {
 
         for (name, saved) in &snapshot.stashed_monitor_layouts {
             let mut stash = saved.clone();
+            stash.workspaces.truncate(MAX_SAVED_WORKSPACES);
             let connected = self
                 .monitors
                 .values()
@@ -388,7 +391,12 @@ impl AppState {
             {
                 continue;
             }
-            if let Some(monitor) = connected {
+            self.stashed_monitor_layouts.insert(name.clone(), stash);
+        }
+
+        let monitors: Vec<_> = self.monitors.values().cloned().collect();
+        for monitor in monitors {
+            if let Some(stash) = self.stashed_monitor_layouts.remove(&monitor.device_name) {
                 let source_width = self.restore_stashed_monitor_layout(&monitor, stash, &[]);
                 let params = ScaledLayoutParams::from_config(
                     &self.config.layout,
@@ -404,8 +412,6 @@ impl AppState {
                     monitor.work_area.width,
                 );
                 restored_slots.extend((0..workspaces.len()).map(|idx| (monitor.id, idx)));
-            } else {
-                self.stashed_monitor_layouts.insert(name.clone(), stash);
             }
         }
 

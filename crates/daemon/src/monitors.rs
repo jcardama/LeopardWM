@@ -35,20 +35,30 @@ impl AppState {
         mut stash: StashedMonitorLayout,
         new_monitors: &[MonitorInfo],
     ) -> i32 {
-        let allowed: Option<HashSet<u64>> = stash.migration_target.as_ref().map(|name| {
-            self.monitors
+        let targets: Vec<_> = self
+            .monitors
+            .values()
+            .chain(new_monitors.iter())
+            .filter(|m| stash.migration_target.as_ref() == Some(&m.device_name))
+            .collect();
+        let allowed: HashSet<u64> = if targets.is_empty() {
+            self.workspaces
                 .values()
-                .chain(new_monitors.iter())
-                .filter(|m| &m.device_name == name)
+                .flatten()
+                .flat_map(|ws| ws.all_window_ids())
+                .collect()
+        } else {
+            targets
+                .iter()
                 .filter_map(|m| self.workspaces.get(&m.id))
                 .flatten()
                 .flat_map(|ws| ws.all_window_ids())
                 .collect()
-        });
+        };
         let mut dropped = 0;
         for ws in &mut stash.workspaces {
             for wid in ws.all_window_ids() {
-                if allowed.as_ref().is_some_and(|ids| !ids.contains(&wid)) {
+                if !allowed.contains(&wid) {
                     if ws.is_floating(wid) {
                         ws.remove_floating(wid);
                     } else {
@@ -67,6 +77,16 @@ impl AppState {
             .iter()
             .flat_map(|w| w.all_window_ids())
             .collect();
+        for other in self.stashed_monitor_layouts.values_mut() {
+            if other.migration_target == stash.migration_target
+                && other
+                    .workspaces
+                    .iter()
+                    .any(|ws| ws.all_window_ids().iter().any(|id| returning.contains(id)))
+            {
+                other.migration_target = Some(monitor.device_name.clone());
+            }
+        }
         for ws_vec in self.workspaces.values_mut() {
             for ws in ws_vec {
                 for &wid in &returning {
@@ -83,6 +103,44 @@ impl AppState {
         self.workspaces.insert(monitor.id, stash.workspaces);
         self.active_workspace.insert(monitor.id, clamped);
         stash.source_viewport_width
+    }
+
+    fn update_stashes_for_removed_monitor(&mut self, removed_id: MonitorId, target: Option<&str>) {
+        let Some(workspaces) = self.workspaces.get(&removed_id) else {
+            return;
+        };
+        let removed_windows: HashSet<_> = workspaces
+            .iter()
+            .flat_map(|ws| ws.all_window_ids())
+            .collect();
+        let removed_name = self
+            .monitors
+            .get(&removed_id)
+            .map(|m| m.device_name.as_str());
+        for stash in self.stashed_monitor_layouts.values_mut() {
+            let follows_removed =
+                removed_name.is_some_and(|name| stash.migration_target.as_deref() == Some(name));
+            for ws in &mut stash.workspaces {
+                for wid in ws.all_window_ids() {
+                    if removed_windows.contains(&wid) != follows_removed {
+                        if ws.is_floating(wid) {
+                            ws.remove_floating(wid);
+                        } else {
+                            let _ = ws.remove_window(wid);
+                        }
+                    }
+                }
+            }
+            if follows_removed {
+                stash.migration_target = target.map(str::to_owned);
+            }
+        }
+        self.stashed_monitor_layouts.retain(|_, stash| {
+            stash
+                .workspaces
+                .iter()
+                .any(|ws| !ws.all_window_ids().is_empty())
+        });
     }
 
     pub(crate) fn reconcile_monitors(&mut self, new_monitors: Vec<MonitorInfo>) {
@@ -262,6 +320,10 @@ impl AppState {
             let device_name = self.monitors.get(removed_id).map(|m| m.device_name.clone());
             let source_viewport_width = old_viewport_widths[removed_id];
             let active_idx = self.active_workspace.get(removed_id).copied().unwrap_or(0);
+            let target_name = primary_id
+                .and_then(|id| new_monitors.iter().find(|m| m.id == id))
+                .map(|m| m.device_name.as_str());
+            self.update_stashes_for_removed_monitor(*removed_id, target_name);
             if let Some(old_ws_vec) = self.workspaces.remove(removed_id) {
                 let mut tiled_window_ids = Vec::new();
                 let mut floating_windows = Vec::new();

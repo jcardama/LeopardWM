@@ -12184,33 +12184,199 @@ fn test_stashed_layout_prunes_closed_window_across_restart() {
 }
 
 #[test]
-fn test_stashed_layout_does_not_reclaim_window_moved_to_another_monitor() {
-    let mut monitors = two_monitors();
-    monitors.push(MonitorInfo {
-        id: 3,
-        rect: Rect::new(3840, 0, 1920, 1080),
-        work_area: Rect::new(3840, 0, 1920, 1040),
-        is_primary: false,
-        device_name: "DISPLAY3".to_string(),
-        scale_factor: 1.0,
-    });
-    let mut state = AppState::new_with_config(test_config(), monitors.clone());
+fn test_stashed_layout_monitor_migration_orderings() {
+    #[derive(Clone, Copy)]
+    enum Step {
+        DropA,
+        DropC,
+        MoveToC,
+        ReturnA,
+        Restart,
+        ReturnAAtStartup,
+        ReturnBAtStartup,
+        MissingTarget,
+        NoTarget,
+        Unmanage100,
+    }
+    use Step::*;
+    let cases: &[(&str, &[Step], Option<MonitorId>)] = &[
+        ("plain return", &[], Some(99)),
+        ("target disconnects", &[DropA], Some(99)),
+        ("target returns first", &[DropA, ReturnA], Some(99)),
+        ("moved then host disconnects", &[MoveToC, DropC], Some(1)),
+        ("moved and host stays", &[MoveToC], Some(3)),
+        (
+            "moved before target disconnects",
+            &[MoveToC, DropA],
+            Some(3),
+        ),
+        (
+            "chained migration after restart",
+            &[DropA, Restart],
+            Some(99),
+        ),
+        (
+            "target returns after restart",
+            &[DropA, Restart, ReturnA],
+            Some(99),
+        ),
+        (
+            "target returned while stopped",
+            &[DropA, ReturnAAtStartup],
+            Some(99),
+        ),
+        (
+            "returned at startup after chained migration",
+            &[DropA, ReturnBAtStartup],
+            Some(99),
+        ),
+        ("absent target fallback", &[MissingTarget], Some(99)),
+        (
+            "absent target at startup",
+            &[MissingTarget, ReturnBAtStartup],
+            Some(99),
+        ),
+        (
+            "no target fallback excludes unmanaged",
+            &[NoTarget, Unmanage100],
+            None,
+        ),
+    ];
+    for &(name, steps, expected_100) in cases {
+        let mut monitors = two_monitors();
+        monitors.push(MonitorInfo {
+            id: 3,
+            rect: Rect::new(3840, 0, 1920, 1080),
+            work_area: Rect::new(3840, 0, 1920, 1040),
+            is_primary: false,
+            device_name: "DISPLAY3".to_string(),
+            scale_factor: 1.0,
+        });
+        let original_a = monitors[0].clone();
+        let mut returned_b = monitors[1].clone();
+        returned_b.id = 99;
+        let mut state = AppState::new_with_config(test_config(), monitors.clone());
+        let ws = &mut state.workspaces.get_mut(&2).unwrap()[0];
+        ws.insert_window(100, Some(500)).unwrap();
+        ws.insert_window(200, Some(650)).unwrap();
+        monitors.retain(|m| m.id != 2);
+        state.reconcile_monitors(monitors.clone());
+        let mut started_with_b = false;
+        for step in steps {
+            match step {
+                DropA | DropC => {
+                    let removed = if matches!(step, DropA) { 1 } else { 3 };
+                    monitors.retain(|m| m.id != removed);
+                    for m in &mut monitors {
+                        m.is_primary = m.id == if removed == 1 { 3 } else { 1 };
+                    }
+                    state.reconcile_monitors(monitors.clone());
+                }
+                MoveToC => {
+                    state.focused_monitor = 1;
+                    state.move_window_to_monitor_transactional(100, 3).unwrap();
+                }
+                ReturnA => {
+                    for m in &mut monitors {
+                        m.is_primary = false;
+                    }
+                    monitors.insert(0, original_a.clone());
+                    state.reconcile_monitors(monitors.clone());
+                }
+                Restart | ReturnAAtStartup | ReturnBAtStartup => {
+                    let snapshot: StateSnapshot =
+                        serde_json::from_str(&state.build_state_json().unwrap()).unwrap();
+                    if matches!(step, ReturnAAtStartup) {
+                        for m in &mut monitors {
+                            m.is_primary = false;
+                        }
+                        monitors.insert(0, original_a.clone());
+                    }
+                    if matches!(step, ReturnBAtStartup) {
+                        monitors.push(returned_b.clone());
+                        started_with_b = true;
+                    }
+                    state = AppState::new_with_config(test_config(), monitors.clone());
+                    state.restore_workspace_structure_with(&snapshot, |_| true);
+                }
+                MissingTarget => {
+                    state
+                        .stashed_monitor_layouts
+                        .get_mut("DISPLAY2")
+                        .unwrap()
+                        .migration_target = Some("MISSING".into())
+                }
+                NoTarget => {
+                    state
+                        .stashed_monitor_layouts
+                        .get_mut("DISPLAY2")
+                        .unwrap()
+                        .migration_target = None
+                }
+                Unmanage100 => {
+                    state.workspaces.get_mut(&1).unwrap()[0]
+                        .remove_window(100)
+                        .unwrap();
+                }
+            }
+        }
+        if !started_with_b {
+            monitors.push(returned_b.clone());
+            state.reconcile_monitors(monitors);
+        }
+        let locations = |id| -> Vec<MonitorId> {
+            state
+                .workspaces
+                .iter()
+                .filter_map(|(&monitor, workspaces)| {
+                    workspaces
+                        .iter()
+                        .any(|ws| ws.contains_window(id))
+                        .then_some(monitor)
+                })
+                .collect()
+        };
+        assert_eq!(
+            locations(100),
+            expected_100.into_iter().collect::<Vec<_>>(),
+            "{name}: window 100"
+        );
+        assert_eq!(locations(200), vec![99], "{name}: window 200");
+        let ws = &state.workspaces[&99][0];
+        let index = ws.rows()[0].find_window_location(200).unwrap().0;
+        assert_eq!(ws.column(index).unwrap().width(), 650, "{name}: width");
+    }
+}
+
+#[test]
+fn test_stashed_layout_truncates_oversized_workspace_list() {
+    let mut state = AppState::new_with_config(test_config(), two_monitors());
     state.workspaces.get_mut(&2).unwrap()[0]
         .insert_window(100, Some(500))
         .unwrap();
-    state.workspaces.get_mut(&2).unwrap()[0]
-        .insert_window(200, Some(650))
+    state.reconcile_monitors(test_monitors());
+    let mut snapshot: StateSnapshot =
+        serde_json::from_str(&state.build_state_json().unwrap()).unwrap();
+    let stash = snapshot
+        .stashed_monitor_layouts
+        .get_mut("DISPLAY2")
         .unwrap();
-    state.reconcile_monitors(vec![monitors[0].clone(), monitors[2].clone()]);
-    state.focused_monitor = 1;
-    state.move_window_to_monitor_transactional(100, 3).unwrap();
-    monitors[1].id = 99;
-    state.reconcile_monitors(monitors);
-    assert!(state.workspaces[&3][0].contains_window(100));
-    assert!(!state.workspaces[&99][0].contains_window(100));
-    assert_eq!(state.workspaces[&99][0].columns().len(), 1);
-    assert!(state.workspaces[&99][0].contains_window(200));
-    assert!(!state.workspaces[&1][0].contains_window(200));
+    stash.workspaces.resize_with(12, Workspace::new);
+    stash.active_workspace = 11;
+    let mut restarted = AppState::new_with_config(test_config(), test_monitors());
+    restarted.restore_workspace_structure_with(&snapshot, |_| true);
+    assert_eq!(
+        restarted.stashed_monitor_layouts["DISPLAY2"]
+            .workspaces
+            .len(),
+        9
+    );
+    let mut returned = two_monitors();
+    returned[1].id = 99;
+    restarted.reconcile_monitors(returned);
+    assert_eq!(restarted.workspaces[&99].len(), 9);
+    assert_eq!(restarted.active_workspace_idx(99), 8);
+    assert!(restarted.workspaces[&99][0].contains_window(100));
 }
 
 #[test]
