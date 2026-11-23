@@ -293,7 +293,7 @@ pub(crate) fn prepare_workspace_for_focus(
     hwnd: u64,
     fullscreen_follows_focus: bool,
     viewport_width: i32,
-) {
+) -> bool {
     if let Some(fullscreen) = workspace.fullscreen_window_id() {
         let stays_visible = hwnd == fullscreen
             || workspace
@@ -306,14 +306,14 @@ pub(crate) fn prepare_workspace_for_focus(
                 && !workspace.is_floating(hwnd)
             {
                 workspace.fullscreen_follow_focus();
+                workspace.ensure_focused_visible_animated(viewport_width);
+                return true;
             } else {
                 workspace.clear_fullscreen_if_window(fullscreen);
             }
         }
     }
-    if !workspace.is_floating(hwnd) && workspace.focused_window() == Some(hwnd) {
-        workspace.ensure_focused_visible_animated(viewport_width);
-    }
+    false
 }
 
 impl AppState {

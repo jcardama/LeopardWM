@@ -688,6 +688,11 @@ impl AppState {
         let switching = ws_idx != self.active_workspace_idx(monitor);
         self.focused_monitor = monitor;
         if switching {
+            if !floating {
+                let workspace = &mut self.workspaces.get_mut(&monitor).unwrap()[ws_idx];
+                workspace.stop_animation();
+                workspace.ensure_focused_visible(viewport_width);
+            }
             let resp = self.switch_workspace_on_monitor(
                 monitor,
                 (ws_idx + 1) as u8,
@@ -704,12 +709,15 @@ impl AppState {
             }
         } else {
             let workspace = self.focused_workspace_mut().unwrap();
-            crate::command_handler::prepare_workspace_for_focus(
+            let revealed = crate::command_handler::prepare_workspace_for_focus(
                 workspace,
                 wid,
                 follows_focus,
                 viewport_width,
             );
+            if !floating && !revealed {
+                workspace.ensure_focused_visible_animated(viewport_width);
+            }
             if let Err(error) = self.apply_layout() {
                 warn!("Overview layout application failed: {}", error);
                 return;

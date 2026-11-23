@@ -18298,6 +18298,33 @@ fn test_follow_window_to_workspace_tiled_commands() {
 }
 
 #[test]
+fn test_follow_window_to_workspace_keeps_oversized_column_scroll() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    let monitor = state.focused_monitor;
+    let viewport_width = state.viewport_width_for(monitor);
+    state
+        .focused_workspace_mut()
+        .unwrap()
+        .insert_window(100, Some(3000))
+        .unwrap();
+    let destination = state.ensure_workspace_exists(monitor, 1).unwrap();
+    destination.set_centering_mode(leopardwm_core_layout::CenteringMode::JustInView);
+    destination.set_reduce_motion(true);
+    let (left, right, _, _) = destination.outer_gaps();
+    state.config.behavior.follow_window_to_workspace = true;
+
+    assert_eq!(
+        state.handle_command(IpcCommand::MoveToWorkspace { index: 2 }),
+        IpcResponse::Ok
+    );
+    assert_eq!(state.active_workspace_idx(monitor), 1);
+    assert_eq!(
+        state.focused_workspace().unwrap().scroll_offset(),
+        f64::from(3000 - (viewport_width - left - right))
+    );
+}
+
+#[test]
 fn test_follow_window_to_workspace_reveals_tiled_window() {
     let mut visibility = Vec::new();
     for (command, animating) in [
