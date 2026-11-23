@@ -288,7 +288,7 @@ fn elevation_blocked_health_views(
     (legacy, records)
 }
 
-pub(crate) fn resolve_fullscreen_for_focus(
+pub(crate) fn prepare_workspace_for_focus(
     workspace: &mut Workspace,
     hwnd: u64,
     fullscreen_follows_focus: bool,
@@ -306,11 +306,13 @@ pub(crate) fn resolve_fullscreen_for_focus(
                 && !workspace.is_floating(hwnd)
             {
                 workspace.fullscreen_follow_focus();
-                workspace.ensure_focused_visible_animated(viewport_width);
             } else {
                 workspace.clear_fullscreen_if_window(fullscreen);
             }
         }
+    }
+    if !workspace.is_floating(hwnd) && workspace.focused_window() == Some(hwnd) {
+        workspace.ensure_focused_visible_animated(viewport_width);
     }
 }
 
@@ -1947,7 +1949,7 @@ impl AppState {
             .and_then(|workspaces| workspaces.get_mut(idx))
         {
             if let Some(hwnd) = focus_target {
-                resolve_fullscreen_for_focus(
+                prepare_workspace_for_focus(
                     workspace,
                     hwnd,
                     fullscreen_follows_focus,

@@ -704,7 +704,7 @@ impl AppState {
             }
         } else {
             let workspace = self.focused_workspace_mut().unwrap();
-            crate::command_handler::resolve_fullscreen_for_focus(
+            crate::command_handler::prepare_workspace_for_focus(
                 workspace,
                 wid,
                 follows_focus,
@@ -712,6 +712,7 @@ impl AppState {
             );
             if let Err(error) = self.apply_layout() {
                 warn!("Overview layout application failed: {}", error);
+                return;
             }
             self.sync_taskbar_buttons();
         }
@@ -880,6 +881,77 @@ mod tests {
             assert_eq!(placement.visibility, Visibility::Visible);
             assert!(state.last_placed_layout_rects.contains_key(&0));
         }
+    }
+
+    #[test]
+    fn overview_activation_reveals_offscreen_tiled_window() {
+        use crate::state::TestApplyPlacementsBehavior;
+        use std::time::Duration;
+
+        for destination in [0, 1] {
+            for fullscreen in [false, true] {
+                for follows_focus in [false, true] {
+                    let mut state = test_state();
+                    state.paused = false;
+                    state.reduce_motion = true;
+                    state.config.behavior.fullscreen_follows_focus = follows_focus;
+                    state.injected_apply_placements_behavior =
+                        Some(TestApplyPlacementsBehavior::SleepAndSucceed(Duration::ZERO));
+                    let ws = state.ensure_workspace_exists(1, destination).unwrap();
+                    ws.set_reduce_motion(true);
+                    for wid in [101, 201, 301] {
+                        ws.insert_window(wid, Some(1100)).unwrap();
+                    }
+                    ws.focus_window(101).unwrap();
+                    ws.set_scroll_offset(0.0);
+                    if fullscreen {
+                        assert!(ws.toggle_fullscreen_window(101));
+                    } else {
+                        let placement = state
+                            .workspace_placements(1, destination)
+                            .into_iter()
+                            .find(|p| p.window_id == 301)
+                            .unwrap();
+                        assert_eq!(placement.visibility, Visibility::OffScreenRight);
+                    }
+                    state.activate_overview_window(301);
+                    let placement = state
+                        .workspace_placements(1, destination)
+                        .into_iter()
+                        .find(|p| p.window_id == 301)
+                        .unwrap();
+                    assert_eq!(placement.visibility, Visibility::Visible,
+                        "destination={destination}, fullscreen={fullscreen}, follows_focus={follows_focus}");
+                    assert_eq!(state.active_workspace_idx(1), destination);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn overview_activation_does_not_sync_focus_after_layout_failure() {
+        use crate::state::TestApplyPlacementsBehavior;
+        use std::sync::atomic::Ordering;
+        use std::time::Duration;
+
+        let mut state = test_state();
+        state.paused = false;
+        state.reduce_motion = true;
+        state.workspaces.get_mut(&1).unwrap()[0].set_reduce_motion(true);
+        add_windows(&mut state, 0, &[101, 201]);
+        state.previous_focused_hwnd = Some(101);
+        state.injected_apply_placements_behavior =
+            Some(TestApplyPlacementsBehavior::SleepAndFail(Duration::ZERO));
+
+        state.activate_overview_window(201);
+
+        assert!(
+            state
+                .injected_apply_placements_call_count
+                .load(Ordering::SeqCst)
+                > 0
+        );
+        assert_eq!(state.previous_focused_hwnd, Some(101));
     }
 
     #[test]
