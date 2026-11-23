@@ -207,6 +207,15 @@ impl AnchoredDir {
         self.file(name, FILE_WRITE_DATA.0, FILE_SHARE_READ, FILE_OPEN_IF)
     }
 
+    pub fn open_write_shared(&self, name: &OsStr) -> io::Result<File> {
+        self.file(
+            name,
+            FILE_WRITE_DATA.0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            FILE_OPEN_IF,
+        )
+    }
+
     pub fn create_new(&self, name: &OsStr) -> io::Result<File> {
         self.file(name, FILE_WRITE_DATA.0, FILE_SHARE_READ, FILE_CREATE)
     }

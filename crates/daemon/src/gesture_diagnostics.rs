@@ -258,8 +258,8 @@ pub fn start_capture(
                 let directory = leopardwm_ipc::anchored_fs::AnchoredDir::for_path(
                     path.parent().expect("capture log has a parent"),
                 )?;
-                let file =
-                    directory.open_write(path.file_name().expect("capture log has a name"))?;
+                let file = directory
+                    .open_write_shared(path.file_name().expect("capture log has a name"))?;
                 file.set_len(0)?;
                 Ok(file)
             };

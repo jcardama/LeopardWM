@@ -92,7 +92,7 @@ fn error_file(path: &Path, truncate: bool) -> io::Result<File> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing log file name"))?;
     let directory = leopardwm_ipc::anchored_fs::AnchoredDir::for_path(parent)?;
     if truncate {
-        let file = directory.open_write(name)?;
+        let file = directory.open_write_shared(name)?;
         file.set_len(0)?;
         Ok(file)
     } else {
@@ -109,7 +109,12 @@ fn install_panic_hook(error_log_path: PathBuf) {
     std::panic::set_hook(Box::new(move |info| {
         let record =
             log_text::panic_record(info.location(), log_text::panic_payload(info.payload()));
-        let _ = append_error(&error_log_path, &record);
+        if let Err(error) = append_error(&error_log_path, &record) {
+            eprintln!(
+                "[leopardwm-watchdog] Cannot write error log: {}",
+                log_text::text(error)
+            );
+        }
         eprint!("{record}");
     }));
 }
@@ -119,7 +124,12 @@ fn report_fatal_error(path: &Path, err: &anyhow::Error) {
         "Watchdog fatal error: {}",
         log_text::text(format_args!("{err:#}"))
     ));
-    let _ = append_error(path, &record);
+    if let Err(error) = append_error(path, &record) {
+        eprintln!(
+            "[leopardwm-watchdog] Cannot write error log: {}",
+            log_text::text(error)
+        );
+    }
     eprint!("{record}");
 }
 
@@ -367,6 +377,23 @@ mod tests {
             static BASE: Instant = Instant::now();
         }
         BASE.with(|b| *b + Duration::from_secs(secs))
+    }
+
+    #[test]
+    fn daemon_error_reset_succeeds_while_another_writer_is_open() {
+        let dir =
+            std::env::temp_dir().join(format!("leopardwm-watchdog-reset-{}", std::process::id()));
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join(DAEMON_ERROR_LOG_NAME);
+        let mut held = File::create(&path).unwrap();
+        held.write_all(b"old stderr").unwrap();
+        let result = error_file(&path, true);
+        let length = std::fs::metadata(&path).unwrap().len();
+        let error = result.err();
+        drop(held);
+        std::fs::remove_dir_all(dir).unwrap();
+        assert!(error.is_none(), "reset failed: {error:?}");
+        assert_eq!(length, 0);
     }
 
     #[test]
