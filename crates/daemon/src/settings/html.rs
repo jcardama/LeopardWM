@@ -1956,20 +1956,6 @@ function inputToHex(v) { return v.replace('#', '').toUpperCase(); }
 var configSnapshot = window._initConfig || {};
 function applyTrayConfig(cfg) {
   configSnapshot = cfg;
-  var rows = cfg.layout.rows;
-  if (rows) {
-    var globalSplit = document.getElementById('layout-rows-split');
-    if (globalSplit && Array.isArray(rows.split)) globalSplit._lastValidSplit = rows.split.slice();
-    document.querySelectorAll('#workspace-rows-body tr').forEach(function(tr) {
-      if (!tr._loadedWorkspaces) return;
-      var matches = (rows.workspaces || []).filter(function(item) {
-        return JSON.stringify(item.workspaces) === tr._loadedWorkspaces;
-      });
-      if (matches.length === 1 && Array.isArray(matches[0].split)) {
-        tr.querySelector('.ws-row-split')._lastValidSplit = matches[0].split.slice();
-      }
-    });
-  }
   setCb('cb-layout-centering_mode', cfg.layout.centering_mode);
   setCb('cb-layout-center_columns', cfg.layout.center_columns || 'off');
   setChecked('appearance-active_border', cfg.appearance.active_border);
@@ -2781,7 +2767,6 @@ function addWorkspaceRow(item) {
   if (!tbody) return;
   var tr = document.createElement('tr');
   item = item || {};
-  if (Array.isArray(item.workspaces)) tr._loadedWorkspaces = JSON.stringify(item.workspaces);
   var wsVal = '';
   if (Array.isArray(item.workspaces)) {
     wsVal = item.workspaces.join(', ');
@@ -3672,7 +3657,9 @@ const cases = [
   { name: 'partly valid fraction', loaded: ['60%', '40%', '1/'], edits: [], expected: ['60%', '40%', '1/'] },
   { name: 'partly valid text', loaded: ['50%', '50%', 'oops'], edits: [], expected: ['50%', '50%', 'oops'] },
   { name: 'raw loaded text', loaded: [' 50% ', '50%'], edits: [], expected: [' 50% ', '50%'] },
-  { name: 'tray refresh while editing', loaded: ['50%', '50%'], edits: ['1/'], push: ['60%', '40%', '1/'], expected: ['60%', '40%', '1/'] },
+  { name: 'tray push during incomplete edit', loaded: ['50%', '50%'], edits: ['1/'], push: ['60%', '40%'], expected: ['50%', '50%'] },
+  { name: 'retype displayed split after tray push', loaded: ['50%', '50%'], edits: [], push: ['60%', '40%'], afterPush: ['1', '50%, 50%'], expected: ['50%', '50%'] },
+  { name: 'retargeted workspace after tray push', loaded: ['50%', '50%'], edits: [], push: ['60%', '40%'], retarget: true, expected: ['50%', '50%'] },
   { name: 'empty edit', loaded: ['50%', '50%'], edits: [''], expected: ['50%', '50%'] },
   { name: 'valid edit', loaded: ['50%', '50%'], edits: ['1/3, 2/3'], expected: ['1/3', '2/3'], then: '1/' },
   { name: 'new empty workspace row', loaded: ['100%'], edits: [], expected: ['100%'], newRow: true }
@@ -3689,11 +3676,20 @@ for (const test of cases) {
   const globalSplit = document.getElementById('layout-rows-split');
   const rowSplit = rows[0].querySelector('.ws-row-split');
   for (const edit of test.edits) { globalSplit.edit(edit); rowSplit.edit(edit); }
+  if (test.retarget) {
+    rows[0].querySelector('.ws-row-workspaces').edit('2');
+    const retargeted = readConfig();
+    assert.deepStrictEqual(retargeted.layout.rows.workspaces[0], { workspaces: [2], split: test.loaded });
+    config.layout.rows.workspaces = [retargeted.layout.rows.workspaces[0], { workspaces: [1], split: test.push }];
+  }
   if (test.push) {
-    config.layout.rows.split = test.push;
-    config.layout.rows.workspaces[0].split = test.push;
+    if (!test.retarget) {
+      config.layout.rows.split = test.push;
+      config.layout.rows.workspaces[0].split = test.push;
+    }
     applyTrayConfig(config);
   }
+  for (const edit of test.afterPush || []) { globalSplit.edit(edit); rowSplit.edit(edit); }
   let result = readConfig();
   try { assert.deepStrictEqual(result.layout.rows.split, test.expected); }
   catch (error) { failures.push(test.name + ' global: ' + error.message); }
