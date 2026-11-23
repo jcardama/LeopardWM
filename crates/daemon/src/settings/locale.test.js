@@ -74,7 +74,7 @@ row.isConnected = true;
 row.querySelector = selector => selector === '.preset-val' ? draft : deleteButton;
 const languageText = {};
 const languages = [['en', 'English'], ['zh-CN', '简体中文']].map(([value, textContent]) => ({
-  dataset: { value }, textContent, classList: { add: () => {}, remove: () => {} }
+  dataset: { value }, textContent, classList: { add: () => {}, remove: () => {}, contains: () => false }, setAttribute() {}
 }));
 const languageCombo = {
   dataset: { value: 'en' },
@@ -221,8 +221,12 @@ function eventElement() {
       add: name => classes.add(name), remove: name => classes.delete(name),
       contains: name => classes.has(name)
     },
+    setAttribute() {},
     addEventListener(name, callback) { (listeners[name] ||= []).push(callback); },
-    emit(name, event = {}) { for (const callback of listeners[name] || []) callback({ stopPropagation() {}, ...event }); }
+    emit(name, event = {}) {
+      for (const callback of listeners[name] || []) callback({ target: this, stopPropagation() {}, ...event });
+      if (name === 'click' && this.parent) this.parent.emit(name, { target: this });
+    }
   };
 }
 function presetFixture(values = [0.333, 0.5, 0.667]) {
@@ -246,6 +250,7 @@ function presetFixture(values = [0.333, 0.5, 0.667]) {
   const popup = eventElement();
   const combo = eventElement();
   let options = [];
+  popup.contains = option => options.includes(option);
   Object.defineProperty(combo, 'innerHTML', {
     set(markup) {
       triggerText.textContent = markup.match(/class="combobox-text">([^<]*)/)[1];
@@ -253,6 +258,7 @@ function presetFixture(values = [0.333, 0.5, 0.667]) {
         const option = eventElement();
         if (match[1].includes('selected')) option.classList.add('selected');
         option.dataset.value = match[2]; option.textContent = match[3];
+        option.parent = popup; option.closest = () => option;
         return option;
       });
     }

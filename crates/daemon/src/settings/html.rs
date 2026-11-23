@@ -101,6 +101,7 @@ pub const SETTINGS_HTML: &str = r##"<!DOCTYPE html>
     --infobar-stroke: rgba(255,255,255,0.0837); /* CardStrokeColorDefault (dark) */
     --info-bg: rgba(118, 185, 237, 0.10);
     --success-bg: rgba(109, 202, 70, 0.10);
+    --success-stroke: #6ccb5f;
     --warning-bg: #433519;          /* SystemFillColorCautionBackground (dark) */
     --warning-stroke: #FCE100;      /* SystemFillColorCaution (dark) */
     --error-bg: rgba(255, 153, 164, 0.08);
@@ -157,6 +158,14 @@ pub const SETTINGS_HTML: &str = r##"<!DOCTYPE html>
     color: ButtonText !important;
     border-color: ButtonBorder !important;
   }
+  .btn-accent:enabled {
+    forced-color-adjust: none;
+    background: Highlight !important;
+    color: HighlightText !important;
+    border-color: Highlight !important;
+  }
+  .btn-accent:enabled:hover { border-color: HighlightText !important; }
+  .btn-accent:disabled { color: GrayText !important; border-color: GrayText !important; }
   .info-bar {
     background: Canvas !important;
     border-color: Highlight !important;
@@ -168,6 +177,7 @@ pub const SETTINGS_HTML: &str = r##"<!DOCTYPE html>
     border-color: CanvasText !important;
   }
   .combobox-option {
+    forced-color-adjust: none;
     color: CanvasText !important;
     background: transparent !important;
   }
@@ -494,7 +504,12 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 2px; }
   transition: background 0.06s;
   white-space: nowrap;
 }
-.combobox-option:hover { background: var(--subtle-secondary); }
+.combobox-option:hover, .combobox-option:focus-visible { background: var(--subtle-secondary); }
+.combobox-option:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+@media (forced-colors: active) {
+  .combobox-option:focus-visible { outline-color: Highlight; }
+  .combobox-option.selected:focus-visible { outline-color: HighlightText; }
+}
 .combobox-option.selected {
   background: var(--subtle-secondary);
   font-weight: 600;
@@ -719,7 +734,7 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 2px; }
   border-bottom: 1px solid var(--accent-tertiary);
 }
 .btn-accent:hover { background: var(--accent-secondary); }
-.btn-accent:active { background: var(--accent-tertiary); border-bottom-color: transparent; }
+.btn-accent:active { background: var(--accent-tertiary); color: var(--accent-text); border-bottom-color: transparent; }
 .btn-sm { font-size: 12px; line-height: 16px; padding: 4px 12px; min-height: 24px; }
 
 /* ── Editable Tables ──────────────────────────────────────────────── */
@@ -1651,13 +1666,34 @@ document.querySelectorAll('.nav-item[data-section]').forEach(function(link) {
 });
 
 /* ── ComboBox ───────────────────────────────────────────────────────── */
+function closeCombobox(cb) {
+  cb.classList.remove('open');
+  cb.querySelector('.combobox-trigger').setAttribute('aria-expanded', 'false');
+}
+function syncComboboxOptions(cb) {
+  cb.querySelectorAll('.combobox-option').forEach(function(opt) {
+    opt.setAttribute('role', 'option');
+    opt.setAttribute('aria-selected', String(opt.classList.contains('selected')));
+    opt.tabIndex = -1;
+  });
+}
 function initCombobox(cb) {
   var trigger = cb.querySelector('.combobox-trigger');
   var popup = cb.querySelector('.combobox-popup');
+  trigger.setAttribute('aria-haspopup', 'listbox');
+  trigger.setAttribute('aria-expanded', 'false');
+  popup.setAttribute('role', 'listbox');
+  syncComboboxOptions(cb);
   trigger.addEventListener('click', function(e) {
     e.stopPropagation();
+    if (trigger.disabled || cb.classList.contains('disabled')) return;
     document.querySelectorAll('.combobox.open').forEach(function(other) {
-      if (other !== cb) other.classList.remove('open');
+      if (other !== cb) closeCombobox(other);
+    });
+    document.querySelectorAll('.rule-opts.open').forEach(function(o) {
+      o.classList.remove('open');
+      o.querySelectorAll('.menu-item.subopen').forEach(function(m) { m.classList.remove('subopen'); });
+      var tr = o.closest('tr'); if (tr && typeof updateRuleSummary === 'function') updateRuleSummary(tr);
     });
     if (!cb.classList.contains('open')) {
       /* Position popup using fixed coords from trigger rect. Anchor to the
@@ -1688,25 +1724,56 @@ function initCombobox(cb) {
       }
     }
     cb.classList.toggle('open');
+    trigger.setAttribute('aria-expanded', String(cb.classList.contains('open')));
+    syncComboboxOptions(cb);
   });
-  cb.querySelectorAll('.combobox-option').forEach(function(opt) {
-    opt.addEventListener('click', function(e) {
-      e.stopPropagation();
-      cb.querySelector('.combobox-text').textContent = opt.textContent;
-      cb.dataset.value = opt.dataset.value;
-      cb.classList.remove('open');
-      cb.querySelectorAll('.combobox-option').forEach(function(o) { o.classList.remove('selected'); });
-      opt.classList.add('selected');
-      if (cb.dataset.noConfig !== undefined) cb.dispatchEvent(new Event('change'));
-      else autoSave(0);
-    });
+  trigger.addEventListener('keydown', function(e) {
+    if (trigger.disabled || cb.classList.contains('disabled')) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      if (!cb.classList.contains('open')) trigger.click();
+      var options = cb.querySelectorAll('.combobox-option');
+      var selected = Array.from(options).find(function(o) { return o.classList.contains('selected'); });
+      if (selected || options[0]) (selected || options[0]).focus();
+    }
+  });
+  popup.addEventListener('click', function(e) {
+    var opt = e.target.closest('.combobox-option');
+    if (!opt || !popup.contains(opt) || trigger.disabled || cb.classList.contains('disabled')) return;
+    e.stopPropagation();
+    cb.querySelector('.combobox-text').textContent = opt.textContent;
+    cb.dataset.value = opt.dataset.value;
+    closeCombobox(cb);
+    cb.querySelectorAll('.combobox-option').forEach(function(o) { o.classList.remove('selected'); });
+    opt.classList.add('selected');
+    syncComboboxOptions(cb);
+    if (cb.dataset.noConfig !== undefined) cb.dispatchEvent(new Event('change'));
+    else autoSave(0);
+  });
+  popup.addEventListener('keydown', function(e) {
+    if (trigger.disabled || cb.classList.contains('disabled')) return;
+    var options = Array.from(cb.querySelectorAll('.combobox-option'));
+    var index = options.indexOf(document.activeElement);
+    if (e.key === 'Escape') { e.preventDefault(); closeCombobox(cb); trigger.focus(); }
+    else if (e.key === 'Tab') closeCombobox(cb);
+    else if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      if (index >= 0) { options[index].click(); trigger.focus(); }
+    } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Home' || e.key === 'End') {
+      e.preventDefault();
+      if (!options.length) return;
+      if (e.key === 'Home') index = 0;
+      else if (e.key === 'End') index = options.length - 1;
+      else index = Math.max(0, Math.min(options.length - 1, index + (e.key === 'ArrowDown' ? 1 : -1)));
+      options[index].focus();
+    }
   });
 }
 document.querySelectorAll('.combobox').forEach(function(cb) {
   if (cb.querySelector('.combobox-trigger')) initCombobox(cb);
 });
 document.addEventListener('click', function() {
-  document.querySelectorAll('.combobox.open').forEach(function(cb) { cb.classList.remove('open'); });
+  document.querySelectorAll('.combobox.open').forEach(closeCombobox);
   document.querySelectorAll('.rule-opts.open').forEach(function(o) {
     o.classList.remove('open');
     o.querySelectorAll('.menu-item.subopen').forEach(function(m) { m.classList.remove('subopen'); });
@@ -1838,6 +1905,7 @@ function setCb(id, value, showUnknown) {
       o.classList.add('selected');
       cb.querySelector('.combobox-text').textContent = o.textContent;
     }
+    o.setAttribute('aria-selected', String(o.classList.contains('selected')));
   });
   if (!matched && showUnknown) cb.querySelector('.combobox-text').textContent = value;
 }
@@ -2550,7 +2618,7 @@ function initRuleOptions(tr) {
         var t = o.closest('tr'); if (t) updateRuleSummary(t);
       }
     });
-    document.querySelectorAll('.combobox.open').forEach(function(c) { c.classList.remove('open'); });
+    document.querySelectorAll('.combobox.open').forEach(closeCombobox);
     if (cell.classList.contains('open')) {
       pop.querySelectorAll('.menu-item.subopen').forEach(function(m) { m.classList.remove('subopen'); });
     }
@@ -3141,6 +3209,7 @@ const els = {};
 function node() { const classes = new Set(); return {value:'', textContent:'', disabled:false, hidden:false, dataset:{},
   classList:{add(...names){names.forEach(name => classes.add(name));}, remove(...names){names.forEach(name => classes.delete(name));}, contains(name){return classes.has(name);}},
   listeners:{}, addEventListener(event, callback) { this.listeners[event] = callback; },
+  setAttribute(name, value) { this[name] = value; },
   scrolled:0, scrollIntoView() { this.scrolled++; },
   dispatchEvent(event) { this.listeners[event.type]?.call(this, event); }}; }
 function el(id) { return els[id] ||= node(); }
@@ -3150,7 +3219,9 @@ function combo(id, values) {
   cb.dataset.value = values[0]; cb.dataset.noConfig = '';
   cb.querySelector = selector => ({'.combobox-trigger':trigger, '.combobox-text':text, '.combobox-popup':popup})[selector];
   cb.querySelectorAll = () => options;
-  return {cb, options};
+  popup.contains = opt => options.includes(opt);
+  options.forEach(opt => opt.closest = () => opt);
+  return {cb, options, popup};
 }
 const category = combo('report-category', ['', 'Focus', 'Settings']);
 const regression = combo('report-regression', ['Not sure', 'Yes', 'No']);
@@ -3167,7 +3238,7 @@ for (const id of ['hc-info-bar', 'hotkey-warn-bar']) {
 global.document = {getElementById: el, querySelector: selector => sources[selector.split(' ')[0].slice(1)]};
 eval(html.slice(html.indexOf('function showInfoBar('), start));
 let saves = 0; global.autoSave = () => saves++;
-const comboStart = html.indexOf('function initCombobox(');
+const comboStart = html.indexOf('function closeCombobox(');
 eval(html.slice(comboStart, html.indexOf("document.querySelectorAll('.combobox').forEach", comboStart)));
 eval(html.slice(html.indexOf('function cbVal('), html.indexOf('function hexToInput(')));
 initCombobox(category.cb); initCombobox(regression.cb);
@@ -3190,9 +3261,9 @@ el('report-actual').value = 'Details'; el('report-actual').listeners.input();
 assert.equal(el('report-submit').disabled, false);
 assert.equal(messages.at(-1).action, 'report_draft');
 assert.equal(messages.at(-1).draft.actual, 'Details');
-category.options[2].listeners.click({stopPropagation(){}});
+category.popup.listeners.click({target:category.options[2], stopPropagation(){}});
 assert.equal(messages.at(-1).draft.category, 'Settings');
-regression.options[2].listeners.click({stopPropagation(){}});
+regression.popup.listeners.click({target:regression.options[2], stopPropagation(){}});
 assert.equal(messages.at(-1).draft.regression, 'No');
 assert.equal(saves, 0);
 window.reportStatus({file:'snapshot'}); assert(bar.classList.contains('success'));
@@ -3207,6 +3278,72 @@ assert.equal(bar.hidden, true);
 assert.equal(el('report-status').hidden, false);
 assert.equal(messages.at(-1).draft.category, '');
 assert.equal(messages.at(-1).draft.regression, 'Not sure');
+"#;
+        let mut child = Command::new("node")
+            .args(["-e", script])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(SETTINGS_HTML.as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    #[ignore = "Needs Node.js on PATH for the optional Settings JavaScript check"]
+    fn combobox_keyboard_navigation_uses_selection_click_path() {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        let script = r#"
+const assert = require('assert');
+const html = require('fs').readFileSync(0, 'utf8');
+function node() {
+  const classes = new Set(), listeners = {};
+  return {dataset:{}, attrs:{}, style:{}, textContent:'', disabled:false,
+    classList:{add(c){classes.add(c)}, remove(c){classes.delete(c)}, contains(c){return classes.has(c)}, toggle(c){classes.has(c) ? classes.delete(c) : classes.add(c)}},
+    setAttribute(k,v){this.attrs[k]=v}, addEventListener(k,fn){(listeners[k] ||= []).push(fn)},
+    emit(type, event={}){event.type=type; event.target ||= this; event.preventDefault ||= () => {}; event.stopPropagation ||= () => {}; for(const fn of listeners[type] || []) fn.call(this,event)},
+    focus(){document.activeElement=this}, click(){this.emit('click')},
+    getBoundingClientRect(){return {width:100,left:10,right:110,top:10,bottom:42}}};
+}
+const cb=node(), trigger=node(), popup=node(), text=node();
+const options=['one','two','three'].map(value => Object.assign(node(), {dataset:{value},textContent:value}));
+options[0].classList.add('selected'); cb.dataset.value='one'; cb.dataset.noConfig='';
+cb.querySelector = s => ({'.combobox-trigger':trigger,'.combobox-popup':popup,'.combobox-text':text})[s];
+cb.querySelectorAll = () => options;
+popup.contains = opt => options.includes(opt);
+let extra=0, changes=0, saves=0;
+options.forEach(opt => { opt.closest=()=>opt; opt.addEventListener('click',()=>extra++); opt.click=()=>{opt.emit('click'); popup.emit('click',{target:opt})}; });
+cb.dispatchEvent=()=>changes++;
+global.document={activeElement:null,querySelectorAll:()=>[],getElementById:()=>cb};
+global.window={innerWidth:1000,innerHeight:800}; global.autoSave=()=>saves++;
+let start=html.indexOf('function closeCombobox('); if(start<0) start=html.indexOf('function initCombobox(');
+const end=html.indexOf("document.querySelectorAll('.combobox').forEach",start);
+assert(start>=0 && end>start); eval(html.slice(start,end)); initCombobox(cb);
+eval(html.slice(html.indexOf('function setCb('), html.indexOf('function hexToInput(')));
+setCb('combo','two'); assert.equal(options[0].attrs['aria-selected'],'false'); assert.equal(options[1].attrs['aria-selected'],'true');
+setCb('combo','one');
+assert.equal(popup.attrs.role,'listbox'); assert.equal(trigger.attrs['aria-haspopup'],'listbox');
+trigger.emit('keydown',{key:'ArrowDown'}); assert.equal(trigger.attrs['aria-expanded'],'true'); assert.equal(document.activeElement,options[0]);
+popup.emit('keydown',{key:'ArrowDown'}); assert.equal(document.activeElement,options[1]);
+popup.emit('keydown',{key:'Enter'}); assert.equal(cb.dataset.value,'two'); assert.equal(extra,1); assert.equal(changes,1); assert.equal(saves,0);
+assert.equal(options[0].attrs['aria-selected'],'false'); assert.equal(options[1].attrs['aria-selected'],'true'); assert.equal(trigger.attrs['aria-expanded'],'false'); assert.equal(document.activeElement,trigger);
+trigger.emit('keydown',{key:'ArrowUp'}); assert.equal(document.activeElement,options[1]);
+popup.emit('keydown',{key:'End'}); popup.emit('keydown',{key:' '}); assert.equal(cb.dataset.value,'three'); assert.equal(extra,2); assert.equal(changes,2);
+trigger.emit('keydown',{key:' '}); popup.emit('keydown',{key:'Escape'}); assert.equal(trigger.attrs['aria-expanded'],'false'); assert.equal(document.activeElement,trigger);
+trigger.disabled=true; trigger.emit('keydown',{key:'ArrowDown'}); assert.equal(trigger.attrs['aria-expanded'],'false');
 "#;
         let mut child = Command::new("node")
             .args(["-e", script])
