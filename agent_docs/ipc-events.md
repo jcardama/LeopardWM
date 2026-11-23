@@ -278,7 +278,7 @@ Do not infer workspace-state support from the numeric version alone; require the
 
 Carries enough column structure to render without a follow-up `QueryWorkspace`. The optional v4 additions `focused_row` and `rows` describe all rows in top-to-bottom order. Each `RowSummary` contains `columns`, `focused_column` and `scroll_offset`; the row's index is its position in the array. Top-level `columns` and `focused_column` reflect the focused row for backward compatibility.
 
-The `QueryWorkspace` response (`status: "workspace_state"`) likewise adds `focused_row` and `rows`. The `QueryFocused` response (`status: "focused_window"`) and `WindowInfo` objects in window-list and focused-window-info responses include a zero-based `row_index` for tiled windows in multi-row workspaces. It is absent for floating windows and single-row workspaces, and may also be absent with an older daemon. `FocusedWindowChanged` events do not include a row index.
+The `QueryWorkspace` response (`status: "workspace_state"`) likewise adds `focused_row` and `rows`. In a multi-row workspace, `QueryFocused` (`status: "focused_window"`) reports the zero-based focused `row_index`, even if that row is empty; it omits the field for single-row workspaces and floating focus. `WindowInfo` objects include `row_index` for tiled windows in multi-row workspaces and omit it for floating windows and single-row workspaces. Older daemons may omit these fields. `FocusedWindowChanged` events do not include a row index.
 
 Per-column fields:
 

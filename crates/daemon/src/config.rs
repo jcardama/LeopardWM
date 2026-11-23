@@ -750,23 +750,13 @@ pub enum TaskbarButtons {
     ShowAll,
 }
 
-#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkspaceEdgeWrap {
     #[default]
     Off,
     Wrap,
     Clamp,
-}
-
-impl Serialize for WorkspaceEdgeWrap {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        match self {
-            Self::Off => serializer.serialize_bool(false),
-            Self::Wrap => serializer.serialize_bool(true),
-            Self::Clamp => serializer.serialize_str("clamp"),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2208,6 +2198,28 @@ pub(crate) struct ConfigRejection {
     pending: bool,
 }
 
+fn serialize_config_file(config: &Config) -> Result<String> {
+    let mut content =
+        toml::to_string_pretty(config).context("Failed to serialize config to TOML")?;
+    let legacy = match config.behavior.workspace_edge_wrap {
+        WorkspaceEdgeWrap::Off => "false",
+        WorkspaceEdgeWrap::Wrap => "true",
+        WorkspaceEdgeWrap::Clamp => return Ok(content),
+    };
+    #[derive(Deserialize)]
+    struct FileBehavior {
+        workspace_edge_wrap: toml::Spanned<String>,
+    }
+    #[derive(Deserialize)]
+    struct FileConfig {
+        behavior: FileBehavior,
+    }
+    let parsed: FileConfig =
+        toml::from_str(&content).context("Failed to inspect serialized config")?;
+    content.replace_range(parsed.behavior.workspace_edge_wrap.span(), legacy);
+    Ok(content)
+}
+
 #[derive(Default)]
 struct ConfigFile {
     path: Option<PathBuf>,
@@ -2565,8 +2577,7 @@ impl ConfigFile {
             .or_else(|| paths.first())
             .ok_or_else(|| anyhow::anyhow!("No config path available"))?
             .clone();
-        let content =
-            toml::to_string_pretty(config).context("Failed to serialize config to TOML")?;
+        let content = serialize_config_file(config)?;
         for rejection in self
             .rejections
             .iter_mut()
@@ -2786,14 +2797,34 @@ mod tests {
                 toml::Value::Boolean(false),
             ),
         ] {
-            let config: Config =
+            let mut config: Config =
                 toml::from_str(&format!("[behavior]\nworkspace_edge_wrap = {input}")).unwrap();
+            config.appearance.language =
+                "test\n[behavior]\nworkspace_edge_wrap = \"wrap\"\nend".into();
             assert_eq!(config.behavior.workspace_edge_wrap, expected);
-            let serialized = toml::to_string(&config).unwrap();
+            let settings = serde_json::to_value(&config).unwrap();
+            let expected_setting = match expected {
+                WorkspaceEdgeWrap::Off => "off",
+                WorkspaceEdgeWrap::Wrap => "wrap",
+                WorkspaceEdgeWrap::Clamp => "clamp",
+            };
+            assert_eq!(
+                settings["behavior"]["workspace_edge_wrap"],
+                expected_setting
+            );
+            let settings_config: Config = serde_json::from_value(settings).unwrap();
+            assert_eq!(settings_config.behavior.workspace_edge_wrap, expected);
+            let fixture = ConfigFileFixture::new();
+            let path = fixture.0.join("config.toml");
+            ConfigFile::default()
+                .save(&config, std::slice::from_ref(&path))
+                .unwrap();
+            let serialized = fs::read_to_string(&path).unwrap();
             let value: toml::Value = toml::from_str(&serialized).unwrap();
             assert_eq!(value["behavior"]["workspace_edge_wrap"], saved);
             let reloaded: Config = toml::from_str(&serialized).unwrap();
             assert_eq!(reloaded.behavior.workspace_edge_wrap, expected);
+            assert_eq!(reloaded.appearance.language, config.appearance.language);
         }
         let omitted: Config = toml::from_str("[behavior]").unwrap();
         assert_eq!(omitted.behavior.workspace_edge_wrap, WorkspaceEdgeWrap::Off);
@@ -5687,7 +5718,10 @@ mod tests {
         fs::write(&paths[1], "[layout]\ngap = 42\n").unwrap();
         let mut file = ConfigFile::default();
         let config = file.load(&paths).unwrap();
-        let expected = toml::to_string_pretty(&config).unwrap();
+        let expected = toml::to_string_pretty(&config).unwrap().replace(
+            "workspace_edge_wrap = \"off\"",
+            "workspace_edge_wrap = false",
+        );
         file.save(&config, &paths).unwrap();
         assert!(!paths[0].exists());
         assert_eq!(fs::read_to_string(&paths[1]).unwrap(), expected);
