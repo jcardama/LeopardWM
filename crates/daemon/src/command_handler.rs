@@ -288,6 +288,32 @@ fn elevation_blocked_health_views(
     (legacy, records)
 }
 
+pub(crate) fn resolve_fullscreen_for_focus(
+    workspace: &mut Workspace,
+    hwnd: u64,
+    fullscreen_follows_focus: bool,
+    viewport_width: i32,
+) {
+    if let Some(fullscreen) = workspace.fullscreen_window_id() {
+        let stays_visible = hwnd == fullscreen
+            || workspace
+                .floating_windows()
+                .iter()
+                .any(|floating| floating.id == hwnd && floating.pinned);
+        if !stays_visible {
+            if fullscreen_follows_focus
+                && !workspace.is_floating(fullscreen)
+                && !workspace.is_floating(hwnd)
+            {
+                workspace.fullscreen_follow_focus();
+                workspace.ensure_focused_visible_animated(viewport_width);
+            } else {
+                workspace.clear_fullscreen_if_window(fullscreen);
+            }
+        }
+    }
+}
+
 impl AppState {
     pub(crate) fn workspace_placements(
         &self,
@@ -1793,7 +1819,7 @@ impl AppState {
         self.switch_workspace_on_monitor(self.focused_monitor, index, relative_forward, false, None)
     }
 
-    fn switch_workspace_on_monitor(
+    pub(crate) fn switch_workspace_on_monitor(
         &mut self,
         monitor: MonitorId,
         index: u8,
@@ -1920,23 +1946,13 @@ impl AppState {
             .get_mut(&monitor)
             .and_then(|workspaces| workspaces.get_mut(idx))
         {
-            if let Some((hwnd, fullscreen)) = focus_target.zip(workspace.fullscreen_window_id()) {
-                let stays_visible = hwnd == fullscreen
-                    || workspace
-                        .floating_windows()
-                        .iter()
-                        .any(|floating| floating.id == hwnd && floating.pinned);
-                if !stays_visible {
-                    if fullscreen_follows_focus
-                        && !workspace.is_floating(fullscreen)
-                        && !workspace.is_floating(hwnd)
-                    {
-                        workspace.fullscreen_follow_focus();
-                        workspace.ensure_focused_visible_animated(viewport_width);
-                    } else {
-                        workspace.clear_fullscreen_if_window(fullscreen);
-                    }
-                }
+            if let Some(hwnd) = focus_target {
+                resolve_fullscreen_for_focus(
+                    workspace,
+                    hwnd,
+                    fullscreen_follows_focus,
+                    viewport_width,
+                );
             }
         }
         if let Some(workspace) = self.focused_workspace_mut() {

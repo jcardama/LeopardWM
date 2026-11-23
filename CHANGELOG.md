@@ -52,6 +52,7 @@ All notable changes to LeopardWM will be documented in this file.
 - **Tray quick toggles now refresh Settings health after saving.**
 - **The GlazeWM compatibility endpoint retries an unchanged configuration after a port conflict clears.**
 - **Single-row window queries no longer show a redundant row number.**
+- **Selecting a window in Overview now brings it into view when another window is fullscreen.** Sticky floating windows leave fullscreen unchanged.
 - **Settings dropdowns now support keyboard navigation and screen readers.** Accent buttons and selected options are also easier to read in dark and high contrast modes.
 - **Invalid or outdated settings can now fall back to defaults without resetting the entire configuration.** When LeopardWM can identify the affected settings, it loads the rest and preserves the original as `config.toml.corrupt` before saving (or `config.toml.corrupt.1` if needed); saving is blocked if neither copy can be kept. Saving a single-link `config.toml` replaces the file, so custom ACLs, file attributes, and alternate data streams are not kept; hard-linked configs are written in place so the links stay.
 - **Settings no longer undoes quick-toggle changes made from the tray while Settings is open.**

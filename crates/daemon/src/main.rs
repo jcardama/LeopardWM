@@ -3294,36 +3294,7 @@ async fn handle_overview_event(
     match event {
         OverviewEvent::ActivateWindow(wid) => {
             let mut s = ctx.state.lock().await;
-            // Resolve the target workspace BEFORE hiding so the close
-            // animation zooms toward the activated workspace's row.
-            let target = s.find_window_workspace(wid);
-            s.hide_overview_animated(target.map(|(_, ws_idx)| ws_idx));
-            let Some((monitor, ws_idx)) = target else {
-                debug!("Overview activate: window {} no longer managed", wid);
-                return;
-            };
-            s.focused_monitor = monitor;
-            if ws_idx != s.active_workspace_idx(monitor) {
-                let resp = s.handle_command(IpcCommand::SwitchWorkspace {
-                    index: (ws_idx + 1) as u8,
-                });
-                if let IpcResponse::Error { message } = resp {
-                    warn!(
-                        "Overview workspace switch failed: {}",
-                        log_text::text(message)
-                    );
-                    return;
-                }
-            }
-            // Tiled focus flows through the workspace; floating focus is
-            // tracked via previous_focused_hwnd (same split as elsewhere).
-            if s.focused_workspace().is_some_and(|ws| ws.is_floating(wid)) {
-                s.previous_focused_hwnd = Some(wid);
-            } else if let Some(ws) = s.focused_workspace_mut() {
-                let _ = ws.focus_window(wid);
-            }
-            let _ = leopardwm_platform_win32::set_foreground_window(wid);
-            s.sync_foreground_window();
+            s.activate_overview_window(wid);
         }
         OverviewEvent::SwitchWorkspace(idx) => {
             let mut s = ctx.state.lock().await;

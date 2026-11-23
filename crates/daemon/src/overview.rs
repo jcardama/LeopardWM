@@ -669,6 +669,59 @@ impl AppState {
         }
     }
 
+    pub(crate) fn activate_overview_window(&mut self, wid: u64) {
+        // Resolve the target workspace BEFORE hiding so the close
+        // animation zooms toward the activated workspace's row.
+        let target = self.find_window_workspace(wid);
+        self.hide_overview_animated(target.map(|(_, ws_idx)| ws_idx));
+        let Some((monitor, ws_idx)) = target else {
+            tracing::debug!("Overview activate: window {} no longer managed", wid);
+            return;
+        };
+        let viewport_width = self.viewport_width_for(monitor);
+        let follows_focus = self.config.behavior.fullscreen_follows_focus;
+        let workspace = &mut self.workspaces.get_mut(&monitor).unwrap()[ws_idx];
+        let floating = workspace.is_floating(wid);
+        if !floating {
+            let _ = workspace.focus_window(wid);
+        }
+        let switching = ws_idx != self.active_workspace_idx(monitor);
+        self.focused_monitor = monitor;
+        if switching {
+            let resp = self.switch_workspace_on_monitor(
+                monitor,
+                (ws_idx + 1) as u8,
+                None,
+                false,
+                Some(wid),
+            );
+            if let leopardwm_ipc::IpcResponse::Error { message } = resp {
+                warn!(
+                    "Overview workspace switch failed: {}",
+                    leopardwm_ipc::log_text::text(message)
+                );
+                return;
+            }
+        } else {
+            let workspace = self.focused_workspace_mut().unwrap();
+            crate::command_handler::resolve_fullscreen_for_focus(
+                workspace,
+                wid,
+                follows_focus,
+                viewport_width,
+            );
+            if let Err(error) = self.apply_layout() {
+                warn!("Overview layout application failed: {}", error);
+            }
+            self.sync_taskbar_buttons();
+        }
+        // Tiled focus flows through the workspace; floating focus is
+        // tracked via previous_focused_hwnd (same split as elsewhere).
+        self.previous_focused_hwnd = floating.then_some(wid);
+        let _ = leopardwm_platform_win32::set_foreground_window(wid);
+        self.sync_foreground_window();
+    }
+
     pub(crate) fn refresh_overview_model(&mut self) {
         if !self.overview_open {
             return;
@@ -726,6 +779,106 @@ mod tests {
         let ws = state.ensure_workspace_exists(1, ws_idx).unwrap();
         for &wid in wids {
             ws.insert_window(wid, None).unwrap();
+        }
+    }
+
+    #[test]
+    fn overview_activation_resolves_fullscreen_for_selected_window() {
+        use windows::core::w;
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            CreateWindowExW, DestroyWindow, WINDOW_EX_STYLE, WINDOW_STYLE,
+        };
+
+        struct TestWindow(HWND);
+        impl Drop for TestWindow {
+            fn drop(&mut self) {
+                let _ = unsafe { DestroyWindow(self.0) };
+            }
+        }
+
+        let fullscreen = TestWindow(unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("STATIC"),
+                w!(""),
+                WINDOW_STYLE::default(),
+                0,
+                0,
+                200,
+                100,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap()
+        });
+        let fullscreen_hwnd = fullscreen.0 .0 as u64;
+        for (
+            floating,
+            pinned,
+            fullscreen_float,
+            follows_focus,
+            destination,
+            animated,
+            expected_fullscreen,
+        ) in [
+            (true, false, false, false, 0, false, None),
+            (true, false, false, true, 1, false, None),
+            (true, false, false, true, 1, true, None),
+            (true, true, false, true, 0, false, Some(fullscreen_hwnd)),
+            (false, false, false, false, 0, false, None),
+            (false, false, false, true, 1, true, Some(0)),
+            (false, false, true, true, 0, false, None),
+        ] {
+            let mut state = test_state();
+            state.paused = false;
+            state.reduce_motion = !animated;
+            state.injected_apply_placements_behavior =
+                Some(crate::state::TestApplyPlacementsBehavior::SleepAndSucceed(
+                    std::time::Duration::ZERO,
+                ));
+            let ws = state.ensure_workspace_exists(1, destination).unwrap();
+            if fullscreen_float {
+                ws.add_floating(fullscreen_hwnd, Rect::new(0, 0, 300, 300))
+                    .unwrap();
+            } else {
+                ws.insert_window(fullscreen_hwnd, Some(800)).unwrap();
+            }
+            if floating {
+                ws.add_floating(0, Rect::new(40, 50, 300, 400)).unwrap();
+                ws.set_floating_pinned(0, pinned);
+            } else {
+                ws.insert_window(0, Some(800)).unwrap();
+            }
+            if !fullscreen_float {
+                ws.focus_window(fullscreen_hwnd).unwrap();
+            }
+            assert!(ws.toggle_fullscreen_window(fullscreen_hwnd));
+            if pinned {
+                state.sticky_windows.insert(0);
+            }
+            state.config.behavior.fullscreen_follows_focus = follows_focus;
+            state.overview_open = true;
+            state.activate_overview_window(0);
+            if animated {
+                assert!(state.layout_transition.is_some());
+                state.tick_animations(10_000);
+                state.apply_layout().unwrap();
+            }
+
+            let ws = state.focused_workspace().unwrap();
+            assert_eq!(state.active_workspace_idx(1), destination);
+            assert_eq!(ws.fullscreen_window_id(), expected_fullscreen, "floating={floating}, pinned={pinned}, follows_focus={follows_focus}, destination={destination}");
+            assert_eq!(state.previous_focused_hwnd, Some(0));
+            let placement = state
+                .workspace_placements(1, destination)
+                .into_iter()
+                .find(|p| p.window_id == 0)
+                .unwrap();
+            assert_eq!(placement.visibility, Visibility::Visible);
+            assert!(state.last_placed_layout_rects.contains_key(&0));
         }
     }
 
