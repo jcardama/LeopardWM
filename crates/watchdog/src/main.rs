@@ -153,9 +153,15 @@ fn run(log_paths: &WatchdogLogPaths) -> Result<()> {
     let daemon_args: Vec<String> = std::env::args().skip(1).collect();
 
     let mut crashes: Vec<Instant> = Vec::new();
+    let mut restart_attempt = None;
 
     loop {
-        let status = spawn_daemon(&daemon_path, &daemon_args, &log_paths.daemon_error)?;
+        let status = spawn_daemon(
+            &daemon_path,
+            &daemon_args,
+            &log_paths.daemon_error,
+            restart_attempt,
+        )?;
 
         // Restarting during console shutdown would re-tile and re-park windows during cleanup.
         if CONSOLE_CTRL_RECEIVED.load(Ordering::SeqCst) {
@@ -188,6 +194,7 @@ fn run(log_paths: &WatchdogLogPaths) -> Result<()> {
                     "The daemon crashed and was restarted automatically. Your windows are visible again.",
                 );
                 info!(attempt, "Restarting daemon after crash");
+                restart_attempt = Some(attempt);
             }
             CrashDecision::GiveUp { count } => {
                 // Render synchronously so the user actually sees the "disabled"
@@ -247,14 +254,32 @@ fn find_daemon_binary() -> Result<PathBuf> {
     Ok(candidate)
 }
 
-fn spawn_daemon(path: &Path, args: &[String], error_log_path: &Path) -> Result<ExitStatus> {
+fn daemon_command(path: &Path, args: &[String], restart_attempt: Option<usize>) -> Command {
+    let mut command = Command::new(path);
+    command.args(args);
+    match restart_attempt {
+        Some(attempt) => {
+            command.env("LEOPARDWM_WATCHDOG_RESTARTS", attempt.to_string());
+        }
+        None => {
+            command.env_remove("LEOPARDWM_WATCHDOG_RESTARTS");
+        }
+    }
+    command
+}
+
+fn spawn_daemon(
+    path: &Path,
+    args: &[String],
+    error_log_path: &Path,
+    restart_attempt: Option<usize>,
+) -> Result<ExitStatus> {
     let stderr = OpenOptions::new()
         .create(true)
         .append(true)
         .open(error_log_path)
         .context("failed to open daemon error log")?;
-    let mut child = Command::new(path)
-        .args(args)
+    let mut child = daemon_command(path, args, restart_attempt)
         // The daemon writes its own tracing log. Keep stdout nulled and retain
         // bootstrap stderr and early panics across every supervised restart.
         .stdout(Stdio::null())
@@ -326,6 +351,20 @@ mod tests {
             static BASE: Instant = Instant::now();
         }
         BASE.with(|b| *b + Duration::from_secs(secs))
+    }
+
+    #[test]
+    fn daemon_command_sets_restart_signal_only_for_restarts() {
+        let key = std::ffi::OsStr::new("LEOPARDWM_WATCHDOG_RESTARTS");
+        for (attempt, expected) in [(None, None), (Some(2), Some("2"))] {
+            let command = daemon_command(Path::new("leopardwm.exe"), &[], attempt);
+            let value = command
+                .get_envs()
+                .find(|(name, _)| *name == key)
+                .expect("restart signal must override inherited environment")
+                .1;
+            assert_eq!(value, expected.map(std::ffi::OsStr::new));
+        }
     }
 
     #[test]

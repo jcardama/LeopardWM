@@ -15,6 +15,8 @@ use tracing_subscriber::fmt::MakeWriter;
 pub(crate) struct LogHealth {
     initial: DaemonLogStatus,
     first_write_error: Arc<OnceLock<String>>,
+    settings_events:
+        Arc<OnceLock<std::sync::Weak<std::sync::mpsc::Sender<crate::settings::SettingsEvent>>>>,
 }
 
 impl LogHealth {
@@ -22,6 +24,7 @@ impl LogHealth {
         Self {
             initial,
             first_write_error: Arc::new(OnceLock::new()),
+            settings_events: Arc::new(OnceLock::new()),
         }
     }
 
@@ -35,9 +38,24 @@ impl LogHealth {
         }
     }
 
+    pub(crate) fn set_settings_events(
+        &self,
+        sender: std::sync::Weak<std::sync::mpsc::Sender<crate::settings::SettingsEvent>>,
+    ) {
+        let _ = self.settings_events.set(sender);
+    }
+
     fn record<T>(&self, result: io::Result<T>) -> io::Result<T> {
         if let Err(error) = &result {
-            let _ = self.first_write_error.set(error.to_string());
+            if self.first_write_error.set(error.to_string()).is_ok() {
+                if let Some(sender) = self
+                    .settings_events
+                    .get()
+                    .and_then(std::sync::Weak::upgrade)
+                {
+                    let _ = sender.send(crate::settings::SettingsEvent::LogFailure);
+                }
+            }
         }
         result
     }
@@ -240,6 +258,25 @@ mod tests {
         assert!(message.ends_with("opened this log at log level info\n"));
         drop(writer);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn first_write_failure_notifies_settings_once() {
+        let health = LogHealth::new(DaemonLogStatus::Writing {
+            path: "daemon.log".into(),
+        });
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let sender = Arc::new(sender);
+        health.set_settings_events(Arc::downgrade(&sender));
+        assert!(health.record::<()>(Err(io::Error::other("first"))).is_err());
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(crate::settings::SettingsEvent::LogFailure)
+        ));
+        assert!(health
+            .record::<()>(Err(io::Error::other("second")))
+            .is_err());
+        assert!(receiver.try_recv().is_err());
     }
 
     #[test]

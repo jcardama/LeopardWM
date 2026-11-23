@@ -907,6 +907,15 @@ input[type="range"]::-webkit-slider-thumb {
 .report-note { line-height: 1.5; margin: 0 0 12px; }
 .report-actions { display: flex; gap: 8px; }
 .report-status { margin-bottom: 12px; overflow-wrap: anywhere; }
+
+/* Troubleshooting */
+#sec-troubleshooting .troubleshooting-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+#sec-troubleshooting .field-info { overflow-wrap: anywhere; }
+#sec-troubleshooting .troubleshooting-hint { color: var(--text-primary); margin-top: 6px; }
+#sec-troubleshooting .troubleshooting-status { color: var(--text-secondary); overflow-wrap: anywhere; margin-bottom: 12px; }
+/* Keep the empty live region in the accessibility tree so its first update is announced. */
+#sec-troubleshooting .troubleshooting-status:empty { margin-bottom: 0; }
+/* End Troubleshooting */
 </style>
 </head>
 <body>
@@ -941,6 +950,12 @@ input[type="range"]::-webkit-slider-thumb {
       <svg class="nav-icon" viewBox="0 0 16 16" stroke-width="1.5"><path d="M2 5.5V3.5a1.5 1.5 0 011.5-1.5H5.5"/><path d="M10.5 2H12.5A1.5 1.5 0 0114 3.5V5.5"/><path d="M14 10.5v2a1.5 1.5 0 01-1.5 1.5H10.5"/><path d="M5.5 14H3.5A1.5 1.5 0 012 12.5V10.5"/></svg>
       <span data-i18n="settings.text.snap_hints_titlecase"></span>
     </a>
+    <!-- Troubleshooting -->
+    <a href="#" data-section="troubleshooting" class="nav-item">
+      <svg class="nav-icon" viewBox="0 0 16 16"><path d="M2 8h3l1.5-4 3 8 1.5-4h3"/></svg>
+      <span data-i18n="settings.troubleshooting.title"></span>
+    </a>
+    <!-- End Troubleshooting -->
     <div class="nav-spacer"></div>
     <a href="#" data-section="report" class="nav-item">
       <svg class="nav-icon" viewBox="0 0 16 16"><path d="M3 2h10v9H7l-4 3z"/><path d="M8 4v3m0 2v.1"/></svg>
@@ -1487,6 +1502,26 @@ input[type="range"]::-webkit-slider-thumb {
           <div class="report-actions"><button class="btn" type="button" id="report-submit" data-i18n="settings.report.submit" disabled></button><button class="btn" type="button" id="report-clear" data-i18n="settings.report.clear"></button></div>
         </div>
       </div>
+
+      <!-- Troubleshooting -->
+      <div id="sec-troubleshooting" class="section">
+        <h2 class="section-title" data-i18n="settings.troubleshooting.title"></h2>
+        <h3 class="section-subtitle" data-i18n="settings.troubleshooting.health"></h3>
+        <div class="card" id="troubleshooting-health" aria-live="polite"></div>
+        <h3 class="section-subtitle" data-i18n="settings.troubleshooting.saved_diagnostics"></h3>
+        <div class="card">
+          <div id="troubleshooting-files" aria-live="polite"></div>
+          <div class="about-divider"></div>
+          <div class="troubleshooting-actions">
+            <button class="btn btn-sm" id="troubleshooting-refresh" data-i18n="settings.troubleshooting.refresh"></button>
+            <button class="btn btn-sm" id="troubleshooting-reveal" data-i18n="settings.troubleshooting.reveal_folder"></button>
+            <button class="btn btn-sm btn-accent" id="troubleshooting-create" data-i18n="settings.troubleshooting.create_snapshot"></button>
+          </div>
+          <p class="troubleshooting-status" id="troubleshooting-status" role="status"></p>
+        </div>
+        <button class="btn" id="troubleshooting-report" hidden data-i18n="settings.troubleshooting.report_issue"></button>
+      </div>
+      <!-- End Troubleshooting -->
 
       <!-- About -->
       <div id="sec-about" class="section">
@@ -2930,6 +2965,97 @@ document.querySelectorAll('input[type="text"], input[type="number"]').forEach(fu
   if (el.hasAttribute('data-no-config')) return;
   el.addEventListener('input', function() { autoSave(500); });
 });
+/* Troubleshooting */
+(function() {
+  if (!document.getElementById('troubleshooting-health')) return;
+  var health = null;
+  var files = null;
+  var pending = {};
+  var nextId = Date.now() * 1000;
+  var prefix = 'settings.troubleshooting.';
+  function send(action, extra) { window.ipc.postMessage(JSON.stringify(Object.assign({action: action}, extra || {}))); }
+  function field(label, description, button, hint) {
+    var descriptions = Array.isArray(description) ? description : [description];
+    return '<div class="field"><div class="field-info"><div class="field-label">' + escHtml(label) + '</div>' +
+      descriptions.filter(Boolean).map(function(text) { return '<div class="field-desc">' + escHtml(text) + '</div>'; }).join('') +
+      (hint ? '<div class="field-desc troubleshooting-hint">' + escHtml(hint) + '</div>' : '') + '</div>' + (button || '') + '</div>';
+  }
+  function renderHealth() {
+    if (!health) { document.getElementById('troubleshooting-health').innerHTML = field(t(prefix + 'loading'), '', ''); return; }
+    var output = (health.rows || []).map(function(row) {
+      var label = '', details = [], hint = '', button = '';
+      switch (row.kind) {
+        case 'config':
+          label = t(prefix + 'config');
+          details = [t(prefix + 'path', {path: row.path}), row.reason, row.line != null ? t(prefix + 'location', {line: row.line, column: row.column}) : '',
+            row.recovered.length ? t(prefix + 'recovered', {fields: row.recovered.join(', ')}) : ''];
+          hint = t(prefix + 'config_hint');
+          button = '<button class="btn btn-sm" data-troubleshooting-action="reveal_config">' + escHtml(t(prefix + 'reveal_config')) + '</button>'; break;
+        case 'warning': label = t(prefix + 'warning', {field: row.field}); details = [row.message]; hint = t(prefix + 'config_hint'); break;
+        case 'unknown_keys': label = t(prefix + 'unknown_keys', {keys: row.keys.join(', ')}); hint = t(prefix + 'config_hint'); break;
+        case 'reserved_hotkeys': label = t(prefix + 'reserved', {binds: row.binds.join(', ')}); hint = t(prefix + 'reserved_hint'); break;
+        case 'keyboard_hook': label = t(prefix + 'hook'); hint = t(prefix + 'hook_hint'); break;
+        case 'elevated_window': label = t(prefix + 'elevated', {executable: row.executable || t(prefix + 'unknown_executable')}); hint = t(prefix + 'elevated_hint'); break;
+        case 'integrity': label = t(prefix + 'integrity'); hint = t(prefix + 'integrity_hint'); break;
+        case 'watchdog_restart': label = t(prefix + 'watchdog'); hint = t(prefix + 'watchdog_hint'); break;
+        case 'log_failure': label = t(prefix + 'log_failure'); details = [t(prefix + 'path', {path: row.path}), row.error]; hint = t(prefix + 'log_hint'); break;
+        case 'update': label = t(prefix + 'update', {tag: row.tag}); hint = t(prefix + 'update_hint');
+          button = '<button class="btn btn-sm" data-troubleshooting-action="releases">' + escHtml(t(prefix + 'releases')) + '</button>'; break;
+      }
+      return label ? field(label, details, button, hint) : '';
+    }).join('');
+    document.getElementById('troubleshooting-health').innerHTML = output || field(t(prefix + 'no_problems'), '', '');
+  }
+  function formatSize(size) {
+    var units = ['bytes', 'kb', 'mb', 'gb', 'tb'], unit = 0;
+    while (size >= 1024 && unit < units.length - 1) { size /= 1024; unit++; }
+    return t(prefix + 'size_' + units[unit], {value: size.toLocaleString(document.documentElement.lang, {maximumFractionDigits: 1})});
+  }
+  function renderFiles() {
+    if (!files) { document.getElementById('troubleshooting-files').innerHTML = field(t(prefix + 'loading'), '', ''); return; }
+    var output = files.ok ? files.files.map(function(file) {
+      var date = file.modified == null ? t(prefix + 'unknown_time') : new Date(file.modified * 1000).toLocaleString(document.documentElement.lang);
+      return field(file.name, t(prefix + 'file_details', {size: formatSize(file.size), modified: date}), '');
+    }).join('') : field(t(prefix + 'list_failed'), files.error, '');
+    document.getElementById('troubleshooting-files').innerHTML = output || field(t(prefix + 'no_files'), '', '');
+  }
+  window.lwmReceiveHealth = function(value) { health = value; renderHealth(); };
+  window.lwmReceiveDiagnostics = function(value) { files = value; renderFiles(); };
+  window.lwmReceiveSnapshot = function(result) {
+    var resolve = pending[result.id];
+    if (resolve) { delete pending[result.id]; resolve(result.ok ? {ok: true, path: result.path} : {ok: false, error: result.error}); }
+    send('list_diagnostics');
+  };
+  window.lwmCreateSnapshot = function() {
+    return new Promise(function(resolve) {
+      var id = ++nextId;
+      pending[id] = resolve;
+      try { send('create_snapshot', {id: id}); }
+      catch (error) { delete pending[id]; resolve({ok: false, error: String(error)}); }
+    });
+  };
+  document.getElementById('troubleshooting-health').addEventListener('click', function(event) {
+    var action = event.target.dataset.troubleshootingAction;
+    if (action === 'reveal_config') send('reveal_config');
+    if (action === 'releases') send('open_url', {url: 'https://github.com/jcardama/LeopardWM/releases'});
+  });
+  document.getElementById('troubleshooting-refresh').addEventListener('click', function() { send('list_diagnostics'); });
+  document.getElementById('troubleshooting-reveal').addEventListener('click', function() { send('reveal_diagnostics'); });
+  document.getElementById('troubleshooting-create').addEventListener('click', function() {
+    var button = this, status = document.getElementById('troubleshooting-status');
+    button.disabled = true; status.textContent = t(prefix + 'creating');
+    window.lwmCreateSnapshot().then(function(result) {
+      button.disabled = false;
+      status.textContent = result.ok ? t(prefix + 'created', {path: result.path}) : t(prefix + 'create_failed', {error: result.error});
+    });
+  });
+  var report = document.querySelector('.nav-item[data-section="report"]');
+  var reportButton = document.getElementById('troubleshooting-report');
+  if (report) { reportButton.hidden = false; reportButton.addEventListener('click', function() { report.click(); }); }
+  new MutationObserver(function() { renderHealth(); renderFiles(); }).observe(document.documentElement, {attributes: true, attributeFilter: ['lang']});
+  renderHealth(); renderFiles(); send('request_health'); send('list_diagnostics');
+})();
+/* End Troubleshooting */
 </script>
 </body>
 </html>
@@ -2996,6 +3122,41 @@ assert.equal(messages.at(-1).draft.category, 'Settings');
             .take()
             .unwrap()
             .write_all(SETTINGS_HTML.as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    #[ignore = "Needs Node.js on PATH for the optional Settings JavaScript check"]
+    fn troubleshooting_renders_safely_and_routes_snapshot_results() {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        let payload = serde_json::json!({
+            "page": SETTINGS_HTML,
+            "english": serde_json::from_str::<serde_json::Value>(&crate::locale::page_json("en")).unwrap(),
+            "chinese": serde_json::from_str::<serde_json::Value>(&crate::locale::page_json("zh-CN")).unwrap(),
+        });
+        let mut child = Command::new("node")
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/src/settings/troubleshooting.test.js"
+            ))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("Node.js is required for the Settings JavaScript test");
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(payload.to_string().as_bytes())
             .unwrap();
         let output = child.wait_with_output().unwrap();
         assert!(

@@ -1240,9 +1240,11 @@ impl AppState {
     }
 
     pub(crate) fn reload_config(&mut self, log_validation_warnings: bool) -> IpcResponse {
+        self.settings_health_dirty = true;
         match Config::load() {
             Ok(mut new_config) => {
-                for warning in new_config.validate() {
+                let warnings = new_config.validate();
+                for warning in &warnings {
                     if log_validation_warnings {
                         warn!(
                             "Config: {} - {}",
@@ -1251,6 +1253,8 @@ impl AppState {
                         );
                     }
                 }
+                self.config_warnings = warnings;
+                self.settings_health_dirty = true;
                 self.apply_config(new_config);
                 if let Err(e) = self.apply_layout() {
                     return IpcResponse::error(format!("Failed to apply layout: {}", e));

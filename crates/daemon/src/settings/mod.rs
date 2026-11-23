@@ -3,11 +3,13 @@
 
 mod html;
 mod issue_report;
+pub(crate) mod troubleshooting;
 mod win32;
 
 pub use win32::{
     push_failed_binds, push_locale, push_recorded_chord, push_report_status, push_tray_config,
 };
+pub(crate) use win32::{push_health, push_snapshot_result};
 
 use leopardwm_ipc::log_text;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -21,6 +23,9 @@ use crate::config::Config;
 pub enum SettingsEvent {
     /// The user saved the config (already written to disk).
     Saved,
+    RequestHealth,
+    CreateSnapshot(u64),
+    LogFailure,
     /// The hotkey recorder started (`true`) or stopped (`false`). While
     /// recording, the keyboard hook captures the combo before it can fire its
     /// configured action.

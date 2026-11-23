@@ -414,6 +414,12 @@ async fn reload_config_and_hotkeys(ctx: &mut EventLoopCtx<'_>) {
     // Refresh the rejected-hotkey warning in an open settings window so it
     // reflects the new registration instead of the snapshot taken at open.
     settings::push_failed_binds(&hotkey_state.failed_binds);
+    {
+        let mut state = state.lock().await;
+        state.settings_failed_binds = hotkey_state.failed_binds.clone();
+        state.keyboard_hook_unavailable = hotkey_state.hook.is_none();
+        state.settings_health_dirty = true;
+    }
     sync_tray_toggles(tray_manager, &new_config);
     if let Some(manager) = tray_manager {
         let state = state.lock().await;
@@ -3430,7 +3436,6 @@ async fn handle_settings_event(
             info!("Settings: config saved, triggering reload");
             let response = {
                 let mut state = ctx.state.lock().await;
-                // Settings already logged validation warnings before saving the clamped config.
                 state.reload_config(false)
             };
             if matches!(response, IpcResponse::Ok) {
@@ -3442,6 +3447,20 @@ async fn handle_settings_event(
                     log_text::text(message)
                 );
             }
+        }
+        settings::SettingsEvent::RequestHealth | settings::SettingsEvent::LogFailure => {
+            let state = ctx.state.lock().await;
+            settings::push_health(&settings::troubleshooting::health(&state));
+        }
+        settings::SettingsEvent::CreateSnapshot(id) => {
+            let state = ctx.state.lock().await;
+            let result = diagnostic_snapshot::create_diagnostic_snapshot(
+                &state,
+                "settings",
+                env!("CARGO_PKG_VERSION").to_string(),
+                leopardwm_platform_win32::current_process_integrity(),
+            );
+            settings::push_snapshot_result(id, result);
         }
         settings::SettingsEvent::SetRecording(true) => {
             debug!("Settings: recording started, capturing hotkeys");
@@ -3914,6 +3933,9 @@ async fn finish_daemon_event(ctx: &mut EventLoopCtx<'_>) {
             .as_ref()
             .map(|retry| retry.generation);
         state.publish_workspace_state_if_subscribed();
+        if std::mem::take(&mut state.settings_health_dirty) {
+            settings::push_health(&settings::troubleshooting::health(&state));
+        }
         (timer_needed, retry_generation)
     };
     if should_arm_idle_reapply {
@@ -3940,6 +3962,55 @@ async fn initialize_state(
         Err(error) => warn!("Focus placeholder unavailable: {error}"),
     }
     state
+}
+
+async fn handle_update_available(
+    state: &Arc<Mutex<AppState>>,
+    tray: &Option<tray::TrayManager>,
+    tag: String,
+) {
+    {
+        let mut state = state.lock().await;
+        state.available_update = Some(tag.clone());
+        state.settings_health_dirty = true;
+    }
+    if let Some(manager) = tray {
+        manager.set_available_update(Some(tag));
+    }
+}
+
+fn start_update_check(
+    config: &Config,
+    event_tx: &mpsc::Sender<DaemonEvent>,
+) -> Arc<std::sync::atomic::AtomicBool> {
+    let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    if config.behavior.check_for_updates {
+        let tx = event_tx.clone();
+        update_check::spawn_update_checker(cancel.clone(), move |tag| {
+            let _ = tx.blocking_send(DaemonEvent::UpdateAvailable(tag));
+        });
+    }
+    cancel
+}
+
+async fn initialize_settings_health(
+    state: &Arc<Mutex<AppState>>,
+    warnings: &[config::ConfigWarning],
+    hotkeys: &HotkeyState,
+    hotkeys_enabled: bool,
+    sender: &Arc<std::sync::mpsc::Sender<settings::SettingsEvent>>,
+) {
+    let mut state = state.lock().await;
+    state.config_warnings = warnings.to_vec();
+    state.watchdog_restarts = std::env::var("LEOPARDWM_WATCHDOG_RESTARTS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0);
+    state.settings_failed_binds = hotkeys.failed_binds.clone();
+    state.keyboard_hook_unavailable = hotkeys_enabled && hotkeys.hook.is_none();
+    if let Some(log) = &state.daemon_log {
+        log.set_settings_events(Arc::downgrade(sender));
+    }
 }
 
 async fn start_glazewm_compat(
@@ -4113,14 +4184,7 @@ async fn main() -> Result<()> {
     let (tray_manager, quit_fallback) =
         setup_tray(&state, &config, &event_tx, &mut thread_handles).await;
 
-    let update_check_cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    if config.behavior.check_for_updates {
-        let tx = event_tx.clone();
-        let cancel = update_check_cancel.clone();
-        update_check::spawn_update_checker(cancel, move |tag| {
-            let _ = tx.blocking_send(DaemonEvent::UpdateAvailable(tag));
-        });
-    }
+    let update_check_cancel = start_update_check(&config, &event_tx);
 
     // Tab-strip icon poll: Windows has no MSAA event for icon-only
     // changes (e.g., Discord/Slack swapping in a notification-badge
@@ -4134,6 +4198,14 @@ async fn main() -> Result<()> {
 
     let (settings_sync_tx, settings_sync_rx) = std::sync::mpsc::channel();
     let settings_sync_tx = Arc::new(settings_sync_tx);
+    initialize_settings_health(
+        &state,
+        &config_warnings,
+        &hotkey_state,
+        !args.skip_hotkeys(),
+        &settings_sync_tx,
+    )
+    .await;
     match spawn_forwarding_thread(
         "settings-fwd",
         settings_sync_rx,
@@ -4251,9 +4323,7 @@ async fn main() -> Result<()> {
                 handle_tray_event(&mut ctx, tray_event).await;
             }
             DaemonEvent::UpdateAvailable(tag) => {
-                if let Some(ref mgr) = tray_manager {
-                    mgr.set_available_update(Some(tag));
-                }
+                handle_update_available(&state, &tray_manager, tag).await
             }
             DaemonEvent::TabStripIconPoll => handle_tab_strip_icon_poll(&state).await,
             DaemonEvent::PeriodicCheck => handle_periodic_check(&mut ctx).await,

@@ -96,6 +96,12 @@ const WM_SETTINGS_PUSH_RECORDED: u32 = WM_APP + 2;
 const WM_SETTINGS_PUSH_LOCALE: u32 = WM_APP + 3;
 const WM_SETTINGS_PUSH_TRAY_CONFIG: u32 = WM_APP + 4;
 const WM_SETTINGS_PUSH_REPORT: u32 = WM_APP + 5;
+const WM_SETTINGS_PUSH_HEALTH: u32 = WM_APP + 6;
+const WM_SETTINGS_PUSH_SNAPSHOT: u32 = WM_APP + 7;
+const WM_SETTINGS_LIST_DIAGNOSTICS: u32 = WM_APP + 8;
+static SETTINGS_WINDOW: Mutex<Option<isize>> = Mutex::new(None);
+static PENDING_HEALTH: Mutex<Option<String>> = Mutex::new(None);
+static PENDING_SNAPSHOTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 static REPORT_DRAFT: Mutex<Option<super::issue_report::IssueReport>> = Mutex::new(None);
 static PENDING_REPORT: Mutex<Option<String>> = Mutex::new(None);
 
@@ -142,6 +148,46 @@ pub fn push_failed_binds(failed_binds: &[String]) {
     }
     unsafe {
         let _ = PostThreadMessageW(thread_id, WM_SETTINGS_PUSH_BINDS, WPARAM(0), LPARAM(0));
+    }
+}
+
+pub(crate) fn push_health(health: &super::troubleshooting::Health) {
+    let window = SETTINGS_WINDOW
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let Some(hwnd) = *window else { return };
+    if let (Ok(json), Ok(mut pending)) = (serde_json::to_string(health), PENDING_HEALTH.lock()) {
+        *pending = Some(json);
+        unsafe {
+            let _ = PostMessageW(
+                Some(HWND(hwnd as *mut _)),
+                WM_SETTINGS_PUSH_HEALTH,
+                WPARAM(0),
+                LPARAM(0),
+            );
+        }
+    }
+}
+
+pub(crate) fn push_snapshot_result(id: u64, result: Result<std::path::PathBuf>) {
+    let window = SETTINGS_WINDOW
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let Some(hwnd) = *window else { return };
+    let result = match result {
+        Ok(path) => serde_json::json!({"id": id, "ok": true, "path": path.display().to_string()}),
+        Err(error) => serde_json::json!({"id": id, "ok": false, "error": format!("{error:#}")}),
+    };
+    if let Ok(mut pending) = PENDING_SNAPSHOTS.lock() {
+        pending.push(result.to_string());
+        unsafe {
+            let _ = PostMessageW(
+                Some(HWND(hwnd as *mut _)),
+                WM_SETTINGS_PUSH_SNAPSHOT,
+                WPARAM(0),
+                LPARAM(0),
+            );
+        }
     }
 }
 
@@ -313,6 +359,10 @@ pub fn run_settings_window(
             }
         }
 
+        *SETTINGS_WINDOW
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some(hwnd.0 as isize);
+
         apply_win11_theming(hwnd, dark);
 
         // Extend the DWM frame into the entire client area so Mica renders behind content
@@ -379,7 +429,31 @@ pub fn run_settings_window(
             .with_transparent(true)
             .with_background_color((0, 0, 0, 0))
             .with_additional_browser_args("--disable-features=msSmartScreenProtection")
-            .build(&win_handle)?;
+            .build(&win_handle)
+            .inspect_err(|_| {
+                let _ = DestroyWindow(hwnd);
+                if let Ok(mut thread) = SETTINGS_THREAD.lock() { *thread = None; }
+                if let Ok(mut pending) = PENDING_HEALTH.lock() { *pending = None; }
+                if let Ok(mut pending) = PENDING_SNAPSHOTS.lock() { pending.clear(); }
+            })?;
+
+        // The WebView remains at this address until WM_DESTROY clears the pointer.
+        SetWindowLongPtrW(
+            hwnd,
+            GWLP_USERDATA,
+            &webview as *const wry::WebView as isize,
+        );
+        let _ = PostMessageW(Some(hwnd), WM_SETTINGS_PUSH_HEALTH, WPARAM(0), LPARAM(0));
+        let _ = PostMessageW(Some(hwnd), WM_SETTINGS_PUSH_SNAPSHOT, WPARAM(0), LPARAM(0));
+        let _ = PostMessageW(
+            Some(hwnd),
+            WM_SETTINGS_LIST_DIAGNOSTICS,
+            WPARAM(0),
+            LPARAM(0),
+        );
+        if let Some(sender) = close_tx.upgrade() {
+            let _ = sender.send(SettingsEvent::RequestHealth);
+        }
 
         let init_js = "init(window._initConfig)".to_string();
         let _ = webview.evaluate_script(&init_js);
@@ -479,11 +553,33 @@ pub fn run_settings_window(
             DispatchMessageW(&msg_buf);
         }
 
+        let window_still_open = {
+            let mut window = SETTINGS_WINDOW
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if *window == Some(hwnd.0 as isize) {
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                *window = None;
+                true
+            } else {
+                false
+            }
+        };
+        if window_still_open {
+            let _ = DestroyWindow(hwnd);
+        }
+
         // The window is gone; stop the daemon from posting to a dead thread.
         if let Ok(mut g) = SETTINGS_THREAD.lock() {
             *g = None;
             if let Ok(mut pending) = PENDING_TRAY_CONFIG.lock() {
                 *pending = None;
+            }
+            if let Ok(mut pending) = PENDING_HEALTH.lock() {
+                *pending = None;
+            }
+            if let Ok(mut pending) = PENDING_SNAPSHOTS.lock() {
+                pending.clear();
             }
             if let Ok(mut pending) = PENDING_RECORDED.lock() {
                 pending.clear();
@@ -505,6 +601,42 @@ pub fn run_settings_window(
     }
 
     Ok(())
+}
+
+#[derive(serde::Serialize)]
+struct DiagnosticFile {
+    name: String,
+    size: u64,
+    modified: Option<u64>,
+}
+
+fn list_diagnostics(dir: &std::path::Path) -> std::io::Result<Vec<DiagnosticFile>> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
+    let mut files = Vec::new();
+    for entry in entries {
+        let entry = entry?;
+        let metadata = entry.metadata()?;
+        if !metadata.is_file() {
+            continue;
+        }
+        let modified = metadata.modified().ok();
+        files.push((
+            modified,
+            DiagnosticFile {
+                name: entry.file_name().to_string_lossy().into_owned(),
+                size: metadata.len(),
+                modified: modified
+                    .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|time| time.as_secs()),
+            },
+        ));
+    }
+    files.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.name.cmp(&b.1.name)));
+    Ok(files.into_iter().map(|(_, file)| file).collect())
 }
 
 fn is_allowed_url(url: &str) -> bool {
@@ -580,6 +712,47 @@ fn handle_ipc(body: &str, event_tx: &mpsc::Sender<SettingsEvent>, hwnd: HWND) {
         "save" => {
             if let Some(cfg_val) = msg.get("config") {
                 do_save(cfg_val, event_tx);
+            }
+        }
+        "request_health" => {
+            let _ = event_tx.send(SettingsEvent::RequestHealth);
+        }
+        "create_snapshot" => {
+            if let Some(id) = msg.get("id").and_then(|value| value.as_u64()) {
+                let _ = event_tx.send(SettingsEvent::CreateSnapshot(id));
+            }
+        }
+        "list_diagnostics" => unsafe {
+            let _ = PostMessageW(
+                Some(hwnd),
+                WM_SETTINGS_LIST_DIAGNOSTICS,
+                WPARAM(0),
+                LPARAM(0),
+            );
+        },
+        "reveal_diagnostics" => {
+            let path = leopardwm_ipc::diagnostics_dir();
+            if let Err(error) = std::fs::create_dir_all(&path) {
+                warn!(
+                    "Cannot create diagnostics folder {}: {}",
+                    log_text::path(path.display()),
+                    log_text::text(error)
+                );
+            } else {
+                leopardwm_platform_win32::shell::open(&path);
+            }
+        }
+        "reveal_config" => {
+            let path = crate::config::config_rejection()
+                .map(|rejection| rejection.path)
+                .or_else(|| {
+                    crate::config::config_paths()
+                        .into_iter()
+                        .find(|path| path.exists())
+                })
+                .or_else(|| crate::config::config_paths().into_iter().next());
+            if let Some(folder) = path.as_deref().and_then(std::path::Path::parent) {
+                leopardwm_platform_win32::shell::open(folder);
             }
         }
         "set_recording" => {
@@ -669,6 +842,45 @@ unsafe extern "system" fn wndproc(
     lparam: LPARAM,
 ) -> LRESULT {
     match message {
+        WM_SETTINGS_PUSH_HEALTH | WM_SETTINGS_PUSH_SNAPSHOT | WM_SETTINGS_LIST_DIAGNOSTICS => {
+            let webview = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const wry::WebView;
+            if let Some(webview) = webview.as_ref() {
+                match message {
+                    WM_SETTINGS_PUSH_HEALTH => {
+                        if let Some(json) = PENDING_HEALTH
+                            .lock()
+                            .ok()
+                            .and_then(|mut pending| pending.take())
+                        {
+                            let _ = webview
+                                .evaluate_script(&format!("window.lwmReceiveHealth({json})"));
+                        }
+                    }
+                    WM_SETTINGS_PUSH_SNAPSHOT => {
+                        let results = PENDING_SNAPSHOTS
+                            .lock()
+                            .map(|mut pending| std::mem::take(&mut *pending))
+                            .unwrap_or_default();
+                        for result in results {
+                            let _ = webview
+                                .evaluate_script(&format!("window.lwmReceiveSnapshot({result})"));
+                        }
+                    }
+                    WM_SETTINGS_LIST_DIAGNOSTICS => {
+                        let listing = match list_diagnostics(&leopardwm_ipc::diagnostics_dir()) {
+                            Ok(files) => serde_json::json!({"ok": true, "files": files}),
+                            Err(error) => {
+                                serde_json::json!({"ok": false, "error": error.to_string()})
+                            }
+                        };
+                        let _ = webview
+                            .evaluate_script(&format!("window.lwmReceiveDiagnostics({listing})"));
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            LRESULT(0)
+        }
         WM_GETMINMAXINFO => {
             let minmax = &mut *(lparam.0 as *mut MINMAXINFO);
             let ((width, height), _) =
@@ -697,6 +909,10 @@ unsafe extern "system" fn wndproc(
             LRESULT(0)
         }
         WM_DESTROY => {
+            *SETTINGS_WINDOW
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()) = None;
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
             PostQuitMessage(0);
             LRESULT(0)
         }
@@ -761,6 +977,55 @@ unsafe fn apply_win11_theming(hwnd: HWND, dark: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn save_requests_config_reload() {
+        let mut config = Config::default();
+        config.layout.gap = -1;
+        let (sender, receiver) = mpsc::channel();
+        assert!(do_save(&serde_json::to_value(config).unwrap(), &sender));
+        assert!(matches!(receiver.try_recv(), Ok(SettingsEvent::Saved)));
+    }
+
+    #[test]
+    fn diagnostics_listing_sorts_by_full_modification_time_and_includes_metadata() {
+        use std::time::{Duration, SystemTime, UNIX_EPOCH};
+        let dir = std::env::temp_dir().join(format!(
+            "leopardwm-diagnostics-list-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&dir).unwrap();
+        for (name, bytes, nanos) in [
+            ("a-older.txt", &b"old"[..], 100_000_000),
+            ("z-newer.txt", &b"newer"[..], 800_000_000),
+        ] {
+            let path = dir.join(name);
+            std::fs::write(&path, bytes).unwrap();
+            let file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+            file.set_times(
+                std::fs::FileTimes::new()
+                    .set_modified(UNIX_EPOCH + Duration::new(1_700_000_000, nanos)),
+            )
+            .unwrap();
+        }
+        std::fs::create_dir(dir.join("subfolder")).unwrap();
+        let files = list_diagnostics(&dir).unwrap();
+        assert_eq!(
+            files
+                .iter()
+                .map(|file| (file.name.as_str(), file.size, file.modified))
+                .collect::<Vec<_>>(),
+            vec![
+                ("z-newer.txt", 5, Some(1_700_000_000)),
+                ("a-older.txt", 3, Some(1_700_000_000))
+            ]
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn window_sizes_scale_from_96_dpi_logical_pixels() {

@@ -783,7 +783,9 @@ impl AppState {
     ) -> ElevationCheck {
         if !block.is_blocked() {
             // A recycled HWND may belong to a manageable window.
-            self.elevation_blocked.remove(&hwnd);
+            if self.elevation_blocked.remove(&hwnd).is_some() {
+                self.settings_health_dirty = true;
+            }
             return ElevationCheck::Manageable;
         }
         let record = ElevationBlockedRecord {
@@ -791,8 +793,14 @@ impl AppState {
             reason: block,
         };
         match self.elevation_blocked.insert(hwnd, record) {
-            None => ElevationCheck::BlockedNew,
-            Some(prev) if prev.title != title || prev.reason != block => ElevationCheck::BlockedNew,
+            None => {
+                self.settings_health_dirty = true;
+                ElevationCheck::BlockedNew
+            }
+            Some(prev) if prev.title != title || prev.reason != block => {
+                self.settings_health_dirty = true;
+                ElevationCheck::BlockedNew
+            }
             Some(_) => ElevationCheck::BlockedKnown,
         }
     }
@@ -1496,7 +1504,9 @@ impl AppState {
             leopardwm_platform_win32::taskbar::taskbar_forget(hwnd);
             // Forget an elevation-blocked window once it's truly gone, so a
             // recycled HWND for a normal window isn't wrongly skipped.
-            self.elevation_blocked.remove(&hwnd);
+            if self.elevation_blocked.remove(&hwnd).is_some() {
+                self.settings_health_dirty = true;
+            }
             // Hidden keeps a remembered width for a later show. Destroy must
             // not, or the next occupant of this HWND inherits it.
             self.hidden_column_widths.remove(&hwnd);
