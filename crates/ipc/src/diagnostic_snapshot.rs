@@ -61,6 +61,23 @@ pub struct SnapshotInput {
 }
 
 fn masked_config(text: &str) -> String {
+    fn mask_names(value: &mut toml::Value) {
+        match value {
+            toml::Value::Array(values) => values.iter_mut().for_each(mask_names),
+            _ => *value = toml::Value::String("<masked>".into()),
+        }
+    }
+    fn mask_workspace_names(workspaces: &mut toml::Value) {
+        match workspaces {
+            toml::Value::Table(table) => {
+                if let Some(names) = table.get_mut("names") {
+                    mask_names(names);
+                }
+            }
+            toml::Value::Array(values) => values.iter_mut().for_each(mask_workspace_names),
+            _ => {}
+        }
+    }
     fn mask(value: &mut toml::Value) {
         match value {
             toml::Value::Table(table) => {
@@ -82,13 +99,8 @@ fn masked_config(text: &str) -> String {
     match text.parse::<toml::Table>() {
         Ok(table) => {
             let mut value = toml::Value::Table(table);
-            if let Some(toml::Value::Array(names)) = value
-                .get_mut("workspaces")
-                .and_then(|workspaces| workspaces.get_mut("names"))
-            {
-                for name in names {
-                    *name = toml::Value::String("<masked>".into());
-                }
+            if let Some(workspaces) = value.get_mut("workspaces") {
+                mask_workspace_names(workspaces);
             }
             mask(&mut value);
             toml::to_string_pretty(&value)
@@ -853,6 +865,40 @@ mod tests {
         assert!(!report.contains("multiline secret"));
         assert!(report.contains("config text omitted: TOML parse error at line"));
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn workspace_names_are_masked_for_invalid_toml_shapes() {
+        let (dir, mut input) = fixture();
+        let cases = [
+            ("[workspaces]\nnames = ['private-one', 'private-two']", "[workspaces]\nnames = ['<masked>', '<masked>']"),
+            ("[workspaces]\nnames = 'private-one'", "[workspaces]\nnames = '<masked>'"),
+            ("[[workspaces]]\nnames = ['private-one']\n[[workspaces]]\nnames = 'private-two'", "[[workspaces]]\nnames = ['<masked>']\n[[workspaces]]\nnames = '<masked>'"),
+            ("[workspaces]\nnames = [['private-one'], ['private-two', { private_key = 'private-three' }]]", "[workspaces]\nnames = [['<masked>'], ['<masked>', '<masked>']]"),
+        ];
+        let mut failures = Vec::new();
+        for (source, expected) in cases {
+            input.config_text = Some(source.into());
+            let report = render(&input);
+            let config = report
+                .split_once("## Config\n")
+                .unwrap()
+                .1
+                .split_once("\n## Workspaces\n")
+                .unwrap()
+                .0
+                .lines()
+                .skip(2)
+                .collect::<Vec<_>>()
+                .join("\n");
+            let actual: toml::Table = config.parse().unwrap();
+            let expected: toml::Table = expected.parse().unwrap();
+            if report.contains("private-") || report.contains("private_key") || actual != expected {
+                failures.push(format!("{source}: {config}"));
+            }
+        }
+        fs::remove_dir_all(dir).unwrap();
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
     #[test]
