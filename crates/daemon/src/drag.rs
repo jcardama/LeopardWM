@@ -170,6 +170,11 @@ impl AppState {
             let target = &mut self.workspaces.get_mut(&target_monitor).unwrap()[target_idx];
             let _ = target.add_floating(drag.hwnd, rect);
         }
+        if target_monitor != drag.source_monitor
+            && self.workspaces[&target_monitor][target_idx].contains_window(drag.hwnd)
+        {
+            self.forget_stashed_windows(&[drag.hwnd]);
+        }
         self.focused_monitor = target_monitor;
         self.previous_focused_hwnd = Some(drag.hwnd);
         self.restore_snap_for_window(drag.hwnd);
@@ -1398,6 +1403,11 @@ impl AppState {
             workspace.ensure_focused_visible_animated(target_viewport.width);
         }
 
+        if target_monitor != source_monitor
+            && self.workspaces[&target_monitor][tgt_mut_idx].contains_window(hwnd)
+        {
+            self.forget_stashed_windows(&[hwnd]);
+        }
         self.focused_monitor = target_monitor;
         info!(
             "Window merge: {} into column {} slot {} on monitor {}",
@@ -1578,6 +1588,11 @@ impl AppState {
                 ws.ensure_focused_visible_animated(vw);
             }
 
+            if target_monitor != source_monitor
+                && self.workspaces[&target_monitor][tgt_idx].contains_window(hwnd)
+            {
+                self.forget_stashed_windows(&[hwnd]);
+            }
             self.focused_monitor = target_monitor;
 
             // Clear any in-progress transition so windows stay at their current positions.
@@ -1709,6 +1724,7 @@ impl AppState {
             }
         };
 
+        let moved_windows = column.windows().to_vec();
         self.reconcile_drag_source_scroll(source_monitor, src_idx, target_monitor, tgt_idx);
 
         debug!(
@@ -1743,6 +1759,9 @@ impl AppState {
             target_ws.ensure_focused_visible_animated(target_viewport.width);
         }
 
+        if source_monitor != target_monitor {
+            self.forget_stashed_windows(&moved_windows);
+        }
         self.focused_monitor = target_monitor;
 
         self.start_layout_transition(snapshot);

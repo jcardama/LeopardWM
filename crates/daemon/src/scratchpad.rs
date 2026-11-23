@@ -335,7 +335,11 @@ impl AppState {
             origin_column,
             origin_sibling,
         });
+        let was_managed = self.find_window_workspace(wid).is_some();
         self.hide_window_to_holding(wid);
+        if was_managed && self.find_window_workspace(wid).is_none() {
+            self.forget_stashed_windows(&[wid]);
+        }
         let _ = self.apply_layout();
         self.sync_foreground_window();
         info!("Scratchpad: stashed window {}", wid);

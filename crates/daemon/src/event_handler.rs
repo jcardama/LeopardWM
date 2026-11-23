@@ -1928,6 +1928,9 @@ impl AppState {
             }
             return false;
         }
+        if from_mid != to_mid {
+            self.forget_stashed_windows(&[hwnd]);
+        }
         let source_width = self.viewport_width_for(from_mid);
         if let Some(ws) = self
             .workspaces
@@ -3356,8 +3359,15 @@ impl AppState {
                         .get_mut(&monitor_id)
                         .and_then(|v| v.get_mut(ws_idx))
                     {
-                        workspace.update_floating(hwnd, visible_rect);
+                        let updated = workspace.update_floating(hwnd, visible_rect);
                         debug!("Floating window {} dropped at {:?}", hwnd, visible_rect);
+                        let monitors: Vec<_> = self.monitors.values().cloned().collect();
+                        if updated
+                            && find_monitor_for_rect(&monitors, &visible_rect)
+                                .is_some_and(|monitor| monitor.id != drag.source_monitor)
+                        {
+                            self.forget_stashed_windows(&[hwnd]);
+                        }
                     }
                 }
             }

@@ -12185,166 +12185,399 @@ fn test_stashed_layout_prunes_closed_window_across_restart() {
 
 #[test]
 fn test_stashed_layout_monitor_migration_orderings() {
-    #[derive(Clone, Copy)]
-    enum Step {
-        DropA,
-        DropC,
-        MoveToC,
-        ReturnA,
-        Restart,
-        ReturnAAtStartup,
-        ReturnBAtStartup,
-        MissingTarget,
-        NoTarget,
-        Unmanage100,
-    }
-    use Step::*;
-    let cases: &[(&str, &[Step], Option<MonitorId>)] = &[
-        ("plain return", &[], Some(99)),
-        ("target disconnects", &[DropA], Some(99)),
-        ("target returns first", &[DropA, ReturnA], Some(99)),
-        ("moved then host disconnects", &[MoveToC, DropC], Some(1)),
-        ("moved and host stays", &[MoveToC], Some(3)),
-        (
-            "moved before target disconnects",
-            &[MoveToC, DropA],
-            Some(3),
-        ),
-        (
-            "chained migration after restart",
-            &[DropA, Restart],
-            Some(99),
-        ),
-        (
-            "target returns after restart",
-            &[DropA, Restart, ReturnA],
-            Some(99),
-        ),
-        (
-            "target returned while stopped",
-            &[DropA, ReturnAAtStartup],
-            Some(99),
-        ),
-        (
-            "returned at startup after chained migration",
-            &[DropA, ReturnBAtStartup],
-            Some(99),
-        ),
-        ("absent target fallback", &[MissingTarget], Some(99)),
-        (
-            "absent target at startup",
-            &[MissingTarget, ReturnBAtStartup],
-            Some(99),
-        ),
-        (
-            "no target fallback excludes unmanaged",
-            &[NoTarget, Unmanage100],
-            None,
-        ),
+    let orders = [
+        [2, 1, -2, -1],
+        [2, 1, -1, -2],
+        [2, -2, 1, -1],
+        [1, 2, -1, -2],
+        [1, 2, -2, -1],
+        [1, -1, 2, -2],
     ];
-    for &(name, steps, expected_100) in cases {
-        let mut monitors = two_monitors();
-        monitors.push(MonitorInfo {
-            id: 3,
-            rect: Rect::new(3840, 0, 1920, 1080),
-            work_area: Rect::new(3840, 0, 1920, 1040),
-            is_primary: false,
-            device_name: "DISPLAY3".to_string(),
-            scale_factor: 1.0,
-        });
-        let original_a = monitors[0].clone();
-        let mut returned_b = monitors[1].clone();
-        returned_b.id = 99;
-        let mut state = AppState::new_with_config(test_config(), monitors.clone());
-        let ws = &mut state.workspaces.get_mut(&2).unwrap()[0];
-        ws.insert_window(100, Some(500)).unwrap();
-        ws.insert_window(200, Some(650)).unwrap();
-        monitors.retain(|m| m.id != 2);
-        state.reconcile_monitors(monitors.clone());
-        let mut started_with_b = false;
-        for step in steps {
-            match step {
-                DropA | DropC => {
-                    let removed = if matches!(step, DropA) { 1 } else { 3 };
-                    monitors.retain(|m| m.id != removed);
-                    for m in &mut monitors {
-                        m.is_primary = m.id == if removed == 1 { 3 } else { 1 };
-                    }
-                    state.reconcile_monitors(monitors.clone());
-                }
-                MoveToC => {
-                    state.focused_monitor = 1;
-                    state.move_window_to_monitor_transactional(100, 3).unwrap();
-                }
-                ReturnA => {
-                    for m in &mut monitors {
-                        m.is_primary = false;
-                    }
-                    monitors.insert(0, original_a.clone());
-                    state.reconcile_monitors(monitors.clone());
-                }
-                Restart | ReturnAAtStartup | ReturnBAtStartup => {
+    for steps in orders {
+        for restart_after in 0..=5 {
+            let mut monitors = two_monitors();
+            monitors.push(MonitorInfo {
+                id: 3,
+                rect: Rect::new(3840, 0, 1920, 1080),
+                work_area: Rect::new(3840, 0, 1920, 1040),
+                is_primary: false,
+                device_name: "DISPLAY3".to_string(),
+                scale_factor: 1.0,
+            });
+            let originals = monitors.clone();
+            let mut state = AppState::new_with_config(test_config(), monitors.clone());
+            state.workspaces.get_mut(&1).unwrap()[0]
+                .insert_window(100, Some(500))
+                .unwrap();
+            state.workspaces.get_mut(&2).unwrap()[0]
+                .insert_window(200, Some(650))
+                .unwrap();
+            for position in 0..=4 {
+                if position == restart_after {
                     let snapshot: StateSnapshot =
                         serde_json::from_str(&state.build_state_json().unwrap()).unwrap();
-                    if matches!(step, ReturnAAtStartup) {
-                        for m in &mut monitors {
-                            m.is_primary = false;
-                        }
-                        monitors.insert(0, original_a.clone());
-                    }
-                    if matches!(step, ReturnBAtStartup) {
-                        monitors.push(returned_b.clone());
-                        started_with_b = true;
-                    }
                     state = AppState::new_with_config(test_config(), monitors.clone());
                     state.restore_workspace_structure_with(&snapshot, |_| true);
                 }
-                MissingTarget => {
-                    state
-                        .stashed_monitor_layouts
-                        .get_mut("DISPLAY2")
-                        .unwrap()
-                        .migration_target = Some("MISSING".into())
+                if position == 4 {
+                    break;
                 }
-                NoTarget => {
-                    state
-                        .stashed_monitor_layouts
-                        .get_mut("DISPLAY2")
-                        .unwrap()
-                        .migration_target = None
+                let step: i32 = steps[position];
+                let id = step.unsigned_abs() as MonitorId;
+                if step > 0 {
+                    monitors.retain(|m| m.id != id);
+                } else {
+                    monitors.push(originals.iter().find(|m| m.id == id).unwrap().clone());
                 }
-                Unmanage100 => {
-                    state.workspaces.get_mut(&1).unwrap()[0]
-                        .remove_window(100)
-                        .unwrap();
+                let primary = if monitors.iter().any(|m| m.id == 1) {
+                    1
+                } else {
+                    monitors[0].id
+                };
+                for monitor in &mut monitors {
+                    monitor.is_primary = monitor.id == primary;
+                }
+                state.reconcile_monitors(monitors.clone());
+                if step < 0 {
+                    let window = if id == 1 { 100 } else { 200 };
+                    assert!(
+                        state.workspaces[&id]
+                            .iter()
+                            .any(|ws| ws.contains_window(window)),
+                        "steps {steps:?} restart {restart_after} after {position}"
+                    );
+                }
+            }
+            for (monitor, window, width) in [(1, 100, 500), (2, 200, 650)] {
+                let ws = &state.workspaces[&monitor][0];
+                let col = ws.rows()[0].find_window_location(window).unwrap().0;
+                assert_eq!(
+                    ws.column(col).unwrap().width(),
+                    width,
+                    "steps {steps:?} restart {restart_after}"
+                );
+                assert_eq!(
+                    state
+                        .workspaces
+                        .values()
+                        .flatten()
+                        .filter(|ws| ws.contains_window(window))
+                        .count(),
+                    1
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn test_stashed_user_moves_survive_disconnect_and_restart() {
+    for mode in [
+        "window",
+        "ipc_window",
+        "floating",
+        "float_drop",
+        "column",
+        "edge",
+        "drag_column",
+        "drag_merge",
+        "drag_placeholder",
+    ] {
+        for closed in [false, true] {
+            for target_absent in [false, true] {
+                let mut monitors = two_monitors();
+                monitors.push(MonitorInfo {
+                    id: 3,
+                    rect: Rect::new(3840, 0, 1920, 1080),
+                    work_area: Rect::new(3840, 0, 1920, 1040),
+                    is_primary: false,
+                    device_name: "DISPLAY3".to_string(),
+                    scale_factor: 1.0,
+                });
+                let mut state = AppState::new_with_config(test_config(), monitors.clone());
+                state.injected_apply_placements_behavior =
+                    Some(TestApplyPlacementsBehavior::SleepAndSucceed(Duration::ZERO));
+                let ws = &mut state.workspaces.get_mut(&2).unwrap()[0];
+                ws.insert_window(100, Some(500)).unwrap();
+                ws.insert_window_in_column(101, 0).unwrap();
+                ws.insert_window(200, Some(650)).unwrap();
+                state.reconcile_monitors(vec![monitors[0].clone(), monitors[2].clone()]);
+                let primary = state.workspaces.get_mut(&1).unwrap();
+                primary[0].remove_window(101).unwrap();
+                let col = primary[0].rows()[0].find_window_location(100).unwrap().0;
+                primary[0].insert_window_in_column(101, col).unwrap();
+                primary[0].remove_window(200).unwrap();
+                let mut other_workspace = Workspace::new();
+                other_workspace.insert_window(200, Some(650)).unwrap();
+                primary.push(other_workspace);
+                state.focused_monitor = 1;
+                state.workspaces.get_mut(&1).unwrap()[0]
+                    .focus_window(100)
+                    .unwrap();
+                match mode {
+                    "window" => {
+                        state.move_window_to_monitor_transactional(100, 3).unwrap();
+                    }
+                    "ipc_window" => {
+                        assert_eq!(
+                            state.handle_command(IpcCommand::MoveWindowToMonitorRight),
+                            IpcResponse::Ok
+                        );
+                    }
+                    "floating" => {
+                        let viewport = state.layout_viewport(1);
+                        assert!(state.workspaces.get_mut(&1).unwrap()[0].float_window_at(
+                            100,
+                            Rect::new(100, 100, 500, 500),
+                            viewport
+                        ));
+                        state.move_window_to_monitor_transactional(100, 3).unwrap();
+                    }
+                    "column" => {
+                        state
+                            .move_focused_column_to_monitor_transactional(3, true)
+                            .unwrap();
+                    }
+                    "edge" => {
+                        state.config.behavior.move_crosses_monitors = true;
+                        assert_eq!(
+                            state.handle_command(IpcCommand::MoveColumnRight),
+                            IpcResponse::Ok
+                        );
+                    }
+                    _ => {
+                        let drag = DragState {
+                            hwnd: 100,
+                            is_tiled: true,
+                            float_on_drop: false,
+                            start_visible_rect: None,
+                            source_monitor: 1,
+                            source_workspace_idx: 0,
+                            source_row: 0,
+                            source_window_slot: 0,
+                            current_row_index: 0,
+                            current_column_index: 0,
+                            last_drop_target: None,
+                            last_hint_update: None,
+                            removed_from_source: false,
+                            preview_mode: crate::state::DragPreviewMode::None,
+                            target_column_peers: Vec::new(),
+                            source_column_peers: Vec::new(),
+                            source_column_width: Some(500),
+                        };
+                        let rect = Rect::new(3840, 0, 500, 500);
+                        if mode == "float_drop" {
+                            assert!(state.finalize_float_drag(&drag, rect));
+                        } else if mode == "drag_column" {
+                            state.execute_cross_monitor_drag(100, &drag, 3, 0, &rect);
+                        } else if mode == "drag_placeholder" {
+                            state.workspaces.get_mut(&3).unwrap()[0]
+                                .insert_window(DRAG_PLACEHOLDER_HWND, Some(500))
+                                .unwrap();
+                            state.finalize_drag_merge(100, &drag, 3, &rect);
+                        } else {
+                            state.execute_window_merge(100, &drag, 3, &rect);
+                        }
+                    }
+                }
+                assert!(state.workspaces[&3][0].contains_window(100), "{mode}");
+                let json = state.build_state_json().unwrap();
+                let snapshot: StateSnapshot = serde_json::from_str(&json).unwrap();
+                if target_absent {
+                    monitors.remove(0);
+                }
+                let mut restarted = AppState::new_with_config(test_config(), monitors);
+                restarted.restore_workspace_structure_with(&snapshot, |id| !closed || id != 100);
+                assert_eq!(
+                    restarted.workspaces[&3][0].contains_window(100),
+                    !closed,
+                    "{mode}"
+                );
+                assert!(!restarted.workspaces[&2][0].contains_window(100), "{mode}");
+                assert_eq!(
+                    restarted.workspaces[&2][0].contains_window(200),
+                    !target_absent,
+                    "{mode}"
+                );
+                if matches!(mode, "column" | "edge" | "drag_column") {
+                    assert!(restarted.workspaces[&3][0].contains_window(101), "{mode}");
+                    assert!(!restarted.workspaces[&2][0].contains_window(101), "{mode}");
+                } else {
+                    assert_eq!(
+                        restarted.workspaces[&2][0].contains_window(101),
+                        !target_absent,
+                        "{mode}"
+                    );
                 }
             }
         }
-        if !started_with_b {
-            monitors.push(returned_b.clone());
-            state.reconcile_monitors(monitors);
-        }
-        let locations = |id| -> Vec<MonitorId> {
-            state
-                .workspaces
-                .iter()
-                .filter_map(|(&monitor, workspaces)| {
-                    workspaces
-                        .iter()
-                        .any(|ws| ws.contains_window(id))
-                        .then_some(monitor)
-                })
-                .collect()
+    }
+}
+
+#[test]
+fn test_stashed_user_move_survives_automatic_migration_back() {
+    let mut monitors = two_monitors();
+    monitors.push(MonitorInfo {
+        id: 3,
+        rect: Rect::new(3840, 0, 1920, 1080),
+        work_area: Rect::new(3840, 0, 1920, 1040),
+        is_primary: false,
+        device_name: "DISPLAY3".to_string(),
+        scale_factor: 1.0,
+    });
+    let mut state = AppState::new_with_config(test_config(), monitors.clone());
+    state.workspaces.get_mut(&2).unwrap()[0]
+        .insert_window(100, Some(500))
+        .unwrap();
+    state.workspaces.get_mut(&2).unwrap()[0]
+        .insert_window(200, Some(650))
+        .unwrap();
+    state.reconcile_monitors(vec![monitors[0].clone(), monitors[2].clone()]);
+    state.focused_monitor = 1;
+    state.move_window_to_monitor_transactional(100, 3).unwrap();
+    state.reconcile_monitors(vec![monitors[0].clone()]);
+    state.reconcile_monitors(vec![monitors[0].clone(), monitors[1].clone()]);
+    assert!(state.workspaces[&1][0].contains_window(100));
+    assert!(!state.workspaces[&2][0].contains_window(100));
+    assert!(state.workspaces[&2][0].contains_window(200));
+}
+
+#[test]
+fn test_stashed_scratchpad_summoned_on_another_monitor_stays_there() {
+    let mut monitors = two_monitors();
+    monitors.push(MonitorInfo {
+        id: 3,
+        rect: Rect::new(3840, 0, 1920, 1080),
+        work_area: Rect::new(3840, 0, 1920, 1040),
+        is_primary: false,
+        device_name: "DISPLAY3".to_string(),
+        scale_factor: 1.0,
+    });
+    let mut state = AppState::new_with_config(test_config(), monitors.clone());
+    state.injected_apply_placements_behavior =
+        Some(TestApplyPlacementsBehavior::SleepAndSucceed(Duration::ZERO));
+    state.workspaces.get_mut(&2).unwrap()[0]
+        .insert_window(0, Some(500))
+        .unwrap();
+    state.workspaces.get_mut(&2).unwrap()[0]
+        .insert_window(200, Some(650))
+        .unwrap();
+    state.reconcile_monitors(vec![monitors[0].clone(), monitors[2].clone()]);
+    state.focused_monitor = 1;
+    state.workspaces.get_mut(&1).unwrap()[0]
+        .focus_window(0)
+        .unwrap();
+    state.scratchpad_stash();
+    state.focused_monitor = 3;
+    state.scratchpad_toggle();
+    state.reconcile_monitors(monitors);
+    assert!(state.workspaces[&3][0].contains_window(0));
+    assert!(!state.workspaces[&2][0].contains_window(0));
+    assert!(state.workspaces[&2][0].contains_window(200));
+}
+
+#[test]
+fn test_stashed_edit_config_pull_moves_window_without_reclaiming_it() {
+    let mut monitors = two_monitors();
+    monitors.push(MonitorInfo {
+        id: 3,
+        rect: Rect::new(3840, 0, 1920, 1080),
+        work_area: Rect::new(3840, 0, 1920, 1040),
+        is_primary: false,
+        device_name: "DISPLAY3".to_string(),
+        scale_factor: 1.0,
+    });
+    let mut state = AppState::new_with_config(test_config(), monitors.clone());
+    state.injected_apply_placements_behavior =
+        Some(TestApplyPlacementsBehavior::SleepAndSucceed(Duration::ZERO));
+    state.workspaces.get_mut(&2).unwrap()[0]
+        .insert_window(0, Some(500))
+        .unwrap();
+    state.workspaces.get_mut(&2).unwrap()[0]
+        .insert_window(200, Some(650))
+        .unwrap();
+    state.reconcile_monitors(vec![monitors[0].clone(), monitors[2].clone()]);
+    assert!(state.pull_window_to_workspace(0, 1, 0, 3, 0));
+    state.reconcile_monitors(monitors);
+    assert!(state.workspaces[&3][0].contains_window(0));
+    assert!(!state.workspaces[&2][0].contains_window(0));
+    assert!(state.workspaces[&2][0].contains_window(200));
+}
+
+#[test]
+fn test_stashed_monitors_return_together_during_restart() {
+    let mut monitors = two_monitors();
+    monitors.push(MonitorInfo {
+        id: 3,
+        rect: Rect::new(3840, 0, 1920, 1080),
+        work_area: Rect::new(3840, 0, 1920, 1040),
+        is_primary: false,
+        device_name: "DISPLAY3".to_string(),
+        scale_factor: 1.0,
+    });
+    let mut state = AppState::new_with_config(test_config(), monitors.clone());
+    state.workspaces.get_mut(&1).unwrap()[0]
+        .insert_window(100, Some(500))
+        .unwrap();
+    state.workspaces.get_mut(&2).unwrap()[0]
+        .insert_window(200, Some(650))
+        .unwrap();
+    state.reconcile_monitors(vec![monitors[0].clone(), monitors[2].clone()]);
+    let mut third = monitors[2].clone();
+    third.is_primary = true;
+    state.reconcile_monitors(vec![third]);
+    let snapshot: StateSnapshot = serde_json::from_str(&state.build_state_json().unwrap()).unwrap();
+    for _ in 0..8 {
+        let mut restarted = AppState::new_with_config(test_config(), monitors.clone());
+        restarted.restore_workspace_structure_with(&snapshot, |_| true);
+        assert!(restarted.workspaces[&1][0].contains_window(100));
+        assert!(!restarted.workspaces[&1][0].contains_window(200));
+        assert!(restarted.workspaces[&2][0].contains_window(200));
+        assert!(!restarted.workspaces[&2][0].contains_window(100));
+    }
+}
+
+#[test]
+fn test_stashed_snapshot_accepts_unknown_fields() {
+    let mut state = AppState::new_with_config(test_config(), two_monitors());
+    state.workspaces.get_mut(&2).unwrap()[0]
+        .insert_window(100, Some(500))
+        .unwrap();
+    state.reconcile_monitors(test_monitors());
+    let mut json: serde_json::Value =
+        serde_json::from_str(&state.build_state_json().unwrap()).unwrap();
+    json["stashed_monitor_layouts"]["DISPLAY2"]["migration_target"] = serde_json::json!("DISPLAY1");
+    let snapshot: StateSnapshot = serde_json::from_value(json).unwrap();
+    let mut restarted = AppState::new_with_config(test_config(), test_monitors());
+    restarted.restore_workspace_structure_with(&snapshot, |_| true);
+    restarted.reconcile_monitors(two_monitors());
+    assert!(restarted.workspaces[&2][0].contains_window(100));
+}
+
+#[test]
+fn test_stashed_failed_moves_and_closed_windows() {
+    for column in [false, true] {
+        let mut state = AppState::new_with_config(test_config(), two_monitors());
+        let ws = &mut state.workspaces.get_mut(&2).unwrap()[0];
+        ws.insert_window(100, Some(500)).unwrap();
+        ws.insert_window(200, Some(650)).unwrap();
+        state.reconcile_monitors(test_monitors());
+        state.focused_monitor = 1;
+        state.workspaces.get_mut(&1).unwrap()[0]
+            .focus_window(100)
+            .unwrap();
+        let failed = if column {
+            state.move_focused_column_to_monitor_transactional(999, true)
+        } else {
+            state.move_window_to_monitor_transactional(100, 999)
         };
-        assert_eq!(
-            locations(100),
-            expected_100.into_iter().collect::<Vec<_>>(),
-            "{name}: window 100"
-        );
-        assert_eq!(locations(200), vec![99], "{name}: window 200");
-        let ws = &state.workspaces[&99][0];
-        let index = ws.rows()[0].find_window_location(200).unwrap().0;
-        assert_eq!(ws.column(index).unwrap().width(), 650, "{name}: width");
+        assert!(failed.is_err());
+        state.handle_window_event(WindowEvent::Destroyed(200));
+        state.reconcile_monitors(two_monitors());
+        let ws = &state.workspaces[&2][0];
+        assert!(ws.contains_window(100));
+        assert!(!ws.contains_window(200));
+        assert_eq!(ws.columns().len(), 1);
     }
 }
 

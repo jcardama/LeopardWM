@@ -121,7 +121,7 @@ impl AppState {
     /// Cheap deterministic hash for save-request deduplication: focused
     /// monitor, per-monitor active workspace index, every workspace's
     /// requested column widths + membership + floating windows + rounded
-    /// scroll offset, and tab title override
+    /// scroll offset, stashed monitor layouts, and tab title override
     /// keys/value lengths. Used to dedup save requests so unchanged
     /// state (e.g. mid-animation frames with no structural delta) does
     /// not enqueue a write.
@@ -397,7 +397,7 @@ impl AppState {
         let monitors: Vec<_> = self.monitors.values().cloned().collect();
         for monitor in monitors {
             if let Some(stash) = self.stashed_monitor_layouts.remove(&monitor.device_name) {
-                let source_width = self.restore_stashed_monitor_layout(&monitor, stash, &[]);
+                let source_width = self.restore_stashed_monitor_layout(&monitor, stash);
                 let params = ScaledLayoutParams::from_config(
                     &self.config.layout,
                     &self.config.appearance,

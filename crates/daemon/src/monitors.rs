@@ -33,28 +33,13 @@ impl AppState {
         &mut self,
         monitor: &MonitorInfo,
         mut stash: StashedMonitorLayout,
-        new_monitors: &[MonitorInfo],
     ) -> i32 {
-        let targets: Vec<_> = self
-            .monitors
+        let allowed: HashSet<u64> = self
+            .workspaces
             .values()
-            .chain(new_monitors.iter())
-            .filter(|m| stash.migration_target.as_ref() == Some(&m.device_name))
+            .flatten()
+            .flat_map(|ws| ws.all_window_ids())
             .collect();
-        let allowed: HashSet<u64> = if targets.is_empty() {
-            self.workspaces
-                .values()
-                .flatten()
-                .flat_map(|ws| ws.all_window_ids())
-                .collect()
-        } else {
-            targets
-                .iter()
-                .filter_map(|m| self.workspaces.get(&m.id))
-                .flatten()
-                .flat_map(|ws| ws.all_window_ids())
-                .collect()
-        };
         let mut dropped = 0;
         for ws in &mut stash.workspaces {
             for wid in ws.all_window_ids() {
@@ -77,16 +62,6 @@ impl AppState {
             .iter()
             .flat_map(|w| w.all_window_ids())
             .collect();
-        for other in self.stashed_monitor_layouts.values_mut() {
-            if other.migration_target == stash.migration_target
-                && other
-                    .workspaces
-                    .iter()
-                    .any(|ws| ws.all_window_ids().iter().any(|id| returning.contains(id)))
-            {
-                other.migration_target = Some(monitor.device_name.clone());
-            }
-        }
         for ws_vec in self.workspaces.values_mut() {
             for ws in ws_vec {
                 for &wid in &returning {
@@ -105,34 +80,13 @@ impl AppState {
         stash.source_viewport_width
     }
 
-    fn update_stashes_for_removed_monitor(&mut self, removed_id: MonitorId, target: Option<&str>) {
-        let Some(workspaces) = self.workspaces.get(&removed_id) else {
-            return;
-        };
-        let removed_windows: HashSet<_> = workspaces
-            .iter()
-            .flat_map(|ws| ws.all_window_ids())
-            .collect();
-        let removed_name = self
-            .monitors
-            .get(&removed_id)
-            .map(|m| m.device_name.as_str());
+    pub(crate) fn forget_stashed_windows(&mut self, windows: &[u64]) {
         for stash in self.stashed_monitor_layouts.values_mut() {
-            let follows_removed =
-                removed_name.is_some_and(|name| stash.migration_target.as_deref() == Some(name));
             for ws in &mut stash.workspaces {
-                for wid in ws.all_window_ids() {
-                    if removed_windows.contains(&wid) != follows_removed {
-                        if ws.is_floating(wid) {
-                            ws.remove_floating(wid);
-                        } else {
-                            let _ = ws.remove_window(wid);
-                        }
-                    }
+                for &wid in windows {
+                    let _ = ws.remove_window(wid);
+                    ws.remove_floating(wid);
                 }
-            }
-            if follows_removed {
-                stash.migration_target = target.map(str::to_owned);
             }
         }
         self.stashed_monitor_layouts.retain(|_, stash| {
@@ -245,8 +199,7 @@ impl AppState {
         for monitor in &new_monitors {
             if !old_ids.contains(&monitor.id) {
                 if let Some(stash) = self.stashed_monitor_layouts.remove(&monitor.device_name) {
-                    let source_width =
-                        self.restore_stashed_monitor_layout(monitor, stash, &new_monitors);
+                    let source_width = self.restore_stashed_monitor_layout(monitor, stash);
                     source_viewport_widths.insert(monitor.id, source_width);
                     continue;
                 }
@@ -320,10 +273,6 @@ impl AppState {
             let device_name = self.monitors.get(removed_id).map(|m| m.device_name.clone());
             let source_viewport_width = old_viewport_widths[removed_id];
             let active_idx = self.active_workspace.get(removed_id).copied().unwrap_or(0);
-            let target_name = primary_id
-                .and_then(|id| new_monitors.iter().find(|m| m.id == id))
-                .map(|m| m.device_name.as_str());
-            self.update_stashes_for_removed_monitor(*removed_id, target_name);
             if let Some(old_ws_vec) = self.workspaces.remove(removed_id) {
                 let mut tiled_window_ids = Vec::new();
                 let mut floating_windows = Vec::new();
@@ -395,19 +344,28 @@ impl AppState {
                 // reconnect restores it; the windows migrated above stay on
                 // primary meanwhile and are pulled back when it returns.
                 if let Some(name) = device_name {
-                    if !tiled_window_ids.is_empty() || !floating_windows.is_empty() {
+                    let owned: HashSet<u64> = self
+                        .stashed_monitor_layouts
+                        .values()
+                        .flat_map(|stash| &stash.workspaces)
+                        .flat_map(|ws| ws.all_window_ids())
+                        .collect();
+                    let mut stashed_ws = old_ws_vec;
+                    for ws in &mut stashed_ws {
+                        for wid in ws.all_window_ids() {
+                            if owned.contains(&wid) {
+                                let _ = ws.remove_window(wid);
+                                ws.remove_floating(wid);
+                            }
+                        }
+                    }
+                    if stashed_ws.iter().any(|ws| !ws.all_window_ids().is_empty()) {
                         self.stashed_monitor_layouts.insert(
                             name,
                             StashedMonitorLayout {
-                                workspaces: old_ws_vec,
+                                workspaces: stashed_ws,
                                 active_workspace: active_idx,
                                 source_viewport_width,
-                                migration_target: primary_id.and_then(|id| {
-                                    new_monitors
-                                        .iter()
-                                        .find(|m| m.id == id)
-                                        .map(|m| m.device_name.clone())
-                                }),
                             },
                         );
                     }
@@ -643,6 +601,7 @@ impl AppState {
 
         self.workspaces.get_mut(&source_monitor).unwrap()[src_idx] = source_workspace;
         self.workspaces.get_mut(&target_monitor).unwrap()[tgt_idx] = target_workspace;
+        self.forget_stashed_windows(&[window_id]);
         self.focused_monitor = target_monitor;
         Ok(Some(window_id))
     }
@@ -677,6 +636,7 @@ impl AppState {
         let source_row = source.focused_row();
         let column_index = source.focused_column_index();
         let column = &source.columns_for_row(source_row)[column_index];
+        let moved_windows = column.windows().to_vec();
         let minimized: Vec<_> = column
             .windows()
             .iter()
@@ -711,6 +671,7 @@ impl AppState {
 
         self.workspaces.get_mut(&source_monitor).unwrap()[src_idx] = source;
         self.workspaces.get_mut(&target_monitor).unwrap()[tgt_idx] = target;
+        self.forget_stashed_windows(&moved_windows);
         self.focused_monitor = target_monitor;
         Ok(Some(focused))
     }

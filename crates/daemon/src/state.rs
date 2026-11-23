@@ -431,7 +431,6 @@ pub(crate) struct StashedMonitorLayout {
     pub(crate) workspaces: Vec<Workspace>,
     pub(crate) active_workspace: usize,
     pub(crate) source_viewport_width: i32,
-    pub(crate) migration_target: Option<String>,
 }
 
 pub(crate) struct AppState {

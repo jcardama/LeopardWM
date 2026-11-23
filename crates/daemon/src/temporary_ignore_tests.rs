@@ -218,7 +218,6 @@ fn seed_recycled_lifetime_caches(state: &mut AppState, hwnd: u64) {
             workspaces: vec![stale_workspace],
             active_workspace: 0,
             source_viewport_width: 1920,
-            migration_target: None,
         },
     );
 }
