@@ -126,6 +126,7 @@ mod tests {
 
     #[cfg(windows)]
     fn assert_redirected_directory_is_refused(redirect_leaf: bool) {
+        crate::anchored_fs::force_refuse_for_tests();
         let root = temp_dir();
         let target = root.join("outside");
         let app = root.join("leopardwm");
@@ -158,6 +159,24 @@ mod tests {
         assert!(!target_was_modified, "junction target was modified");
     }
 
+    #[test]
+    fn open_refuses_hard_link_to_outside_file() {
+        crate::anchored_fs::force_refuse_for_tests();
+        let root = temp_dir();
+        let dir = root.join("logs");
+        fs::create_dir_all(&dir).unwrap();
+        let outside = root.join("outside");
+        fs::write(&outside, b"preserve").unwrap();
+        fs::hard_link(&outside, dir.join("example.log")).unwrap();
+        let result = BoundedLogFile::open(&dir, "example.log", 100);
+        let refused = result.is_err();
+        drop(result);
+        let contents = fs::read(outside).unwrap();
+        fs::remove_dir_all(root).unwrap();
+        assert!(refused, "hard-linked log was accepted");
+        assert_eq!(contents, b"preserve");
+    }
+
     #[cfg(windows)]
     #[test]
     fn open_refuses_redirected_app_directory_without_creating_logs() {
@@ -172,7 +191,8 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn rollover_does_not_write_through_redirected_previous_log() {
+    fn rollover_preserves_current_when_previous_is_a_directory_junction() {
+        crate::anchored_fs::force_refuse_for_tests();
         let root = temp_dir();
         let dir = root.join("logs");
         let target = root.join("outside");
@@ -206,7 +226,8 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn unsafe_reopen_is_reported_once_per_failure_streak() {
+    fn junction_reopen_failure_is_reported_once_per_failure_streak() {
+        crate::anchored_fs::force_refuse_for_tests();
         let root = temp_dir();
         let dir = root.join("logs");
         let target = root.join("outside");

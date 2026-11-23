@@ -295,6 +295,7 @@ mod tests {
 
     #[test]
     fn start_rejects_hard_link_without_modifying_its_target() {
+        leopardwm_ipc::anchored_fs::force_refuse_for_tests();
         let root = directory();
         let dir = root.join("diagnostics");
         fs::create_dir_all(&dir).unwrap();
@@ -358,6 +359,7 @@ mod tests {
     }
 
     fn junction(link: &Path, target: &Path) {
+        leopardwm_ipc::anchored_fs::force_refuse_for_tests();
         let output = std::process::Command::new("cmd")
             .args(["/D", "/C", "mklink", "/J"])
             .arg(link)

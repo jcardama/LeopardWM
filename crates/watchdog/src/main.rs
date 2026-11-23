@@ -380,6 +380,30 @@ mod tests {
     }
 
     #[test]
+    fn error_log_refuses_hard_link_on_reset_and_append() {
+        leopardwm_ipc::anchored_fs::force_refuse_for_tests();
+        let root =
+            std::env::temp_dir().join(format!("lwm-watchdog-hardlink-{}", std::process::id()));
+        let dir = root.join("logs");
+        std::fs::create_dir_all(&dir).unwrap();
+        let outside = root.join("outside");
+        std::fs::write(&outside, b"preserve").unwrap();
+        let path = dir.join(DAEMON_ERROR_LOG_NAME);
+        std::fs::hard_link(&outside, &path).unwrap();
+        let reset = error_file(&path, true);
+        let reset_refused = reset.is_err();
+        drop(reset);
+        let after_reset = std::fs::read(&outside).unwrap();
+        let append_refused = append_error(&path, "record").is_err();
+        let after_append = std::fs::read(&outside).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+        assert!(
+            reset_refused && append_refused && after_reset == b"preserve" && after_append == b"preserve",
+            "reset refused={reset_refused}, append refused={append_refused}, after reset={after_reset:?}, after append={after_append:?}"
+        );
+    }
+
+    #[test]
     fn daemon_error_reset_succeeds_while_another_writer_is_open() {
         let dir =
             std::env::temp_dir().join(format!("leopardwm-watchdog-reset-{}", std::process::id()));

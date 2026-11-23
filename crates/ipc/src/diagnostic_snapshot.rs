@@ -487,6 +487,35 @@ mod tests {
     }
 
     #[test]
+    fn write_refuses_junction_ancestor_without_creating_snapshot() {
+        crate::anchored_fs::force_refuse_for_tests();
+        let (root, input) = fixture();
+        let target = root.join("outside");
+        let link = root.join("link");
+        fs::create_dir(&target).unwrap();
+        let output = std::process::Command::new("cmd")
+            .args(["/D", "/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(&target)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let refused = write(&input, &link.join("diagnostics")).is_err();
+        let target_was_modified = fs::read_dir(&target).unwrap().next().is_some();
+        fs::remove_dir(link).unwrap();
+        fs::remove_dir_all(root).unwrap();
+        assert!(refused, "snapshot accepted a redirected ancestor");
+        assert!(
+            !target_was_modified,
+            "snapshot created files in the junction target"
+        );
+    }
+
+    #[test]
     fn explicit_spans_preserve_only_the_allowed_parts() {
         let (dir, mut input) = fixture();
         input.known_titles = vec!["x title=y".into()];
