@@ -21,7 +21,7 @@ Use a classic personal access token with `public_repo` and `workflow`. The new f
 
 **Verify:** after pushing a `v*` tag, check the `publish-winget` job at https://github.com/jcardama/LeopardWM/actions. It prints the PR URL on success. Check that PR and its validation results; a successful GitHub Release alone does not prove the Winget job succeeded.
 
-**Manual fallback:** if the job fails, inspect the job log and any existing open PR or fork branch before retrying. Run the pinned komac `update jcardama.LeopardWM --version <version> --urls <x64-msi-url> <arm64-msi-url> --dry-run` locally with `GITHUB_TOKEN` set, preserving stdout bytes in a file. Run `python tools/winget_manifest.py <stdout-file> <output-directory>`, then `winget validate --manifest <output-directory>`. Submit the validated files by hand to `microsoft/winget-pkgs`. Do not use `komac submit`; it rewrites the installer layout.
+**Manual fallback:** if the job fails, inspect the job log and any existing open PR or fork branch before retrying. Run the pinned komac `update jcardama.LeopardWM --version <version> --urls <x64-msi-url> <arm64-msi-url> --dry-run` locally with `GITHUB_TOKEN` set, preserving stdout bytes in a file. Run `python tools/winget_manifest.py <stdout-file> <output-directory> --version <version>`, then `winget validate --manifest <output-directory>`. Submit the validated files by hand to `microsoft/winget-pkgs`. Do not use `komac submit`; it rewrites the installer layout.
 
 ---
 

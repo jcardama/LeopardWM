@@ -120,8 +120,9 @@ def installer(data, version):
         else:
             fail("unrecognized installer entry")
     x64 = [entry for entry in entries if entry[0] == b"- Architecture: x64\r\n"]
-    if len(x64) != 1 or len(entries) < 2:
-        fail("expected one x64 and at least one other installer")
+    arm64 = [entry for entry in entries if entry[0] == b"- Architecture: arm64\r\n"]
+    if len(entries) != 2 or len(x64) != 1 or len(arm64) != 1:
+        fail("expected one x64 and one arm64 installer")
     extracted = {}
     for entry in entries:
         starts = [i for i, line in enumerate(entry) if re.match(rb"^  [A-Za-z][A-Za-z0-9]*:", line)]
@@ -132,6 +133,13 @@ def installer(data, version):
             fail("duplicate installer field")
         fields = [(name, entry[start:(starts[i + 1] if i + 1 < len(starts) else len(entry))])
                   for i, (start, name) in enumerate(zip(starts, names))]
+        urls = [value for name, value in fields if name == "InstallerUrl"]
+        url = re.fullmatch(rb"  InstallerUrl: ([^\r\n]+)\r\n", b"".join(urls[0])) if urls else None
+        arch = b"x86_64" if entry is x64[0] else b"arm64"
+        expected = (b"https://github.com/jcardama/LeopardWM/releases/download/v" + version
+                    + b"/LeopardWM-" + version + b"-" + arch + b".msi")
+        if not url or scalar(url.group(1)) != expected:
+            fail("installer URL does not match release and architecture")
         rebuilt = [entry[0]]
         for name, value in fields:
             if name == "AppsAndFeaturesEntries":
@@ -153,7 +161,7 @@ def installer(data, version):
     return b"".join(prefix + [line for name in ROOT_KEYS if name in root for line in root[name]])
 
 
-def generate(stdout, output):
+def generate(stdout, output, release_version):
     pattern = rb"(?m)^# Created with [^\r\n]+\r\n.*?^ManifestVersion: [^\r\n]+\r\n"
     matches = list(re.finditer(pattern, stdout, re.DOTALL | re.MULTILINE))
     if not matches or not re.fullmatch(rb"Latest version of [^\r\n]+\n", stdout[:matches[0].start()]):
@@ -170,6 +178,8 @@ def generate(stdout, output):
         identifier, version = field(data, b"PackageIdentifier"), field(data, b"PackageVersion")
         if not SAFE_NAME.fullmatch(identifier) or not SAFE_NAME.fullmatch(version):
             fail("unsafe package identifier or version")
+        if version != release_version:
+            fail("manifest version does not match release version")
         if identity is None:
             identity = (identifier, version)
         if identity != (identifier, version):
@@ -202,9 +212,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("stdout", type=Path)
     parser.add_argument("output", type=Path)
+    parser.add_argument("--version", required=True)
     args = parser.parse_args()
     try:
-        generate(args.stdout.read_bytes(), args.output)
+        generate(args.stdout.read_bytes(), args.output, args.version.encode("utf-8"))
     except (ValueError, OSError) as error:
         print(f"winget manifest: {error}", file=sys.stderr)
         return 1

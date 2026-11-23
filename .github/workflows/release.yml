@@ -128,7 +128,7 @@ jobs:
           $base = "https://github.com/jcardama/LeopardWM/releases/download/$env:GITHUB_REF_NAME"
           $exe = Join-Path $env:RUNNER_TEMP 'komac.exe'
           & $exe update jcardama.LeopardWM --version $version --urls "$base/LeopardWM-$version-x86_64.msi" "$base/LeopardWM-$version-arm64.msi" --dry-run > (Join-Path $env:RUNNER_TEMP 'komac-stdout.txt')
-          python tools/winget_manifest.py (Join-Path $env:RUNNER_TEMP 'komac-stdout.txt') (Join-Path $env:RUNNER_TEMP 'winget-manifests')
+          python tools/winget_manifest.py (Join-Path $env:RUNNER_TEMP 'komac-stdout.txt') (Join-Path $env:RUNNER_TEMP 'winget-manifests') --version $version
       - name: Submit Winget pull request
         shell: pwsh
         env:
