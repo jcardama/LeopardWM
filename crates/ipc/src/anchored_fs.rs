@@ -193,6 +193,15 @@ impl AnchoredDir {
         components: &[&OsStr],
         policy: RedirectPolicy,
     ) -> io::Result<Self> {
+        Self::walk(root, components, policy, FILE_OPEN_IF)
+    }
+
+    fn walk(
+        root: &Path,
+        components: &[&OsStr],
+        policy: RedirectPolicy,
+        disposition: NTCREATEFILE_CREATE_DISPOSITION,
+    ) -> io::Result<Self> {
         // The caller supplies the trusted profile or temporary root, which may itself be redirected.
         let root_handle = OpenOptions::new()
             .access_mode(FILE_READ_ATTRIBUTES.0 | SYNCHRONIZE)
@@ -212,7 +221,7 @@ impl AnchoredDir {
                 &path,
                 0,
                 FILE_SHARE_READ | FILE_SHARE_WRITE,
-                FILE_OPEN_IF,
+                disposition,
                 FILE_DIRECTORY_FILE | policy.open_options(),
             )?;
             verify(&file, &path, true, policy)?;
@@ -226,6 +235,17 @@ impl AnchoredDir {
     }
 
     pub fn for_path(path: &Path) -> io::Result<Self> {
+        Self::for_path_with(path, FILE_OPEN_IF)
+    }
+
+    pub(crate) fn for_existing_path(path: &Path) -> io::Result<Self> {
+        Self::for_path_with(path, FILE_OPEN)
+    }
+
+    fn for_path_with(
+        path: &Path,
+        disposition: NTCREATEFILE_CREATE_DISPOSITION,
+    ) -> io::Result<Self> {
         let local = directories::BaseDirs::new()
             .map(|d| d.data_local_dir().to_path_buf())
             .unwrap_or_else(std::env::temp_dir);
@@ -242,7 +262,7 @@ impl AnchoredDir {
             )
         })?;
         let components: Vec<_> = relative.components().map(|c| c.as_os_str()).collect();
-        Self::open(root, &components)
+        Self::walk(root, &components, process_policy(), disposition)
     }
 
     fn file(

@@ -106,7 +106,7 @@ fn read_tail(path: &Path, limit: u64) -> io::Result<(String, bool)> {
     let name = path
         .file_name()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "log path has no filename"))?;
-    let directory = crate::anchored_fs::AnchoredDir::for_path(parent)?;
+    let directory = crate::anchored_fs::AnchoredDir::for_existing_path(parent)?;
     let mut file = directory.open_read(name)?;
     let length = file.metadata()?.len();
     let start = length.saturating_sub(limit);
@@ -567,6 +567,22 @@ mod tests {
             !report.contains(root.to_string_lossy().as_ref()),
             "{report}"
         );
+        assert!(report.contains("## Daemon Log\nunavailable:"), "{report}");
+        assert!(
+            report.contains("## Gesture Capture\nunavailable:"),
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn snapshot_does_not_create_missing_log_directory() {
+        let (root, mut input) = fixture();
+        let missing = root.join("missing");
+        input.log_dir = missing.join("logs");
+        let report = render(&input);
+        let created = missing.exists();
+        fs::remove_dir_all(root).unwrap();
+        assert!(!created, "snapshot created the missing log directory");
         assert!(report.contains("## Daemon Log\nunavailable:"), "{report}");
         assert!(
             report.contains("## Gesture Capture\nunavailable:"),
