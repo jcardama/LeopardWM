@@ -1029,6 +1029,16 @@ fn init_logging(
     Ok((capture_handle, log_health, recording::install(recording)))
 }
 
+fn write_crash_report(
+    dir: &std::path::Path,
+    name: &std::ffi::OsStr,
+    report: &str,
+) -> std::io::Result<()> {
+    use std::io::Write;
+    let directory = leopardwm_ipc::anchored_fs::AnchoredDir::for_path(dir)?;
+    directory.create_new(name)?.write_all(report.as_bytes())
+}
+
 fn install_panic_hook() {
     std::panic::set_hook(Box::new(|info| {
         eprint!(
@@ -1067,9 +1077,11 @@ fn install_panic_hook() {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        let crash_path = std::env::temp_dir().join(format!("leopardwm-crash-{}.txt", ts));
+        let temp_dir = std::env::temp_dir();
+        let crash_name = format!("leopardwm-crash-{}.txt", ts);
+        let crash_path = temp_dir.join(&crash_name);
         let report = format_crash_report(info);
-        if let Err(e) = std::fs::write(&crash_path, &report) {
+        if let Err(e) = write_crash_report(&temp_dir, crash_name.as_ref(), &report) {
             eprintln!("[leopardwm] Failed to write crash report: {}", e);
         } else {
             eprintln!(

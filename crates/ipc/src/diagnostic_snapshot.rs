@@ -1,5 +1,6 @@
 use crate::log_text::{self, Kind};
 use regex::Regex;
+#[cfg(test)]
 use std::fs;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -99,7 +100,14 @@ const LOG_TAIL_BYTES: u64 = 256 * 1024;
 const CAPTURE_TAIL_BYTES: u64 = 1024 * 1024;
 
 fn read_tail(path: &Path, limit: u64) -> io::Result<(String, bool)> {
-    let mut file = fs::File::open(path)?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "log path has no parent"))?;
+    let name = path
+        .file_name()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "log path has no filename"))?;
+    let directory = crate::anchored_fs::AnchoredDir::for_path(parent)?;
+    let mut file = directory.open_read(name)?;
     let length = file.metadata()?.len();
     let start = length.saturating_sub(limit);
     let mut partial = false;
@@ -130,7 +138,12 @@ fn file_section(path: &Path, tail: Option<usize>, stitch: bool, redactor: &Redac
     };
     let (current, truncated) = match read_tail(path, limit) {
         Ok(result) => result,
-        Err(error) => return format!("unavailable: {error}\n"),
+        Err(error) => {
+            return format!(
+                "unavailable: {}\n",
+                redactor.mask_profile(&error.to_string())
+            )
+        }
     };
     let Some(line_limit) = tail else {
         // Gesture capture contains only typed gesture data and canonical command names.
@@ -513,6 +526,69 @@ mod tests {
             !target_was_modified,
             "snapshot created files in the junction target"
         );
+    }
+
+    #[test]
+    fn snapshot_refuses_logs_in_junction_target() {
+        crate::anchored_fs::force_refuse_for_tests();
+        let (root, mut input) = fixture();
+        let target = root.join("outside");
+        let link = root.join("logs");
+        fs::create_dir(&target).unwrap();
+        fs::write(
+            target.join("leopardwm-daemon.log"),
+            "[lwm-log-v1] redirected-daemon-canary\n",
+        )
+        .unwrap();
+        fs::write(
+            target.join(crate::GESTURE_CAPTURE_LOG_FILE),
+            "redirected-capture-canary\n",
+        )
+        .unwrap();
+        let output = std::process::Command::new("cmd")
+            .args(["/D", "/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(&target)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        input.log_dir = link.clone();
+        input.userprofile = Some(root.to_string_lossy().into_owned());
+        let report = render(&input);
+        fs::remove_dir(link).unwrap();
+        fs::remove_dir_all(&root).unwrap();
+        assert!(!report.contains("redirected-daemon-canary"), "{report}");
+        assert!(!report.contains("redirected-capture-canary"), "{report}");
+        assert!(
+            !report.contains(root.to_string_lossy().as_ref()),
+            "{report}"
+        );
+        assert!(report.contains("## Daemon Log\nunavailable:"), "{report}");
+        assert!(
+            report.contains("## Gesture Capture\nunavailable:"),
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn snapshot_reads_log_while_writer_is_open() {
+        let (dir, input) = fixture();
+        let mut writer = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(dir.join("leopardwm-daemon.log"))
+            .unwrap();
+        writer
+            .write_all(b"[lwm-log-v1] active-log-canary\n")
+            .unwrap();
+        let report = render(&input);
+        drop(writer);
+        fs::remove_dir_all(dir).unwrap();
+        assert!(report.contains("active-log-canary"), "{report}");
     }
 
     #[test]

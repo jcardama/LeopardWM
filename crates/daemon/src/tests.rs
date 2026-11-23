@@ -4,6 +4,42 @@ use std::sync::atomic::Ordering;
 
 static REAL_WINDOW_STYLE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+#[test]
+fn crash_report_preserves_existing_file_in_temp_root() {
+    let dir = std::env::temp_dir();
+    let name = format!(
+        "leopardwm-crash-test-{}-{}.txt",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    );
+    let path = dir.join(&name);
+    let mut existing = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .unwrap();
+    std::io::Write::write_all(&mut existing, b"original report").unwrap();
+    drop(existing);
+    let result = write_crash_report(&dir, name.as_ref(), "replacement report");
+    let contents = std::fs::read(&path).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    let new_result = write_crash_report(&dir, name.as_ref(), "new report");
+    let new_contents = std::fs::read(&path).ok();
+    if new_contents.is_some() {
+        std::fs::remove_file(path).unwrap();
+    }
+    assert_eq!(
+        result.unwrap_err().kind(),
+        std::io::ErrorKind::AlreadyExists
+    );
+    assert_eq!(contents, b"original report");
+    assert!(new_result.is_ok(), "{new_result:?}");
+    assert_eq!(new_contents.as_deref(), Some(&b"new report"[..]));
+}
+
 fn run_in_placement_test_process(test_name: &str) -> bool {
     const CHILD_ENV: &str = "LEOPARDWM_TEST_PLACEMENT_CHILD";
     if std::env::var(CHILD_ENV).as_deref() == Ok(test_name) {

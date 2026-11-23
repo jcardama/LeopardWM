@@ -21,8 +21,8 @@ use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVAT
 use windows::Win32::Storage::FileSystem::{
     GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_ACCESS_RIGHTS, FILE_APPEND_DATA,
     FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT,
-    FILE_FLAG_BACKUP_SEMANTICS, FILE_READ_ATTRIBUTES, FILE_RENAME_INFO, FILE_SHARE_DELETE,
-    FILE_SHARE_MODE, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_WRITE_DATA,
+    FILE_FLAG_BACKUP_SEMANTICS, FILE_READ_ATTRIBUTES, FILE_READ_DATA, FILE_RENAME_INFO,
+    FILE_SHARE_DELETE, FILE_SHARE_MODE, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_WRITE_DATA,
 };
 use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 use windows::Win32::System::IO::IO_STATUS_BLOCK;
@@ -203,8 +203,11 @@ impl AnchoredDir {
         let mut path = root.to_path_buf();
         for component in components {
             path.push(component);
+            let parent = handles
+                .last()
+                .ok_or_else(|| io::Error::other("missing anchored directory handle"))?;
             let file = open_relative(
-                handles.last().unwrap(),
+                parent,
                 component,
                 &path,
                 0,
@@ -250,8 +253,12 @@ impl AnchoredDir {
         disposition: NTCREATEFILE_CREATE_DISPOSITION,
     ) -> io::Result<File> {
         let path = self.path.join(name);
+        let parent = self
+            .handles
+            .last()
+            .ok_or_else(|| io::Error::other("missing anchored directory handle"))?;
         let file = open_relative(
-            self.handles.last().unwrap(),
+            parent,
             name,
             &path,
             access,
@@ -261,6 +268,15 @@ impl AnchoredDir {
         )?;
         verify(&file, &path, false, self.policy)?;
         Ok(file)
+    }
+
+    pub fn open_read(&self, name: &OsStr) -> io::Result<File> {
+        self.file(
+            name,
+            FILE_READ_DATA.0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            FILE_OPEN,
+        )
     }
 
     pub fn open_append(&self, name: &OsStr) -> io::Result<File> {
