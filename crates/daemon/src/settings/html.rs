@@ -1622,6 +1622,12 @@ function applyLocale(strings, language) {
       el.setAttribute(attribute, t(el.getAttribute('data-i18n-' + attribute)));
     });
   });
+  var windows = document.getElementById('report-windows');
+  if (windows) {
+    var version = window._windowsVersion || '';
+    windows.textContent = version === 'Unknown' ? t('settings.report.unknown') :
+      version.replace(/, Build ([^)]*)\)$/, function(_, build) { return ', ' + t('settings.report.build', {build: build}) + ')'; });
+  }
 }
 function languageOptionsMarkup(languages) {
   return languages.map(function(language) {
@@ -1947,7 +1953,9 @@ function setCb(id, value, showUnknown) {
 function hexToInput(hex) { return '#' + (hex || '000000').toLowerCase(); }
 function inputToHex(v) { return v.replace('#', '').toUpperCase(); }
 
+var configSnapshot = window._initConfig || {};
 function applyTrayConfig(cfg) {
+  configSnapshot = cfg;
   setCb('cb-layout-centering_mode', cfg.layout.centering_mode);
   setCb('cb-layout-center_columns', cfg.layout.center_columns || 'off');
   setChecked('appearance-active_border', cfg.appearance.active_border);
@@ -1962,6 +1970,7 @@ function applyTrayConfig(cfg) {
 /* ── Init ────────────────────────────────────────────────────────────── */
 var glazewmCompatPort = 6123;
 function init(cfg) {
+  configSnapshot = cfg;
   glazewmCompatPort = cfg.glazewm_compat ? cfg.glazewm_compat.port : 6123;
   setChecked('glazewm_compat-enabled', cfg.glazewm_compat && cfg.glazewm_compat.enabled);
   setVal('layout-gap', cfg.layout.gap);
@@ -1971,6 +1980,7 @@ function init(cfg) {
   setVal('layout-outer_gap_bottom', cfg.layout.outer_gap_bottom);
   var rowsSplit = (cfg.layout.rows && cfg.layout.rows.split) ? cfg.layout.rows.split.join(', ') : '100%';
   setVal('layout-rows-split', rowsSplit);
+  readRowSplit(document.getElementById('layout-rows-split'), ['100%']);
   setVal('layout-rows-gap', (cfg.layout.rows && cfg.layout.rows.gap != null) ? cfg.layout.rows.gap : 8);
   var wsRowsBody = document.getElementById('workspace-rows-body');
   if (wsRowsBody) {
@@ -2772,8 +2782,12 @@ function addWorkspaceRow(item) {
     '<td><button class="row-delete" type="button" onclick="removeWorkspaceRow(this)">' + deleteIcon + '</button></td>';
   tbody.appendChild(tr);
   wrapAllInputs(tr);
+  readRowSplit(tr.querySelector('.ws-row-split'), ['50%', '50%']);
   tr.querySelectorAll('input').forEach(function(input) {
-    input.addEventListener('input', function() { autoSave(500); });
+    input.addEventListener('input', function() {
+      if (input.classList.contains('ws-row-split')) readRowSplit(input, ['50%', '50%']);
+      autoSave(500);
+    });
   });
 }
 
@@ -2781,6 +2795,18 @@ function removeWorkspaceRow(button) {
   var tr = button.closest('tr');
   if (tr) tr.remove();
   autoSave(0);
+}
+
+function readRowSplit(input, fallback) {
+  var parts = input.value.split(',').map(function(s) { return s.trim(); });
+  var number = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i;
+  var valid = parts.every(function(part) {
+    var terms = part.replace(/%+$/, '').trim().split('/').map(function(s) { return s.trim(); });
+    if (terms.length > 2 || !terms.every(function(s) { return number.test(s) && Number(s) > 0; })) return false;
+    return Number.isFinite(terms.length === 2 ? Number(terms[0]) / Number(terms[1]) : Number(terms[0]));
+  });
+  if (valid) input._lastValidSplit = parts.slice();
+  return (input._lastValidSplit || fallback).slice();
 }
 
 function readWorkspaceRows() {
@@ -2792,9 +2818,7 @@ function readWorkspaceRows() {
     if (!wsInput || !splitInput) return;
     var wsList = parseWorkspaceInput(wsInput.value);
     if (wsList.length > 0) {
-      var splitParts = (splitInput.value.trim() || '50%, 50%').split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
-      if (splitParts.length === 0) splitParts = ['100%'];
-      rows.push({ workspaces: wsList, split: splitParts });
+      rows.push({ workspaces: wsList, split: readRowSplit(splitInput, ['50%', '50%']) });
     }
   });
   return rows;
@@ -2809,7 +2833,7 @@ function readConfig() {
     widthPresets = lastValidWidthPresets.slice();
     defaultWidthPreset = lastValidDefaultWidthPreset;
   }
-  return {
+  var controlled = {
     layout: {
       gap: num('layout-gap'),
       outer_gap_left: num('layout-outer_gap_left'),
@@ -2826,7 +2850,7 @@ function readConfig() {
       center_past_edges: checked('layout-center_past_edges'),
       rows: {
         workspaces: readWorkspaceRows(),
-        split: (val('layout-rows-split') || '100%').split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; }),
+        split: readRowSplit(document.getElementById('layout-rows-split'), ['100%']),
         gap: num('layout-rows-gap')
       }
     },
@@ -2908,6 +2932,15 @@ function readConfig() {
       port: glazewmCompatPort
     }
   };
+  var result = JSON.parse(JSON.stringify(configSnapshot));
+  delete result.high_contrast;
+  delete result.auto_start;
+  Object.keys(controlled).forEach(function(key) {
+    if (key === 'hotkeys' || key === 'window_rules') result[key] = controlled[key];
+    else result[key] = Object.assign({}, result[key], controlled[key]);
+  });
+  result.layout.rows = Object.assign({}, (configSnapshot.layout || {}).rows, controlled.layout.rows);
+  return result;
 }
 
 function readWorkspaceNames() {
@@ -3064,7 +3097,6 @@ function showInfoBar(bar, severity, text) {
     fields[name].addEventListener('change', onChange);
   });
   document.getElementById('report-version').textContent = window._version || '';
-  document.getElementById('report-windows').textContent = window._windowsVersion || '';
   document.getElementById('report-clear').addEventListener('click', function() {
     names.forEach(function(name) { setField(name, name === 'regression' ? 'Not sure' : ''); });
     document.getElementById('report-status-bar').hidden = true;
@@ -3116,7 +3148,10 @@ document.querySelectorAll('input[type="checkbox"], input[type="color"], input[ty
 /* Debounced: text and number inputs */
 document.querySelectorAll('input[type="text"], input[type="number"]').forEach(function(el) {
   if (el.hasAttribute('data-no-config')) return;
-  el.addEventListener('input', function() { autoSave(500); });
+  el.addEventListener('input', function() {
+    if (el.id === 'layout-rows-split') readRowSplit(el, ['100%']);
+    autoSave(500);
+  });
 });
 /* Troubleshooting */
 (function() {
@@ -3518,25 +3553,31 @@ function section(start, end) {
   return html.slice(a, b);
 }
 const elements = {};
+const workspaceSplit = { value: '50%, 50%' };
+const workspaceInput = { value: '1' };
+const workspaceRow = { querySelector(selector) { return selector === '.ws-row-split' ? workspaceSplit : workspaceInput; } };
 global.document = { getElementById(id) {
   return elements[id] ||= { value: '', checked: false, dataset: {},
     querySelectorAll() { return []; }, querySelector() { return { textContent: '' }; } };
-} };
+}, querySelectorAll(selector) { return selector === '#workspace-rows-body tr' ? [workspaceRow] : []; } };
+global.window = { _initConfig: { behavior: { check_for_updates: true } } };
 global.autoSave = () => { throw Error('tray push must not save'); };
 eval(section('function val(id)', 'var selectedWidthPresetRow'));
 eval(section('function checked(id)', 'function hexToInput(hex)'));
 eval(section('function hexToInput(hex)', 'function applyTrayConfig('));
 eval(section('function applyTrayConfig(', '/* ── Init'));
+eval(section('function parseWorkspaceInput(', 'function escAttr('));
 eval(section('function readConfig()', 'function readWorkspaceNames()'));
 global.readPresets = () => [0.5];
 global.lastValidDefaultWidthPreset = 1;
 global.lastValidWidthPresets = [0.5];
-global.readWorkspaceRows = global.readRules = global.readWorkspaceNames = global.readDisabledHotkeys = () => [];
+global.readRules = global.readWorkspaceNames = global.readDisabledHotkeys = () => [];
 global.readHotkeys = () => ({});
 global.readScrollModifier = () => 'none';
 global.gestureCaptureSecs = 0;
 global.glazewmCompatPort = 6123;
 document.getElementById('layout-gap').value = '37';
+document.getElementById('layout-rows-split').value = '25%, 75%';
 document.getElementById('cb-layout-centering_mode').dataset.value = 'center';
 document.getElementById('cb-layout-center_columns').dataset.value = 'off';
 document.getElementById('behavior-focus_new_windows').checked = true;
@@ -3547,7 +3588,25 @@ const cfg = { layout: { centering_mode: 'on_overflow', center_columns: 'fit' },
   appearance: { active_border: true }, behavior: { focus_new_windows: false,
   focus_follows_mouse: true, keep_awake: true, focus_lock_modifier: 'F13', taskbar_buttons: 'show_all', new_window_placement: 'in_column' } };
 eval(payload.script);
-const saved = readConfig();
+payload.config.behavior.uncontrolled = { value: 42 };
+payload.config.high_contrast = true;
+payload.config.auto_start = true;
+applyTrayConfig(payload.config);
+let saved = readConfig();
+assert.strictEqual(saved.behavior.check_for_updates, false, 'tray-pushed update opt-out');
+assert.deepStrictEqual(saved.behavior.uncontrolled, { value: 42 });
+assert(!('high_contrast' in saved) && !('auto_start' in saved));
+assert.deepStrictEqual(Object.keys(saved.hotkeys).sort(), ['disabled', 'scroll_modifier']);
+workspaceSplit.value = '1/';
+document.getElementById('layout-rows-split').value = '1/';
+saved = readConfig();
+assert.deepStrictEqual(saved.layout.rows.workspaces[0].split, ['50%', '50%'], 'workspace incomplete split');
+assert.deepStrictEqual(saved.layout.rows.split, ['25%', '75%'], 'global incomplete split');
+workspaceSplit.value = '';
+document.getElementById('layout-rows-split').value = '';
+saved = readConfig();
+assert.deepStrictEqual(saved.layout.rows.workspaces[0].split, ['50%', '50%'], 'empty workspace edit');
+assert.deepStrictEqual(saved.layout.rows.split, ['25%', '75%'], 'empty global edit');
 assert.strictEqual(saved.layout.gap, 37);
 for (const [section, keys] of Object.entries({layout: ['centering_mode', 'center_columns'],
   appearance: ['active_border'], behavior: ['focus_new_windows', 'focus_follows_mouse', 'keep_awake', 'focus_lock_modifier', 'taskbar_buttons', 'new_window_placement']})) {
@@ -3566,6 +3625,7 @@ for (const [section, keys] of Object.entries({layout: ['centering_mode', 'center
         config.layout.center_columns.center_columns = crate::config::CenterColumnsConfig::Fit;
         config.appearance.active_border = true;
         config.behavior.focus_new_windows = false;
+        config.behavior.check_for_updates = false;
         config.behavior.focus_follows_mouse = true;
         config.behavior.keep_awake = true;
         config.behavior.focus_lock_modifier = "F13".to_string();
@@ -3574,6 +3634,7 @@ for (const [section, keys] of Object.entries({layout: ['centering_mode', 'center
         let payload = serde_json::json!({
             "html": SETTINGS_HTML,
             "script": super::tray_config_script(&config).unwrap(),
+            "config": config,
         });
         child
             .stdin
@@ -3755,7 +3816,6 @@ for (const [section, keys] of Object.entries({layout: ['centering_mode', 'center
         assert!(SETTINGS_HTML.contains("setVal('layout-rows-split', rowsSplit);"));
         assert!(SETTINGS_HTML.contains("setVal('layout-rows-gap',"));
         assert!(SETTINGS_HTML.contains("rows: {"));
-        assert!(SETTINGS_HTML.contains("split: (val('layout-rows-split')"));
         assert!(SETTINGS_HTML.contains("gap: num('layout-rows-gap')"));
 
         assert!(SETTINGS_HTML.contains("id=\"workspace-rows-body\""));

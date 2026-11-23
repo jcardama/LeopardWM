@@ -668,7 +668,7 @@ A user rule matching the same window overrides the built-in rule.
 
 ### Fixed-size caption windows
 
-Windows with a title bar but no resize frame or maximize button open floating at their own size and position by default. Set `[behavior] fixed_size_windows = "tile"` to tile them instead, or use `"float"` for the default. Any matching window rule overrides this setting; an `action = "tile"` rule keeps a particular window tiled. A rule without an `action`, for example one specifying only `open_on_workspace` or `column_width`, also tiles the window. Dialog-like windows without minimize or maximize buttons remain unmanaged unless a rule matches.
+Windows with a title bar and minimize button but no resize frame or maximize button open floating at their own size and position by default. Set `[behavior] fixed_size_windows = "tile"` to tile them instead, or use `"float"` for the default. Any matching window rule overrides this setting; an `action = "tile"` rule keeps a particular window tiled. A rule without an `action`, for example one specifying only `open_on_workspace` or `column_width`, also tiles the window. Dialog-like windows without minimize or maximize buttons remain unmanaged unless a rule matches.
 
 ## Floating Window Rule Position
 

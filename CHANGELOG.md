@@ -36,7 +36,7 @@ All notable changes to LeopardWM will be documented in this file.
 
 - **Collect a redacted diagnostic snapshot for bug reports.** Run `lwm collect-logs` to write a text file with configuration, health, layout structure and recent logs. Private log values are quoted for redaction, and older, unmarked log entries are omitted.
 - **Unknown configuration keys are now reported.** Check the daemon log or run `lwm doctor` to find misspelled or unrecognized settings.
-- **Fixed-size windows with a title bar now open floating.** Windows without a resize frame or maximize button keep their own size and position; set `[behavior] fixed_size_windows = "tile"` to tile them by default, or use a per-app `action = "tile"` rule to keep one tiled.
+- **Fixed-size windows with a title bar and minimize button now open floating.** Windows without a resize frame or maximize button keep their own size and position; set `[behavior] fixed_size_windows = "tile"` to tile them by default, or use a per-app `action = "tile"` rule to keep one tiled.
 - **Settings groups hotkeys by category.** Monitor and LeopardWM start collapsed. Thanks to @gczark for the suggestion. (#182)
 - **Workspace snapshots now report rows.** When a workspace uses more than one row, `lwm query workspaces` and `workspace_state` subscribers see its row count and each tiled window's row, so bars can group windows by row. Thanks to @azumafuji for the original proposal. (#150)
 - **The CLI now has a complete command reference and a refreshed bar integration guide.**
@@ -45,6 +45,9 @@ All notable changes to LeopardWM will be documented in this file.
 
 - **Administrator diagnostics no longer write through redirected folders or files.** Logs, diagnostic snapshots, and recordings refuse unsafe paths instead.
 - **Winget release manifests now check that both installer architectures and download links match the release.**
+- **Settings preserves the update-check opt-out when saving.**
+- **Incomplete row splits no longer change the layout while editing.**
+- **Report an Issue now localizes Windows build labels.**
 - **Report an Issue now limits the GitHub title to 256 characters.** If shortened, the full draft is copied to the clipboard when available.
 - **Tray quick toggles now refresh Settings health after saving.**
 - **The GlazeWM compatibility endpoint retries an unchanged configuration after a port conflict clears.**

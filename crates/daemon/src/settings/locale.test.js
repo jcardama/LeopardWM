@@ -101,6 +101,18 @@ context.refreshLocale(english, 'en');
 assert.equal(text.textContent, 'Settings');
 assert.equal(languageText.textContent, 'English');
 assert.equal(draft.value, 'unfinished preset');
+const windowsVersion = { textContent: 'Windows 11 (24H2, Build 26100)' };
+const previousGetElement = document.getElementById;
+document.getElementById = id => id === 'report-windows' ? windowsVersion : previousGetElement(id);
+context.window._windowsVersion = 'Windows 11 (24H2, Build 26100)';
+context.refreshLocale(chinese, 'zh-CN');
+assert.equal(windowsVersion.textContent, 'Windows 11 (24H2, 内部版本 26100)');
+context.window._windowsVersion = 'Unknown';
+context.refreshLocale(english, 'en');
+assert.equal(windowsVersion.textContent, 'Unknown');
+context.refreshLocale(chinese, 'zh-CN');
+assert.equal(windowsVersion.textContent, '未知');
+document.getElementById = previousGetElement;
 const warnings = Object.fromEntries(['hotkey-warn-bar', 'hotkey-warn-title', 'hotkey-warn-msg']
   .map(id => [id, {}]));
 document.getElementById = id => warnings[id];

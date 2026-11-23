@@ -160,7 +160,7 @@ See the [bar guide](yasb.md#any-bar) and [event schemas](../agent_docs/ipc-event
 | `lwm emergency-uncloak` | Perform local emergency visibility restoration without daemon IPC. Alias: `lwm restore-windows`. |
 | `lwm doctor` | Run diagnostic checks. |
 | `lwm doctor windows` | Inspect top-level window admission. Optional `--watch <SECONDS>` and `--delay <SECONDS>` each accept 1–120; watch samples every 100 ms. `--include-titles` includes otherwise redacted titles; `--all` includes windows normally filtered out. |
-| `lwm collect-logs` | Collect diagnostic logs for a bug report. |
+| `lwm collect-logs` | Write a redacted diagnostic snapshot text file and print its path. If the daemon is unavailable or does not support snapshots, collect the available local data instead. |
 
 ## Configuration and autostart
 
