@@ -2549,6 +2549,33 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "park mode currently parks a focused fitting column centered across a neighboring monitor"]
+    fn park_mode_keeps_focused_column_visible_with_uneven_outer_gaps() {
+        let mut config = crate::config::Config::default();
+        config.layout.offscreen_mode = OffscreenMode::Park;
+        config.layout.gap = 0;
+        config.layout.outer_gap_left = 0;
+        config.layout.outer_gap_right = 100;
+        config.layout.outer_gap_top = 0;
+        config.layout.outer_gap_bottom = 0;
+        let owner = monitor(1, 0, 0, 1000, 1000);
+        let neighbor = monitor(2, -1000, 0, 1000, 1000);
+        let mut state = AppState::new_with_config(config, vec![owner.clone(), neighbor]);
+        state.injected_window_maximized.insert(0, false);
+        let workspace = &mut state.workspaces.get_mut(&1).unwrap()[0];
+        workspace.insert_window(0, Some(950)).unwrap();
+        workspace.ensure_focused_visible(1000);
+        let logical = workspace.compute_placements_animated(owner.work_area);
+        let physical = state.apply_physical_projection(logical);
+        assert_eq!(physical[0].visibility, Visibility::Visible);
+        assert!(physical[0].rect.x >= owner.rect.x);
+        assert!(
+            edge_end(physical[0].rect.x, physical[0].rect.width)
+                <= edge_end(owner.rect.x, owner.rect.width)
+        );
+    }
+
+    #[test]
     fn park_mode_groups_only_members_of_the_same_row_column() {
         let mut config = crate::config::Config::default();
         config.layout.offscreen_mode = OffscreenMode::Park;
