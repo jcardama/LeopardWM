@@ -6037,6 +6037,35 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "small tabbed rows reserve the entire row height for the tab strip"]
+    fn test_small_tabbed_row_keeps_active_window_visible() {
+        let mut ws = Workspace::with_gaps(0, 0);
+        ws.set_row_gap(10);
+        ws.set_row_layout(&[0.95, 0.05]);
+        ws.set_tab_strip_reserve_px(38);
+
+        ws.insert_window(1, Some(400)).unwrap();
+        ws.insert_window_in_column(2, 0).unwrap();
+        ws.toggle_focused_column_tabbed_mode();
+        ws.set_active_tab(0, 0).unwrap();
+
+        ws.focus_row(1);
+        ws.insert_window(3, Some(400)).unwrap();
+        ws.insert_window_in_column(4, 0).unwrap();
+        ws.toggle_focused_column_tabbed_mode();
+        ws.set_active_tab(0, 0).unwrap();
+
+        let placements = ws.compute_placements(Rect::new(0, 0, 1280, 720));
+        let normal = placements.iter().find(|p| p.window_id == 1).unwrap();
+        assert_eq!(normal.visibility, Visibility::Visible);
+        assert_eq!(normal.rect, Rect::new(0, 38, 400, 637));
+
+        let active = placements.iter().find(|p| p.window_id == 3).unwrap();
+        assert_eq!(active.visibility, Visibility::Visible);
+        assert!(active.rect.height > 0, "active tab has no usable height");
+    }
+
+    #[test]
     fn test_multi_row_independent_scrolling() {
         let mut ws = Workspace::with_gaps(10, 10);
         ws.set_row_layout(&[1.0, 1.0]);
