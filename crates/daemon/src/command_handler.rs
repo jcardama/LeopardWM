@@ -3365,6 +3365,37 @@ mod floating_policy_tests {
         assert_eq!(strip_snapshot(&state), before);
     }
 
+    #[test]
+    fn a_moved_sticky_floating_window_stays_above_fullscreen_where_it_lands() {
+        for cmd in [
+            IpcCommand::MoveToWorkspace { index: 3 },
+            IpcCommand::MoveWindowToMonitorRight,
+        ] {
+            let mut state = floating_focus_state_on(vec![monitor(1, 0), monitor(2, 1920)]);
+            assert_eq!(
+                state.handle_command(IpcCommand::ToggleSticky),
+                IpcResponse::Ok
+            );
+            assert_eq!(state.handle_command(cmd.clone()), IpcResponse::Ok);
+            let (mon, idx) = state.find_window_workspace(FLOATING).unwrap();
+            let ws = &mut state.workspaces.get_mut(&mon).unwrap()[idx];
+            ws.insert_window(500, None).unwrap();
+            ws.focus_window(500).unwrap();
+            ws.toggle_fullscreen();
+            assert_eq!(ws.fullscreen_window_id(), Some(500), "{cmd:?}");
+            let placement = state
+                .workspace_placements(mon, idx)
+                .into_iter()
+                .find(|p| p.window_id == FLOATING)
+                .unwrap();
+            assert_eq!(
+                placement.visibility,
+                leopardwm_core_layout::Visibility::Visible,
+                "{cmd:?}"
+            );
+        }
+    }
+
     fn floating_rect(state: &AppState) -> Rect {
         state
             .focused_workspace()

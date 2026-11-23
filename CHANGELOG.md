@@ -59,6 +59,7 @@ All notable changes to LeopardWM will be documented in this file.
 - **Resizing a maximized column with the mouse now unmaximizes it at the snapped preset width.** The next maximize toggle maximizes it again.
 - **Chromium-based apps such as Edge, Chrome, and Beeper no longer lose their window frame when LeopardWM changes their style while they are off-screen.** This can happen during pause, resume, configuration reload, or quit.
 - **Following a window to another workspace now keeps it visible and focused even when the destination has a fullscreen window or a shown scratchpad.**
+- **A sticky floating window moved to another workspace or monitor now stays above a fullscreen window there.** Previously it could hide behind fullscreen until the next workspace switch.
 - **Maximized columns remain restorable when their first window closes or moves out.** The next window carries the maximize state, and a window expelled from a maximized column gets the column's pre-maximize width. Contributed by @azumafuji. (#150)
 - **A dragged window returns to its original place in a stacked column when its drop is cancelled or has no target.** This also applies when switching workspaces during the drag.
 - **Shortcuts recorded in Settings with punctuation keys now fire on the key you pressed on non-US layouts such as Dvorak.** Settings saves the key Windows reports, so the shortcut matches it on any keyboard layout.

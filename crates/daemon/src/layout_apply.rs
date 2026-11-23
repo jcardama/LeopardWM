@@ -571,6 +571,7 @@ impl AppState {
 
     pub(crate) fn apply_layout(&mut self) -> Result<LayoutApplyOutcome> {
         self.reap_finished_pending_apply_workers_with_recovery();
+        self.repin_sticky_floating_windows();
 
         if self.paused {
             return Ok(LayoutApplyOutcome::Completed);

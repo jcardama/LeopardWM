@@ -56,6 +56,20 @@ impl AppState {
         info!("Sticky: pinned window {}", wid);
     }
 
+    /// `Workspace::add_floating` starts unpinned, so a sticky floating window
+    /// re-added by a move, drag, monitor change or float toggle needs its pin
+    /// restored to stay above fullscreen.
+    pub(crate) fn repin_sticky_floating_windows(&mut self) {
+        if self.sticky_windows.is_empty() {
+            return;
+        }
+        for ws in self.workspaces.values_mut().flatten() {
+            for &wid in &self.sticky_windows {
+                ws.set_floating_pinned(wid, true);
+            }
+        }
+    }
+
     /// Rehome sticky windows on the focused monitor after switching its active
     /// workspace and before applying layout. Other monitors stay untouched.
     pub(crate) fn rehome_sticky_windows(&mut self) {
