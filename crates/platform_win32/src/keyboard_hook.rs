@@ -206,15 +206,18 @@ fn is_recording_control(vk: u32, modifiers: Modifiers) -> bool {
     modifiers == Modifiers::default() && matches!(vk, VK_ESCAPE | VK_TAB | VK_BACK | VK_DELETE)
 }
 
-fn focus_lock_mask(vk: u32, held: bool, ctrl_held: bool) -> Option<u16> {
+/// Mask an Alt or Win focus lock with the same rules as a swallowed hotkey, so the
+/// injected key never completes another chord the user is holding.
+fn focus_lock_mask(vk: u32, held: bool, mut live: Modifiers) -> Option<u16> {
     if !held {
         return None;
     }
     match vk as i32 {
-        VK_MENU => Some(VK_MENU_MASK),
-        VK_LWIN if !ctrl_held => Some(VK_CONTROL as u16),
-        _ => None,
+        VK_MENU => live.alt = true,
+        VK_LWIN => live.win = true,
+        _ => return None,
     }
+    menu_mask(live)
 }
 
 pub(crate) fn mask_focus_lock(vk: u32) {
@@ -222,8 +225,15 @@ pub(crate) fn mask_focus_lock(vk: u32) {
         return;
     }
     let held = focus_lock_held(vk);
-    let ctrl_held = unsafe { GetAsyncKeyState(VK_CONTROL) < 0 };
-    if let Some(mask) = focus_lock_mask(vk, held, ctrl_held) {
+    let down = |key: i32| unsafe { GetAsyncKeyState(key) < 0 };
+    let live = Modifiers {
+        ctrl: down(VK_CONTROL),
+        alt: down(VK_MENU),
+        shift: down(VK_SHIFT),
+        win: down(VK_LWIN) || down(VK_RWIN),
+        fn_mods: 0,
+    };
+    if let Some(mask) = focus_lock_mask(vk, held, live) {
         unsafe { send_menu_mask(mask) };
     }
 }
@@ -1205,20 +1215,37 @@ mod tests {
 
     #[test]
     fn focus_lock_mask_respects_held_keys() {
-        for (vk, held, ctrl, expected) in [
-            (VK_MENU as u32, true, false, Some(VK_MENU_MASK)),
-            (VK_MENU as u32, false, false, None),
-            (VK_LWIN as u32, true, false, Some(VK_CONTROL as u16)),
-            (VK_LWIN as u32, true, true, None),
-            (VK_LWIN as u32, false, false, None),
-            (VK_CONTROL as u32, true, false, None),
-            (VK_SHIFT as u32, true, false, None),
-            (0x7c, true, false, None),
+        let mods = |ctrl, alt, shift, win| Modifiers {
+            ctrl,
+            alt,
+            shift,
+            win,
+            fn_mods: 0,
+        };
+        let none = mods(false, false, false, false);
+        for (vk, held, live, expected) in [
+            (VK_MENU as u32, true, none, Some(VK_MENU_MASK)),
+            (VK_MENU as u32, false, none, None),
+            (VK_MENU as u32, true, mods(true, false, false, false), None),
+            (VK_LWIN as u32, true, none, Some(VK_CONTROL as u16)),
+            (VK_LWIN as u32, true, mods(true, false, false, false), None),
+            // A Ctrl tap would complete Ctrl+Shift or Ctrl+Alt+Shift+Win chords.
+            (VK_LWIN as u32, true, mods(false, false, true, false), None),
+            (
+                VK_LWIN as u32,
+                true,
+                mods(false, true, true, false),
+                Some(VK_MENU_MASK),
+            ),
+            (VK_LWIN as u32, false, none, None),
+            (VK_CONTROL as u32, true, none, None),
+            (VK_SHIFT as u32, true, none, None),
+            (0x7c, true, none, None),
         ] {
             assert_eq!(
-                focus_lock_mask(vk, held, ctrl),
+                focus_lock_mask(vk, held, live),
                 expected,
-                "vk={vk:#x} held={held} ctrl={ctrl}"
+                "vk={vk:#x} held={held} live={live:?}"
             );
         }
     }

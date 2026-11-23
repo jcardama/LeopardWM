@@ -16,7 +16,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW, PostMessageW,
     PostThreadMessageW, RegisterClassW, UnregisterClassW, MSG, WM_USER, WM_WTSSESSION_CHANGE,
     WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP, WTS_CONSOLE_CONNECT,
-    WTS_SESSION_UNLOCK,
+    WTS_REMOTE_CONNECT, WTS_SESSION_UNLOCK,
 };
 
 /// Window message asking whether an interactive session may end.
@@ -544,7 +544,8 @@ fn sysevent_window_proc_inner(
         }
         WM_WTSSESSION_CHANGE
             if wparam.0 == WTS_SESSION_UNLOCK as usize
-                || wparam.0 == WTS_CONSOLE_CONNECT as usize =>
+                || wparam.0 == WTS_CONSOLE_CONNECT as usize
+                || wparam.0 == WTS_REMOTE_CONNECT as usize =>
         {
             crate::keyboard_hook::reset_focus_lock_state();
             windows::Win32::Foundation::LRESULT(0)
@@ -910,6 +911,7 @@ mod tests {
         for (message, kind) in [
             (WM_WTSSESSION_CHANGE, WTS_SESSION_UNLOCK as usize),
             (WM_WTSSESSION_CHANGE, WTS_CONSOLE_CONNECT as usize),
+            (WM_WTSSESSION_CHANGE, WTS_REMOTE_CONNECT as usize),
             (WM_POWERBROADCAST, PBT_APMRESUMEAUTOMATIC),
             (WM_POWERBROADCAST, PBT_APMRESUMESUSPEND),
         ] {
