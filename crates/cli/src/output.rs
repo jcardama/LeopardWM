@@ -80,7 +80,9 @@ pub(crate) fn print_response(response: &IpcResponse) {
             if *is_floating {
                 println!("  Floating: yes");
             } else {
-                println!("  Row index: {}", row_index + 1);
+                if let Some(row_index) = row_index {
+                    println!("  Row index: {}", row_index + 1);
+                }
                 println!("  Column index: {}", column_index);
                 println!("  Window index: {}", window_index);
             }
@@ -91,9 +93,13 @@ pub(crate) fn print_response(response: &IpcResponse) {
                 let location = if win.is_floating {
                     "floating".to_string()
                 } else {
+                    let row = win
+                        .row_index
+                        .map(|r| format!("row {} ", r + 1))
+                        .unwrap_or_default();
                     format!(
-                        "row {} col {} win {}",
-                        win.row_index.map(|r| r + 1).unwrap_or(1),
+                        "{}col {} win {}",
+                        row,
                         win.column_index.unwrap_or(0),
                         win.window_index.unwrap_or(0)
                     )
@@ -118,9 +124,13 @@ pub(crate) fn print_response(response: &IpcResponse) {
                 if win.is_floating {
                     println!("  Layout: floating");
                 } else {
+                    let row = win
+                        .row_index
+                        .map(|r| format!("row {}, ", r + 1))
+                        .unwrap_or_default();
                     println!(
-                        "  Layout: tiled (row {}, col {}, win {})",
-                        win.row_index.map(|r| r + 1).unwrap_or(1),
+                        "  Layout: tiled ({}col {}, win {})",
+                        row,
                         win.column_index.unwrap_or(0),
                         win.window_index.unwrap_or(0)
                     );

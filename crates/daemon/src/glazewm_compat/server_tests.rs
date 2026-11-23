@@ -71,7 +71,7 @@ async fn loopback_same_user_origin_and_frame_limit() {
 }
 
 #[tokio::test]
-async fn enable_disable_rebind_and_collision_do_not_retry() {
+async fn enable_disable_rebind_and_retry_collision() {
     let first = bind(0).unwrap();
     let first_addr = first.local_addr().unwrap();
     let second = bind(0).unwrap();
@@ -104,8 +104,8 @@ async fn enable_disable_rebind_and_collision_do_not_retry() {
     assert!(server.task.is_none());
     drop(occupied);
     server.configure(&config, events).await;
-    assert!(server.task.is_none());
-    assert!(TcpStream::connect(first_addr).await.is_err());
+    assert!(server.task.is_some());
+    assert!(TcpStream::connect(first_addr).await.is_ok());
 }
 
 #[tokio::test]

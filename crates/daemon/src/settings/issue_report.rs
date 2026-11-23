@@ -54,9 +54,19 @@ pub fn issue_url(report: &IssueReport, version: &str, windows_version: &str) -> 
         ("windows-version", windows_version.to_owned()),
         ("regression", report.regression.clone()),
     ];
+    let title_truncated = fields[0].1.chars().count() > 256;
+    if title_truncated {
+        fields[0].1 = fields[0]
+            .1
+            .chars()
+            .take(255)
+            .chain(std::iter::once('…'))
+            .collect();
+    }
     let mut url = build_url(&fields);
-    let truncated = url.len() > URL_LIMIT;
-    if truncated && encode(&fields[0].1).len() > TITLE_ENCODED_LIMIT {
+    let url_truncated = url.len() > URL_LIMIT;
+    let truncated = title_truncated || url_truncated;
+    if url_truncated && encode(&fields[0].1).len() > TITLE_ENCODED_LIMIT {
         let mut title = String::new();
         let mut encoded_len = encode("…").len();
         for ch in fields[0].1.chars() {
@@ -184,6 +194,26 @@ mod tests {
             assert!(!lower.contains(forbidden));
         }
         assert!(full_text(&report, "0.4.0", "Windows 11").contains(&report.actual));
+    }
+
+    #[test]
+    fn title_limit_triggers_full_draft_even_when_url_fits() {
+        for text in ["x", "é"] {
+            let report = IssueReport {
+                title: text.repeat(257),
+                ..IssueReport::default()
+            };
+            let (url, truncated) = issue_url(&report, "0.4.0", "Windows 11");
+            let title = url
+                .split('&')
+                .find_map(|part| part.strip_prefix("title="))
+                .map(decode)
+                .unwrap();
+            assert!(truncated);
+            assert_eq!(title.chars().count(), 256);
+            assert!(title.ends_with('…'));
+            assert!(full_text(&report, "0.4.0", "Windows 11").contains(&report.title));
+        }
     }
 
     #[test]

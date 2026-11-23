@@ -45,6 +45,10 @@ All notable changes to LeopardWM will be documented in this file.
 
 - **Administrator diagnostics no longer write through redirected folders or files.** Logs, diagnostic snapshots, and recordings refuse unsafe paths instead.
 - **Winget release manifests now check that both installer architectures and download links match the release.**
+- **Report an Issue now limits the GitHub title to 256 characters.** If shortened, the full draft is copied to the clipboard when available.
+- **Tray quick toggles now refresh Settings health after saving.**
+- **The GlazeWM compatibility endpoint retries an unchanged configuration after a port conflict clears.**
+- **Single-row window queries no longer show a redundant row number.**
 - **Settings dropdowns now support keyboard navigation and screen readers.** Accent buttons and selected options are also easier to read in dark and high contrast modes.
 - **Invalid or outdated settings can now fall back to defaults without resetting the entire configuration.** When LeopardWM can identify the affected settings, it loads the rest and preserves the original as `config.toml.corrupt` before saving (or `config.toml.corrupt.1` if needed); saving is blocked if neither copy can be kept. Saving a single-link `config.toml` replaces the file, so custom ACLs, file attributes, and alternate data streams are not kept; hard-linked configs are written in place so the links stay.
 - **Settings no longer undoes quick-toggle changes made from the tray while Settings is open.**
@@ -66,7 +70,7 @@ All notable changes to LeopardWM will be documented in this file.
 - **Maximized columns remain restorable when their first window closes or moves out.** The next window carries the maximize state, and a window expelled from a maximized column gets the column's pre-maximize width. Contributed by @azumafuji. (#150)
 - **A dragged window returns to its original place in a stacked column when its drop is cancelled or has no target.** This also applies when switching workspaces during the drag.
 - **Shortcuts recorded in Settings with punctuation keys now fire on the key you pressed on non-US layouts such as Dvorak.** Settings saves the key Windows reports, so the shortcut matches it on any keyboard layout.
-- **Downgrade note.** Back up `config.toml` before installing a release older than 0.4.0; older releases cannot read some 0.4.0 values and may reset all settings.
+- **Downgrade note.** Back up `config.toml` before installing 0.3.5. It cannot read `workspace_edge_wrap = "clamp"` and may reset all settings; single-column centering also falls back to the 0.3.5 default because 0.4.0 no longer saves `center_single_column`.
 
 ## 0.3.5
 

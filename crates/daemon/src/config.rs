@@ -750,13 +750,23 @@ pub enum TaskbarButtons {
     ShowAll,
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkspaceEdgeWrap {
     #[default]
     Off,
     Wrap,
     Clamp,
+}
+
+impl Serialize for WorkspaceEdgeWrap {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Off => serializer.serialize_bool(false),
+            Self::Wrap => serializer.serialize_bool(true),
+            Self::Clamp => serializer.serialize_str("clamp"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2491,12 +2501,13 @@ impl ConfigFile {
                         self.rejections.last_mut().unwrap().recovered_fields = fields;
                         return Ok(config);
                     }
-                    let location = error.span().map(|span| {
-                        let prefix = &content[..span.start];
-                        (
-                            prefix.bytes().filter(|&byte| byte == b'\n').count() + 1,
-                            prefix.rsplit('\n').next().unwrap_or("").chars().count() + 1,
-                        )
+                    let location = error.span().and_then(|span| {
+                        content.get(..span.start).map(|prefix| {
+                            (
+                                prefix.bytes().filter(|&byte| byte == b'\n').count() + 1,
+                                prefix.rsplit('\n').next().unwrap_or("").chars().count() + 1,
+                            )
+                        })
                     });
                     let reason = format!("Failed to parse config file {}: {error}", path.display());
                     self.reject(path, reason.clone(), location, Some(bytes));
@@ -2757,21 +2768,30 @@ mod tests {
     #[test]
     fn workspace_edge_wrap_config_compatibility_and_validation() {
         for (input, expected, saved) in [
-            ("true", WorkspaceEdgeWrap::Wrap, "wrap"),
-            ("false", WorkspaceEdgeWrap::Off, "off"),
-            ("\"wrap\"", WorkspaceEdgeWrap::Wrap, "wrap"),
-            ("\"clamp\"", WorkspaceEdgeWrap::Clamp, "clamp"),
-            ("\"off\"", WorkspaceEdgeWrap::Off, "off"),
+            ("true", WorkspaceEdgeWrap::Wrap, toml::Value::Boolean(true)),
+            ("false", WorkspaceEdgeWrap::Off, toml::Value::Boolean(false)),
+            (
+                "\"wrap\"",
+                WorkspaceEdgeWrap::Wrap,
+                toml::Value::Boolean(true),
+            ),
+            (
+                "\"clamp\"",
+                WorkspaceEdgeWrap::Clamp,
+                toml::Value::String("clamp".into()),
+            ),
+            (
+                "\"off\"",
+                WorkspaceEdgeWrap::Off,
+                toml::Value::Boolean(false),
+            ),
         ] {
             let config: Config =
                 toml::from_str(&format!("[behavior]\nworkspace_edge_wrap = {input}")).unwrap();
             assert_eq!(config.behavior.workspace_edge_wrap, expected);
             let serialized = toml::to_string(&config).unwrap();
             let value: toml::Value = toml::from_str(&serialized).unwrap();
-            assert_eq!(
-                value["behavior"]["workspace_edge_wrap"].as_str(),
-                Some(saved)
-            );
+            assert_eq!(value["behavior"]["workspace_edge_wrap"], saved);
             let reloaded: Config = toml::from_str(&serialized).unwrap();
             assert_eq!(reloaded.behavior.workspace_edge_wrap, expected);
         }

@@ -2591,7 +2591,7 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
                 state.hide_border();
             }
             let _ = state.config.save();
-            settings::push_tray_config(&state.config);
+            sync_tray_after_quick_toggle(ctx.tray_manager, &mut state);
         }
         tray::TrayEvent::ToggleFocusNewWindows => {
             let mut state = ctx.state.lock().await;
@@ -2601,7 +2601,7 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
                 state.config.behavior.focus_new_windows
             );
             let _ = state.config.save();
-            settings::push_tray_config(&state.config);
+            sync_tray_after_quick_toggle(ctx.tray_manager, &mut state);
         }
         tray::TrayEvent::ToggleFocusFollowsMouse => {
             let enabled = {
@@ -2617,7 +2617,7 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
                     state.config.behavior.focus_follows_mouse
                 );
                 let _ = state.config.save();
-                settings::push_tray_config(&state.config);
+                sync_tray_after_quick_toggle(ctx.tray_manager, &mut state);
                 state.config.behavior.focus_follows_mouse
             };
             sync_mouse_hook(enabled, ctx.mouse_hook_handle, ctx.event_tx);

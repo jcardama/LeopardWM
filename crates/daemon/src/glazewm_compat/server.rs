@@ -40,7 +40,7 @@ impl Server {
         events: mpsc::Sender<DaemonEvent>,
     ) {
         if self.config.as_ref() == Some(config)
-            && !self.task.as_ref().is_some_and(JoinHandle::is_finished)
+            && (!config.enabled || self.task.as_ref().is_some_and(|task| !task.is_finished()))
         {
             return;
         }

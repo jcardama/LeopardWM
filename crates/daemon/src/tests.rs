@@ -9707,7 +9707,7 @@ fn test_cmd_query_focused_empty() {
             is_floating,
         } => {
             assert!(window_id.is_none());
-            assert_eq!(row_index, 0);
+            assert_eq!(row_index, None);
             assert!(!is_floating);
             assert_eq!(column_index, 0);
             assert_eq!(window_index, 0);
@@ -12260,6 +12260,54 @@ fn test_cmd_query_all_windows() {
         }
         other => panic!("Expected WindowList, got {:?}", other),
     }
+}
+
+#[test]
+fn query_rows_only_for_multi_row_workspaces() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    let ws = state.focused_workspace_mut().unwrap();
+    ws.insert_window(10, None).unwrap();
+    let focused = serde_json::to_value(state.handle_command(IpcCommand::QueryFocused)).unwrap();
+    assert!(focused.get("row_index").is_none());
+    let IpcResponse::WindowList { windows } = state.handle_command(IpcCommand::QueryAllWindows)
+    else {
+        panic!("expected window list")
+    };
+    assert_eq!(
+        windows
+            .iter()
+            .find(|w| w.window_id == 10)
+            .unwrap()
+            .row_index,
+        None
+    );
+
+    let ws = state.focused_workspace_mut().unwrap();
+    ws.set_row_layout(&[0.5, 0.5]);
+    ws.insert_window_in_row(20, 1, None).unwrap();
+    ws.focus_row(1);
+    let focused = serde_json::to_value(state.handle_command(IpcCommand::QueryFocused)).unwrap();
+    assert_eq!(focused["row_index"], 1);
+    let IpcResponse::WindowList { windows } = state.handle_command(IpcCommand::QueryAllWindows)
+    else {
+        panic!("expected window list")
+    };
+    assert_eq!(
+        windows
+            .iter()
+            .find(|w| w.window_id == 10)
+            .unwrap()
+            .row_index,
+        Some(0)
+    );
+    assert_eq!(
+        windows
+            .iter()
+            .find(|w| w.window_id == 20)
+            .unwrap()
+            .row_index,
+        Some(1)
+    );
 }
 
 #[test]

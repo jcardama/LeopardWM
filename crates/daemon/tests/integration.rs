@@ -76,14 +76,14 @@ fn test_all_responses_roundtrip() {
         },
         IpcResponse::FocusedWindow {
             window_id: Some(12345),
-            row_index: 0,
+            row_index: None,
             column_index: 2,
             window_index: 1,
             is_floating: false,
         },
         IpcResponse::FocusedWindow {
             window_id: None,
-            row_index: 0,
+            row_index: None,
             column_index: 0,
             window_index: 0,
             is_floating: false,

@@ -535,7 +535,7 @@ impl AppState {
                     window_id: Some(hwnd),
                     column_index: ws.focused_column_index(),
                     window_index: ws.focused_window_index_in_column(),
-                    row_index: ws.focused_row(),
+                    row_index: None,
                     is_floating: true,
                 })
             }
@@ -1198,7 +1198,7 @@ impl AppState {
         if let Some(workspace) = self.focused_workspace() {
             IpcResponse::FocusedWindow {
                 window_id: workspace.focused_window(),
-                row_index: workspace.focused_row(),
+                row_index: (workspace.row_count() > 1).then(|| workspace.focused_row()),
                 column_index: workspace.focused_column_index(),
                 window_index: workspace.focused_window_index_in_column(),
                 is_floating: false,
@@ -1682,7 +1682,7 @@ impl AppState {
                                     rect.width,
                                     rect.height,
                                 ),
-                                row_index: Some(row_idx),
+                                row_index: (workspace.row_count() > 1).then_some(row_idx),
                                 column_index: Some(col_idx),
                                 window_index: Some(win_idx),
                                 monitor_id: *monitor_id as i64,
@@ -3741,7 +3741,7 @@ mod floating_policy_tests {
                 window_id: Some(FLOATING),
                 column_index: 1,
                 window_index: 1,
-                row_index: 0,
+                row_index: None,
                 is_floating: true,
             }
         );
@@ -3753,7 +3753,7 @@ mod floating_policy_tests {
                 window_id: Some(201),
                 column_index: 1,
                 window_index: 1,
-                row_index: 0,
+                row_index: None,
                 is_floating: false,
             }
         );

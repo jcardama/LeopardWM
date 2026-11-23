@@ -260,7 +260,7 @@ fn released_035_client_decodes_additive_rows_and_snapshot() {
     };
     let focused = IpcResponse::FocusedWindow {
         window_id: Some(42),
-        row_index: 1,
+        row_index: Some(1),
         column_index: 0,
         window_index: 0,
         is_floating: false,

@@ -171,8 +171,8 @@ pub struct WindowInfo {
     pub executable: String,
     /// The window's current rectangle (position and size).
     pub rect: IpcRect,
-    /// The row index if tiled (0-based), None if floating.
-    #[serde(default)]
+    /// The row index (0-based) in a multi-row workspace, None if floating or single-row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub row_index: Option<usize>,
     /// The column index if tiled, None if floating.
     pub column_index: Option<usize>,
@@ -823,9 +823,9 @@ pub enum IpcResponse {
     FocusedWindow {
         /// Window ID of the focused window, if any.
         window_id: Option<u64>,
-        /// Row index of the focused window (0-based). An additive v4 extension.
-        #[serde(default)]
-        row_index: usize,
+        /// Row index of the focused tiled window in a multi-row workspace (0-based).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        row_index: Option<usize>,
         /// Column index of the focused tiled window. When `is_floating` is
         /// true, this still refers to the tiled focus, not `window_id`.
         column_index: usize,
@@ -1218,21 +1218,21 @@ mod tests {
             },
             IpcResponse::FocusedWindow {
                 window_id: Some(12345),
-                row_index: 1,
+                row_index: Some(1),
                 column_index: 1,
                 window_index: 0,
                 is_floating: false,
             },
             IpcResponse::FocusedWindow {
                 window_id: Some(67890),
-                row_index: 0,
+                row_index: None,
                 column_index: 1,
                 window_index: 0,
                 is_floating: true,
             },
             IpcResponse::FocusedWindow {
                 window_id: None,
-                row_index: 0,
+                row_index: None,
                 column_index: 0,
                 window_index: 0,
                 is_floating: false,
@@ -1778,7 +1778,7 @@ mod tests {
                 is_floating,
             } => {
                 assert_eq!(window_id, Some(7));
-                assert_eq!(row_index, 0);
+                assert_eq!(row_index, None);
                 assert_eq!(column_index, 2);
                 assert_eq!(window_index, 1);
                 assert!(!is_floating);
