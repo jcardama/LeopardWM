@@ -4369,6 +4369,48 @@ fn assert_drag_to_other_workspace_repairs_source_scroll(
 }
 
 #[test]
+fn maximized_column_drag_restores_width_at_destination() {
+    for (target_monitor, target_idx, target_row) in [(1, 0, 1), (1, 1, 0), (2, 0, 0)] {
+        let mut state = AppState::new_with_config(test_config(), two_monitors());
+        state.paused = true;
+        state.reduce_motion = true;
+        let source_width = state.viewport_width_for(1);
+        let source = &mut state.workspaces.get_mut(&1).unwrap()[0];
+        source.set_row_layout(&[0.5, 0.5]);
+        source.insert_window_in_row(0, 0, Some(550)).unwrap();
+        source.focus_window(0).unwrap();
+        assert!(source.toggle_maximize_column(source_width));
+        if target_idx == 1 {
+            state
+                .workspaces
+                .get_mut(&target_monitor)
+                .unwrap()
+                .push(Workspace::new());
+        }
+        seed_drag_session(&mut state, 0);
+        state.clear_drag_placeholder();
+        let drag = state.drag_state.take().unwrap();
+        state.active_workspace.insert(target_monitor, target_idx);
+        state.execute_cross_monitor_drag(
+            0,
+            &drag,
+            target_monitor,
+            target_row,
+            &Rect::new(0, 0, 550, 400),
+        );
+
+        let destination_width = state.viewport_width_for(target_monitor);
+        let destination = &mut state.workspaces.get_mut(&target_monitor).unwrap()[target_idx];
+        let (row, column, _) = destination.find_window_location_rc(0).unwrap();
+        assert_eq!(row, target_row);
+        assert_eq!(destination.rows()[row].column(column).unwrap().width(), 550);
+        assert!(destination.toggle_maximize_column(destination_width));
+        assert!(!destination.toggle_maximize_column(destination_width));
+        assert_eq!(destination.rows()[row].column(column).unwrap().width(), 550);
+    }
+}
+
+#[test]
 fn test_drag_to_other_monitor_repairs_source_scroll() {
     assert_drag_to_other_workspace_repairs_source_scroll(2, 0, false);
 }

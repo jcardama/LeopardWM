@@ -1694,7 +1694,7 @@ impl AppState {
             .workspaces
             .get_mut(&source_monitor)
             .and_then(|v| v.get_mut(src_idx))
-            .and_then(|ws| ws.remove_column_in_row(src_row, col_idx))
+            .and_then(|ws| ws.remove_column_for_transfer(src_row, col_idx))
         {
             Some(col) => col,
             None => {
