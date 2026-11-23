@@ -2,6 +2,7 @@
 //!
 //! Shared types for daemon-CLI communication over Windows named pipes.
 
+pub mod anchored_fs;
 pub mod bounded_log;
 pub mod config_template;
 pub mod diagnostic_snapshot;

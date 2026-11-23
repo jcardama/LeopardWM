@@ -1,6 +1,6 @@
 use crate::log_text::{self, Kind};
 use regex::Regex;
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -412,15 +412,15 @@ pub fn write(input: &SnapshotInput, output_dir: &Path) -> io::Result<PathBuf> {
         timestamp.second()
     );
     let contents = render(input);
-    fs::create_dir_all(output_dir)?;
+    let directory = crate::anchored_fs::AnchoredDir::for_path(output_dir)?;
     for suffix in 0..1000 {
         let filename = if suffix == 0 {
             format!("{name}.txt")
         } else {
             format!("{name}-{suffix}.txt")
         };
-        let path = output_dir.join(filename);
-        match OpenOptions::new().write(true).create_new(true).open(&path) {
+        let path = output_dir.join(&filename);
+        match directory.create_new(filename.as_ref()) {
             Ok(mut file) => {
                 file.write_all(contents.as_bytes())?;
                 return Ok(path);
@@ -438,6 +438,7 @@ pub fn write(input: &SnapshotInput, output_dir: &Path) -> io::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::OpenOptions;
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(0);
 

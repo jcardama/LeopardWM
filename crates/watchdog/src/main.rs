@@ -4,7 +4,8 @@
 
 use anyhow::{Context, Result};
 use leopardwm_ipc::log_text;
-use std::fs::{self, OpenOptions};
+use std::fs::File;
+use std::io;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, ExitStatus, Stdio};
@@ -82,8 +83,25 @@ fn init_tracing(log_dir: &Path) -> Result<()> {
         .map_err(|err| anyhow::anyhow!("Failed to set tracing subscriber: {err}"))
 }
 
-fn append_error(path: &Path, record: &str) -> std::io::Result<()> {
-    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+fn error_file(path: &Path, truncate: bool) -> io::Result<File> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing log directory"))?;
+    let name = path
+        .file_name()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing log file name"))?;
+    let directory = leopardwm_ipc::anchored_fs::AnchoredDir::for_path(parent)?;
+    if truncate {
+        let file = directory.open_write(name)?;
+        file.set_len(0)?;
+        Ok(file)
+    } else {
+        directory.open_append(name)
+    }
+}
+
+fn append_error(path: &Path, record: &str) -> io::Result<()> {
+    let mut file = error_file(path, false)?;
     file.write_all(record.as_bytes())
 }
 
@@ -107,7 +125,9 @@ fn report_fatal_error(path: &Path, err: &anyhow::Error) {
 
 fn main() -> ExitCode {
     let log_paths = WatchdogLogPaths::new();
-    if let Err(err) = fs::create_dir_all(&log_paths.dir).context("Failed to create log directory") {
+    if let Err(err) = leopardwm_ipc::anchored_fs::AnchoredDir::for_path(&log_paths.dir)
+        .context("Failed to create log directory")
+    {
         report_fatal_error(&log_paths.watchdog_error, &err);
         return ExitCode::FAILURE;
     }
@@ -125,7 +145,7 @@ fn main() -> ExitCode {
 }
 
 fn run(log_paths: &WatchdogLogPaths) -> Result<()> {
-    fs::File::create(&log_paths.daemon_error).context("Failed to reset daemon error log")?;
+    error_file(&log_paths.daemon_error, true).context("Failed to reset daemon error log")?;
     init_tracing(&log_paths.dir)?;
 
     info!("leopardwm-watchdog starting");
@@ -274,11 +294,7 @@ fn spawn_daemon(
     error_log_path: &Path,
     restart_attempt: Option<usize>,
 ) -> Result<ExitStatus> {
-    let stderr = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(error_log_path)
-        .context("failed to open daemon error log")?;
+    let stderr = error_file(error_log_path, false).context("failed to open daemon error log")?;
     let mut child = daemon_command(path, args, restart_attempt)
         // The daemon writes its own tracing log. Keep stdout nulled and retain
         // bootstrap stderr and early panics across every supervised restart.

@@ -254,7 +254,16 @@ pub fn start_capture(
                 ));
                 return;
             }
-            let mut file = match File::create(&path) {
+            let open = || -> std::io::Result<File> {
+                let directory = leopardwm_ipc::anchored_fs::AnchoredDir::for_path(
+                    path.parent().expect("capture log has a parent"),
+                )?;
+                let file =
+                    directory.open_write(path.file_name().expect("capture log has a name"))?;
+                file.set_len(0)?;
+                Ok(file)
+            };
+            let mut file = match open() {
                 Ok(file) => file,
                 Err(e) => {
                     let _ = ready_tx.send(Err(e.to_string()));

@@ -19,6 +19,9 @@ authors = ["jcardama <jcardama@hey.com>"]
 [workspace.dependencies]
 # Win32 bindings
 windows = { version = "0.62", features = [
+    "Wdk_Foundation",
+    "Wdk_Storage_FileSystem",
+    "Win32_System_IO",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Accessibility",
     "Win32_UI_Input_KeyboardAndMouse",

@@ -739,7 +739,7 @@ fn handle_ipc(body: &str, event_tx: &mpsc::Sender<SettingsEvent>, hwnd: HWND) {
         },
         "reveal_diagnostics" => {
             let path = leopardwm_ipc::diagnostics_dir();
-            if let Err(error) = std::fs::create_dir_all(&path) {
+            if let Err(error) = leopardwm_ipc::anchored_fs::AnchoredDir::for_path(&path) {
                 warn!(
                     "Cannot create diagnostics folder {}: {}",
                     log_text::path(path.display()),

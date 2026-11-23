@@ -2564,7 +2564,7 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
         tray::TrayEvent::ViewLogs => {
             info!("Tray: View logs requested");
             let log_dir = leopardwm_ipc::log_dir();
-            if let Err(e) = std::fs::create_dir_all(&log_dir) {
+            if let Err(e) = leopardwm_ipc::anchored_fs::AnchoredDir::for_path(&log_dir) {
                 warn!(
                     "Failed to create log directory {}: {}",
                     log_text::path(log_dir.display()),

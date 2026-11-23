@@ -1,18 +1,9 @@
-use std::fs::{self, File, OpenOptions};
+use std::fs::File;
 use std::io::{self, Write};
-use std::os::windows::ffi::{OsStrExt, OsStringExt};
-use std::os::windows::fs::OpenOptionsExt;
-use std::os::windows::io::AsRawHandle;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing_subscriber::{filter::LevelFilter, reload, Registry};
-use windows::Win32::Foundation::HANDLE;
-use windows::Win32::Storage::FileSystem::{
-    GetFileInformationByHandle, GetFinalPathNameByHandleW, BY_HANDLE_FILE_INFORMATION,
-    FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT,
-    FILE_NAME_NORMALIZED, GETFINALPATHNAMEBYHANDLE_FLAGS, VOLUME_NAME_DOS,
-};
 
 const FILE_NAME: &str = "leopardwm-recording.log";
 const MAX_BYTES: u64 = 20 * 1024 * 1024;
@@ -93,77 +84,6 @@ pub(crate) fn stop_on_exit() {
     }
 }
 
-fn verify_recording_file(file: &File, expected: &Path) -> Result<(), String> {
-    const CSTR_EQUAL: i32 = 2;
-    windows::core::link!("kernel32.dll" "system" fn CompareStringOrdinal(
-        first: *const u16, first_len: i32, second: *const u16, second_len: i32,
-        ignore_case: i32
-    ) -> i32);
-
-    let handle = HANDLE(file.as_raw_handle());
-    let mut info = BY_HANDLE_FILE_INFORMATION::default();
-    unsafe { GetFileInformationByHandle(handle, &mut info) }.map_err(|error| {
-        format!(
-            "Cannot verify recording file {} (actual path unavailable): {error}",
-            expected.display()
-        )
-    })?;
-    let mut buffer = vec![0u16; 512];
-    let actual = loop {
-        let len = unsafe {
-            GetFinalPathNameByHandleW(
-                handle,
-                &mut buffer,
-                GETFINALPATHNAMEBYHANDLE_FLAGS(FILE_NAME_NORMALIZED.0 | VOLUME_NAME_DOS.0),
-            )
-        } as usize;
-        if len == 0 {
-            return Err(format!(
-                "Cannot verify recording file {} (actual path unavailable): {}",
-                expected.display(),
-                io::Error::last_os_error()
-            ));
-        }
-        if len < buffer.len() {
-            buffer.truncate(len);
-            break buffer;
-        }
-        buffer.resize(len + 1, 0);
-    };
-    let actual_without_prefix = actual
-        .strip_prefix(&[b'\\' as u16, b'\\' as u16, b'?' as u16, b'\\' as u16])
-        .unwrap_or(&actual);
-    let expected_wide: Vec<u16> = expected.as_os_str().encode_wide().collect();
-    let same_path = match (
-        i32::try_from(actual_without_prefix.len()),
-        i32::try_from(expected_wide.len()),
-    ) {
-        (Ok(actual_len), Ok(expected_len)) => unsafe {
-            CompareStringOrdinal(
-                actual_without_prefix.as_ptr(),
-                actual_len,
-                expected_wide.as_ptr(),
-                expected_len,
-                1,
-            ) == CSTR_EQUAL
-        },
-        _ => false,
-    };
-    if info.nNumberOfLinks != 1
-        || info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT.0 | FILE_ATTRIBUTE_DIRECTORY.0)
-            != 0
-        || !same_path
-    {
-        let actual_path = std::ffi::OsString::from_wide(&actual);
-        return Err(format!(
-            "Unsafe recording file: expected {}, actual {}",
-            expected.display(),
-            Path::new(&actual_path).display()
-        ));
-    }
-    Ok(())
-}
-
 impl Recording {
     pub(crate) fn new(filter: FilterHandle, directory: PathBuf) -> Self {
         Self {
@@ -190,22 +110,15 @@ impl Recording {
         if state.active.is_some() {
             return Err("A recording is already active".into());
         }
-        fs::create_dir_all(&self.inner.directory).map_err(|e| e.to_string())?;
+        let dir = leopardwm_ipc::anchored_fs::AnchoredDir::for_path(&self.inner.directory)
+            .map_err(|e| e.to_string())?;
         let path = self.inner.directory.join(FILE_NAME);
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .share_mode(1)
-            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0)
-            .open(&path)
-            .map_err(|error| {
-                format!(
-                    "Cannot open recording file {} (it may be in use): {error}",
-                    path.display()
-                )
-            })?;
-        verify_recording_file(&file, &path)?;
+        let mut file = dir.open_write(FILE_NAME.as_ref()).map_err(|error| {
+            format!(
+                "Cannot open recording file {} (it may be in use): {error}",
+                path.display()
+            )
+        })?;
         file.set_len(0).map_err(|error| {
             format!("Cannot truncate recording file {}: {error}", path.display())
         })?;
@@ -349,6 +262,9 @@ impl Write for RecordingWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::{self, OpenOptions};
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::path::Path;
     use std::sync::atomic::{AtomicU64, Ordering};
     use tracing_subscriber::prelude::*;
 
@@ -470,17 +386,53 @@ mod tests {
                 .with_writer(move || writer.writer())
                 .with_filter(filter),
         );
-        tracing::subscriber::with_default(subscriber, || {
-            assert!(recording.start(Some(60)).is_err());
+        let refused = tracing::subscriber::with_default(subscriber, || {
+            let result = recording.start(Some(60));
+            if result.is_ok() {
+                recording.stop(StopReason::Stopped);
+            }
+            result.is_err()
         });
-        let redirected = target.join(FILE_NAME);
-        if redirected.exists() {
-            assert!(!fs::read_to_string(redirected)
-                .unwrap()
-                .contains("LeopardWM"));
-        }
+        let redirected_exists = target.join(FILE_NAME).exists();
         fs::remove_dir(dir).unwrap();
         fs::remove_dir_all(root).unwrap();
+        assert!(refused, "recording accepted a redirected folder");
+        assert!(
+            !redirected_exists,
+            "recording created a file in the junction target"
+        );
+    }
+
+    #[test]
+    fn start_refuses_redirected_ancestor_without_creating_folder() {
+        let root = directory();
+        let target = root.join("outside");
+        let link = root.join("link");
+        fs::create_dir_all(&target).unwrap();
+        junction(&link, &target);
+        let (filter, handle) = reload::Layer::new(LevelFilter::OFF);
+        let recording = Recording::new(handle, link.join("recordings"));
+        let writer = recording.clone();
+        let subscriber = Registry::default().with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(move || writer.writer())
+                .with_filter(filter),
+        );
+        let refused = tracing::subscriber::with_default(subscriber, || {
+            let result = recording.start(Some(60));
+            if result.is_ok() {
+                recording.stop(StopReason::Stopped);
+            }
+            result.is_err()
+        });
+        let target_was_modified = fs::read_dir(&target).unwrap().next().is_some();
+        fs::remove_dir(link).unwrap();
+        fs::remove_dir_all(root).unwrap();
+        assert!(refused, "recording accepted a redirected ancestor");
+        assert!(
+            !target_was_modified,
+            "recording created a folder in the junction target"
+        );
     }
 
     #[test]
