@@ -230,10 +230,14 @@ Settings gesture menus:
 | Command | Action |
 |---|---|
 | `focus_next` / `focus_prev` | Focus the next / previous window across columns, wrapping at strip ends |
+| `focus_floating` / `focus_tiling` | Focus the remembered floating window / return focus to the tiled layer |
+| `switch_focus_floating_tiling` | Switch focus between the floating and tiled layers |
 | `focus_row_up` / `focus_row_down` | Focus the row above / below |
 | `move_window_to_row_up` / `move_window_to_row_down` | Move the focused window to the row above / below |
 | `scroll_left` / `scroll_right` | Move the strip viewport left / right by 100 px without changing focus |
 | `nudge_left` / `nudge_right` | Move a floating window or shift tiled windows left / right by `move_step` |
+| `align_column_left` / `align_column_right` | Align the focused column to the left / right edge of the screen |
+| `float` / `tile` | Float the focused window if tiled / tile it if floating |
 
 `scroll_up` and `scroll_down` under `[gestures]` default to `focus_next` and
 `focus_prev`. Hold `[hotkeys].scroll_modifier` (Ctrl+Alt by default) while using
