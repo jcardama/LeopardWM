@@ -507,7 +507,7 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 2px; }
 .combobox-option:hover, .combobox-option:focus-visible { background: var(--subtle-secondary); }
 .combobox-option:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 @media (forced-colors: active) {
-  .combobox-option:focus-visible { outline-color: Highlight; }
+  .combobox-option:focus-visible { outline-color: CanvasText; }
   .combobox-option.selected:focus-visible, .combobox-option:hover:focus-visible {
     outline-color: HighlightText;
     outline-offset: -5px;
