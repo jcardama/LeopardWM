@@ -508,7 +508,7 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 2px; }
 .combobox-option:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 @media (forced-colors: active) {
   .combobox-option:focus-visible { outline-color: Highlight; }
-  .combobox-option.selected:focus-visible { outline-color: HighlightText; }
+  .combobox-option.selected:focus-visible, .combobox-option:hover:focus-visible { outline-color: HighlightText; }
 }
 .combobox-option.selected {
   background: var(--subtle-secondary);
@@ -1683,6 +1683,29 @@ function initCombobox(cb) {
   trigger.setAttribute('aria-haspopup', 'listbox');
   trigger.setAttribute('aria-expanded', 'false');
   popup.setAttribute('role', 'listbox');
+  function namePopup() {
+    var labelledBy = trigger.getAttribute('aria-labelledby');
+    var field = cb.closest('.field');
+    var fieldLabel = field && field.querySelector('.field-label');
+    var label = cb.getAttribute('aria-label') || (fieldLabel && fieldLabel.textContent.trim());
+    if (labelledBy) {
+      popup.removeAttribute('aria-label');
+      popup.setAttribute('aria-labelledby', labelledBy);
+    } else if (label) {
+      popup.removeAttribute('aria-labelledby');
+      popup.setAttribute('aria-label', label);
+    } else {
+      if (!trigger.id) {
+        var id;
+        do { id = 'combobox-trigger-' + (initCombobox.nextId = (initCombobox.nextId || 0) + 1); }
+        while (document.getElementById(id));
+        trigger.id = id;
+      }
+      popup.removeAttribute('aria-label');
+      popup.setAttribute('aria-labelledby', trigger.id);
+    }
+  }
+  namePopup();
   syncComboboxOptions(cb);
   trigger.addEventListener('click', function(e) {
     e.stopPropagation();
@@ -1724,11 +1747,18 @@ function initCombobox(cb) {
       }
     }
     cb.classList.toggle('open');
+    if (cb.classList.contains('open')) namePopup();
     trigger.setAttribute('aria-expanded', String(cb.classList.contains('open')));
     syncComboboxOptions(cb);
   });
   trigger.addEventListener('keydown', function(e) {
     if (trigger.disabled || cb.classList.contains('disabled')) return;
+    if ((e.key === 'Enter' || e.key === ' ') && e.repeat) { e.preventDefault(); return; }
+    if (cb.classList.contains('open') && (e.key === 'Escape' || e.key === 'Tab')) {
+      if (e.key === 'Escape') e.preventDefault();
+      closeCombobox(cb);
+      return;
+    }
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
       if (!cb.classList.contains('open')) trigger.click();
@@ -1758,6 +1788,7 @@ function initCombobox(cb) {
     else if (e.key === 'Tab') closeCombobox(cb);
     else if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
+      if (e.repeat) return;
       if (index >= 0) { options[index].click(); trigger.focus(); }
     } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Home' || e.key === 'End') {
       e.preventDefault();
@@ -3209,12 +3240,14 @@ const els = {};
 function node() { const classes = new Set(); return {value:'', textContent:'', disabled:false, hidden:false, dataset:{},
   classList:{add(...names){names.forEach(name => classes.add(name));}, remove(...names){names.forEach(name => classes.delete(name));}, contains(name){return classes.has(name);}},
   listeners:{}, addEventListener(event, callback) { this.listeners[event] = callback; },
-  setAttribute(name, value) { this[name] = value; },
+  setAttribute(name, value) { this[name] = value; }, getAttribute(name) { return this[name] || null; },
+  removeAttribute(name) { delete this[name]; }, closest() { return null; },
   scrolled:0, scrollIntoView() { this.scrolled++; },
   dispatchEvent(event) { this.listeners[event.type]?.call(this, event); }}; }
 function el(id) { return els[id] ||= node(); }
 function combo(id, values) {
   const cb = el(id), trigger = node(), text = node(), popup = node();
+  trigger.id = id + '-trigger';
   const options = values.map(value => Object.assign(node(), {dataset:{value}, textContent:value}));
   cb.dataset.value = values[0]; cb.dataset.noConfig = '';
   cb.querySelector = selector => ({'.combobox-trigger':trigger, '.combobox-text':text, '.combobox-popup':popup})[selector];
@@ -3313,7 +3346,7 @@ function node() {
   const classes = new Set(), listeners = {};
   return {dataset:{}, attrs:{}, style:{}, textContent:'', disabled:false,
     classList:{add(c){classes.add(c)}, remove(c){classes.delete(c)}, contains(c){return classes.has(c)}, toggle(c){classes.has(c) ? classes.delete(c) : classes.add(c)}},
-    setAttribute(k,v){this.attrs[k]=v}, addEventListener(k,fn){(listeners[k] ||= []).push(fn)},
+    setAttribute(k,v){this.attrs[k]=v}, getAttribute(k){return this.attrs[k] || null}, removeAttribute(k){delete this.attrs[k]}, closest(){return null}, addEventListener(k,fn){(listeners[k] ||= []).push(fn)},
     emit(type, event={}){event.type=type; event.target ||= this; event.preventDefault ||= () => {}; event.stopPropagation ||= () => {}; for(const fn of listeners[type] || []) fn.call(this,event)},
     focus(){document.activeElement=this}, click(){this.emit('click')},
     getBoundingClientRect(){return {width:100,left:10,right:110,top:10,bottom:42}}};
@@ -3327,7 +3360,7 @@ popup.contains = opt => options.includes(opt);
 let extra=0, changes=0, saves=0;
 options.forEach(opt => { opt.closest=()=>opt; opt.addEventListener('click',()=>extra++); opt.click=()=>{opt.emit('click'); popup.emit('click',{target:opt})}; });
 cb.dispatchEvent=()=>changes++;
-global.document={activeElement:null,querySelectorAll:()=>[],getElementById:()=>cb};
+global.document={activeElement:null,querySelectorAll:()=>[],getElementById:id=>id==='combo'?cb:null};
 global.window={innerWidth:1000,innerHeight:800}; global.autoSave=()=>saves++;
 let start=html.indexOf('function closeCombobox('); if(start<0) start=html.indexOf('function initCombobox(');
 const end=html.indexOf("document.querySelectorAll('.combobox').forEach",start);
@@ -3343,6 +3376,30 @@ assert.equal(options[0].attrs['aria-selected'],'false'); assert.equal(options[1]
 trigger.emit('keydown',{key:'ArrowUp'}); assert.equal(document.activeElement,options[1]);
 popup.emit('keydown',{key:'End'}); popup.emit('keydown',{key:' '}); assert.equal(cb.dataset.value,'three'); assert.equal(extra,2); assert.equal(changes,2);
 trigger.emit('keydown',{key:' '}); popup.emit('keydown',{key:'Escape'}); assert.equal(trigger.attrs['aria-expanded'],'false'); assert.equal(document.activeElement,trigger);
+trigger.focus(); trigger.click(); let prevented=false;
+trigger.emit('keydown',{key:'Escape',preventDefault(){prevented=true}}); assert(prevented); assert.equal(trigger.attrs['aria-expanded'],'false'); assert.equal(document.activeElement,trigger);
+prevented=false; trigger.emit('keydown',{key:'Escape',preventDefault(){prevented=true}}); assert.equal(prevented,false);
+trigger.click(); trigger.emit('keydown',{key:'Tab',preventDefault(){prevented=true}}); assert.equal(prevented,false); assert.equal(trigger.attrs['aria-expanded'],'false');
+for (const key of ['Enter',' ']) {
+  trigger.emit('keydown',{key,repeat:true}); assert.equal(trigger.attrs['aria-expanded'],'false');
+  trigger.emit('keydown',{key}); assert.equal(trigger.attrs['aria-expanded'],'true');
+  const before=changes; popup.emit('keydown',{key,repeat:true}); assert.equal(changes,before); assert.equal(trigger.attrs['aria-expanded'],'true');
+  popup.emit('keydown',{key:'Escape'});
+}
+function checkName(triggerLabel, comboLabel, fieldLabel, attr, expected) {
+  const c=node(), t=node(), p=node();
+  if (triggerLabel) t.setAttribute('aria-labelledby',triggerLabel);
+  if (comboLabel) c.setAttribute('aria-label',comboLabel);
+  c.closest=()=>fieldLabel ? {querySelector:()=>({textContent:fieldLabel})} : null;
+  c.querySelector=s=>s==='.combobox-trigger'?t:p; c.querySelectorAll=()=>[];
+  initCombobox(c);
+  if (!expected) assert(t.id);
+  assert.equal(p.attrs[attr], expected || t.id);
+}
+checkName('report-label report-value','combo label','field label','aria-labelledby','report-label report-value');
+checkName(null,'combo label','field label','aria-label','combo label');
+checkName(null,null,'field label','aria-label','field label');
+checkName(null,null,null,'aria-labelledby');
 trigger.disabled=true; trigger.emit('keydown',{key:'ArrowDown'}); assert.equal(trigger.attrs['aria-expanded'],'false');
 "#;
         let mut child = Command::new("node")

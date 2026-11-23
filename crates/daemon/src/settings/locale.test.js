@@ -221,7 +221,7 @@ function eventElement() {
       add: name => classes.add(name), remove: name => classes.delete(name),
       contains: name => classes.has(name)
     },
-    setAttribute() {},
+    setAttribute() {}, getAttribute() { return null; }, removeAttribute() {}, closest() { return null; },
     addEventListener(name, callback) { (listeners[name] ||= []).push(callback); },
     emit(name, event = {}) {
       for (const callback of listeners[name] || []) callback({ target: this, stopPropagation() {}, ...event });
@@ -245,7 +245,7 @@ function presetFixture(values = [0.333, 0.5, 0.667]) {
     clearTimeout(id) { timers.delete(id); }
   });
   runSettings(script, ctx);
-  const trigger = eventElement();
+  const trigger = eventElement(); trigger.id = 'preset-trigger';
   const triggerText = eventElement();
   const popup = eventElement();
   const combo = eventElement();
@@ -431,7 +431,7 @@ function commandFixture({ saving = false } = {}) {
     : selector === '.combobox' || selector === '[id^="cb-gestures-"]' ? combos : [];
   function addCombo(id, value) {
     const cb = eventElement(); cb.dataset.value = value;
-    const trigger = eventElement();
+    const trigger = eventElement(); trigger.id = id + '-trigger';
     const text = eventElement();
     const popup = eventElement();
     let options = [];
