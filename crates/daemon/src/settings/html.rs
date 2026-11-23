@@ -1492,7 +1492,6 @@ input[type="range"]::-webkit-slider-thumb {
         <p class="section-desc" data-i18n="settings.report.guide"></p>
         <p class="section-desc" data-i18n="settings.report.long"></p>
         <div class="info-bar"><svg class="info-bar-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1a7 7 0 100 14A7 7 0 008 1zm-.75 3.5a.75.75 0 011.5 0v4a.75.75 0 01-1.5 0v-4zm.75 7a.75.75 0 110-1.5.75.75 0 010 1.5z"/></svg><div class="info-bar-content"><span class="info-bar-message" data-i18n="settings.report.privacy"></span></div></div>
-        <div id="report-status" role="status"><div class="info-bar" id="report-status-bar" hidden><svg class="info-bar-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill-rule="evenodd"/></svg><div class="info-bar-content"><span class="info-bar-message" id="report-status-text"></span></div></div></div>
         <div class="card">
           <div class="field stacked"><div class="field-info"><label class="field-label" for="report-title" data-i18n="settings.report.subject"></label></div><input type="text" id="report-title" data-no-config autocomplete="off"></div>
           <div class="field"><div class="field-info"><div class="field-label" id="report-category-label" data-i18n="settings.report.category"></div></div>
@@ -1525,6 +1524,7 @@ input[type="range"]::-webkit-slider-thumb {
           <div class="field"><div class="field-info"><div class="field-label" data-i18n="settings.report.version"></div></div><span id="report-version"></span></div>
           <div class="field"><div class="field-info"><div class="field-label" data-i18n="settings.report.windows"></div></div><span id="report-windows"></span></div>
           <div class="field"><div class="field-info"></div><div><button class="btn btn-sm btn-accent" type="button" id="report-submit" data-i18n="settings.report.submit" disabled></button> <button class="btn btn-sm" type="button" id="report-clear" data-i18n="settings.report.clear"></button></div></div>
+          <div id="report-status" role="status"><div class="info-bar" id="report-status-bar" hidden><svg class="info-bar-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill-rule="evenodd"/></svg><div class="info-bar-content"><span class="info-bar-message" id="report-status-text"></span></div></div></div>
         </div>
       </div>
 
@@ -3133,6 +3133,7 @@ const html = require('fs').readFileSync(0, 'utf8');
 const start = html.indexOf('/* ── Report an Issue ── */');
 const end = html.indexOf('/* ── Auto-save', start);
 assert(start >= 0 && end > start);
+assert.match(html, /<div id="report-status" role="status"><div class="info-bar" id="report-status-bar" hidden>/);
 const els = {};
 function node() { const classes = new Set(); return {value:'', textContent:'', disabled:false, hidden:false, dataset:{},
   classList:{add(...names){names.forEach(name => classes.add(name));}, remove(...names){names.forEach(name => classes.delete(name));}, contains(name){return classes.has(name);}},
