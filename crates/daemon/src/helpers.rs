@@ -714,7 +714,7 @@ impl AppState {
         self.application_fullscreen
             .retain(|hwnd, _| managed.contains(hwnd));
         // A tiled drag or stashed scratchpad leaves its workspace while still managed.
-        self.managed_lifetime_tokens.retain(|hwnd, token| {
+        self.managed_lifetime_tokens.retain(|hwnd, _| {
             let still_managed = managed.contains(hwnd)
                 || self
                     .drag_state
@@ -722,7 +722,7 @@ impl AppState {
                     .is_some_and(|drag| drag.is_tiled && drag.hwnd == *hwnd)
                 || crate::managed_lifetime::is_stashed_scratchpad(self.scratchpad, *hwnd);
             if !still_managed {
-                leopardwm_platform_win32::retire_frame_refresh_lifetime(*hwnd, *token);
+                leopardwm_platform_win32::forget_stale_frame_refresh(*hwnd);
             }
             still_managed
         });

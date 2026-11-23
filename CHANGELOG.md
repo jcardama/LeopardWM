@@ -51,7 +51,7 @@ All notable changes to LeopardWM will be documented in this file.
 - **Hotkeys no longer stop working after hours of use because failed batched window moves leak positioning handles.** Thanks to @doutorferr0 for the report and measurements. (#180)
 - **Store apps such as Calculator and Settings are now managed as soon as they open.** Previously they could stay unmanaged until minimized and restored.
 - **Daemon and watchdog logs now normally stay around 20 MB each, with one previous file kept.** If another process prevents rollover, the current log can grow until rollover succeeds. On first start, an existing oversized log moves to its `.old.log` file when possible and is replaced at the next successful rollover.
-- **LeopardWM no longer leaks memory when an off-screen window with a pending frame refresh closes or leaves management.**
+- **LeopardWM no longer accumulates stale frame refresh records for off-screen windows that have closed.**
 - **Closing the last window on a workspace no longer sends you back to another workspace when Windows activates a parked window there.** Thanks to @Daiivy for the report. (#179)
 - **Audacity's import progress window now floats by default, so it no longer pulls the strip back to it while an import runs.** Thanks to @KeronCyst for the report. (#176)
 - **Resizing a floating window below the size its app allows now keeps LeopardWM's stored size in step with the actual window.**

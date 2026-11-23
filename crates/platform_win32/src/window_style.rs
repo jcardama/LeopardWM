@@ -72,53 +72,55 @@ fn is_border_color_unsupported_hresult(code: windows::core::HRESULT) -> bool {
     code.0 == E_INVALIDARG_HRESULT || code.0 == E_NOTIMPL_HRESULT
 }
 
-struct ManagedFrameRefresh {
-    token: u64,
-    pending: Option<u64>,
+struct FrameRefresh {
+    identity: WindowIdentity,
+    generation: u64,
 }
 
-static FRAME_REFRESHES: LazyLock<Mutex<HashMap<WindowId, ManagedFrameRefresh>>> =
+impl FrameRefresh {
+    fn matches_window(&self, window_id: WindowId) -> bool {
+        window_id_to_hwnd(window_id).is_ok_and(|hwnd| window_identity_matches(hwnd, self.identity))
+    }
+}
+
+static FRAME_REFRESHES: LazyLock<Mutex<HashMap<WindowId, FrameRefresh>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 static NEXT_FRAME_REFRESH: AtomicU64 = AtomicU64::new(1);
 
-fn lock_frame_refreshes() -> MutexGuard<'static, HashMap<WindowId, ManagedFrameRefresh>> {
+fn lock_frame_refreshes() -> MutexGuard<'static, HashMap<WindowId, FrameRefresh>> {
     FRAME_REFRESHES
         .lock()
         .unwrap_or_else(crate::recover_poisoned_mutex)
 }
 
-pub(crate) fn register_frame_refresh_lifetime(window_id: WindowId, token: u64) {
-    lock_frame_refreshes().insert(
-        window_id,
-        ManagedFrameRefresh {
-            token,
-            pending: None,
-        },
-    );
-}
-
-/// Discard pending refreshes for a departing managed lifetime without invalidating
-/// the HWND's token, which queued style restores and hidden-window suppression still use.
-pub fn retire_frame_refresh_lifetime(window_id: WindowId, token: u64) {
+/// Discard a departing window's refresh only if its identity is no longer live.
+/// A live unmanaged window can still need the refresh when recovery returns it on-screen.
+pub fn forget_stale_frame_refresh(window_id: WindowId) {
     let mut refreshes = lock_frame_refreshes();
     if refreshes
         .get(&window_id)
-        .is_some_and(|entry| entry.token == token)
+        .is_some_and(|entry| !entry.matches_window(window_id))
     {
         refreshes.remove(&window_id);
     }
 }
 
 fn mark_frame_refresh(window_id: WindowId, hwnd: HWND, identity: WindowIdentity) {
-    let mut refreshes = lock_frame_refreshes();
-    let Some(entry) = refreshes.get_mut(&window_id) else {
+    if identity.managed_lifetime_token.is_none() {
         return;
-    };
-    if identity.managed_lifetime_token == Some(entry.token)
-        && window_identity_matches(hwnd, identity)
-    {
-        entry.pending = Some(NEXT_FRAME_REFRESH.fetch_add(1, Ordering::Relaxed));
     }
+    let mut refreshes = lock_frame_refreshes();
+    if !window_identity_matches(hwnd, identity) {
+        return;
+    }
+    refreshes.insert(
+        window_id,
+        FrameRefresh {
+            identity,
+            generation: NEXT_FRAME_REFRESH.fetch_add(1, Ordering::Relaxed),
+        },
+    );
+    refreshes.retain(|&id, entry| entry.matches_window(id));
 }
 
 fn frame_change_offscreen(hwnd: HWND) -> bool {
@@ -157,24 +159,22 @@ fn finish_frame_change(
 
 pub(crate) fn frame_refresh(window_id: WindowId, hwnd: HWND) -> Option<u64> {
     let mut refreshes = lock_frame_refreshes();
-    let entry = refreshes.get_mut(&window_id)?;
-    let generation = entry.pending?;
-    if capture_window_identity(hwnd).and_then(|identity| identity.managed_lifetime_token)
-        == Some(entry.token)
-    {
-        Some(generation)
+    let entry = refreshes.get(&window_id)?;
+    if window_identity_matches(hwnd, entry.identity) {
+        Some(entry.generation)
     } else {
-        entry.pending = None;
+        refreshes.remove(&window_id);
         None
     }
 }
 
 pub(crate) fn clear_frame_refresh(window_id: WindowId, generation: u64) {
     let mut refreshes = lock_frame_refreshes();
-    if let Some(entry) = refreshes.get_mut(&window_id) {
-        if entry.pending == Some(generation) {
-            entry.pending = None;
-        }
+    if refreshes
+        .get(&window_id)
+        .is_some_and(|entry| entry.generation == generation)
+    {
+        refreshes.remove(&window_id);
     }
 }
 
@@ -1122,41 +1122,55 @@ mod tests {
         }
     }
 
-    #[test]
-    fn departing_window_discards_pending_frame_refresh() {
-        let _guard = lock_snap_tracking_fixture();
-        let fixture = HiddenFramedFixture::create();
+    fn mark_fixture_frame_refresh(fixture: &HiddenFramedFixture) -> u64 {
         let id = fixture.window_id();
         let hwnd = fixture.hwnd();
-        let token = crate::stamp_managed_lifetime_token(id).unwrap();
-        let identity = capture_window_identity(hwnd).unwrap();
-        mark_frame_refresh(id, hwnd, identity);
-        assert!(frame_refresh(id, hwnd).is_some());
-
-        retire_frame_refresh_lifetime(id, token);
-
-        assert_eq!(frame_refresh(id, hwnd), None);
+        crate::stamp_managed_lifetime_token(id).unwrap();
+        mark_frame_refresh(id, hwnd, capture_window_identity(hwnd).unwrap());
+        frame_refresh(id, hwnd).unwrap()
     }
 
     #[test]
-    fn late_frame_refresh_is_rejected_after_departure() {
+    fn destroyed_departure_discards_pending_frame_refresh() {
+        use windows::Win32::UI::WindowsAndMessaging::DestroyWindow;
+
+        let _guard = lock_snap_tracking_fixture();
+        let mut fixture = HiddenFramedFixture::create();
+        let id = fixture.window_id();
+        mark_fixture_frame_refresh(&fixture);
+        unsafe { DestroyWindow(fixture.hwnd.take().unwrap()).unwrap() };
+
+        forget_stale_frame_refresh(id);
+
+        assert!(!lock_frame_refreshes().contains_key(&id));
+    }
+
+    #[test]
+    fn marking_frame_refresh_sweeps_stale_identities() {
+        let _guard = lock_snap_tracking_fixture();
+        let stale = HiddenFramedFixture::create();
+        let id = stale.window_id();
+        mark_fixture_frame_refresh(&stale);
+        crate::stamp_managed_lifetime_token(id).unwrap();
+
+        let live = HiddenFramedFixture::create();
+        let generation = mark_fixture_frame_refresh(&live);
+
+        assert!(!lock_frame_refreshes().contains_key(&id));
+        clear_frame_refresh(live.window_id(), generation);
+    }
+
+    #[test]
+    fn live_departure_preserves_pending_frame_refresh_for_recovery() {
         let _guard = lock_snap_tracking_fixture();
         let fixture = HiddenFramedFixture::create();
         let id = fixture.window_id();
-        let hwnd = fixture.hwnd();
-        let token = crate::stamp_managed_lifetime_token(id).unwrap();
-        let identity = capture_window_identity(hwnd).unwrap();
+        let generation = mark_fixture_frame_refresh(&fixture);
 
-        retire_frame_refresh_lifetime(id, token);
-        assert!(window_identity_matches(hwnd, identity));
-        mark_frame_refresh(id, hwnd, identity);
-        assert_eq!(frame_refresh(id, hwnd), None);
+        forget_stale_frame_refresh(id);
 
-        let new_token = crate::stamp_managed_lifetime_token(id).unwrap();
-        retire_frame_refresh_lifetime(id, token);
-        mark_frame_refresh(id, hwnd, capture_window_identity(hwnd).unwrap());
-        assert!(frame_refresh(id, hwnd).is_some());
-        retire_frame_refresh_lifetime(id, new_token);
+        assert_eq!(frame_refresh(id, fixture.hwnd()), Some(generation));
+        clear_frame_refresh(id, generation);
     }
 
     #[derive(Default)]

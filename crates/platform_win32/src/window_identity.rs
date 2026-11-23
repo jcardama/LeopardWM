@@ -187,12 +187,10 @@ pub fn read_window_lifetime_token(window_id: WindowId) -> Result<Option<u64>, Wi
     read_lifetime_token(window_id, IGNORE_TOKEN_PROPERTY)
 }
 
-/// Stamp a unique managed-lifetime token and register it for frame refreshes. Does not touch the
+/// Stamp a unique managed-lifetime token on `window_id`. Does not touch the
 /// ignore property. The OS clears the property when that window is destroyed.
 pub fn stamp_managed_lifetime_token(window_id: WindowId) -> Result<u64, Win32Error> {
-    let token = stamp_lifetime_token(window_id, MANAGED_TOKEN_PROPERTY)?;
-    crate::window_style::register_frame_refresh_lifetime(window_id, token);
-    Ok(token)
+    stamp_lifetime_token(window_id, MANAGED_TOKEN_PROPERTY)
 }
 
 /// Read the managed-lifetime token currently stored on `window_id`, if any.

@@ -114,9 +114,9 @@ pub use window_query::{
     is_window_valid, is_window_visible, window_minimized_state, window_presence, WindowPresence,
 };
 pub use window_style::{
-    queue_maximized_window_restore, remove_maximizebox, reset_window_border_color,
-    restore_maximizebox, restore_maximizebox_all, restore_maximizebox_panic_recovery,
-    retire_frame_refresh_lifetime, set_window_border_color, wait_for_window_style_requests,
+    forget_stale_frame_refresh, queue_maximized_window_restore, remove_maximizebox,
+    reset_window_border_color, restore_maximizebox, restore_maximizebox_all,
+    restore_maximizebox_panic_recovery, set_window_border_color, wait_for_window_style_requests,
 };
 
 use leopardwm_core_layout::WindowId;
