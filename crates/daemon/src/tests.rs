@@ -9479,6 +9479,7 @@ fn test_state_snapshot_serialization() {
         workspaces: vec![],
         focused_monitor_name: "DISPLAY1".to_string(),
         active_workspace: HashMap::new(),
+        stashed_monitor_layouts: HashMap::new(),
         tab_title_overrides: HashMap::new(),
     };
     let json = serde_json::to_string(&snapshot).expect("serialize");
@@ -9511,6 +9512,7 @@ fn test_save_and_load_roundtrip() {
         }],
         focused_monitor_name: "DISPLAY1".to_string(),
         active_workspace: HashMap::new(),
+        stashed_monitor_layouts: HashMap::new(),
         tab_title_overrides: HashMap::new(),
     };
     let json = serde_json::to_string_pretty(&snapshot).expect("serialize");
@@ -9529,6 +9531,7 @@ fn test_state_snapshot_with_tab_title_overrides_roundtrip() {
         workspaces: vec![],
         focused_monitor_name: "DISPLAY1".to_string(),
         active_workspace: HashMap::new(),
+        stashed_monitor_layouts: HashMap::new(),
         tab_title_overrides: overrides.clone(),
     };
     let json = serde_json::to_string(&snapshot).expect("serialize");
@@ -9548,6 +9551,7 @@ fn test_state_snapshot_v0_1_14_backward_compat() {
     }"#;
     let parsed: StateSnapshot = serde_json::from_str(legacy_json).expect("deserialize");
     assert!(parsed.tab_title_overrides.is_empty());
+    assert!(parsed.stashed_monitor_layouts.is_empty());
     assert_eq!(parsed.focused_monitor_name, "DISPLAY1");
 }
 
@@ -12137,6 +12141,149 @@ fn test_reconcile_restores_stashed_layout_on_monitor_return() {
 }
 
 #[test]
+fn test_stashed_layout_survives_persistence_roundtrip() {
+    let mut state = AppState::new_with_config(test_config(), two_monitors());
+    let ws = &mut state.workspaces.get_mut(&2).unwrap()[0];
+    ws.insert_window(100, Some(500)).unwrap();
+    ws.insert_window(200, Some(650)).unwrap();
+    state.reconcile_monitors(test_monitors());
+    let snapshot: StateSnapshot = serde_json::from_str(&state.build_state_json().unwrap()).unwrap();
+
+    let mut restarted = AppState::new_with_config(test_config(), test_monitors());
+    restarted.restore_workspace_structure_with(&snapshot, |_| true);
+    let mut returned = two_monitors();
+    returned[1].id = 99;
+    restarted.reconcile_monitors(returned);
+
+    let ws = &restarted.workspaces[&99][0];
+    for (id, width) in [(100, 500), (200, 650)] {
+        let column = ws.rows()[0].find_window_location(id).unwrap().0;
+        assert_eq!(ws.column(column).unwrap().width(), width);
+        assert!(!restarted.workspaces[&1][0].contains_window(id));
+    }
+}
+
+#[test]
+fn test_stashed_layout_prunes_closed_window_across_restart() {
+    let mut state = AppState::new_with_config(test_config(), two_monitors());
+    let ws = &mut state.workspaces.get_mut(&2).unwrap()[0];
+    ws.insert_window(100, Some(500)).unwrap();
+    ws.insert_window(200, Some(650)).unwrap();
+    state.reconcile_monitors(test_monitors());
+    let snapshot: StateSnapshot = serde_json::from_str(&state.build_state_json().unwrap()).unwrap();
+    let mut restarted = AppState::new_with_config(test_config(), test_monitors());
+    restarted.restore_workspace_structure_with(&snapshot, |id| id != 100);
+    let mut returned = two_monitors();
+    returned[1].id = 99;
+    restarted.reconcile_monitors(returned);
+    let ws = &restarted.workspaces[&99][0];
+    assert!(ws.contains_window(200));
+    assert!(!ws.contains_window(100));
+    assert_eq!(ws.columns().len(), 1);
+    assert_eq!(ws.columns()[0].width(), 650);
+}
+
+#[test]
+fn test_stashed_layout_does_not_reclaim_window_moved_to_another_monitor() {
+    let mut monitors = two_monitors();
+    monitors.push(MonitorInfo {
+        id: 3,
+        rect: Rect::new(3840, 0, 1920, 1080),
+        work_area: Rect::new(3840, 0, 1920, 1040),
+        is_primary: false,
+        device_name: "DISPLAY3".to_string(),
+        scale_factor: 1.0,
+    });
+    let mut state = AppState::new_with_config(test_config(), monitors.clone());
+    state.workspaces.get_mut(&2).unwrap()[0]
+        .insert_window(100, Some(500))
+        .unwrap();
+    state.workspaces.get_mut(&2).unwrap()[0]
+        .insert_window(200, Some(650))
+        .unwrap();
+    state.reconcile_monitors(vec![monitors[0].clone(), monitors[2].clone()]);
+    state.focused_monitor = 1;
+    state.move_window_to_monitor_transactional(100, 3).unwrap();
+    monitors[1].id = 99;
+    state.reconcile_monitors(monitors);
+    assert!(state.workspaces[&3][0].contains_window(100));
+    assert!(!state.workspaces[&99][0].contains_window(100));
+    assert_eq!(state.workspaces[&99][0].columns().len(), 1);
+    assert!(state.workspaces[&99][0].contains_window(200));
+    assert!(!state.workspaces[&1][0].contains_window(200));
+}
+
+#[test]
+fn test_stashed_layout_restored_when_monitor_already_connected_at_startup() {
+    let mut state = AppState::new_with_config(test_config(), two_monitors());
+    state.workspaces.get_mut(&2).unwrap()[0]
+        .insert_window(100, Some(500))
+        .unwrap();
+    state.reconcile_monitors(test_monitors());
+    let snapshot: StateSnapshot = serde_json::from_str(&state.build_state_json().unwrap()).unwrap();
+    let mut monitors = two_monitors();
+    monitors[1].id = 99;
+    let mut restarted = AppState::new_with_config(test_config(), monitors);
+    let restored = restarted.restore_workspace_structure_with(&snapshot, |_| true);
+    assert!(restored.contains(&(99, 0)));
+    assert!(restarted.workspaces[&99][0].contains_window(100));
+    assert_eq!(restarted.workspaces[&99][0].columns()[0].width(), 500);
+    assert!(!restarted.workspaces[&1][0].contains_window(100));
+    assert!(restarted.stashed_monitor_layouts.is_empty());
+}
+
+#[test]
+fn test_stashed_layout_rescales_after_restart_when_returned_monitor_changes_width() {
+    let mut state = AppState::new_with_config(test_config(), two_monitors());
+    state.workspaces.get_mut(&2).unwrap()[0]
+        .insert_window(100, Some(500))
+        .unwrap();
+    state.reconcile_monitors(test_monitors());
+    let snapshot: StateSnapshot = serde_json::from_str(&state.build_state_json().unwrap()).unwrap();
+    let mut restarted = AppState::new_with_config(test_config(), test_monitors());
+    restarted.restore_workspace_structure_with(&snapshot, |_| true);
+    let mut returned = two_monitors();
+    returned[1].id = 99;
+    returned[1].rect.width = 1280;
+    returned[1].work_area.width = 1280;
+    restarted.reconcile_monitors(returned);
+    assert_eq!(restarted.workspaces[&99][0].columns()[0].width(), 329);
+}
+
+#[test]
+fn test_stashed_layout_returns_when_migration_target_handle_changes() {
+    for primary_first in [true, false] {
+        let mut state = AppState::new_with_config(test_config(), two_monitors());
+        state.workspaces.get_mut(&2).unwrap()[0]
+            .insert_window(100, Some(500))
+            .unwrap();
+        state.reconcile_monitors(test_monitors());
+        let mut monitors = two_monitors();
+        monitors[0].id = 88;
+        monitors[1].id = 99;
+        if !primary_first {
+            monitors.reverse();
+        }
+        state.reconcile_monitors(monitors);
+        assert!(state.workspaces[&99][0].contains_window(100));
+        assert_eq!(state.workspaces[&99][0].columns()[0].width(), 500);
+        assert!(!state.workspaces[&88][0].contains_window(100));
+    }
+}
+
+#[test]
+fn test_stashed_layout_signature_changes_without_connected_layout_changes() {
+    let mut state = AppState::new_with_config(test_config(), two_monitors());
+    state.workspaces.get_mut(&2).unwrap()[0]
+        .insert_window(100, Some(500))
+        .unwrap();
+    state.reconcile_monitors(test_monitors());
+    let before = state.persisted_signature();
+    state.stashed_monitor_layouts.clear();
+    assert_ne!(before, state.persisted_signature());
+}
+
+#[test]
 fn test_reconcile_restores_stash_at_changed_width_and_active_workspace() {
     let mut state = AppState::new_with_config(test_config(), two_monitors());
     let second_workspace = state.workspaces[&2][0].clone();
@@ -13194,6 +13341,7 @@ fn test_restore_state_preserves_scroll_offset() {
         }],
         focused_monitor_name: "DISPLAY1".to_string(),
         active_workspace: HashMap::new(),
+        stashed_monitor_layouts: HashMap::new(),
         tab_title_overrides: HashMap::new(),
     };
 
@@ -13225,6 +13373,7 @@ fn test_restore_state_clamps_saved_workspace_index() {
         }],
         focused_monitor_name: "DISPLAY1".to_string(),
         active_workspace: HashMap::new(),
+        stashed_monitor_layouts: HashMap::new(),
         tab_title_overrides: HashMap::new(),
     };
 
@@ -13252,6 +13401,7 @@ fn test_restore_state_on_empty_workspace_safe() {
         }],
         focused_monitor_name: "DISPLAY1".to_string(),
         active_workspace: HashMap::new(),
+        stashed_monitor_layouts: HashMap::new(),
         tab_title_overrides: HashMap::new(),
     };
 
@@ -13300,6 +13450,7 @@ fn test_restore_state_returns_restored_monitor_ids() {
         }],
         focused_monitor_name: "DISPLAY1".to_string(),
         active_workspace: HashMap::new(),
+        stashed_monitor_layouts: HashMap::new(),
         tab_title_overrides: HashMap::new(),
     };
 
@@ -13319,6 +13470,7 @@ fn test_restore_state_returns_restored_monitor_ids() {
         }],
         focused_monitor_name: "DISPLAY1".to_string(),
         active_workspace: HashMap::new(),
+        stashed_monitor_layouts: HashMap::new(),
         tab_title_overrides: HashMap::new(),
     };
 
@@ -16803,6 +16955,7 @@ fn test_new_window_monitor_reload_preserves_members_and_changes_next_admission()
         }],
         focused_monitor_name: "DISPLAY1".to_string(),
         active_workspace: std::collections::HashMap::new(),
+        stashed_monitor_layouts: HashMap::new(),
         tab_title_overrides: std::collections::HashMap::new(),
     };
     state.restore_workspace_structure_with(&snapshot, |_| true);
@@ -23037,6 +23190,7 @@ fn test_restore_center_single_column_runtime_setting() {
                 }],
                 focused_monitor_name: "DISPLAY1".to_string(),
                 active_workspace: std::collections::HashMap::new(),
+                stashed_monitor_layouts: HashMap::new(),
                 tab_title_overrides: std::collections::HashMap::new(),
             };
             let snapshot =
@@ -23487,6 +23641,7 @@ fn test_center_single_column_restore_preserves_valid_offsets() {
                 }],
                 focused_monitor_name: "DISPLAY1".to_string(),
                 active_workspace: HashMap::new(),
+                stashed_monitor_layouts: HashMap::new(),
                 tab_title_overrides: HashMap::new(),
             };
             if structure_restore {
@@ -23521,6 +23676,7 @@ fn test_restore_structure_preserves_columns_widths_grouping_scroll() {
         }],
         focused_monitor_name: "DISPLAY1".to_string(),
         active_workspace: std::collections::HashMap::new(),
+        stashed_monitor_layouts: HashMap::new(),
         tab_title_overrides: std::collections::HashMap::new(),
     };
 
@@ -23561,6 +23717,7 @@ fn test_restore_structure_prunes_dead_windows() {
         }],
         focused_monitor_name: "DISPLAY1".to_string(),
         active_workspace: std::collections::HashMap::new(),
+        stashed_monitor_layouts: HashMap::new(),
         tab_title_overrides: std::collections::HashMap::new(),
     };
 
@@ -23645,6 +23802,7 @@ fn test_restore_structure_rejects_excluded_classes_but_keeps_hidden_windows() {
         }],
         focused_monitor_name: "DISPLAY1".to_string(),
         active_workspace: std::collections::HashMap::new(),
+        stashed_monitor_layouts: HashMap::new(),
         tab_title_overrides: std::collections::HashMap::new(),
     };
     let mut state = structure_restore_state();
@@ -23805,6 +23963,7 @@ fn test_initial_layout_parks_restored_inactive_windows() {
         ],
         focused_monitor_name: "DISPLAY1".into(),
         active_workspace: HashMap::from([("DISPLAY1".into(), 0), ("DISPLAY2".into(), 1)]),
+        stashed_monitor_layouts: HashMap::new(),
         tab_title_overrides: HashMap::new(),
     };
     let mut state = structure_restore_state();
@@ -24650,6 +24809,7 @@ fn test_restore_structure_reapplies_snap_suppression() {
             ],
             focused_monitor_name: "DISPLAY1".to_string(),
             active_workspace: HashMap::new(),
+            stashed_monitor_layouts: HashMap::new(),
             tab_title_overrides: HashMap::new(),
         };
         let mut state = structure_restore_state();
@@ -24705,6 +24865,7 @@ fn test_restore_structure_clamps_workspace_index() {
         }],
         focused_monitor_name: "DISPLAY1".to_string(),
         active_workspace: std::collections::HashMap::new(),
+        stashed_monitor_layouts: HashMap::new(),
         tab_title_overrides: std::collections::HashMap::new(),
     };
 
@@ -24736,6 +24897,7 @@ fn test_restore_structure_skips_unknown_monitor() {
         }],
         focused_monitor_name: "DISPLAY1".to_string(),
         active_workspace: std::collections::HashMap::new(),
+        stashed_monitor_layouts: HashMap::new(),
         tab_title_overrides: std::collections::HashMap::new(),
     };
 

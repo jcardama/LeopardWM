@@ -43,6 +43,7 @@ All notable changes to LeopardWM will be documented in this file.
 
 ### Fixes
 
+- **Disconnected monitors regain their windows and layouts after LeopardWM restarts.** Windows closed or moved to another monitor while the display was away stay where they belong.
 - **Administrator diagnostics no longer write through redirected folders or files.** Logs, diagnostic snapshots, and recordings refuse unsafe paths instead.
 - **Winget release manifests now check that both installer architectures and download links match the release.**
 - **Settings preserves the update-check opt-out when saving.**

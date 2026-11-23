@@ -15,6 +15,23 @@ fn saved_workspace_slot(index: usize) -> usize {
 }
 
 impl AppState {
+    fn apply_saved_workspace_params(
+        &self,
+        ws: &mut Workspace,
+        ws_idx: usize,
+        params: &ScaledLayoutParams,
+    ) {
+        params.apply_to(ws, ws_idx);
+        ws.set_centering_mode(self.config.layout.centering_mode.into());
+        ws.set_center_past_edges(self.config.layout.center_past_edges);
+        ws.set_center_columns(self.config.layout.center_columns.center_columns.into());
+        ws.set_reduce_motion(self.reduce_motion);
+        ws.set_scroll_animation(
+            self.config.animation.scroll_duration_ms,
+            self.config.animation.easing,
+        );
+    }
+
     pub(crate) fn save_state(&self) -> Result<()> {
         let json = self.build_state_json()?;
         Self::write_state_file(&json)?;
@@ -92,6 +109,7 @@ impl AppState {
             focused_monitor_name: focused_name,
             active_workspace: active_ws_map,
             tab_title_overrides: self.tab_title_overrides.clone(),
+            stashed_monitor_layouts: self.stashed_monitor_layouts.clone(),
         };
 
         let json = serde_json::to_string_pretty(&snapshot)?;
@@ -143,6 +161,15 @@ impl AppState {
                     }
                 }
             }
+        }
+
+        let mut stashes: Vec<_> = self.stashed_monitor_layouts.iter().collect();
+        stashes.sort_unstable_by_key(|(name, _)| *name);
+        for (name, stash) in stashes {
+            name.hash(&mut hasher);
+            serde_json::to_vec(stash)
+                .expect("stash serialization")
+                .hash(&mut hasher);
         }
 
         let mut overrides: Vec<(u64, usize)> = self
@@ -279,15 +306,7 @@ impl AppState {
                 scale,
                 vw,
             );
-            params.apply_to(&mut ws, ws_idx);
-            ws.set_centering_mode(self.config.layout.centering_mode.into());
-            ws.set_center_past_edges(self.config.layout.center_past_edges);
-            ws.set_center_columns(self.config.layout.center_columns.center_columns.into());
-            ws.set_reduce_motion(self.reduce_motion);
-            ws.set_scroll_animation(
-                self.config.animation.scroll_duration_ms,
-                self.config.animation.easing,
-            );
+            self.apply_saved_workspace_params(&mut ws, ws_idx, &params);
             for (r_idx, saved_row) in ws_snapshot.workspace.rows().iter().enumerate() {
                 ws.set_scroll_offset_for_row(r_idx, saved_row.scroll_offset());
             }
@@ -321,6 +340,73 @@ impl AppState {
                 log_text::text(&ws_snapshot.monitor_device_name),
                 ws_idx
             );
+        }
+
+        for (name, saved) in &snapshot.stashed_monitor_layouts {
+            let mut stash = saved.clone();
+            let connected = self
+                .monitors
+                .values()
+                .find(|m| &m.device_name == name)
+                .cloned();
+            let scale = connected.as_ref().map_or(1.0, |m| m.scale_factor);
+            let params = ScaledLayoutParams::from_config(
+                &self.config.layout,
+                &self.config.appearance,
+                scale,
+                stash.source_viewport_width,
+            );
+            let mut dropped = 0;
+            for (idx, ws) in stash.workspaces.iter_mut().enumerate() {
+                for wid in ws.all_window_ids() {
+                    if !keep(wid) {
+                        if ws.is_floating(wid) {
+                            ws.remove_floating(wid);
+                        } else {
+                            let _ = ws.remove_window(wid);
+                        }
+                        dropped += 1;
+                    }
+                }
+                let gap = ws.gap();
+                let (left, right, top, bottom) = ws.outer_gaps();
+                self.apply_saved_workspace_params(ws, idx, &params);
+                ws.set_gap(gap);
+                ws.set_outer_gaps(left, right, top, bottom);
+            }
+            if dropped > 0 {
+                info!(
+                    "Dropped {} invalid window(s) from stashed monitor {}",
+                    dropped,
+                    log_text::name(name)
+                );
+            }
+            if !stash
+                .workspaces
+                .iter()
+                .any(|ws| !ws.all_window_ids().is_empty())
+            {
+                continue;
+            }
+            if let Some(monitor) = connected {
+                let source_width = self.restore_stashed_monitor_layout(&monitor, stash, &[]);
+                let params = ScaledLayoutParams::from_config(
+                    &self.config.layout,
+                    &self.config.appearance,
+                    monitor.scale_factor,
+                    monitor.work_area.width,
+                );
+                let workspaces = self.workspaces.get_mut(&monitor.id).unwrap();
+                crate::monitors::apply_reconciled_geometry(
+                    workspaces,
+                    &params,
+                    source_width,
+                    monitor.work_area.width,
+                );
+                restored_slots.extend((0..workspaces.len()).map(|idx| (monitor.id, idx)));
+            } else {
+                self.stashed_monitor_layouts.insert(name.clone(), stash);
+            }
         }
 
         restored_slots

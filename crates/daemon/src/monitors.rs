@@ -6,7 +6,7 @@ use leopardwm_platform_win32::{MonitorId, MonitorInfo};
 use std::collections::{HashMap, HashSet};
 use tracing::{info, warn};
 
-fn apply_reconciled_geometry(
+pub(crate) fn apply_reconciled_geometry(
     workspaces: &mut [Workspace],
     params: &ScaledLayoutParams,
     source_viewport_width: i32,
@@ -29,6 +29,62 @@ fn apply_reconciled_geometry(
 }
 
 impl AppState {
+    pub(crate) fn restore_stashed_monitor_layout(
+        &mut self,
+        monitor: &MonitorInfo,
+        mut stash: StashedMonitorLayout,
+        new_monitors: &[MonitorInfo],
+    ) -> i32 {
+        let allowed: Option<HashSet<u64>> = stash.migration_target.as_ref().map(|name| {
+            self.monitors
+                .values()
+                .chain(new_monitors.iter())
+                .filter(|m| &m.device_name == name)
+                .filter_map(|m| self.workspaces.get(&m.id))
+                .flatten()
+                .flat_map(|ws| ws.all_window_ids())
+                .collect()
+        });
+        let mut dropped = 0;
+        for ws in &mut stash.workspaces {
+            for wid in ws.all_window_ids() {
+                if allowed.as_ref().is_some_and(|ids| !ids.contains(&wid)) {
+                    if ws.is_floating(wid) {
+                        ws.remove_floating(wid);
+                    } else {
+                        let _ = ws.remove_window(wid);
+                    }
+                    dropped += 1;
+                }
+            }
+            ws.set_centering_mode(self.config.layout.centering_mode.into());
+            ws.set_center_past_edges(self.config.layout.center_past_edges);
+            ws.set_center_columns(self.config.layout.center_columns.center_columns.into());
+            ws.ensure_focused_visible(stash.source_viewport_width);
+        }
+        let returning: HashSet<u64> = stash
+            .workspaces
+            .iter()
+            .flat_map(|w| w.all_window_ids())
+            .collect();
+        for ws_vec in self.workspaces.values_mut() {
+            for ws in ws_vec {
+                for &wid in &returning {
+                    let _ = ws.remove_window(wid);
+                    ws.remove_floating(wid);
+                }
+            }
+        }
+        let clamped = stash
+            .active_workspace
+            .min(stash.workspaces.len().saturating_sub(1));
+        info!("Restored {} stashed workspace(s) for reconnected monitor {} ({}); dropped {} window(s)",
+            stash.workspaces.len(), monitor.id, log_text::name(&monitor.device_name), dropped);
+        self.workspaces.insert(monitor.id, stash.workspaces);
+        self.active_workspace.insert(monitor.id, clamped);
+        stash.source_viewport_width
+    }
+
     pub(crate) fn reconcile_monitors(&mut self, new_monitors: Vec<MonitorInfo>) {
         let new_ids: HashSet<MonitorId> = new_monitors.iter().map(|m| m.id).collect();
         let old_ids: HashSet<MonitorId> = self.monitors.keys().copied().collect();
@@ -130,44 +186,10 @@ impl AppState {
         // targets exist even when all old monitors are replaced with new ones.
         for monitor in &new_monitors {
             if !old_ids.contains(&monitor.id) {
-                // A monitor whose stable device_name was stashed on disconnect is
-                // returning (e.g. it woke from sleep or was re-docked). Restore its
-                // saved layout instead of a fresh one, and pull its windows back off
-                // whatever monitor they were migrated to while it was gone.
-                if let Some(StashedMonitorLayout {
-                    workspaces: mut stashed_ws,
-                    active_workspace: active_idx,
-                    source_viewport_width,
-                }) = self.stashed_monitor_layouts.remove(&monitor.device_name)
-                {
-                    source_viewport_widths.insert(monitor.id, source_viewport_width);
-                    for workspace in &mut stashed_ws {
-                        workspace.set_centering_mode(self.config.layout.centering_mode.into());
-                        workspace.set_center_past_edges(self.config.layout.center_past_edges);
-                        workspace.set_center_columns(
-                            self.config.layout.center_columns.center_columns.into(),
-                        );
-                        workspace.ensure_focused_visible(source_viewport_width);
-                    }
-                    let returning: HashSet<u64> =
-                        stashed_ws.iter().flat_map(|w| w.all_window_ids()).collect();
-                    for ws_vec in self.workspaces.values_mut() {
-                        for ws in ws_vec.iter_mut() {
-                            for &wid in &returning {
-                                let _ = ws.remove_window(wid);
-                                ws.remove_floating(wid);
-                            }
-                        }
-                    }
-                    let clamped = active_idx.min(stashed_ws.len().saturating_sub(1));
-                    info!(
-                        "Restored {} stashed workspace(s) for reconnected monitor {} ({})",
-                        stashed_ws.len(),
-                        monitor.id,
-                        log_text::name(&monitor.device_name)
-                    );
-                    self.workspaces.insert(monitor.id, stashed_ws);
-                    self.active_workspace.insert(monitor.id, clamped);
+                if let Some(stash) = self.stashed_monitor_layouts.remove(&monitor.device_name) {
+                    let source_width =
+                        self.restore_stashed_monitor_layout(monitor, stash, &new_monitors);
+                    source_viewport_widths.insert(monitor.id, source_width);
                     continue;
                 }
                 // Same-pass handle change: the same physical monitor (matched by
@@ -318,6 +340,12 @@ impl AppState {
                                 workspaces: old_ws_vec,
                                 active_workspace: active_idx,
                                 source_viewport_width,
+                                migration_target: primary_id.and_then(|id| {
+                                    new_monitors
+                                        .iter()
+                                        .find(|m| m.id == id)
+                                        .map(|m| m.device_name.clone())
+                                }),
                             },
                         );
                     }

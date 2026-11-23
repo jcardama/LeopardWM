@@ -426,10 +426,12 @@ impl LayoutTransition {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct StashedMonitorLayout {
     pub(crate) workspaces: Vec<Workspace>,
     pub(crate) active_workspace: usize,
     pub(crate) source_viewport_width: i32,
+    pub(crate) migration_target: Option<String>,
 }
 
 pub(crate) struct AppState {
@@ -995,6 +997,8 @@ pub(crate) struct StateSnapshot {
     /// empty so older snapshots without this field load cleanly.
     #[serde(default)]
     pub(crate) tab_title_overrides: HashMap<u64, String>,
+    #[serde(default)]
+    pub(crate) stashed_monitor_layouts: HashMap<String, StashedMonitorLayout>,
 }
 
 impl AppState {
