@@ -1956,6 +1956,20 @@ function inputToHex(v) { return v.replace('#', '').toUpperCase(); }
 var configSnapshot = window._initConfig || {};
 function applyTrayConfig(cfg) {
   configSnapshot = cfg;
+  var rows = cfg.layout.rows;
+  if (rows) {
+    var globalSplit = document.getElementById('layout-rows-split');
+    if (globalSplit && Array.isArray(rows.split)) globalSplit._lastValidSplit = rows.split.slice();
+    document.querySelectorAll('#workspace-rows-body tr').forEach(function(tr) {
+      if (!tr._loadedWorkspaces) return;
+      var matches = (rows.workspaces || []).filter(function(item) {
+        return JSON.stringify(item.workspaces) === tr._loadedWorkspaces;
+      });
+      if (matches.length === 1 && Array.isArray(matches[0].split)) {
+        tr.querySelector('.ws-row-split')._lastValidSplit = matches[0].split.slice();
+      }
+    });
+  }
   setCb('cb-layout-centering_mode', cfg.layout.centering_mode);
   setCb('cb-layout-center_columns', cfg.layout.center_columns || 'off');
   setChecked('appearance-active_border', cfg.appearance.active_border);
@@ -1978,9 +1992,12 @@ function init(cfg) {
   setVal('layout-outer_gap_right', cfg.layout.outer_gap_right);
   setVal('layout-outer_gap_top', cfg.layout.outer_gap_top);
   setVal('layout-outer_gap_bottom', cfg.layout.outer_gap_bottom);
-  var rowsSplit = (cfg.layout.rows && cfg.layout.rows.split) ? cfg.layout.rows.split.join(', ') : '100%';
+  var loadedSplit = (cfg.layout.rows && cfg.layout.rows.split) || ['100%'];
+  var rowsSplit = loadedSplit.join(', ');
   setVal('layout-rows-split', rowsSplit);
-  readRowSplit(document.getElementById('layout-rows-split'), ['100%']);
+  var globalSplit = document.getElementById('layout-rows-split');
+  globalSplit._lastValidSplit = loadedSplit.slice();
+  globalSplit._lastSplitText = globalSplit.value;
   setVal('layout-rows-gap', (cfg.layout.rows && cfg.layout.rows.gap != null) ? cfg.layout.rows.gap : 8);
   var wsRowsBody = document.getElementById('workspace-rows-body');
   if (wsRowsBody) {
@@ -2764,6 +2781,7 @@ function addWorkspaceRow(item) {
   if (!tbody) return;
   var tr = document.createElement('tr');
   item = item || {};
+  if (Array.isArray(item.workspaces)) tr._loadedWorkspaces = JSON.stringify(item.workspaces);
   var wsVal = '';
   if (Array.isArray(item.workspaces)) {
     wsVal = item.workspaces.join(', ');
@@ -2782,12 +2800,11 @@ function addWorkspaceRow(item) {
     '<td><button class="row-delete" type="button" onclick="removeWorkspaceRow(this)">' + deleteIcon + '</button></td>';
   tbody.appendChild(tr);
   wrapAllInputs(tr);
-  readRowSplit(tr.querySelector('.ws-row-split'), ['50%', '50%']);
+  var splitInput = tr.querySelector('.ws-row-split');
+  splitInput._lastValidSplit = Array.isArray(item.split) ? item.split.slice() : ['50%', '50%'];
+  splitInput._lastSplitText = splitInput.value;
   tr.querySelectorAll('input').forEach(function(input) {
-    input.addEventListener('input', function() {
-      if (input.classList.contains('ws-row-split')) readRowSplit(input, ['50%', '50%']);
-      autoSave(500);
-    });
+    input.addEventListener('input', function() { autoSave(500); });
   });
 }
 
@@ -2798,6 +2815,7 @@ function removeWorkspaceRow(button) {
 }
 
 function readRowSplit(input, fallback) {
+  if (input._lastValidSplit && input.value === input._lastSplitText) return input._lastValidSplit.slice();
   var parts = input.value.split(',').map(function(s) { return s.trim(); });
   var number = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i;
   var valid = parts.every(function(part) {
@@ -2805,7 +2823,10 @@ function readRowSplit(input, fallback) {
     if (terms.length > 2 || !terms.every(function(s) { return number.test(s) && Number(s) > 0; })) return false;
     return Number.isFinite(terms.length === 2 ? Number(terms[0]) / Number(terms[1]) : Number(terms[0]));
   });
-  if (valid) input._lastValidSplit = parts.slice();
+  if (valid) {
+    input._lastValidSplit = parts.slice();
+    input._lastSplitText = input.value;
+  }
   return (input._lastValidSplit || fallback).slice();
 }
 
@@ -3148,10 +3169,7 @@ document.querySelectorAll('input[type="checkbox"], input[type="color"], input[ty
 /* Debounced: text and number inputs */
 document.querySelectorAll('input[type="text"], input[type="number"]').forEach(function(el) {
   if (el.hasAttribute('data-no-config')) return;
-  el.addEventListener('input', function() {
-    if (el.id === 'layout-rows-split') readRowSplit(el, ['100%']);
-    autoSave(500);
-  });
+  el.addEventListener('input', function() { autoSave(500); });
 });
 /* Troubleshooting */
 (function() {
@@ -3612,6 +3630,85 @@ for (const [section, keys] of Object.entries({layout: ['centering_mode', 'center
   appearance: ['active_border'], behavior: ['focus_new_windows', 'focus_follows_mouse', 'keep_awake', 'focus_lock_modifier', 'taskbar_buttons', 'new_window_placement']})) {
   for (const key of keys) assert.strictEqual(saved[section][key], cfg[section][key], section + '.' + key);
 }
+
+function input(id, className) {
+  const listeners = [];
+  return { id, value: '', checked: false, dataset: {},
+    classList: { contains(name) { return name === className; } },
+    querySelectorAll() { return []; }, querySelector() { return { textContent: '' }; },
+    hasAttribute() { return false; }, hasChildNodes() { return true; },
+    addEventListener(type, fn) { if (type === 'input') listeners.push(fn); },
+    edit(value) { this.value = value; listeners.forEach(fn => fn()); } };
+}
+const controls = {};
+const rows = [];
+const tbody = { appendChild(row) { rows.push(row); }, set innerHTML(_) { rows.length = 0; } };
+global.document = {
+  getElementById(id) { return id === 'workspace-rows-body' ? tbody : (controls[id] ||= input(id)); },
+  querySelectorAll(selector) {
+    if (selector === '#workspace-rows-body tr') return rows;
+    if (selector === 'input[type="text"], input[type="number"]') return [this.getElementById('layout-rows-split')];
+    return [];
+  },
+  createElement() {
+    const ws = input('', 'ws-row-workspaces'), split = input('', 'ws-row-split');
+    return { set innerHTML(markup) {
+      ws.value = markup.match(/class="ws-row-workspaces" value="([^"]*)"/)[1];
+      split.value = markup.match(/class="ws-row-split" value="([^"]*)"/)[1];
+    }, querySelector(selector) { return selector === '.ws-row-split' ? split : ws; },
+    querySelectorAll() { return [ws, split]; } };
+  }
+};
+global.autoSave = () => {};
+global.escAttr = s => s || '';
+global.wrapAllInputs = global.addPresetRow = global.refreshDefaultWidthPresetOptions = () => {};
+global.loadHotkeysSorted = global.renderFailedHotkeys = global.addRuleRow = global.updateScrollLabels = () => {};
+global.deleteIcon = '';
+eval(section('function init(cfg)', '/* ── Delete icon'));
+eval(section('/* Debounced: text and number inputs */', '/* Troubleshooting */'));
+const cases = [
+  { name: 'intermediate keystroke', loaded: ['50%', '50%'], edits: ['1', '1/'], expected: ['50%', '50%'] },
+  { name: 'fully invalid loaded split', loaded: ['1/'], edits: [], expected: ['1/'] },
+  { name: 'partly valid fraction', loaded: ['60%', '40%', '1/'], edits: [], expected: ['60%', '40%', '1/'] },
+  { name: 'partly valid text', loaded: ['50%', '50%', 'oops'], edits: [], expected: ['50%', '50%', 'oops'] },
+  { name: 'raw loaded text', loaded: [' 50% ', '50%'], edits: [], expected: [' 50% ', '50%'] },
+  { name: 'tray refresh while editing', loaded: ['50%', '50%'], edits: ['1/'], push: ['60%', '40%', '1/'], expected: ['60%', '40%', '1/'] },
+  { name: 'empty edit', loaded: ['50%', '50%'], edits: [''], expected: ['50%', '50%'] },
+  { name: 'valid edit', loaded: ['50%', '50%'], edits: ['1/3, 2/3'], expected: ['1/3', '2/3'], then: '1/' },
+  { name: 'new empty workspace row', loaded: ['100%'], edits: [], expected: ['100%'], newRow: true }
+];
+const failures = [];
+for (const test of cases) {
+  const config = JSON.parse(JSON.stringify(payload.config));
+  config.high_contrast = false;
+  config.layout.rows.split = test.loaded;
+  config.layout.rows.workspaces = test.newRow ? [] : [{workspaces: [1], split: test.loaded}];
+  delete document.getElementById('layout-rows-split')._lastValidSplit;
+  init(config);
+  if (test.newRow) { addWorkspaceRow(); rows[0].querySelector('.ws-row-workspaces').value = '1'; }
+  const globalSplit = document.getElementById('layout-rows-split');
+  const rowSplit = rows[0].querySelector('.ws-row-split');
+  for (const edit of test.edits) { globalSplit.edit(edit); rowSplit.edit(edit); }
+  if (test.push) {
+    config.layout.rows.split = test.push;
+    config.layout.rows.workspaces[0].split = test.push;
+    applyTrayConfig(config);
+  }
+  let result = readConfig();
+  try { assert.deepStrictEqual(result.layout.rows.split, test.expected); }
+  catch (error) { failures.push(test.name + ' global: ' + error.message); }
+  try { assert.deepStrictEqual(result.layout.rows.workspaces[0].split, test.newRow ? ['50%', '50%'] : test.expected); }
+  catch (error) { failures.push(test.name + ' workspace: ' + error.message); }
+  if (test.then) {
+    globalSplit.edit(test.then); rowSplit.edit(test.then);
+    result = readConfig();
+    try { assert.deepStrictEqual(result.layout.rows.split, test.expected); }
+    catch (error) { failures.push(test.name + ' global fallback: ' + error.message); }
+    try { assert.deepStrictEqual(result.layout.rows.workspaces[0].split, test.expected); }
+    catch (error) { failures.push(test.name + ' workspace fallback: ' + error.message); }
+  }
+}
+assert.deepStrictEqual(failures, []);
 "#;
         let mut child = Command::new("node")
             .args(["-e", script])
