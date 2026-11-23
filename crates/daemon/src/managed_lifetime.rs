@@ -148,7 +148,9 @@ impl AppState {
         self.post_admission_maximize_restore_eligible.remove(&hwnd);
         self.forget_recreated_window_lifetime(hwnd);
         self.managed_lifetime_admitted_at_event_ms.remove(&hwnd);
-        self.managed_lifetime_tokens.remove(&hwnd)
+        let token = self.managed_lifetime_tokens.remove(&hwnd)?;
+        leopardwm_platform_win32::retire_frame_refresh_lifetime(hwnd, token);
+        Some(token)
     }
 
     /// Create/Show time of the lifetime that currently owns `hwnd`, if one was recorded.

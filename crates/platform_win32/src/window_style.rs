@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Sender, SyncSender};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{LazyLock, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 use windows::core::BOOL;
 use windows::Win32::Foundation::{GetLastError, SetLastError, HWND, RECT, WIN32_ERROR};
@@ -72,23 +72,53 @@ fn is_border_color_unsupported_hresult(code: windows::core::HRESULT) -> bool {
     code.0 == E_INVALIDARG_HRESULT || code.0 == E_NOTIMPL_HRESULT
 }
 
-static FRAME_REFRESHES: Mutex<Option<HashMap<WindowId, (WindowIdentity, u64)>>> = Mutex::new(None);
+struct ManagedFrameRefresh {
+    token: u64,
+    pending: Option<u64>,
+}
+
+static FRAME_REFRESHES: LazyLock<Mutex<HashMap<WindowId, ManagedFrameRefresh>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 static NEXT_FRAME_REFRESH: AtomicU64 = AtomicU64::new(1);
 
-fn mark_frame_refresh(window_id: WindowId, hwnd: HWND, identity: WindowIdentity) {
-    if identity.managed_lifetime_token.is_none() {
-        return;
-    }
-    let mut guard = FRAME_REFRESHES
+fn lock_frame_refreshes() -> MutexGuard<'static, HashMap<WindowId, ManagedFrameRefresh>> {
+    FRAME_REFRESHES
         .lock()
-        .unwrap_or_else(crate::recover_poisoned_mutex);
-    if !window_identity_matches(hwnd, identity) {
-        return;
-    }
-    guard.get_or_insert_with(HashMap::new).insert(
+        .unwrap_or_else(crate::recover_poisoned_mutex)
+}
+
+pub(crate) fn register_frame_refresh_lifetime(window_id: WindowId, token: u64) {
+    lock_frame_refreshes().insert(
         window_id,
-        (identity, NEXT_FRAME_REFRESH.fetch_add(1, Ordering::Relaxed)),
+        ManagedFrameRefresh {
+            token,
+            pending: None,
+        },
     );
+}
+
+/// Discard pending refreshes for a departing managed lifetime without invalidating
+/// the HWND's token, which queued style restores and hidden-window suppression still use.
+pub fn retire_frame_refresh_lifetime(window_id: WindowId, token: u64) {
+    let mut refreshes = lock_frame_refreshes();
+    if refreshes
+        .get(&window_id)
+        .is_some_and(|entry| entry.token == token)
+    {
+        refreshes.remove(&window_id);
+    }
+}
+
+fn mark_frame_refresh(window_id: WindowId, hwnd: HWND, identity: WindowIdentity) {
+    let mut refreshes = lock_frame_refreshes();
+    let Some(entry) = refreshes.get_mut(&window_id) else {
+        return;
+    };
+    if identity.managed_lifetime_token == Some(entry.token)
+        && window_identity_matches(hwnd, identity)
+    {
+        entry.pending = Some(NEXT_FRAME_REFRESH.fetch_add(1, Ordering::Relaxed));
+    }
 }
 
 fn frame_change_offscreen(hwnd: HWND) -> bool {
@@ -126,29 +156,24 @@ fn finish_frame_change(
 }
 
 pub(crate) fn frame_refresh(window_id: WindowId, hwnd: HWND) -> Option<u64> {
-    let mut guard = FRAME_REFRESHES
-        .lock()
-        .unwrap_or_else(crate::recover_poisoned_mutex);
-    let marks = guard.as_mut()?;
-    let (identity, generation) = *marks.get(&window_id)?;
-    if window_identity_matches(hwnd, identity) {
+    let mut refreshes = lock_frame_refreshes();
+    let entry = refreshes.get_mut(&window_id)?;
+    let generation = entry.pending?;
+    if capture_window_identity(hwnd).and_then(|identity| identity.managed_lifetime_token)
+        == Some(entry.token)
+    {
         Some(generation)
     } else {
-        marks.remove(&window_id);
+        entry.pending = None;
         None
     }
 }
 
 pub(crate) fn clear_frame_refresh(window_id: WindowId, generation: u64) {
-    let mut guard = FRAME_REFRESHES
-        .lock()
-        .unwrap_or_else(crate::recover_poisoned_mutex);
-    if let Some(marks) = guard.as_mut() {
-        if marks
-            .get(&window_id)
-            .is_some_and(|&(_, current)| current == generation)
-        {
-            marks.remove(&window_id);
+    let mut refreshes = lock_frame_refreshes();
+    if let Some(entry) = refreshes.get_mut(&window_id) {
+        if entry.pending == Some(generation) {
+            entry.pending = None;
         }
     }
 }
@@ -1095,6 +1120,43 @@ mod tests {
                 let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::DestroyWindow(hwnd) };
             }
         }
+    }
+
+    #[test]
+    fn departing_window_discards_pending_frame_refresh() {
+        let _guard = lock_snap_tracking_fixture();
+        let fixture = HiddenFramedFixture::create();
+        let id = fixture.window_id();
+        let hwnd = fixture.hwnd();
+        let token = crate::stamp_managed_lifetime_token(id).unwrap();
+        let identity = capture_window_identity(hwnd).unwrap();
+        mark_frame_refresh(id, hwnd, identity);
+        assert!(frame_refresh(id, hwnd).is_some());
+
+        retire_frame_refresh_lifetime(id, token);
+
+        assert_eq!(frame_refresh(id, hwnd), None);
+    }
+
+    #[test]
+    fn late_frame_refresh_is_rejected_after_departure() {
+        let _guard = lock_snap_tracking_fixture();
+        let fixture = HiddenFramedFixture::create();
+        let id = fixture.window_id();
+        let hwnd = fixture.hwnd();
+        let token = crate::stamp_managed_lifetime_token(id).unwrap();
+        let identity = capture_window_identity(hwnd).unwrap();
+
+        retire_frame_refresh_lifetime(id, token);
+        assert!(window_identity_matches(hwnd, identity));
+        mark_frame_refresh(id, hwnd, identity);
+        assert_eq!(frame_refresh(id, hwnd), None);
+
+        let new_token = crate::stamp_managed_lifetime_token(id).unwrap();
+        retire_frame_refresh_lifetime(id, token);
+        mark_frame_refresh(id, hwnd, capture_window_identity(hwnd).unwrap());
+        assert!(frame_refresh(id, hwnd).is_some());
+        retire_frame_refresh_lifetime(id, new_token);
     }
 
     #[derive(Default)]
