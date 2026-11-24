@@ -5396,6 +5396,75 @@ fn move_float_drag_fixture(hwnd: u64, x: i32, y: i32) {
 }
 
 #[test]
+fn floating_drag_end_does_not_reclaim_stashed_window() {
+    let _desktop = display_change_regression::FixtureDesktop::enter();
+    let fixture =
+        display_change_regression::PlacementOwner::spawn_at(Rect::new(100, 100, 600, 400));
+    fixture.resume();
+    let hwnd = fixture.window_id;
+    let start = leopardwm_platform_win32::get_window_visible_rect(hwnd).unwrap();
+    let make_monitor = |id, x, primary, name: &str| MonitorInfo {
+        id,
+        rect: Rect::new(x, start.y - 300, 1800, 1200),
+        work_area: Rect::new(x, start.y - 300, 1800, 1200),
+        is_primary: primary,
+        device_name: name.to_string(),
+        scale_factor: 1.0,
+    };
+    let primary = make_monitor(1, start.x - 300, true, "DISPLAY1");
+    let returning = make_monitor(2, start.x - 2500, false, "DISPLAY2");
+    let destination = make_monitor(3, start.x + 2000, false, "DISPLAY3");
+    let mut state = AppState::new_with_config(
+        test_config(),
+        vec![primary.clone(), returning.clone(), destination.clone()],
+    );
+    state.workspaces.get_mut(&2).unwrap()[0]
+        .add_floating(hwnd, start)
+        .unwrap();
+    state.reconcile_monitors(vec![primary.clone(), destination.clone()]);
+    assert!(state.stashed_monitor_layouts.contains_key("DISPLAY2"));
+    move_float_drag_fixture(hwnd, start.x + 2500, start.y);
+    let dropped = leopardwm_platform_win32::get_window_visible_rect(hwnd).unwrap();
+    assert_eq!(
+        leopardwm_platform_win32::find_monitor_for_rect(
+            &[primary.clone(), destination.clone()],
+            &dropped
+        )
+        .unwrap()
+        .id,
+        3
+    );
+    state.drag_state = Some(DragState {
+        hwnd,
+        is_tiled: false,
+        float_on_drop: false,
+        start_visible_rect: None,
+        source_monitor: 1,
+        source_workspace_idx: 0,
+        source_row: 0,
+        source_window_slot: 0,
+        current_row_index: 0,
+        current_column_index: 0,
+        last_drop_target: None,
+        last_hint_update: None,
+        removed_from_source: false,
+        preview_mode: crate::state::DragPreviewMode::None,
+        target_column_peers: Vec::new(),
+        source_column_peers: Vec::new(),
+        source_column_width: None,
+    });
+    state.handle_window_event(WindowEvent::MoveSizeEnd(hwnd));
+    state.reconcile_monitors(vec![primary, returning, destination]);
+    assert!(!state.workspaces[&2][0].contains_window(hwnd));
+    let floating = state.workspaces[&1][0]
+        .floating_windows()
+        .iter()
+        .find(|window| window.id == hwnd)
+        .unwrap();
+    assert_eq!(floating.rect, dropped);
+}
+
+#[test]
 fn float_drag_drop_keeps_visible_rect_and_leaves_tiling() {
     let _desktop = display_change_regression::FixtureDesktop::enter();
     let fixture = display_change_regression::PlacementOwner::spawn_at(float_drag_fixture_bounds());
@@ -12150,7 +12219,7 @@ fn test_stashed_layout_survives_persistence_roundtrip() {
     let snapshot: StateSnapshot = serde_json::from_str(&state.build_state_json().unwrap()).unwrap();
 
     let mut restarted = AppState::new_with_config(test_config(), test_monitors());
-    restarted.restore_workspace_structure_with(&snapshot, |_| true);
+    restarted.restore_workspace_structure_with(&snapshot, Some(0), |_| true);
     let mut returned = two_monitors();
     returned[1].id = 99;
     restarted.reconcile_monitors(returned);
@@ -12164,6 +12233,45 @@ fn test_stashed_layout_survives_persistence_roundtrip() {
 }
 
 #[test]
+fn test_stashed_layout_is_discarded_if_saved_before_boot() {
+    let mut state = AppState::new_with_config(test_config(), two_monitors());
+    state.workspaces.get_mut(&2).unwrap()[0]
+        .insert_window(100, Some(500))
+        .unwrap();
+    state.reconcile_monitors(test_monitors());
+    let snapshot: StateSnapshot = serde_json::from_str(&state.build_state_json().unwrap()).unwrap();
+    for (saved_at, boot, retained) in [
+        ("1499", Some(1500), false),
+        ("1500", Some(1500), true),
+        ("1501", Some(1500), true),
+        ("invalid", Some(1500), false),
+        ("1501", None, false),
+    ] {
+        let mut saved = snapshot.clone();
+        saved.saved_at = saved_at.to_string();
+        let mut restarted = AppState::new_with_config(test_config(), test_monitors());
+        restarted.restore_workspace_structure_with(&saved, boot, |_| true);
+        assert!(restarted.workspaces[&1][0].contains_window(100));
+        assert_eq!(
+            restarted.stashed_monitor_layouts.contains_key("DISPLAY2"),
+            retained,
+            "{saved_at}"
+        );
+        restarted.reconcile_monitors(two_monitors());
+        assert_eq!(
+            restarted.workspaces[&2][0].contains_window(100),
+            retained,
+            "{saved_at}"
+        );
+        assert_eq!(
+            restarted.workspaces[&1][0].contains_window(100),
+            !retained,
+            "{saved_at}"
+        );
+    }
+}
+
+#[test]
 fn test_stashed_layout_prunes_closed_window_across_restart() {
     let mut state = AppState::new_with_config(test_config(), two_monitors());
     let ws = &mut state.workspaces.get_mut(&2).unwrap()[0];
@@ -12172,7 +12280,7 @@ fn test_stashed_layout_prunes_closed_window_across_restart() {
     state.reconcile_monitors(test_monitors());
     let snapshot: StateSnapshot = serde_json::from_str(&state.build_state_json().unwrap()).unwrap();
     let mut restarted = AppState::new_with_config(test_config(), test_monitors());
-    restarted.restore_workspace_structure_with(&snapshot, |id| id != 100);
+    restarted.restore_workspace_structure_with(&snapshot, Some(0), |id| id != 100);
     let mut returned = two_monitors();
     returned[1].id = 99;
     restarted.reconcile_monitors(returned);
@@ -12217,7 +12325,7 @@ fn test_stashed_layout_monitor_migration_orderings() {
                     let snapshot: StateSnapshot =
                         serde_json::from_str(&state.build_state_json().unwrap()).unwrap();
                     state = AppState::new_with_config(test_config(), monitors.clone());
-                    state.restore_workspace_structure_with(&snapshot, |_| true);
+                    state.restore_workspace_structure_with(&snapshot, Some(0), |_| true);
                 }
                 if position == 4 {
                     break;
@@ -12387,7 +12495,9 @@ fn test_stashed_user_moves_survive_disconnect_and_restart() {
                     monitors.remove(0);
                 }
                 let mut restarted = AppState::new_with_config(test_config(), monitors);
-                restarted.restore_workspace_structure_with(&snapshot, |id| !closed || id != 100);
+                restarted.restore_workspace_structure_with(&snapshot, Some(0), |id| {
+                    !closed || id != 100
+                });
                 assert_eq!(
                     restarted.workspaces[&3][0].contains_window(100),
                     !closed,
@@ -12529,7 +12639,7 @@ fn test_stashed_monitors_return_together_during_restart() {
     let snapshot: StateSnapshot = serde_json::from_str(&state.build_state_json().unwrap()).unwrap();
     for _ in 0..8 {
         let mut restarted = AppState::new_with_config(test_config(), monitors.clone());
-        restarted.restore_workspace_structure_with(&snapshot, |_| true);
+        restarted.restore_workspace_structure_with(&snapshot, Some(0), |_| true);
         assert!(restarted.workspaces[&1][0].contains_window(100));
         assert!(!restarted.workspaces[&1][0].contains_window(200));
         assert!(restarted.workspaces[&2][0].contains_window(200));
@@ -12549,7 +12659,7 @@ fn test_stashed_snapshot_accepts_unknown_fields() {
     json["stashed_monitor_layouts"]["DISPLAY2"]["migration_target"] = serde_json::json!("DISPLAY1");
     let snapshot: StateSnapshot = serde_json::from_value(json).unwrap();
     let mut restarted = AppState::new_with_config(test_config(), test_monitors());
-    restarted.restore_workspace_structure_with(&snapshot, |_| true);
+    restarted.restore_workspace_structure_with(&snapshot, Some(0), |_| true);
     restarted.reconcile_monitors(two_monitors());
     assert!(restarted.workspaces[&2][0].contains_window(100));
 }
@@ -12597,7 +12707,7 @@ fn test_stashed_layout_truncates_oversized_workspace_list() {
     stash.workspaces.resize_with(12, Workspace::new);
     stash.active_workspace = 11;
     let mut restarted = AppState::new_with_config(test_config(), test_monitors());
-    restarted.restore_workspace_structure_with(&snapshot, |_| true);
+    restarted.restore_workspace_structure_with(&snapshot, Some(0), |_| true);
     assert_eq!(
         restarted.stashed_monitor_layouts["DISPLAY2"]
             .workspaces
@@ -12623,7 +12733,7 @@ fn test_stashed_layout_restored_when_monitor_already_connected_at_startup() {
     let mut monitors = two_monitors();
     monitors[1].id = 99;
     let mut restarted = AppState::new_with_config(test_config(), monitors);
-    let restored = restarted.restore_workspace_structure_with(&snapshot, |_| true);
+    let restored = restarted.restore_workspace_structure_with(&snapshot, Some(0), |_| true);
     assert!(restored.contains(&(99, 0)));
     assert!(restarted.workspaces[&99][0].contains_window(100));
     assert_eq!(restarted.workspaces[&99][0].columns()[0].width(), 500);
@@ -12640,7 +12750,7 @@ fn test_stashed_layout_rescales_after_restart_when_returned_monitor_changes_widt
     state.reconcile_monitors(test_monitors());
     let snapshot: StateSnapshot = serde_json::from_str(&state.build_state_json().unwrap()).unwrap();
     let mut restarted = AppState::new_with_config(test_config(), test_monitors());
-    restarted.restore_workspace_structure_with(&snapshot, |_| true);
+    restarted.restore_workspace_structure_with(&snapshot, Some(0), |_| true);
     let mut returned = two_monitors();
     returned[1].id = 99;
     returned[1].rect.width = 1280;
@@ -13776,7 +13886,7 @@ fn test_restore_state_clamps_saved_workspace_index() {
         tab_title_overrides: HashMap::new(),
     };
 
-    state.restore_workspace_structure_with(&snapshot, |_| true);
+    state.restore_workspace_structure_with(&snapshot, Some(0), |_| true);
     state.workspaces.get_mut(&1).unwrap()[8].set_scroll_offset(0.0);
     state.restore_state(&snapshot);
 
@@ -17357,7 +17467,7 @@ fn test_new_window_monitor_reload_preserves_members_and_changes_next_admission()
         stashed_monitor_layouts: HashMap::new(),
         tab_title_overrides: std::collections::HashMap::new(),
     };
-    state.restore_workspace_structure_with(&snapshot, |_| true);
+    state.restore_workspace_structure_with(&snapshot, Some(0), |_| true);
     let mut restored = make_test_window_info(200);
     restored.rect = Rect::new(100, 100, 800, 600);
     state.injected_window_info.insert(200, restored.clone());
@@ -22351,7 +22461,7 @@ fn test_flat_state_restore_reapplies_row_config() {
         config.layout.rows.split = split.clone();
         let mut state = AppState::new_with_config(config, test_monitors());
         assert!(state
-            .restore_workspace_structure_with(&snapshot, |_| true)
+            .restore_workspace_structure_with(&snapshot, Some(0), |_| true)
             .contains(&(1, 0)));
         let ws = state.focused_workspace().unwrap();
         assert_eq!(ws.row_gap(), 37);
@@ -23595,7 +23705,7 @@ fn test_restore_center_single_column_runtime_setting() {
             let snapshot =
                 serde_json::from_str(&serde_json::to_string(&snapshot).unwrap()).unwrap();
             if restore_path == 0 {
-                state.restore_workspace_structure_with(&snapshot, |_| true);
+                state.restore_workspace_structure_with(&snapshot, Some(0), |_| true);
             } else {
                 if restore_path == 2 {
                     state.workspaces.get_mut(&2).unwrap()[0]
@@ -24044,7 +24154,7 @@ fn test_center_single_column_restore_preserves_valid_offsets() {
                 tab_title_overrides: HashMap::new(),
             };
             if structure_restore {
-                state.restore_workspace_structure_with(&snapshot, |_| true);
+                state.restore_workspace_structure_with(&snapshot, Some(0), |_| true);
             } else {
                 let ws = &mut state.workspaces.get_mut(&1).unwrap()[0];
                 ws.insert_window(100, Some(400)).unwrap();
@@ -24081,7 +24191,7 @@ fn test_restore_structure_preserves_columns_widths_grouping_scroll() {
 
     // Fake all four HWNDs alive so none are pruned (avoids the real Win32
     // is_valid_window call).
-    let restored = state.restore_workspace_structure_with(&snapshot, |_| true);
+    let restored = state.restore_workspace_structure_with(&snapshot, Some(0), |_| true);
 
     let display2_id = state
         .monitors
@@ -24121,7 +24231,7 @@ fn test_restore_structure_prunes_dead_windows() {
     };
 
     let alive = |w: u64| w == 200;
-    state.restore_workspace_structure_with(&snapshot, alive);
+    state.restore_workspace_structure_with(&snapshot, Some(0), alive);
 
     let display2_id = state
         .monitors
@@ -25268,7 +25378,7 @@ fn test_restore_structure_clamps_workspace_index() {
         tab_title_overrides: std::collections::HashMap::new(),
     };
 
-    let restored = state.restore_workspace_structure_with(&snapshot, |_| true);
+    let restored = state.restore_workspace_structure_with(&snapshot, Some(0), |_| true);
 
     let display2_id = state
         .monitors
@@ -25300,7 +25410,7 @@ fn test_restore_structure_skips_unknown_monitor() {
         tab_title_overrides: std::collections::HashMap::new(),
     };
 
-    let restored = state.restore_workspace_structure_with(&snapshot, |_| true);
+    let restored = state.restore_workspace_structure_with(&snapshot, Some(0), |_| true);
     assert!(
         restored.is_empty(),
         "unknown monitor produces no restored slots"

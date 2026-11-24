@@ -1,5 +1,15 @@
 //! System-level queries: DPI scaling, power state, accessibility settings.
 
+pub fn boot_time_epoch_seconds() -> Option<u64> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?;
+    let uptime = std::time::Duration::from_millis(unsafe {
+        windows::Win32::System::SystemInformation::GetTickCount64()
+    });
+    Some(now.checked_sub(uptime)?.as_secs())
+}
+
 /// Return the installed Windows product name, display version, and build when available.
 pub fn get_windows_version() -> String {
     use winreg::enums::HKEY_LOCAL_MACHINE;
