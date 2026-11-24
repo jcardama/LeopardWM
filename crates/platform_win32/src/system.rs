@@ -1,13 +1,34 @@
 //! System-level queries: DPI scaling, power state, accessibility settings.
 
-pub fn boot_time_epoch_seconds() -> Option<u64> {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+pub fn current_session_logon_epoch_seconds() -> Option<u64> {
+    use windows::core::PWSTR;
+    use windows::Win32::System::RemoteDesktop::{
+        WTSFreeMemory, WTSQuerySessionInformationW, WTSSessionInfo, WTSINFOW, WTS_CURRENT_SESSION,
+    };
+
+    let mut buffer = PWSTR::null();
+    let mut length = 0;
+    unsafe {
+        WTSQuerySessionInformationW(
+            None,
+            WTS_CURRENT_SESSION,
+            WTSSessionInfo,
+            &mut buffer,
+            &mut length,
+        )
         .ok()?;
-    let uptime = std::time::Duration::from_millis(unsafe {
-        windows::Win32::System::SystemInformation::GetTickCount64()
-    });
-    Some(now.checked_sub(uptime)?.as_secs())
+        let logon = if !buffer.is_null() && length as usize >= std::mem::size_of::<WTSINFOW>() {
+            Some((*buffer.0.cast::<WTSINFOW>()).LogonTime)
+        } else {
+            None
+        };
+        if !buffer.is_null() {
+            WTSFreeMemory(buffer.0.cast());
+        }
+        let ticks = u64::try_from(logon?).ok()?;
+        let seconds = ticks.checked_sub(116_444_736_000_000_000)? / 10_000_000;
+        (seconds != 0).then_some(seconds)
+    }
 }
 
 /// Return the installed Windows product name, display version, and build when available.

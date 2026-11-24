@@ -239,7 +239,7 @@ impl AppState {
     ) -> HashSet<(MonitorId, usize)> {
         let restored_slots = self.restore_workspace_structure_with(
             snapshot,
-            leopardwm_platform_win32::boot_time_epoch_seconds(),
+            leopardwm_platform_win32::current_session_logon_epoch_seconds(),
             |hwnd| {
                 // Keep a saved window only if it's still alive AND manageable. An
                 // elevated window a non-elevated daemon can't reposition would
@@ -257,7 +257,7 @@ impl AppState {
     pub(crate) fn restore_workspace_structure_with(
         &mut self,
         snapshot: &StateSnapshot,
-        boot_time: Option<u64>,
+        session_start: Option<u64>,
         keep: impl Fn(u64) -> bool,
     ) -> HashSet<(MonitorId, usize)> {
         let mut restored_slots = HashSet::new();
@@ -350,12 +350,12 @@ impl AppState {
         }
 
         if !snapshot.stashed_monitor_layouts.is_empty()
-            && !boot_time
+            && !session_start
                 .zip(snapshot.saved_at.parse::<u64>().ok())
-                .is_some_and(|(boot, saved)| saved >= boot)
+                .is_some_and(|(session, saved)| saved >= session)
         {
             info!(
-                "Discarded stashed monitor layouts not known to be saved during the current boot"
+                "Discarded stashed monitor layouts not known to be saved during the current logon session"
             );
             return restored_slots;
         }

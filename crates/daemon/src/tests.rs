@@ -12233,14 +12233,14 @@ fn test_stashed_layout_survives_persistence_roundtrip() {
 }
 
 #[test]
-fn test_stashed_layout_is_discarded_if_saved_before_boot() {
+fn test_stashed_layout_is_discarded_if_saved_before_logon() {
     let mut state = AppState::new_with_config(test_config(), two_monitors());
     state.workspaces.get_mut(&2).unwrap()[0]
         .insert_window(100, Some(500))
         .unwrap();
     state.reconcile_monitors(test_monitors());
     let snapshot: StateSnapshot = serde_json::from_str(&state.build_state_json().unwrap()).unwrap();
-    for (saved_at, boot, retained) in [
+    for (saved_at, session_start, retained) in [
         ("1499", Some(1500), false),
         ("1500", Some(1500), true),
         ("1501", Some(1500), true),
@@ -12250,7 +12250,7 @@ fn test_stashed_layout_is_discarded_if_saved_before_boot() {
         let mut saved = snapshot.clone();
         saved.saved_at = saved_at.to_string();
         let mut restarted = AppState::new_with_config(test_config(), test_monitors());
-        restarted.restore_workspace_structure_with(&saved, boot, |_| true);
+        restarted.restore_workspace_structure_with(&saved, session_start, |_| true);
         assert!(restarted.workspaces[&1][0].contains_window(100));
         assert_eq!(
             restarted.stashed_monitor_layouts.contains_key("DISPLAY2"),

@@ -88,7 +88,7 @@ pub use placement::{
     PlacementLanding, WidthViolation,
 };
 pub use system::{
-    are_animations_enabled, boot_time_epoch_seconds, get_system_highlight_color_bgr,
+    are_animations_enabled, current_session_logon_epoch_seconds, get_system_highlight_color_bgr,
     get_windows_version, is_high_contrast_enabled, is_on_battery_or_power_saver, scale_px,
     set_dpi_awareness, set_keep_awake,
 };
