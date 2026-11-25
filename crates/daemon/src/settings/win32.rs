@@ -124,7 +124,51 @@ pub fn push_report_status(
     }
 }
 static PENDING_LOCALE: Mutex<Option<String>> = Mutex::new(None);
-static PENDING_CONFIG: Mutex<Vec<String>> = Mutex::new(Vec::new());
+#[derive(Clone, Copy)]
+enum ConfigPush {
+    Reload,
+    Tray,
+}
+
+#[derive(Default)]
+struct PendingConfig {
+    reload: Option<String>,
+    tray: Option<String>,
+    wake_posted: bool,
+}
+
+impl PendingConfig {
+    fn enqueue(&mut self, kind: ConfigPush, script: String) -> bool {
+        match kind {
+            ConfigPush::Reload => {
+                self.reload = Some(script);
+                self.tray = None;
+            }
+            ConfigPush::Tray => self.tray = Some(script),
+        }
+        if self.wake_posted {
+            false
+        } else {
+            self.wake_posted = true;
+            true
+        }
+    }
+
+    fn wake_failed(&mut self) {
+        self.wake_posted = false;
+    }
+
+    fn drain(&mut self) -> impl Iterator<Item = String> {
+        self.wake_posted = false;
+        self.reload.take().into_iter().chain(self.tray.take())
+    }
+}
+
+static PENDING_CONFIG: Mutex<PendingConfig> = Mutex::new(PendingConfig {
+    reload: None,
+    tray: None,
+    wake_posted: false,
+});
 
 /// Thread id of the open settings window's message loop, or `None` when closed.
 /// We target the thread queue (not the HWND) so a destroyed or recycled window
@@ -209,28 +253,33 @@ pub fn push_locale(language: &str) {
 }
 
 pub fn push_tray_config(config: &Config) {
-    if let Ok(script) = super::html::tray_config_script(config) {
-        push_config_script(script);
-    }
+    push_config(config, ConfigPush::Tray);
 }
 
 pub fn push_reload_config(config: &Config) {
-    if let Ok(script) = super::html::reload_config_script(config) {
-        push_config_script(script);
-    }
+    push_config(config, ConfigPush::Reload);
 }
 
-fn push_config_script(script: String) {
+fn push_config(config: &Config, kind: ConfigPush) {
     let Ok(settings_thread) = SETTINGS_THREAD.lock() else {
         return;
     };
     let Some(thread_id) = *settings_thread else {
         return;
     };
+    let script = match kind {
+        ConfigPush::Reload => super::html::reload_config_script(config),
+        ConfigPush::Tray => super::html::tray_config_script(config),
+    };
+    let Ok(script) = script else { return };
     if let Ok(mut pending) = PENDING_CONFIG.lock() {
-        pending.push(script);
-        unsafe {
-            let _ = PostThreadMessageW(thread_id, WM_SETTINGS_PUSH_CONFIG, WPARAM(0), LPARAM(0));
+        if pending.enqueue(kind, script)
+            && unsafe {
+                PostThreadMessageW(thread_id, WM_SETTINGS_PUSH_CONFIG, WPARAM(0), LPARAM(0))
+            }
+            .is_err()
+        {
+            pending.wake_failed();
         }
     }
 }
@@ -357,6 +406,9 @@ pub fn run_settings_window(
         let _ = SetWindowPos(hwnd, None, x, y, width, height, flags);
 
         if let Ok(mut g) = SETTINGS_THREAD.lock() {
+            if let Ok(mut pending) = PENDING_CONFIG.lock() {
+                *pending = PendingConfig::default();
+            }
             *g = Some(GetCurrentThreadId());
             if let Ok(mut pending) = PENDING_RECORDED.lock() {
                 pending.clear();
@@ -436,7 +488,10 @@ pub fn run_settings_window(
             .build(&win_handle)
             .inspect_err(|_| {
                 let _ = DestroyWindow(hwnd);
-                if let Ok(mut thread) = SETTINGS_THREAD.lock() { *thread = None; }
+                if let Ok(mut thread) = SETTINGS_THREAD.lock() {
+                    *thread = None;
+                    if let Ok(mut pending) = PENDING_CONFIG.lock() { *pending = PendingConfig::default(); }
+                }
                 if let Ok(mut pending) = PENDING_HEALTH.lock() { *pending = None; }
                 if let Ok(mut pending) = PENDING_SNAPSHOTS.lock() { pending.clear(); }
             })?;
@@ -528,9 +583,9 @@ pub fn run_settings_window(
                 continue;
             }
             if msg_buf.message == WM_SETTINGS_PUSH_CONFIG {
-                let scripts = PENDING_CONFIG
+                let scripts: Vec<_> = PENDING_CONFIG
                     .lock()
-                    .map(|mut pending| std::mem::take(&mut *pending))
+                    .map(|mut pending| pending.drain().collect())
                     .unwrap_or_default();
                 for script in scripts {
                     let _ = webview.evaluate_script(&script);
@@ -577,7 +632,7 @@ pub fn run_settings_window(
         if let Ok(mut g) = SETTINGS_THREAD.lock() {
             *g = None;
             if let Ok(mut pending) = PENDING_CONFIG.lock() {
-                pending.clear();
+                *pending = PendingConfig::default();
             }
             if let Ok(mut pending) = PENDING_HEALTH.lock() {
                 *pending = None;
@@ -1003,6 +1058,65 @@ unsafe fn apply_win11_theming(hwnd: HWND, dark: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn config_push_coalesces_all_short_sequences() {
+        for len in 0..=7 {
+            for bits in 0..(1 << len) {
+                let mut pending = PendingConfig::default();
+                let mut sequence = Vec::new();
+                for i in 0..len {
+                    let reload = bits & (1 << i) != 0;
+                    let script = format!("{}{i}", if reload { 'R' } else { 'T' });
+                    assert_eq!(
+                        pending.enqueue(
+                            if reload {
+                                ConfigPush::Reload
+                            } else {
+                                ConfigPush::Tray
+                            },
+                            script.clone()
+                        ),
+                        i == 0
+                    );
+                    sequence.push((reload, script));
+                }
+                let latest_reload = sequence.iter().rposition(|(reload, _)| *reload);
+                let latest_tray = sequence
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .find(|(i, (reload, _))| !reload && latest_reload.is_none_or(|r| *i > r))
+                    .map(|(_, (_, script))| script.clone());
+                let expected: Vec<_> = latest_reload
+                    .map(|i| sequence[i].1.clone())
+                    .into_iter()
+                    .chain(latest_tray)
+                    .collect();
+                assert_eq!(
+                    pending.drain().collect::<Vec<_>>(),
+                    expected,
+                    "sequence {bits:b}, length {len}"
+                );
+                assert!(pending.drain().next().is_none());
+                assert!(pending.enqueue(ConfigPush::Tray, "next".into()));
+            }
+        }
+    }
+
+    #[test]
+    fn config_push_retries_failed_wake_and_resets_session() {
+        let mut pending = PendingConfig::default();
+        assert!(pending.enqueue(ConfigPush::Reload, "reload".into()));
+        pending.wake_failed();
+        assert!(pending.enqueue(ConfigPush::Tray, "tray".into()));
+        assert_eq!(pending.drain().collect::<Vec<_>>(), ["reload", "tray"]);
+        assert!(pending.enqueue(ConfigPush::Reload, "old session".into()));
+        pending = PendingConfig::default();
+        assert!(pending.drain().next().is_none());
+        assert!(pending.enqueue(ConfigPush::Tray, "new session".into()));
+        assert_eq!(pending.drain().collect::<Vec<_>>(), ["new session"]);
+    }
 
     #[test]
     fn save_requests_config_reload() {

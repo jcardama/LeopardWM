@@ -2800,6 +2800,7 @@ function addWorkspaceRow(item) {
   tr.querySelectorAll('input').forEach(function(input) {
     input.addEventListener('input', function() {
       delete input._rejectedSplitText;
+      input._splitRevision = (input._splitRevision || 0) + 1;
       autoSave(500);
     });
   });
@@ -2811,8 +2812,14 @@ function removeWorkspaceRow(button) {
   autoSave(0);
 }
 
-function readRowSplit(input, fallback) {
-  if (input._lastValidSplit && (input.value === input._lastSplitText || input.value === input._rejectedSplitText)) return input._lastValidSplit.slice();
+function readRowSplit(input, fallback, splitReads) {
+  function result(split, kind) {
+    var value = split.slice();
+    if (splitReads) splitReads.push({input: input, text: input.value, revision: input._splitRevision || 0, split: value, kind: kind});
+    return value;
+  }
+  if (input._lastValidSplit && input.value === input._lastSplitText) return result(input._lastValidSplit, 'accepted');
+  if (input._lastValidSplit && input.value === input._rejectedSplitText) return result(input._lastValidSplit, 'fallback');
   var parts = input.value.split(',').map(function(s) { return s.trim(); });
   var number = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i;
   var valid = parts.every(function(part) {
@@ -2820,10 +2827,10 @@ function readRowSplit(input, fallback) {
     if (terms.length > 2 || !terms.every(function(s) { return number.test(s) && Number(s) > 0; })) return false;
     return Number.isFinite(terms.length === 2 ? Number(terms[0]) / Number(terms[1]) : Number(terms[0]));
   });
-  return valid ? parts : (input._lastValidSplit || fallback).slice();
+  return valid ? result(parts, 'candidate') : result(input._lastValidSplit || fallback, 'fallback');
 }
 
-function readWorkspaceRows() {
+function readWorkspaceRows(splitReads) {
   var rows = [];
   var list = document.querySelectorAll ? document.querySelectorAll('#workspace-rows-body tr') : [];
   list.forEach(function(tr) {
@@ -2832,7 +2839,7 @@ function readWorkspaceRows() {
     if (!wsInput || !splitInput) return;
     var wsList = parseWorkspaceInput(wsInput.value);
     if (wsList.length > 0) {
-      rows.push({ workspaces: wsList, split: readRowSplit(splitInput, ['50%', '50%']) });
+      rows.push({ workspaces: wsList, split: readRowSplit(splitInput, ['50%', '50%'], splitReads) });
     }
   });
   return rows;
@@ -2840,7 +2847,7 @@ function readWorkspaceRows() {
 
 function escAttr(s) { return escHtml(s || ''); }
 
-function readConfig() {
+function readConfig(splitReads) {
   var widthPresets = readPresets('width');
   var defaultWidthPreset = parseInt(cbVal('cb-layout-default_width_preset'), 10) || lastValidDefaultWidthPreset;
   if (!widthPresets.length) {
@@ -2863,8 +2870,8 @@ function readConfig() {
       center_columns: cbVal('cb-layout-center_columns'),
       center_past_edges: checked('layout-center_past_edges'),
       rows: {
-        workspaces: readWorkspaceRows(),
-        split: readRowSplit(document.getElementById('layout-rows-split'), ['100%']),
+        workspaces: readWorkspaceRows(splitReads),
+        split: readRowSplit(document.getElementById('layout-rows-split'), ['100%'], splitReads),
         gap: num('layout-rows-gap')
       }
     },
@@ -3138,36 +3145,19 @@ function showInfoBar(bar, severity, text) {
 /* ── Auto-save ────────────────────────────────────────────────────── */
 var _saveTimer = null;
 var _pendingSplitSaves = [];
-function captureSplitSave(config) {
-  var inputs = [{input: document.getElementById('layout-rows-split'), split: config.layout.rows.split}];
-  var index = 0;
-  document.querySelectorAll('#workspace-rows-body tr').forEach(function(tr) {
-    var ws = tr.querySelector('.ws-row-workspaces');
-    var split = tr.querySelector('.ws-row-split');
-    if (ws && split && parseWorkspaceInput(ws.value).length) {
-      inputs.push({input: split, split: config.layout.rows.workspaces[index++].split});
-    }
-  });
-  _pendingSplitSaves.push(inputs.map(function(item) {
-    var text = item.input.value;
-    var representsSplit = text !== item.input._rejectedSplitText &&
-      JSON.stringify(text.split(',').map(function(s) { return s.trim(); })) === JSON.stringify(item.split);
-    return {input: item.input, text: text, split: item.split.slice(), representsSplit: representsSplit};
-  }));
-}
 window.lwmSaveResult = function(success) {
   var inputs = _pendingSplitSaves.shift();
   if (!inputs) return;
   inputs.forEach(function(item) {
     if (success) {
       item.input._lastValidSplit = item.split;
-      if (item.representsSplit) {
+      if (item.kind !== 'fallback') {
         item.input._lastSplitText = item.text;
         if (item.input._rejectedSplitText === item.text) delete item.input._rejectedSplitText;
       } else {
         delete item.input._lastSplitText;
       }
-    } else if (item.input.value === item.text) {
+    } else if (item.kind === 'candidate' && item.input.value === item.text && (item.input._splitRevision || 0) === item.revision) {
       item.input._rejectedSplitText = item.text;
     }
   });
@@ -3175,8 +3165,9 @@ window.lwmSaveResult = function(success) {
 function autoSave(delay) {
   clearTimeout(_saveTimer);
   _saveTimer = setTimeout(function() {
-    var config = readConfig();
-    captureSplitSave(config);
+    var splitReads = [];
+    var config = readConfig(splitReads);
+    _pendingSplitSaves.push(splitReads);
     window.ipc.postMessage(JSON.stringify({ action: 'save', config: config }));
   }, delay || 0);
 }
@@ -3201,6 +3192,7 @@ document.querySelectorAll('input[type="text"], input[type="number"]').forEach(fu
   if (el.hasAttribute('data-no-config')) return;
   el.addEventListener('input', function() {
     delete el._rejectedSplitText;
+    el._splitRevision = (el._splitRevision || 0) + 1;
     autoSave(500);
   });
 });
@@ -3627,7 +3619,7 @@ eval(section('function checked(id)', 'function hexToInput(hex)'));
 eval(section('function hexToInput(hex)', 'function applyTrayConfig('));
 eval(section('function applyTrayConfig(', '/* ── Init'));
 eval(section('function parseWorkspaceInput(', 'function escAttr('));
-eval(section('function readConfig()', 'function readWorkspaceNames()'));
+eval(section('function readConfig(', 'function readWorkspaceNames()'));
 global.readPresets = () => [0.5];
 global.lastValidDefaultWidthPreset = 1;
 global.lastValidWidthPresets = [0.5];
@@ -3793,6 +3785,35 @@ window.lwmSaveResult(false);
 globalInput.edit('60%, 40%'); workspaceInputForSave.edit('70%, 30%');
 assert.deepStrictEqual(readConfig().layout.rows.split, ['60%', '40%']);
 assert.deepStrictEqual(readConfig().layout.rows.workspaces[0].split, ['70%', '30%']);
+for (const loaded of [[' 50% ', '50%'], ['50%', 'oops'], ['25%, 75%']]) {
+  for (const success of [true, false]) {
+    const config = JSON.parse(JSON.stringify(payload.config));
+    config.layout.rows.split = loaded;
+    config.layout.rows.workspaces = [{workspaces: [1], split: loaded}];
+    init(config);
+    saveNow(0); window.lwmSaveResult(success);
+    saveNow(0);
+    assert.deepStrictEqual(sent.at(-1).config.layout.rows.split, loaded, 'untouched global split');
+    assert.deepStrictEqual(sent.at(-1).config.layout.rows.workspaces[0].split, loaded, 'untouched workspace split');
+    window.lwmSaveResult(true);
+  }
+}
+{
+  const config = JSON.parse(JSON.stringify(payload.config));
+  config.layout.rows.split = ['30%', '70%'];
+  config.layout.rows.workspaces = [{workspaces: [1], split: ['40%', '60%']}];
+  init(config);
+  const g = document.getElementById('layout-rows-split'), w = rows[0].querySelector('.ws-row-split');
+  g.edit('25%, 75%'); w.edit('20%, 80%'); saveNow(0); window.lwmSaveResult(false);
+  saveNow(0);
+  g.edit('25%, 75%'); w.edit('20%, 80%');
+  window.lwmSaveResult(false);
+  assert.deepStrictEqual(readConfig().layout.rows.split, ['25%', '75%'], 'failed fallback does not reject draft');
+  assert.deepStrictEqual(readConfig().layout.rows.workspaces[0].split, ['20%', '80%']);
+  saveNow(0); g.edit('25%, 75%'); w.edit('20%, 80%'); window.lwmSaveResult(false);
+  assert.deepStrictEqual(readConfig().layout.rows.split, ['25%', '75%'], 'same-text retry survives older rejection');
+  assert.deepStrictEqual(readConfig().layout.rows.workspaces[0].split, ['20%', '80%']);
+}
 global.setTimeout = originalTimeout; global.clearTimeout = originalClearTimeout;
 global.autoSave = () => {};
 const cases = [
@@ -3840,7 +3861,9 @@ for (const test of cases) {
   try { assert.deepStrictEqual(result.layout.rows.workspaces[0].split, test.newRow ? ['50%', '50%'] : test.expected); }
   catch (error) { failures.push(test.name + ' workspace: ' + error.message); }
   if (test.then) {
-    captureSplitSave(result);
+    const splitReads = [];
+    readConfig(splitReads);
+    _pendingSplitSaves.push(splitReads);
     window.lwmSaveResult(true);
     globalSplit.edit(test.then); rowSplit.edit(test.then);
     result = readConfig();
@@ -4061,7 +4084,6 @@ assert.deepStrictEqual(failures, []);
         assert!(SETTINGS_HTML.contains("addWorkspaceRow"));
         assert!(SETTINGS_HTML.contains("removeWorkspaceRow"));
         assert!(SETTINGS_HTML.contains("readWorkspaceRows"));
-        assert!(SETTINGS_HTML.contains("workspaces: readWorkspaceRows()"));
 
         for option in ["focus_crosses_monitors", "move_crosses_monitors"] {
             assert!(SETTINGS_HTML.contains(&format!("id=\"behavior-{option}\"")));
