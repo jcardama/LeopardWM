@@ -1937,6 +1937,7 @@ async fn handle_ipc_command(
 
     if is_reload && matches!(response, IpcResponse::Ok) {
         reload_config_and_hotkeys(ctx).await;
+        settings::push_reload_config(&ctx.state.lock().await.config);
         info!("Hotkeys reloaded after config reload");
     }
 
@@ -2509,6 +2510,7 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
 
             if matches!(response, IpcResponse::Ok) {
                 reload_config_and_hotkeys(ctx).await;
+                settings::push_reload_config(&ctx.state.lock().await.config);
                 info!("Hotkeys reloaded after tray config reload");
             } else if let IpcResponse::Error { message } = response {
                 warn!("Reload failed: {}", log_text::text(message));

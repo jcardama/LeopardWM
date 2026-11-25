@@ -513,7 +513,7 @@ dragSettings.flush();
 assert.equal(dragSettings.saves.at(-1).config.behavior.plain_drag_action, 'reorder');
 
 const shortcuts = commandFixture({ saving: true });
-shortcuts.ctx.glazewmCompatPort = 17000;
+shortcuts.ctx.configSnapshot.glazewm_compat = { port: 17000 };
 shortcuts.ctx.document.getElementById('glazewm_compat-enabled').checked = true;
 const configuredShortcuts = {
   'Ctrl+Alt+N': 'focus_next', 'Ctrl+Alt+B': 'focus_next',

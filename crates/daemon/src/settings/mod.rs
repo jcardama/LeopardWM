@@ -7,7 +7,8 @@ pub(crate) mod troubleshooting;
 mod win32;
 
 pub use win32::{
-    push_failed_binds, push_locale, push_recorded_chord, push_report_status, push_tray_config,
+    push_failed_binds, push_locale, push_recorded_chord, push_reload_config, push_report_status,
+    push_tray_config,
 };
 pub(crate) use win32::{push_health, push_snapshot_result};
 

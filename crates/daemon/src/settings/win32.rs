@@ -98,6 +98,8 @@ const WM_SETTINGS_PUSH_TRAY_CONFIG: u32 = WM_APP + 4;
 const WM_SETTINGS_PUSH_REPORT: u32 = WM_APP + 5;
 const WM_SETTINGS_PUSH_HEALTH: u32 = WM_APP + 6;
 const WM_SETTINGS_PUSH_SNAPSHOT: u32 = WM_APP + 7;
+const WM_SETTINGS_PUSH_RELOAD_CONFIG: u32 = WM_APP + 9;
+const WM_SETTINGS_SAVE_RESULT: u32 = WM_APP + 10;
 const WM_SETTINGS_LIST_DIAGNOSTICS: u32 = WM_APP + 8;
 static SETTINGS_WINDOW: Mutex<Option<isize>> = Mutex::new(None);
 static PENDING_HEALTH: Mutex<Option<String>> = Mutex::new(None);
@@ -124,6 +126,7 @@ pub fn push_report_status(
 }
 static PENDING_LOCALE: Mutex<Option<String>> = Mutex::new(None);
 static PENDING_TRAY_CONFIG: Mutex<Option<String>> = Mutex::new(None);
+static PENDING_RELOAD_CONFIG: Mutex<Option<String>> = Mutex::new(None);
 
 /// Thread id of the open settings window's message loop, or `None` when closed.
 /// We target the thread queue (not the HWND) so a destroyed or recycled window
@@ -224,6 +227,29 @@ pub fn push_tray_config(config: &Config) {
             let _ = PostThreadMessageW(
                 thread_id,
                 WM_SETTINGS_PUSH_TRAY_CONFIG,
+                WPARAM(0),
+                LPARAM(0),
+            );
+        }
+    }
+}
+
+pub fn push_reload_config(config: &Config) {
+    let Ok(settings_thread) = SETTINGS_THREAD.lock() else {
+        return;
+    };
+    let Some(thread_id) = *settings_thread else {
+        return;
+    };
+    let Ok(script) = super::html::reload_config_script(config) else {
+        return;
+    };
+    if let Ok(mut pending) = PENDING_RELOAD_CONFIG.lock() {
+        *pending = Some(script);
+        unsafe {
+            let _ = PostThreadMessageW(
+                thread_id,
+                WM_SETTINGS_PUSH_RELOAD_CONFIG,
                 WPARAM(0),
                 LPARAM(0),
             );
@@ -533,6 +559,16 @@ pub fn run_settings_window(
                 }
                 continue;
             }
+            if msg_buf.message == WM_SETTINGS_PUSH_RELOAD_CONFIG {
+                let script = PENDING_RELOAD_CONFIG
+                    .lock()
+                    .ok()
+                    .and_then(|mut pending| pending.take());
+                if let Some(script) = script {
+                    let _ = webview.evaluate_script(&script);
+                }
+                continue;
+            }
             if msg_buf.message == WM_SETTINGS_PUSH_RECORDED {
                 let chords = PENDING_RECORDED
                     .lock()
@@ -573,6 +609,9 @@ pub fn run_settings_window(
         if let Ok(mut g) = SETTINGS_THREAD.lock() {
             *g = None;
             if let Ok(mut pending) = PENDING_TRAY_CONFIG.lock() {
+                *pending = None;
+            }
+            if let Ok(mut pending) = PENDING_RELOAD_CONFIG.lock() {
                 *pending = None;
             }
             if let Ok(mut pending) = PENDING_HEALTH.lock() {
@@ -717,8 +756,16 @@ fn handle_ipc(body: &str, event_tx: &mpsc::Sender<SettingsEvent>, hwnd: HWND) {
             });
         }
         "save" => {
-            if let Some(cfg_val) = msg.get("config") {
-                do_save(cfg_val, event_tx);
+            let saved = msg
+                .get("config")
+                .is_some_and(|cfg_val| do_save(cfg_val, event_tx));
+            unsafe {
+                let _ = PostMessageW(
+                    Some(hwnd),
+                    WM_SETTINGS_SAVE_RESULT,
+                    WPARAM(usize::from(saved)),
+                    LPARAM(0),
+                );
             }
         }
         "request_health" => {
@@ -849,10 +896,17 @@ unsafe extern "system" fn wndproc(
     lparam: LPARAM,
 ) -> LRESULT {
     match message {
-        WM_SETTINGS_PUSH_HEALTH | WM_SETTINGS_PUSH_SNAPSHOT | WM_SETTINGS_LIST_DIAGNOSTICS => {
+        WM_SETTINGS_PUSH_HEALTH
+        | WM_SETTINGS_PUSH_SNAPSHOT
+        | WM_SETTINGS_LIST_DIAGNOSTICS
+        | WM_SETTINGS_SAVE_RESULT => {
             let webview = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const wry::WebView;
             if let Some(webview) = webview.as_ref() {
                 match message {
+                    WM_SETTINGS_SAVE_RESULT => {
+                        let _ = webview
+                            .evaluate_script(&format!("window.lwmSaveResult({});", wparam.0 != 0));
+                    }
                     WM_SETTINGS_PUSH_HEALTH => {
                         if let Some(json) = PENDING_HEALTH
                             .lock()

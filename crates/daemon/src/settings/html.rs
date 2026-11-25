@@ -1968,10 +1968,8 @@ function applyTrayConfig(cfg) {
 }
 
 /* ── Init ────────────────────────────────────────────────────────────── */
-var glazewmCompatPort = 6123;
 function init(cfg) {
   configSnapshot = cfg;
-  glazewmCompatPort = cfg.glazewm_compat ? cfg.glazewm_compat.port : 6123;
   setChecked('glazewm_compat-enabled', cfg.glazewm_compat && cfg.glazewm_compat.enabled);
   setVal('layout-gap', cfg.layout.gap);
   setVal('layout-outer_gap_left', cfg.layout.outer_gap_left);
@@ -1984,6 +1982,7 @@ function init(cfg) {
   var globalSplit = document.getElementById('layout-rows-split');
   globalSplit._lastValidSplit = loadedSplit.slice();
   globalSplit._lastSplitText = globalSplit.value;
+  delete globalSplit._rejectedSplitText;
   setVal('layout-rows-gap', (cfg.layout.rows && cfg.layout.rows.gap != null) ? cfg.layout.rows.gap : 8);
   var wsRowsBody = document.getElementById('workspace-rows-body');
   if (wsRowsBody) {
@@ -2109,6 +2108,14 @@ function init(cfg) {
   for (var j = 1; j <= 9; j++) {
     setVal('workspace-name-' + j, wsNames[j - 1] || '');
   }
+}
+
+function applyReloadConfig(cfg) {
+  cfg = Object.assign({}, cfg, {
+    high_contrast: !document.getElementById('hc-info-bar').hidden,
+    auto_start: checked('startup-auto_start')
+  });
+  init(cfg);
 }
 
 /* ── Delete icon (X) ─────────────────────────────────────────────────── */
@@ -2789,7 +2796,10 @@ function addWorkspaceRow(item) {
   splitInput._lastValidSplit = Array.isArray(item.split) ? item.split.slice() : ['50%', '50%'];
   splitInput._lastSplitText = splitInput.value;
   tr.querySelectorAll('input').forEach(function(input) {
-    input.addEventListener('input', function() { autoSave(500); });
+    input.addEventListener('input', function() {
+      if (input.value !== input._rejectedSplitText) delete input._rejectedSplitText;
+      autoSave(500);
+    });
   });
 }
 
@@ -2800,7 +2810,7 @@ function removeWorkspaceRow(button) {
 }
 
 function readRowSplit(input, fallback) {
-  if (input._lastValidSplit && input.value === input._lastSplitText) return input._lastValidSplit.slice();
+  if (input._lastValidSplit && (input.value === input._lastSplitText || input.value === input._rejectedSplitText)) return input._lastValidSplit.slice();
   var parts = input.value.split(',').map(function(s) { return s.trim(); });
   var number = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i;
   var valid = parts.every(function(part) {
@@ -2808,11 +2818,7 @@ function readRowSplit(input, fallback) {
     if (terms.length > 2 || !terms.every(function(s) { return number.test(s) && Number(s) > 0; })) return false;
     return Number.isFinite(terms.length === 2 ? Number(terms[0]) / Number(terms[1]) : Number(terms[0]));
   });
-  if (valid) {
-    input._lastValidSplit = parts.slice();
-    input._lastSplitText = input.value;
-  }
-  return (input._lastValidSplit || fallback).slice();
+  return valid ? parts : (input._lastValidSplit || fallback).slice();
 }
 
 function readWorkspaceRows() {
@@ -2935,7 +2941,7 @@ function readConfig() {
     },
     glazewm_compat: {
       enabled: checked('glazewm_compat-enabled'),
-      port: glazewmCompatPort
+      port: configSnapshot.glazewm_compat ? configSnapshot.glazewm_compat.port : 6123
     }
   };
   var result = JSON.parse(JSON.stringify(configSnapshot));
@@ -3129,10 +3135,45 @@ function showInfoBar(bar, severity, text) {
 
 /* ── Auto-save ────────────────────────────────────────────────────── */
 var _saveTimer = null;
+var _pendingSplitSaves = [];
+function captureSplitSave(config) {
+  var inputs = [{input: document.getElementById('layout-rows-split'), split: config.layout.rows.split}];
+  var index = 0;
+  document.querySelectorAll('#workspace-rows-body tr').forEach(function(tr) {
+    var ws = tr.querySelector('.ws-row-workspaces');
+    var split = tr.querySelector('.ws-row-split');
+    if (ws && split && parseWorkspaceInput(ws.value).length) {
+      inputs.push({input: split, split: config.layout.rows.workspaces[index++].split});
+    }
+  });
+  _pendingSplitSaves.push(inputs.map(function(item) {
+    var text = item.input.value;
+    var representsSplit = text !== item.input._rejectedSplitText &&
+      JSON.stringify(text.split(',').map(function(s) { return s.trim(); })) === JSON.stringify(item.split);
+    return {input: item.input, text: text, split: item.split.slice(), representsSplit: representsSplit};
+  }));
+}
+window.lwmSaveResult = function(success) {
+  var inputs = _pendingSplitSaves.shift();
+  if (!inputs) return;
+  inputs.forEach(function(item) {
+    if (success) {
+      item.input._lastValidSplit = item.split;
+      if (item.representsSplit) {
+        item.input._lastSplitText = item.text;
+        if (item.input._rejectedSplitText === item.text) delete item.input._rejectedSplitText;
+      }
+    } else {
+      item.input._rejectedSplitText = item.text;
+    }
+  });
+};
 function autoSave(delay) {
   clearTimeout(_saveTimer);
   _saveTimer = setTimeout(function() {
-    window.ipc.postMessage(JSON.stringify({ action: 'save', config: readConfig() }));
+    var config = readConfig();
+    captureSplitSave(config);
+    window.ipc.postMessage(JSON.stringify({ action: 'save', config: config }));
   }, delay || 0);
 }
 
@@ -3154,7 +3195,10 @@ document.querySelectorAll('input[type="checkbox"], input[type="color"], input[ty
 /* Debounced: text and number inputs */
 document.querySelectorAll('input[type="text"], input[type="number"]').forEach(function(el) {
   if (el.hasAttribute('data-no-config')) return;
-  el.addEventListener('input', function() { autoSave(500); });
+  el.addEventListener('input', function() {
+    if (el.value !== el._rejectedSplitText) delete el._rejectedSplitText;
+    autoSave(500);
+  });
 });
 /* Troubleshooting */
 (function() {
@@ -3258,6 +3302,15 @@ pub(super) fn tray_config_script(
 ) -> Result<String, serde_json::Error> {
     Ok(format!(
         "applyTrayConfig({});",
+        serde_json::to_string(config)?
+    ))
+}
+
+pub(super) fn reload_config_script(
+    config: &crate::config::Config,
+) -> Result<String, serde_json::Error> {
+    Ok(format!(
+        "applyReloadConfig({});",
         serde_json::to_string(config)?
     ))
 }
@@ -3578,9 +3631,10 @@ global.readRules = global.readWorkspaceNames = global.readDisabledHotkeys = () =
 global.readHotkeys = () => ({});
 global.readScrollModifier = () => 'none';
 global.gestureCaptureSecs = 0;
-global.glazewmCompatPort = 6123;
 document.getElementById('layout-gap').value = '37';
 document.getElementById('layout-rows-split').value = '25%, 75%';
+document.getElementById('layout-rows-split')._lastValidSplit = ['25%', '75%'];
+document.getElementById('layout-rows-split')._lastSplitText = '25%, 75%';
 document.getElementById('cb-layout-centering_mode').dataset.value = 'center';
 document.getElementById('cb-layout-center_columns').dataset.value = 'off';
 document.getElementById('behavior-focus_new_windows').checked = true;
@@ -3594,8 +3648,10 @@ eval(payload.script);
 payload.config.behavior.uncontrolled = { value: 42 };
 payload.config.high_contrast = true;
 payload.config.auto_start = true;
+payload.config.glazewm_compat.port = 7890;
 applyTrayConfig(payload.config);
 let saved = readConfig();
+assert.strictEqual(saved.glazewm_compat.port, 7890, 'save uses the pushed port');
 assert.strictEqual(saved.behavior.check_for_updates, false, 'tray-pushed update opt-out');
 assert.deepStrictEqual(saved.behavior.uncontrolled, { value: 42 });
 assert(!('high_contrast' in saved) && !('auto_start' in saved));
@@ -3651,6 +3707,65 @@ global.loadHotkeysSorted = global.renderFailedHotkeys = global.addRuleRow = glob
 global.deleteIcon = '';
 eval(section('function init(cfg)', '/* ── Delete icon'));
 eval(section('/* Debounced: text and number inputs */', '/* Troubleshooting */'));
+const reloaded = JSON.parse(JSON.stringify(payload.config));
+reloaded.layout.gap = 91;
+reloaded.behavior.check_for_updates = true;
+reloaded.layout.rows.split = ['30%', '70%'];
+reloaded.layout.rows.workspaces = [{workspaces: [2], split: ['40%', '60%']}];
+global.autoSave = () => { throw Error('reload push must not save'); };
+applyReloadConfig(reloaded);
+applyReloadConfig(reloaded);
+let refreshed = readConfig();
+assert.strictEqual(document.getElementById('layout-gap').value, 91);
+assert.strictEqual(refreshed.layout.gap, 91);
+assert.strictEqual(refreshed.behavior.check_for_updates, true);
+assert.deepStrictEqual(refreshed.layout.rows.split, ['30%', '70%']);
+assert.strictEqual(rows.length, 1);
+assert.deepStrictEqual(refreshed.layout.rows.workspaces[0].split, ['40%', '60%']);
+const originalTimeout = global.setTimeout, originalClearTimeout = global.clearTimeout;
+global.setTimeout = callback => { callback(); return 1; };
+global.clearTimeout = () => {};
+const sent = [];
+window.ipc = {postMessage(message) { sent.push(JSON.parse(message)); }};
+eval(section('/* ── Auto-save', '/* Immediate: toggles'));
+const globalInput = document.getElementById('layout-rows-split');
+const workspaceInputForSave = rows[0].querySelector('.ws-row-split');
+globalInput.value = '25%, 75%'; workspaceInputForSave.value = '20%, 80%';
+autoSave(0);
+globalInput.value = '1/'; workspaceInputForSave.value = '1/';
+assert.deepStrictEqual(readConfig().layout.rows.split, ['30%', '70%']);
+assert.deepStrictEqual(readConfig().layout.rows.workspaces[0].split, ['40%', '60%']);
+globalInput.value = '25%, 75%'; workspaceInputForSave.value = '20%, 80%';
+window.lwmSaveResult(false);
+let afterReject = readConfig();
+assert.deepStrictEqual(afterReject.layout.rows.split, ['30%', '70%']);
+assert.deepStrictEqual(afterReject.layout.rows.workspaces[0].split, ['40%', '60%']);
+autoSave(0);
+assert.deepStrictEqual(sent.at(-1).config.layout.rows.split, ['30%', '70%']);
+assert.deepStrictEqual(sent.at(-1).config.layout.rows.workspaces[0].split, ['40%', '60%']);
+window.lwmSaveResult(true);
+assert.deepStrictEqual(readConfig().layout.rows.split, ['30%', '70%']);
+globalInput.value = '35%, 65%'; workspaceInputForSave.value = '45%, 55%';
+autoSave(0);
+globalInput.value = '1/'; workspaceInputForSave.value = '1/';
+window.lwmSaveResult(true);
+let afterAccept = readConfig();
+assert.deepStrictEqual(afterAccept.layout.rows.split, ['35%', '65%']);
+assert.deepStrictEqual(afterAccept.layout.rows.workspaces[0].split, ['45%', '55%']);
+globalInput.value = '10%, 90%'; workspaceInputForSave.value = '15%, 85%';
+autoSave(0);
+globalInput.value = '20%, 80%'; workspaceInputForSave.value = '25%, 75%';
+autoSave(0);
+globalInput.value = '1/'; workspaceInputForSave.value = '1/';
+window.lwmSaveResult(true);
+assert.deepStrictEqual(readConfig().layout.rows.split, ['10%', '90%']);
+assert.deepStrictEqual(readConfig().layout.rows.workspaces[0].split, ['15%', '85%']);
+window.lwmSaveResult(true);
+assert.deepStrictEqual(readConfig().layout.rows.split, ['20%', '80%']);
+assert.deepStrictEqual(readConfig().layout.rows.workspaces[0].split, ['25%', '75%']);
+assert.strictEqual(sent.length, 5);
+global.setTimeout = originalTimeout; global.clearTimeout = originalClearTimeout;
+global.autoSave = () => {};
 const cases = [
   { name: 'intermediate keystroke', loaded: ['50%', '50%'], edits: ['1', '1/'], expected: ['50%', '50%'] },
   { name: 'fully invalid loaded split', loaded: ['1/'], edits: [], expected: ['1/'] },
@@ -3696,6 +3811,8 @@ for (const test of cases) {
   try { assert.deepStrictEqual(result.layout.rows.workspaces[0].split, test.newRow ? ['50%', '50%'] : test.expected); }
   catch (error) { failures.push(test.name + ' workspace: ' + error.message); }
   if (test.then) {
+    captureSplitSave(result);
+    window.lwmSaveResult(true);
     globalSplit.edit(test.then); rowSplit.edit(test.then);
     result = readConfig();
     try { assert.deepStrictEqual(result.layout.rows.split, test.expected); }
