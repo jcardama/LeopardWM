@@ -3144,10 +3144,32 @@ function showInfoBar(bar, severity, text) {
 
 /* ── Auto-save ────────────────────────────────────────────────────── */
 var _saveTimer = null;
-var _pendingSplitSaves = [];
-window.lwmSaveResult = function(success) {
-  var inputs = _pendingSplitSaves.shift();
-  if (!inputs) return;
+var _pendingSave = null;
+var _nextSaveId = 0;
+var _saveQueued = false;
+var _saveRetryTimer = null;
+function requestSaveResult(id) {
+  _saveRetryTimer = setTimeout(function() {
+    if (!_pendingSave || _pendingSave.id !== id) return;
+    window.ipc.postMessage(JSON.stringify({ action: 'save_result', id: id }));
+    requestSaveResult(id);
+  }, 2000);
+}
+function sendSave() {
+  if (_pendingSave) { _saveQueued = true; return; }
+  _saveQueued = false;
+  var splitReads = [];
+  var config = readConfig(splitReads);
+  var id = ++_nextSaveId;
+  _pendingSave = { id: id, inputs: splitReads };
+  window.ipc.postMessage(JSON.stringify({ action: 'save', id: id, config: config }));
+  requestSaveResult(id);
+}
+window.lwmSaveResult = function(id, success) {
+  if (!_pendingSave || _pendingSave.id !== id || typeof success !== 'boolean') return;
+  clearTimeout(_saveRetryTimer);
+  var inputs = _pendingSave.inputs;
+  _pendingSave = null;
   inputs.forEach(function(item) {
     if (success) {
       item.input._lastValidSplit = item.split;
@@ -3161,15 +3183,12 @@ window.lwmSaveResult = function(success) {
       item.input._rejectedSplitText = item.text;
     }
   });
+  if (_saveQueued) sendSave();
 };
 function autoSave(delay) {
   clearTimeout(_saveTimer);
-  _saveTimer = setTimeout(function() {
-    var splitReads = [];
-    var config = readConfig(splitReads);
-    _pendingSplitSaves.push(splitReads);
-    window.ipc.postMessage(JSON.stringify({ action: 'save', config: config }));
-  }, delay || 0);
+  _saveQueued = false;
+  _saveTimer = setTimeout(sendSave, delay || 0);
 }
 
 /* Immediate: toggles, color pickers, comboboxes, sliders */
@@ -3719,102 +3738,96 @@ assert.deepStrictEqual(refreshed.layout.rows.split, ['30%', '70%']);
 assert.strictEqual(rows.length, 1);
 assert.deepStrictEqual(refreshed.layout.rows.workspaces[0].split, ['40%', '60%']);
 const originalTimeout = global.setTimeout, originalClearTimeout = global.clearTimeout;
-global.setTimeout = callback => { callback(); return 1; };
-global.clearTimeout = () => {};
+const timers = new Map(); let nextTimer = 0;
+global.setTimeout = (callback, delay) => { const id = ++nextTimer; timers.set(id, {callback, delay}); return id; };
+global.clearTimeout = id => timers.delete(id);
+function tick(delay) {
+  const pending = Array.from(timers.entries()).filter(([,timer]) => timer.delay === delay);
+  for (const [id, timer] of pending) { timers.delete(id); timer.callback(); }
+}
 const sent = [];
 window.ipc = {postMessage(message) { sent.push(JSON.parse(message)); }};
 eval(section('/* ── Auto-save', '/* Immediate: toggles'));
-const globalInput = document.getElementById('layout-rows-split');
-const workspaceInputForSave = rows[0].querySelector('.ws-row-split');
-globalInput.value = '25%, 75%'; workspaceInputForSave.value = '20%, 80%';
-autoSave(0);
-globalInput.value = '1/'; workspaceInputForSave.value = '1/';
-assert.deepStrictEqual(readConfig().layout.rows.split, ['30%', '70%']);
-assert.deepStrictEqual(readConfig().layout.rows.workspaces[0].split, ['40%', '60%']);
-globalInput.value = '25%, 75%'; workspaceInputForSave.value = '20%, 80%';
-window.lwmSaveResult(false);
-let afterReject = readConfig();
-assert.deepStrictEqual(afterReject.layout.rows.split, ['30%', '70%']);
-assert.deepStrictEqual(afterReject.layout.rows.workspaces[0].split, ['40%', '60%']);
-autoSave(0);
-assert.deepStrictEqual(sent.at(-1).config.layout.rows.split, ['30%', '70%']);
-assert.deepStrictEqual(sent.at(-1).config.layout.rows.workspaces[0].split, ['40%', '60%']);
-window.lwmSaveResult(true);
-assert.deepStrictEqual(readConfig().layout.rows.split, ['30%', '70%']);
-globalInput.value = '35%, 65%'; workspaceInputForSave.value = '45%, 55%';
-autoSave(0);
-globalInput.value = '1/'; workspaceInputForSave.value = '1/';
-window.lwmSaveResult(true);
-let afterAccept = readConfig();
-assert.deepStrictEqual(afterAccept.layout.rows.split, ['35%', '65%']);
-assert.deepStrictEqual(afterAccept.layout.rows.workspaces[0].split, ['45%', '55%']);
-globalInput.value = '10%, 90%'; workspaceInputForSave.value = '15%, 85%';
-autoSave(0);
-globalInput.value = '20%, 80%'; workspaceInputForSave.value = '25%, 75%';
-autoSave(0);
-globalInput.value = '1/'; workspaceInputForSave.value = '1/';
-window.lwmSaveResult(true);
-assert.deepStrictEqual(readConfig().layout.rows.split, ['10%', '90%']);
-assert.deepStrictEqual(readConfig().layout.rows.workspaces[0].split, ['15%', '85%']);
-window.lwmSaveResult(true);
-assert.deepStrictEqual(readConfig().layout.rows.split, ['20%', '80%']);
-assert.deepStrictEqual(readConfig().layout.rows.workspaces[0].split, ['25%', '75%']);
-assert.strictEqual(sent.length, 5);
-globalInput.value = '60%, 40%'; workspaceInputForSave.value = '70%, 30%';
-autoSave(0);
-globalInput.value = '1/'; workspaceInputForSave.value = '1/';
-autoSave(0);
-window.lwmSaveResult(true);
-window.lwmSaveResult(true);
-globalInput.value = '60%, 40%'; workspaceInputForSave.value = '70%, 30%';
-assert.deepStrictEqual(readConfig().layout.rows.split, ['60%', '40%']);
-assert.deepStrictEqual(readConfig().layout.rows.workspaces[0].split, ['70%', '30%']);
-const saveNow = autoSave;
+const saveNow = () => { autoSave(0); tick(0); };
+const reply = success => window.lwmSaveResult(sent.filter(m => m.action === 'save').at(-1).id, success);
+function resetSplits(loaded, workspaceLoaded = loaded) {
+  const config = JSON.parse(JSON.stringify(payload.config));
+  config.layout.rows.split = loaded;
+  config.layout.rows.workspaces = [{workspaces: [1], split: workspaceLoaded}];
+  init(config);
+  return [document.getElementById('layout-rows-split'), rows[0].querySelector('.ws-row-split')];
+}
+for (const success of [true, false]) {
+  const [g, w] = resetSplits(['30%', '70%'], ['40%', '60%']);
+  g.edit('25%, 75%'); w.edit('20%, 80%'); saveNow();
+  const first = sent.at(-1), count = sent.length;
+  if (success) { g.edit('1/'); w.edit('1/'); }
+  saveNow();
+  assert.equal(sent.length, count, 'only one save may be in flight');
+  window.lwmSaveResult(first.id, success);
+  const second = sent.at(-1);
+  assert.equal(second.action, 'save'); assert.notEqual(second.id, first.id);
+  assert.deepStrictEqual(second.config.layout.rows.split, success ? ['25%', '75%'] : ['30%', '70%']);
+  assert.deepStrictEqual(second.config.layout.rows.workspaces[0].split, success ? ['20%', '80%'] : ['40%', '60%']);
+  window.lwmSaveResult(first.id, true);
+  saveNow(); assert.strictEqual(sent.at(-1).id, second.id, 'stale reply must not release current save');
+  window.lwmSaveResult(second.id, true);
+  reply(true);
+}
+{
+  const [g, w] = resetSplits(['30%', '70%'], ['40%', '60%']);
+  g.edit('25%, 75%'); w.edit('20%, 80%'); saveNow();
+  const first = sent.at(-1); g.edit('1/'); w.edit('1/'); saveNow();
+  const count = sent.length; tick(2000);
+  assert.equal(sent.length, count + 1);
+  assert.deepStrictEqual(sent.at(-1), {action:'save_result', id:first.id});
+  tick(2000); assert.deepStrictEqual(sent.at(-1), {action:'save_result', id:first.id});
+  window.lwmSaveResult(first.id, true);
+  const second = sent.at(-1);
+  assert.deepStrictEqual(second.config.layout.rows.split, ['25%', '75%']);
+  assert.deepStrictEqual(second.config.layout.rows.workspaces[0].split, ['20%', '80%']);
+  window.lwmSaveResult(first.id, false);
+  assert.strictEqual(_pendingSave.id, second.id);
+  window.lwmSaveResult(second.id, true);
+  assert.equal(timers.size, 0);
+}
+{
+  const [g, w] = resetSplits(['30%', '70%'], ['40%', '60%']);
+  g.edit('25%, 75%'); w.edit('20%, 80%'); saveNow();
+  const first = sent.at(-1);
+  g.edit('35%, 65%'); w.edit('45%, 55%'); tick(500);
+  g.edit('10%, 90%'); w.edit('15%, 85%');
+  const count = sent.length;
+  window.lwmSaveResult(first.id, true);
+  assert.equal(sent.length, count, 'new edit still observes its debounce');
+  tick(500);
+  assert.deepStrictEqual(sent.at(-1).config.layout.rows.split, ['10%', '90%']);
+  assert.deepStrictEqual(sent.at(-1).config.layout.rows.workspaces[0].split, ['15%', '85%']);
+  reply(true);
+}
+const savedAutoSave = autoSave;
 global.autoSave = () => {};
-saveNow(0);
-window.lwmSaveResult(false);
-globalInput.edit('55%, 45%'); workspaceInputForSave.edit('65%, 35%');
-saveNow(0);
-window.lwmSaveResult(true);
-globalInput.edit('60%, 40%'); workspaceInputForSave.edit('70%, 30%');
-assert.deepStrictEqual(readConfig().layout.rows.split, ['60%', '40%']);
-assert.deepStrictEqual(readConfig().layout.rows.workspaces[0].split, ['70%', '30%']);
-saveNow(0);
-globalInput.edit('55%, 45%'); workspaceInputForSave.edit('65%, 35%');
-window.lwmSaveResult(false);
-globalInput.edit('60%, 40%'); workspaceInputForSave.edit('70%, 30%');
-assert.deepStrictEqual(readConfig().layout.rows.split, ['60%', '40%']);
-assert.deepStrictEqual(readConfig().layout.rows.workspaces[0].split, ['70%', '30%']);
 for (const loaded of [[' 50% ', '50%'], ['50%', 'oops'], ['25%, 75%']]) {
   for (const success of [true, false]) {
-    const config = JSON.parse(JSON.stringify(payload.config));
-    config.layout.rows.split = loaded;
-    config.layout.rows.workspaces = [{workspaces: [1], split: loaded}];
-    init(config);
-    saveNow(0); window.lwmSaveResult(success);
-    saveNow(0);
+    resetSplits(loaded);
+    savedAutoSave(0); tick(0); reply(success);
+    savedAutoSave(0); tick(0);
     assert.deepStrictEqual(sent.at(-1).config.layout.rows.split, loaded, 'untouched global split');
     assert.deepStrictEqual(sent.at(-1).config.layout.rows.workspaces[0].split, loaded, 'untouched workspace split');
-    window.lwmSaveResult(true);
+    reply(true);
   }
 }
 {
-  const config = JSON.parse(JSON.stringify(payload.config));
-  config.layout.rows.split = ['30%', '70%'];
-  config.layout.rows.workspaces = [{workspaces: [1], split: ['40%', '60%']}];
-  init(config);
-  const g = document.getElementById('layout-rows-split'), w = rows[0].querySelector('.ws-row-split');
-  g.edit('25%, 75%'); w.edit('20%, 80%'); saveNow(0); window.lwmSaveResult(false);
-  saveNow(0);
-  g.edit('25%, 75%'); w.edit('20%, 80%');
-  window.lwmSaveResult(false);
-  assert.deepStrictEqual(readConfig().layout.rows.split, ['25%', '75%'], 'failed fallback does not reject draft');
+  const [g, w] = resetSplits(['30%', '70%'], ['40%', '60%']);
+  g.edit('25%, 75%'); w.edit('20%, 80%'); savedAutoSave(0); tick(0); reply(false);
+  savedAutoSave(0); tick(0);
+  g.edit('25%, 75%'); w.edit('20%, 80%'); reply(false);
+  assert.deepStrictEqual(readConfig().layout.rows.split, ['25%', '75%']);
   assert.deepStrictEqual(readConfig().layout.rows.workspaces[0].split, ['20%', '80%']);
-  saveNow(0); g.edit('25%, 75%'); w.edit('20%, 80%'); window.lwmSaveResult(false);
-  assert.deepStrictEqual(readConfig().layout.rows.split, ['25%', '75%'], 'same-text retry survives older rejection');
+  savedAutoSave(0); tick(0); g.edit('25%, 75%'); w.edit('20%, 80%'); reply(false);
+  assert.deepStrictEqual(readConfig().layout.rows.split, ['25%', '75%']);
   assert.deepStrictEqual(readConfig().layout.rows.workspaces[0].split, ['20%', '80%']);
 }
-global.setTimeout = originalTimeout; global.clearTimeout = originalClearTimeout;
 global.autoSave = () => {};
 const cases = [
   { name: 'intermediate keystroke', loaded: ['50%', '50%'], edits: ['1', '1/'], expected: ['50%', '50%'] },
@@ -3861,10 +3874,7 @@ for (const test of cases) {
   try { assert.deepStrictEqual(result.layout.rows.workspaces[0].split, test.newRow ? ['50%', '50%'] : test.expected); }
   catch (error) { failures.push(test.name + ' workspace: ' + error.message); }
   if (test.then) {
-    const splitReads = [];
-    readConfig(splitReads);
-    _pendingSplitSaves.push(splitReads);
-    window.lwmSaveResult(true);
+    savedAutoSave(0); tick(0); reply(true);
     globalSplit.edit(test.then); rowSplit.edit(test.then);
     result = readConfig();
     try { assert.deepStrictEqual(result.layout.rows.split, test.expected); }
@@ -3874,6 +3884,7 @@ for (const test of cases) {
   }
 }
 assert.deepStrictEqual(failures, []);
+global.setTimeout = originalTimeout; global.clearTimeout = originalClearTimeout;
 "#;
         let mut child = Command::new("node")
             .args(["-e", script])
@@ -4065,8 +4076,6 @@ assert.deepStrictEqual(failures, []);
             "t('settings.text.enter_a_finite_fraction_from_0_05_to_1_0_or_leave_this_blank')"
         ));
         assert!(!SETTINGS_HTML.contains("validateRuleColumnWidths"));
-        assert!(SETTINGS_HTML
-            .contains("function autoSave(delay) {\n  clearTimeout(_saveTimer);\n  _saveTimer"));
         assert!(SETTINGS_HTML.contains("Object.assign({}, tr._rule || {})"));
     }
 

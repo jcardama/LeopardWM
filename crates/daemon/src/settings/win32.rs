@@ -101,6 +101,7 @@ const WM_SETTINGS_PUSH_SNAPSHOT: u32 = WM_APP + 7;
 const WM_SETTINGS_SAVE_RESULT: u32 = WM_APP + 10;
 const WM_SETTINGS_LIST_DIAGNOSTICS: u32 = WM_APP + 8;
 static SETTINGS_WINDOW: Mutex<Option<isize>> = Mutex::new(None);
+static LAST_SAVE_RESULT: Mutex<Option<(u64, bool)>> = Mutex::new(None);
 static PENDING_HEALTH: Mutex<Option<String>> = Mutex::new(None);
 static PENDING_SNAPSHOTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 static REPORT_DRAFT: Mutex<Option<super::issue_report::IssueReport>> = Mutex::new(None);
@@ -261,12 +262,10 @@ pub fn push_reload_config(config: &Config) {
 }
 
 fn push_config(config: &Config, kind: ConfigPush) {
-    let Ok(settings_thread) = SETTINGS_THREAD.lock() else {
-        return;
-    };
-    let Some(thread_id) = *settings_thread else {
-        return;
-    };
+    let window = SETTINGS_WINDOW
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let Some(hwnd) = *window else { return };
     let script = match kind {
         ConfigPush::Reload => super::html::reload_config_script(config),
         ConfigPush::Tray => super::html::tray_config_script(config),
@@ -275,7 +274,12 @@ fn push_config(config: &Config, kind: ConfigPush) {
     if let Ok(mut pending) = PENDING_CONFIG.lock() {
         if pending.enqueue(kind, script)
             && unsafe {
-                PostThreadMessageW(thread_id, WM_SETTINGS_PUSH_CONFIG, WPARAM(0), LPARAM(0))
+                PostMessageW(
+                    Some(HWND(hwnd as *mut _)),
+                    WM_SETTINGS_PUSH_CONFIG,
+                    WPARAM(0),
+                    LPARAM(0),
+                )
             }
             .is_err()
         {
@@ -415,10 +419,6 @@ pub fn run_settings_window(
             }
         }
 
-        *SETTINGS_WINDOW
-            .lock()
-            .unwrap_or_else(|error| error.into_inner()) = Some(hwnd.0 as isize);
-
         apply_win11_theming(hwnd, dark);
 
         // Extend the DWM frame into the entire client area so Mica renders behind content
@@ -502,6 +502,12 @@ pub fn run_settings_window(
             GWLP_USERDATA,
             &webview as *const wry::WebView as isize,
         );
+        *LAST_SAVE_RESULT
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = None;
+        *SETTINGS_WINDOW
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some(hwnd.0 as isize);
         let _ = PostMessageW(Some(hwnd), WM_SETTINGS_PUSH_HEALTH, WPARAM(0), LPARAM(0));
         let _ = PostMessageW(Some(hwnd), WM_SETTINGS_PUSH_SNAPSHOT, WPARAM(0), LPARAM(0));
         let _ = PostMessageW(
@@ -579,16 +585,6 @@ pub fn run_settings_window(
                     let _ = webview.evaluate_script(&format!(
                         "if (window.reportStatus) window.reportStatus({json});"
                     ));
-                }
-                continue;
-            }
-            if msg_buf.message == WM_SETTINGS_PUSH_CONFIG {
-                let scripts: Vec<_> = PENDING_CONFIG
-                    .lock()
-                    .map(|mut pending| pending.drain().collect())
-                    .unwrap_or_default();
-                for script in scripts {
-                    let _ = webview.evaluate_script(&script);
                 }
                 continue;
             }
@@ -776,16 +772,28 @@ fn handle_ipc(body: &str, event_tx: &mpsc::Sender<SettingsEvent>, hwnd: HWND) {
             });
         }
         "save" => {
+            let Some(id) = msg.get("id").and_then(|value| value.as_u64()) else {
+                return;
+            };
             let saved = msg
                 .get("config")
                 .is_some_and(|cfg_val| do_save(cfg_val, event_tx));
+            *LAST_SAVE_RESULT
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()) = Some((id, saved));
             unsafe {
-                let _ = PostMessageW(
-                    Some(hwnd),
-                    WM_SETTINGS_SAVE_RESULT,
-                    WPARAM(usize::from(saved)),
-                    LPARAM(0),
-                );
+                let _ = PostMessageW(Some(hwnd), WM_SETTINGS_SAVE_RESULT, WPARAM(0), LPARAM(0));
+            }
+        }
+        "save_result" => {
+            let id = msg.get("id").and_then(|value| value.as_u64());
+            let result = *LAST_SAVE_RESULT
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if result.is_some_and(|(saved_id, _)| Some(saved_id) == id) {
+                unsafe {
+                    let _ = PostMessageW(Some(hwnd), WM_SETTINGS_SAVE_RESULT, WPARAM(0), LPARAM(0));
+                }
             }
         }
         "request_health" => {
@@ -916,7 +924,8 @@ unsafe extern "system" fn wndproc(
     lparam: LPARAM,
 ) -> LRESULT {
     match message {
-        WM_SETTINGS_PUSH_HEALTH
+        WM_SETTINGS_PUSH_CONFIG
+        | WM_SETTINGS_PUSH_HEALTH
         | WM_SETTINGS_PUSH_SNAPSHOT
         | WM_SETTINGS_LIST_DIAGNOSTICS
         | WM_SETTINGS_SAVE_RESULT => {
@@ -924,8 +933,22 @@ unsafe extern "system" fn wndproc(
             if let Some(webview) = webview.as_ref() {
                 match message {
                     WM_SETTINGS_SAVE_RESULT => {
-                        let _ = webview
-                            .evaluate_script(&format!("window.lwmSaveResult({});", wparam.0 != 0));
+                        let result = *LAST_SAVE_RESULT
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner());
+                        if let Some((id, saved)) = result {
+                            let _ = webview
+                                .evaluate_script(&format!("window.lwmSaveResult({id}, {saved});"));
+                        }
+                    }
+                    WM_SETTINGS_PUSH_CONFIG => {
+                        let scripts: Vec<_> = PENDING_CONFIG
+                            .lock()
+                            .map(|mut pending| pending.drain().collect())
+                            .unwrap_or_default();
+                        for script in scripts {
+                            let _ = webview.evaluate_script(&script);
+                        }
                     }
                     WM_SETTINGS_PUSH_HEALTH => {
                         if let Some(json) = PENDING_HEALTH
@@ -990,7 +1013,16 @@ unsafe extern "system" fn wndproc(
             LRESULT(0)
         }
         WM_DESTROY => {
-            *SETTINGS_WINDOW
+            {
+                let mut window = SETTINGS_WINDOW
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                *window = None;
+                if let Ok(mut pending) = PENDING_CONFIG.lock() {
+                    *pending = PendingConfig::default();
+                }
+            }
+            *LAST_SAVE_RESULT
                 .lock()
                 .unwrap_or_else(|error| error.into_inner()) = None;
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
@@ -1116,6 +1148,28 @@ mod tests {
         assert!(pending.drain().next().is_none());
         assert!(pending.enqueue(ConfigPush::Tray, "new session".into()));
         assert_eq!(pending.drain().collect::<Vec<_>>(), ["new session"]);
+    }
+
+    #[test]
+    fn save_result_query_retains_correlated_failure_without_saving() {
+        let (sender, receiver) = mpsc::channel();
+        let hwnd = HWND(std::ptr::null_mut());
+        handle_ipc(r#"{"action":"save","id":41,"config":0}"#, &sender, hwnd);
+        assert_eq!(*LAST_SAVE_RESULT.lock().unwrap(), Some((41, false)));
+        handle_ipc(
+            r#"{"action":"save_result","id":40,"config":0}"#,
+            &sender,
+            hwnd,
+        );
+        assert_eq!(*LAST_SAVE_RESULT.lock().unwrap(), Some((41, false)));
+        handle_ipc(
+            r#"{"action":"save_result","id":41,"config":0}"#,
+            &sender,
+            hwnd,
+        );
+        assert_eq!(*LAST_SAVE_RESULT.lock().unwrap(), Some((41, false)));
+        assert!(receiver.try_recv().is_err());
+        *LAST_SAVE_RESULT.lock().unwrap() = None;
     }
 
     #[test]

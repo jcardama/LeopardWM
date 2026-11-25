@@ -304,7 +304,11 @@ function presetFixture(values = [0.333, 0.5, 0.667]) {
   values.forEach(value => ctx.addPresetRow('width', value));
   ctx.refreshDefaultWidthPresetOptions(1);
   return { ctx, rows, combo, options: () => options, timers, saves,
-    flush() { const pending = Array.from(timers.values()); timers.clear(); pending.forEach(timer => timer.callback()); } };
+    flush() {
+      const pending = Array.from(timers.values()); timers.clear(); pending.forEach(timer => timer.callback());
+      const save = saves.at(-1);
+      if (save?.action === 'save') ctx.window.lwmSaveResult(save.id, true);
+    } };
 }
 function presetState(fixture) {
   const { ctx, combo } = fixture;
@@ -392,11 +396,13 @@ function commandFixture({ saving = false } = {}) {
         if (!saving) throw new Error('Language refresh sent IPC');
         saves.push(JSON.parse(json));
       } } },
-    setTimeout(callback) {
+    setTimeout(callback, delay) {
       if (!saving) throw new Error('Language refresh scheduled a save');
+      if (delay === 2000) return -1;
       saveCallback = callback;
       scheduledSaves++;
-    }, clearTimeout() { saveCallback = undefined; }
+      return 1;
+    }, clearTimeout(id) { if (id !== -1) saveCallback = undefined; }
   });
   runSettings(script, ctx);
   const decode = text => text.replace(/&quot;/g, '"').replace(/&gt;/g, '>').replace(/&lt;/g, '<').replace(/&amp;/g, '&');
@@ -477,7 +483,11 @@ function commandFixture({ saving = false } = {}) {
     fields[id] = cb; combos.push(cb); ctx.initGestureCombo(id);
     return { cb, text, options };
   }
-  return { ctx, rows, combos, fields, addCombo, saves, scheduledSaves: () => scheduledSaves, flush() { saveCallback(); } };
+  return { ctx, rows, combos, fields, addCombo, saves, scheduledSaves: () => scheduledSaves, flush() {
+    saveCallback();
+    const save = saves.at(-1);
+    if (save?.action === 'save') ctx.window.lwmSaveResult(save.id, true);
+  } };
 }
 
 const scrollSettings = commandFixture({ saving: true });
