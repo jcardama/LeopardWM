@@ -3197,12 +3197,11 @@ window.lwmSaveResult = function(id, success) {
   _pendingSave = null;
   inputs.forEach(function(item) {
     if (success) {
+      // A serialized fallback is already the accepted split; keep its text association.
       item.input._lastValidSplit = item.split;
       if (item.kind !== 'fallback') {
         item.input._lastSplitText = item.text;
         if (item.input._rejectedSplitText === item.text) delete item.input._rejectedSplitText;
-      } else {
-        delete item.input._lastSplitText;
       }
     } else if (item.kind === 'candidate' && item.input.value === item.text && (item.input._splitRevision || 0) === item.revision) {
       item.input._rejectedSplitText = item.text;
@@ -3926,16 +3925,46 @@ for (const withPending of [false, true]) {
 eval(section('/* ── Auto-save', '/* Immediate: toggles'));
 const savedAutoSave = autoSave;
 global.autoSave = () => {};
-for (const loaded of [[' 50% ', '50%'], ['50%', 'oops'], ['25%, 75%']]) {
-  for (const success of [true, false]) {
-    resetSplits(loaded);
-    savedAutoSave(0); tick(0); reply(success);
+const splitShapes = [
+  { name:'literal comma', loaded:['25%, 75%'], afterCandidate:['25%', '75%'] },
+  { name:'raw spaces', loaded:[' 25% ', '75%'], afterCandidate:['25%', '75%'] },
+  { name:'plain entries', loaded:['25%', '75%'], afterCandidate:['25%', '75%'] },
+  { name:'invalid segment', loaded:['25%', 'oops'], afterCandidate:['60%', '40%'] }
+];
+const splitSequences = [
+  { name:'untouched save', edit:null, success:true },
+  { name:'fallback success then undo', edit:'1/', success:true },
+  { name:'fallback failure then undo', edit:'1/', success:false },
+  { name:'candidate success then undo', edit:'60%, 40%', success:true, candidate:true },
+  { name:'candidate failure then undo', edit:'60%, 40%', success:false, candidate:true },
+  { name:'fallback success then paste original', edit:'1/', success:true, paste:true }
+];
+const splitFailures = [];
+function checkSplitPayload(expected, label) {
+  const actual = sent.at(-1);
+  for (const [location, split] of [['global', actual.config.layout.rows.split],
+    ['workspace', actual.config.layout.rows.workspaces[0].split]]) {
+    try { assert.deepStrictEqual(split, expected); }
+    catch (error) { splitFailures.push(label + ' ' + location + ': ' + error.message); }
+  }
+}
+for (const shape of splitShapes) {
+  for (const sequence of splitSequences) {
+    const [g, w] = resetSplits(shape.loaded);
+    const original = g.value;
+    if (sequence.edit !== null) { g.edit(sequence.edit); w.edit(sequence.edit); }
     savedAutoSave(0); tick(0);
-    assert.deepStrictEqual(sent.at(-1).config.layout.rows.split, loaded, 'untouched global split');
-    assert.deepStrictEqual(sent.at(-1).config.layout.rows.workspaces[0].split, loaded, 'untouched workspace split');
+    checkSplitPayload(sequence.candidate ? ['60%', '40%'] : shape.loaded, shape.name + ' / ' + sequence.name + ' first save');
+    reply(sequence.success);
+    if (sequence.paste) { g.edit('1/0'); w.edit('1/0'); }
+    if (sequence.edit !== null) { g.edit(original); w.edit(original); }
+    savedAutoSave(0); tick(0);
+    checkSplitPayload(sequence.candidate && sequence.success ? shape.afterCandidate : shape.loaded,
+      shape.name + ' / ' + sequence.name + ' next save');
     reply(true);
   }
 }
+assert.deepStrictEqual(splitFailures, []);
 {
   const [g, w] = resetSplits(['30%', '70%'], ['40%', '60%']);
   g.edit('25%, 75%'); w.edit('20%, 80%'); savedAutoSave(0); tick(0); reply(false);
