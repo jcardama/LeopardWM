@@ -359,6 +359,22 @@ invalid.flush();
 assert.deepEqual(invalid.saves[0].config.layout.width_presets, [0.5]);
 assert.equal(invalid.saves[0].config.layout.default_width_preset, 1);
 
+const reloadedPresets = presetFixture([0.5]);
+const presetDoc = reloadedPresets.ctx.document;
+const widthBody = presetDoc.getElementById('width-presets-body');
+Object.defineProperty(widthBody, 'innerHTML', { set() { reloadedPresets.rows.length = 0; } });
+presetDoc.getElementById('height-presets-body').appendChild = () => {};
+presetDoc.getElementById('workspace-names-card').hasChildNodes = () => true;
+reloadedPresets.ctx.setCb = () => {};
+reloadedPresets.ctx.renderFailedHotkeys = () => {};
+reloadedPresets.ctx.updateScrollLabels = () => {};
+reloadedPresets.ctx.applyReloadConfig({
+  layout: { width_presets: [1.25, 1.5], height_presets: [], default_width_preset: 2 },
+  appearance: {}, behavior: {}, gestures: {}, snap_hints: {}
+});
+assert.deepEqual(Array.from(reloadedPresets.ctx.readConfig().layout.width_presets), [1.25, 1.5]);
+assert.equal(reloadedPresets.ctx.readConfig().layout.default_width_preset, 2);
+
 function commandFixture({ saving = false } = {}) {
   const rows = [];
   const combos = [];

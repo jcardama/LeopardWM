@@ -94,11 +94,10 @@ const DARK_BG: u32 = 0x00202020;
 const WM_SETTINGS_PUSH_BINDS: u32 = WM_APP + 1;
 const WM_SETTINGS_PUSH_RECORDED: u32 = WM_APP + 2;
 const WM_SETTINGS_PUSH_LOCALE: u32 = WM_APP + 3;
-const WM_SETTINGS_PUSH_TRAY_CONFIG: u32 = WM_APP + 4;
+const WM_SETTINGS_PUSH_CONFIG: u32 = WM_APP + 4;
 const WM_SETTINGS_PUSH_REPORT: u32 = WM_APP + 5;
 const WM_SETTINGS_PUSH_HEALTH: u32 = WM_APP + 6;
 const WM_SETTINGS_PUSH_SNAPSHOT: u32 = WM_APP + 7;
-const WM_SETTINGS_PUSH_RELOAD_CONFIG: u32 = WM_APP + 9;
 const WM_SETTINGS_SAVE_RESULT: u32 = WM_APP + 10;
 const WM_SETTINGS_LIST_DIAGNOSTICS: u32 = WM_APP + 8;
 static SETTINGS_WINDOW: Mutex<Option<isize>> = Mutex::new(None);
@@ -125,8 +124,7 @@ pub fn push_report_status(
     }
 }
 static PENDING_LOCALE: Mutex<Option<String>> = Mutex::new(None);
-static PENDING_TRAY_CONFIG: Mutex<Option<String>> = Mutex::new(None);
-static PENDING_RELOAD_CONFIG: Mutex<Option<String>> = Mutex::new(None);
+static PENDING_CONFIG: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 /// Thread id of the open settings window's message loop, or `None` when closed.
 /// We target the thread queue (not the HWND) so a destroyed or recycled window
@@ -211,48 +209,28 @@ pub fn push_locale(language: &str) {
 }
 
 pub fn push_tray_config(config: &Config) {
-    let settings_thread = match SETTINGS_THREAD.lock() {
-        Ok(thread) => thread,
-        Err(_) => return,
-    };
-    let Some(thread_id) = *settings_thread else {
-        return;
-    };
-    let Ok(script) = super::html::tray_config_script(config) else {
-        return;
-    };
-    if let Ok(mut pending) = PENDING_TRAY_CONFIG.lock() {
-        *pending = Some(script);
-        unsafe {
-            let _ = PostThreadMessageW(
-                thread_id,
-                WM_SETTINGS_PUSH_TRAY_CONFIG,
-                WPARAM(0),
-                LPARAM(0),
-            );
-        }
+    if let Ok(script) = super::html::tray_config_script(config) {
+        push_config_script(script);
     }
 }
 
 pub fn push_reload_config(config: &Config) {
+    if let Ok(script) = super::html::reload_config_script(config) {
+        push_config_script(script);
+    }
+}
+
+fn push_config_script(script: String) {
     let Ok(settings_thread) = SETTINGS_THREAD.lock() else {
         return;
     };
     let Some(thread_id) = *settings_thread else {
         return;
     };
-    let Ok(script) = super::html::reload_config_script(config) else {
-        return;
-    };
-    if let Ok(mut pending) = PENDING_RELOAD_CONFIG.lock() {
-        *pending = Some(script);
+    if let Ok(mut pending) = PENDING_CONFIG.lock() {
+        pending.push(script);
         unsafe {
-            let _ = PostThreadMessageW(
-                thread_id,
-                WM_SETTINGS_PUSH_RELOAD_CONFIG,
-                WPARAM(0),
-                LPARAM(0),
-            );
+            let _ = PostThreadMessageW(thread_id, WM_SETTINGS_PUSH_CONFIG, WPARAM(0), LPARAM(0));
         }
     }
 }
@@ -549,22 +527,12 @@ pub fn run_settings_window(
                 }
                 continue;
             }
-            if msg_buf.message == WM_SETTINGS_PUSH_TRAY_CONFIG {
-                let script = PENDING_TRAY_CONFIG
+            if msg_buf.message == WM_SETTINGS_PUSH_CONFIG {
+                let scripts = PENDING_CONFIG
                     .lock()
-                    .ok()
-                    .and_then(|mut pending| pending.take());
-                if let Some(script) = script {
-                    let _ = webview.evaluate_script(&script);
-                }
-                continue;
-            }
-            if msg_buf.message == WM_SETTINGS_PUSH_RELOAD_CONFIG {
-                let script = PENDING_RELOAD_CONFIG
-                    .lock()
-                    .ok()
-                    .and_then(|mut pending| pending.take());
-                if let Some(script) = script {
+                    .map(|mut pending| std::mem::take(&mut *pending))
+                    .unwrap_or_default();
+                for script in scripts {
                     let _ = webview.evaluate_script(&script);
                 }
                 continue;
@@ -608,11 +576,8 @@ pub fn run_settings_window(
         // The window is gone; stop the daemon from posting to a dead thread.
         if let Ok(mut g) = SETTINGS_THREAD.lock() {
             *g = None;
-            if let Ok(mut pending) = PENDING_TRAY_CONFIG.lock() {
-                *pending = None;
-            }
-            if let Ok(mut pending) = PENDING_RELOAD_CONFIG.lock() {
-                *pending = None;
+            if let Ok(mut pending) = PENDING_CONFIG.lock() {
+                pending.clear();
             }
             if let Ok(mut pending) = PENDING_HEALTH.lock() {
                 *pending = None;

@@ -1991,7 +1991,9 @@ function init(cfg) {
     wsRows.forEach(function(item) { addWorkspaceRow(item); });
   }
   document.getElementById('width-presets-body').innerHTML = '';
-  (cfg.layout.width_presets || [0.333,0.5,0.667]).forEach(function(v) { addPresetRow('width', v); });
+  lastValidWidthPresets = (cfg.layout.width_presets || [0.333,0.5,0.667]).slice();
+  lastValidDefaultWidthPreset = cfg.layout.default_width_preset || 1;
+  lastValidWidthPresets.forEach(function(v) { addPresetRow('width', v); });
   refreshDefaultWidthPresetOptions(cfg.layout.default_width_preset || 1);
   document.getElementById('height-presets-body').innerHTML = '';
   (cfg.layout.height_presets || [0.333,0.5,0.667]).forEach(function(v) { addPresetRow('height', v); });
@@ -2797,7 +2799,7 @@ function addWorkspaceRow(item) {
   splitInput._lastSplitText = splitInput.value;
   tr.querySelectorAll('input').forEach(function(input) {
     input.addEventListener('input', function() {
-      if (input.value !== input._rejectedSplitText) delete input._rejectedSplitText;
+      delete input._rejectedSplitText;
       autoSave(500);
     });
   });
@@ -3162,8 +3164,10 @@ window.lwmSaveResult = function(success) {
       if (item.representsSplit) {
         item.input._lastSplitText = item.text;
         if (item.input._rejectedSplitText === item.text) delete item.input._rejectedSplitText;
+      } else {
+        delete item.input._lastSplitText;
       }
-    } else {
+    } else if (item.input.value === item.text) {
       item.input._rejectedSplitText = item.text;
     }
   });
@@ -3196,7 +3200,7 @@ document.querySelectorAll('input[type="checkbox"], input[type="color"], input[ty
 document.querySelectorAll('input[type="text"], input[type="number"]').forEach(function(el) {
   if (el.hasAttribute('data-no-config')) return;
   el.addEventListener('input', function() {
-    if (el.value !== el._rejectedSplitText) delete el._rejectedSplitText;
+    delete el._rejectedSplitText;
     autoSave(500);
   });
 });
@@ -3764,6 +3768,31 @@ window.lwmSaveResult(true);
 assert.deepStrictEqual(readConfig().layout.rows.split, ['20%', '80%']);
 assert.deepStrictEqual(readConfig().layout.rows.workspaces[0].split, ['25%', '75%']);
 assert.strictEqual(sent.length, 5);
+globalInput.value = '60%, 40%'; workspaceInputForSave.value = '70%, 30%';
+autoSave(0);
+globalInput.value = '1/'; workspaceInputForSave.value = '1/';
+autoSave(0);
+window.lwmSaveResult(true);
+window.lwmSaveResult(true);
+globalInput.value = '60%, 40%'; workspaceInputForSave.value = '70%, 30%';
+assert.deepStrictEqual(readConfig().layout.rows.split, ['60%', '40%']);
+assert.deepStrictEqual(readConfig().layout.rows.workspaces[0].split, ['70%', '30%']);
+const saveNow = autoSave;
+global.autoSave = () => {};
+saveNow(0);
+window.lwmSaveResult(false);
+globalInput.edit('55%, 45%'); workspaceInputForSave.edit('65%, 35%');
+saveNow(0);
+window.lwmSaveResult(true);
+globalInput.edit('60%, 40%'); workspaceInputForSave.edit('70%, 30%');
+assert.deepStrictEqual(readConfig().layout.rows.split, ['60%', '40%']);
+assert.deepStrictEqual(readConfig().layout.rows.workspaces[0].split, ['70%', '30%']);
+saveNow(0);
+globalInput.edit('55%, 45%'); workspaceInputForSave.edit('65%, 35%');
+window.lwmSaveResult(false);
+globalInput.edit('60%, 40%'); workspaceInputForSave.edit('70%, 30%');
+assert.deepStrictEqual(readConfig().layout.rows.split, ['60%', '40%']);
+assert.deepStrictEqual(readConfig().layout.rows.workspaces[0].split, ['70%', '30%']);
 global.setTimeout = originalTimeout; global.clearTimeout = originalClearTimeout;
 global.autoSave = () => {};
 const cases = [
