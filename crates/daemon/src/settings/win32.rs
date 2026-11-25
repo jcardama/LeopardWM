@@ -2,6 +2,7 @@
 //! evaluate_script; JS sends messages through window.ipc.postMessage.
 
 use leopardwm_ipc::log_text;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::Mutex;
 
@@ -99,8 +100,10 @@ const WM_SETTINGS_PUSH_REPORT: u32 = WM_APP + 5;
 const WM_SETTINGS_PUSH_HEALTH: u32 = WM_APP + 6;
 const WM_SETTINGS_PUSH_SNAPSHOT: u32 = WM_APP + 7;
 const WM_SETTINGS_SAVE_RESULT: u32 = WM_APP + 10;
+const WM_SETTINGS_FINISH_CLOSE: u32 = WM_APP + 11;
 const WM_SETTINGS_LIST_DIAGNOSTICS: u32 = WM_APP + 8;
 static SETTINGS_WINDOW: Mutex<Option<isize>> = Mutex::new(None);
+static CLOSE_REQUESTED: AtomicBool = AtomicBool::new(false);
 static LAST_SAVE_RESULT: Mutex<Option<(u64, bool)>> = Mutex::new(None);
 static PENDING_HEALTH: Mutex<Option<String>> = Mutex::new(None);
 static PENDING_SNAPSHOTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
@@ -338,6 +341,7 @@ pub fn run_settings_window(
     high_contrast: bool,
     failed_binds: Vec<String>,
 ) -> Result<()> {
+    CLOSE_REQUESTED.store(false, Ordering::Release);
     unsafe {
         let hinstance = GetModuleHandleW(None)?;
         let dark = is_dark_mode();
@@ -796,6 +800,9 @@ fn handle_ipc(body: &str, event_tx: &mpsc::Sender<SettingsEvent>, hwnd: HWND) {
                 }
             }
         }
+        "finish_close" => unsafe {
+            let _ = PostMessageW(Some(hwnd), WM_SETTINGS_FINISH_CLOSE, WPARAM(0), LPARAM(0));
+        },
         "request_health" => {
             let _ = event_tx.send(SettingsEvent::RequestHealth);
         }
@@ -1009,6 +1016,19 @@ unsafe extern "system" fn wndproc(
             DefWindowProcW(hwnd, message, wparam, lparam)
         }
         WM_CLOSE => {
+            let webview = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const wry::WebView;
+            if CLOSE_REQUESTED.swap(true, Ordering::AcqRel)
+                || webview.as_ref().is_none_or(|webview| {
+                    webview
+                        .evaluate_script("window.lwmRequestClose();")
+                        .is_err()
+                })
+            {
+                let _ = DestroyWindow(hwnd);
+            }
+            LRESULT(0)
+        }
+        WM_SETTINGS_FINISH_CLOSE => {
             let _ = DestroyWindow(hwnd);
             LRESULT(0)
         }
