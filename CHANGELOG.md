@@ -44,7 +44,7 @@ All notable changes to LeopardWM will be documented in this file.
 ### Fixes
 
 - **Settings no longer saves old values after a configuration reload, an outdated GlazeWM port, or a row split that failed to save.**
-- **Disconnected monitors regain their windows and layouts after LeopardWM restarts.** Windows closed or moved to another monitor while the display was away stay where they belong.
+- **Disconnected monitors regain their windows and layouts after LeopardWM restarts while you stay signed in.** Windows closed or moved to another monitor while the display was away stay where they belong.
 - **Administrator diagnostics no longer write through redirected folders or files.** Logs, diagnostic snapshots, and recordings refuse unsafe paths instead.
 - **Winget release manifests now check that both installer architectures and download links match the release.**
 - **Settings preserves the update-check opt-out when saving.**
@@ -54,8 +54,6 @@ All notable changes to LeopardWM will be documented in this file.
 - **Tray quick toggles now refresh Settings health after saving.**
 - **The GlazeWM compatibility endpoint retries an unchanged configuration after a port conflict clears.**
 - **Single-row window queries no longer show a redundant row number.**
-- **Dragging a maximized column to another row, workspace, or monitor now restores its original width.**
-- **Selecting a window in Overview now brings it into view when another window is fullscreen.** Sticky floating windows leave fullscreen unchanged.
 - **Dragging a maximized column to another row, workspace, or monitor now restores its width from before the maximize.** Dragging a window out of a maximized column does the same.
 - **Selecting a window in Overview now always brings it into view.** An off-screen tiled window scrolls into view and is shown even when another window is fullscreen. Sticky floating windows leave fullscreen unchanged.
 - **Settings dropdowns now support keyboard navigation and screen readers.** Accent buttons and selected options are also easier to read in dark and high contrast modes.
